@@ -82,7 +82,7 @@ func TestSugarSemantics(t *testing.T) {
 		{`!(a > b)`, map[string]any{"a": 1, "b": 2}, true},
 		{"// 选主渠道\n a + 1 // 加一", map[string]any{"a": 1}, int64(2)},
 		{`1_000_000 + 1`, map[string]any{}, int64(1000001)},
-		{`for(x in items where x > 1, x * 2)`, map[string]any{"items": []any{1, 2, 3}}, []any{int64(4), int64(6)}},
+		{`[x * 2 for x in items if x > 1]`, map[string]any{"items": []any{1, 2, 3}}, []any{int64(4), int64(6)}},
 		{`reduce(x in items, total from 0, total + x)`, map[string]any{"items": []any{1, 2, 3}}, int64(6)},
 	} {
 		value, _ := compileAndRun(t, test.source, registry, test.args, RunOptions{Fuel: 100_000})
@@ -94,8 +94,8 @@ func TestSugarSemantics(t *testing.T) {
 
 func TestLoopKeywordFormsMatchPositionalForms(t *testing.T) {
 	for _, pair := range [][2]string{
-		{`for(x in items where x > 1, x * 2)`, `for(items,x,gt(x,1),mul(x,2))`},
-		{`for(x in items, x * 2)`, `for(items,x,mul(x,2))`},
+		{`[x * 2 for x in items if x > 1]`, `[mul(x,2) for x in items if gt(x,1)]`},
+		{`[x for x in items]`, `[x for x in items]`},
 		{`reduce(x in items, total from 0, total + x)`, `reduce(items,x,total,0,add(total,x))`},
 	} {
 		sugared, err := Parse(pair[0])

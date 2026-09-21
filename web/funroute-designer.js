@@ -1,10 +1,18 @@
-import { expressionSource } from "./funroute-source.js";
+import { expressionSource, logicalForm } from "./funroute-source.js";
 
 const MIME = "application/x-funroute-node";
 
 // Bumped with the Go side when switch cases became lists and the subject
 // optional.
 const EXPR_JSON_VERSION = 2;
+
+// The derived forms are if nodes with a fixed branch; the palette offers them as
+// their own cards and the canvas renders only the real operand slots.
+const DERIVED_TEMPLATES = {
+  and: () => ({ node: "call", name: "if", args: [null, null, { node: "bool", bool: false }] }),
+  or: () => ({ node: "call", name: "if", args: [null, { node: "bool", bool: true }, null] }),
+  not: () => ({ node: "call", name: "if", args: [null, { node: "bool", bool: false }, { node: "bool", bool: true }] }),
+};
 
 const VALUE_TEMPLATES = [
   { id: "value:var", node: "var", label: "参数", description: "自动成为 args 参数", icon: "𝑥", color: "#475569" },
@@ -285,6 +293,9 @@ export class FunRouteDesigner extends HTMLElement {
       }
     }
     const descriptor = template.descriptor;
+    if (DERIVED_TEMPLATES[descriptor.special]) {
+      return DERIVED_TEMPLATES[descriptor.special]();
+    }
     if (descriptor.special === "switch") {
       return { node: "switch", value: null, cases: [{ match: [null], result: null }], default: null };
     }
@@ -324,8 +335,9 @@ export class FunRouteDesigner extends HTMLElement {
     let iconText = "•";
     let description = "";
     let descriptor = null;
+    const logical = logicalForm(node);
     if (node.node === "call") {
-      descriptor = this._descriptor(node);
+      descriptor = logical ? this._specialDescriptor(logical.kind) : this._descriptor(node);
       color = descriptor.display?.color || color;
       title = descriptor.display?.label || node.name;
       iconText = descriptor.display?.icon || "ƒ";
@@ -366,7 +378,8 @@ export class FunRouteDesigner extends HTMLElement {
     header.append(drag, icon, heading, remove);
     card.append(header);
 
-    if (node.node === "call") card.append(this._renderCall(node, path, descriptor));
+    if (logical) card.append(this._renderLogical(node, path, logical, descriptor));
+    else if (node.node === "call") card.append(this._renderCall(node, path, descriptor));
     else if (node.node === "switch") card.append(this._renderSwitch(node, path));
     else if (node.node === "for") card.append(this._renderFor(node, path));
     else if (node.node === "reduce") card.append(this._renderReduce(node, path));
@@ -375,6 +388,22 @@ export class FunRouteDesigner extends HTMLElement {
     else if (node.node === "dict") card.append(this._renderDict(node, path));
     else card.append(this._renderValueEditor(node, path));
     return card;
+  }
+
+  _specialDescriptor(special) {
+    return (this._catalog.special_forms || []).find((item) => item.special === special) || null;
+  }
+
+  // A derived form shows only its operands; the fixed branch stays hidden so it
+  // cannot be edited into something that is no longer an and/or/not.
+  _renderLogical(node, path, form, descriptor) {
+    const body = element("div", "fr-node__body");
+    const labels = descriptor?.display?.parameters || [];
+    form.slots.forEach((argIndex, slot) => {
+      const label = labels[slot]?.label || `条件 ${slot + 1}`;
+      body.append(this._labeledSlot(label, "bool", [...path, "args", argIndex], node.args[argIndex]));
+    });
+    return body;
   }
 
   _renderCall(node, path, descriptor) {
@@ -479,8 +508,11 @@ export class FunRouteDesigner extends HTMLElement {
     return controls;
   }
 
+  // The card follows the comprehension's reading order: what is produced, then
+  // where it comes from, then the filter.
   _renderFor(node, path) {
     const body = element("div", "fr-node__body");
+    body.append(this._labeledSlot("产出表达式", "每个保留元素产出一个值", [...path, "yield"], node.yield));
     body.append(this._labeledSlot("输入数组", "array<T>", [...path, "source"], node.source));
     const variableRow = element("label", "fr-local-name");
     variableRow.append(element("span", "", "局部名称"));
@@ -496,8 +528,7 @@ export class FunRouteDesigner extends HTMLElement {
     });
     variableRow.append(variable);
     body.append(variableRow);
-    body.append(this._labeledSlot("过滤条件（可空）", "bool；留空表示全部", [...path, "where"], node.where));
-    body.append(this._labeledSlot("生成结果", "每个保留元素生成一个值", [...path, "yield"], node.yield));
+    body.append(this._labeledSlot("筛选条件（可空）", "bool；留空表示全部", [...path, "where"], node.where));
     return body;
   }
 

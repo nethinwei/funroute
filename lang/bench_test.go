@@ -80,7 +80,7 @@ func BenchmarkFor(b *testing.B) {
 	for i := range items {
 		items[i] = i
 	}
-	runtime := benchRuntime(b, `for(items,item,add(item,1))`,
+	runtime := benchRuntime(b, `[add(item,1) for item in items]`,
 		map[string]Type{"items": ArrayOf(IntType)})
 	run(b, runtime, map[string]any{"items": items}, 10_000_000)
 }

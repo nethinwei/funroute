@@ -21,7 +21,7 @@ e ::= c                     字面量（int / float / string / bool）
     | f(e₁, …, eₙ)          函数调用（严格求值）
     | if(e₁, e₂, e₃)        条件（惰性）
     | recur(e₁, …, eₙ)      自递归
-    | for(e, x, [e], e)     有限映射 / 筛选
+    | [e for x in e if e]   有限映射 / 筛选（列表推导）
     | reduce(e, x, a, e, e) 有限折叠
 ```
 

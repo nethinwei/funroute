@@ -24,8 +24,8 @@ lang/parser.go           lang/ast.go  lang/infer*.go  lang/compiler.go        la
 - 类型推导是多候选分叉 + `implicitTypeScore` 打分选最优，同分报歧义；调便利规则改打分函数，别在推导里加特判。混合数值签名（`(int,float)`）额外吃 `mixedPenalty`，所以 `risk < 0.5` 会把 `risk` 推成 float 而不是"int 提升为 float"这个更便宜的读法。
 - `SwitchExpr.Value` 可为 nil（条件形态，`Match` 是 bool 条件），`SwitchCaseExpr.Match` 是列表（多值分支，任一命中）。推导上把条件形态当作“主体是 bool”，于是两种形态共用同一套统一逻辑；编译时 `compileMatch` 在无主体时不发 `OpEqual`。改这里要同时动 `lang/ast.go`、`json_ast.go`、`infer_expr.go`、`compiler.go`、`forms.go` 和 designer 的 switch 卡片。
 - ExprJSON 是 v2（switch 的 `match` 列表化 + `value` 可选）。`web/funroute-designer.js` 的 `EXPR_JSON_VERSION` 必须与 `lang/json_ast.go` 的 `ExprJSONVersion` 同步，否则前端提交的文档会被后端拒绝。
-- 中缀与关键字糖全部在 parser 层脱糖，**AST 不新增任何节点类型**：`a+b` 就是 `add(a,b)`，`a&&b` 就是 `if(a,b,false)`，`for(x in xs, e)` 就是位置形式的 `ForExpr`。新增糖时必须同时更新 `web/funroute-source.js` 的 `INFIX`/`sugarFromIf`/`forHead` 反向打印，否则源码→节点→源码会退化成函数形式。
-- 比较 `lt/le/gt/ge` 是真函数（各 5 个签名）；`!=`/`&&`/`||`/`!` 是 `if` 的糖，靠 `if` 的惰性获得短路，不要为它们注册函数。
+- 中缀与关键字糖全部在 parser 层脱糖，**AST 不新增任何节点类型**：`a+b` 就是 `add(a,b)`，`a&&b` 就是 `if(a,b,false)`，`[e for x in xs if c]` 就是 `ForExpr`（ExprJSON 的节点名仍是 `for`）。新增糖时必须同时更新 `web/funroute-source.js` 的 `INFIX`/`sugarFromIf`/`forHead` 反向打印，否则源码→节点→源码会退化成函数形式。
+- 比较 `lt/le/gt/ge` 是真函数（各 5 个签名）；`and`/`or`/`not`/`ne` 是**派生形式**——展开为 `if`，不进注册表、不新增节点或 opcode，靠 `if` 的惰性短路。它们的三个同步点：`lang/catalog.go` 的 `derivedForms`（目录条目）、`web/funroute-source.js` 的 `sugarFromIf`/`logicalForm`（打印与卡片识别）、`web/funroute-designer.js` 的 `DERIVED_TEMPLATES`（拖出来生成什么）。少一处就会出现"能写不能拖"或"能拖不能打印"。
 - `//` 注释、`1_000_000` 分隔符、尾随逗号是纯词法糖，不进 AST，ExprJSON 往返不保留。
 - `if`/`switch`/`for`/`reduce` 在 parser 阶段即成专用节点，编译为跳转/循环指令、不走 `OpCall`；`for` 与 `reduce` 共用 `OpLoopInit/OpLoopCollect/OpLoopNext`，靠 `Instruction.C`（累加器槽，`noAccumulator` 表示映射）区分折叠与映射。
 - 形式校验只有一处：`CompileAST` 里的 `validateForms`。parser 不做授权检查，所以源码与 ExprJSON 自动走同一条路径，不会出现“源码拒绝、JSON 放行”的后门。

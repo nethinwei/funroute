@@ -7,7 +7,7 @@ FunRoute 是面向支付路由的强类型、纯表达式函数语言。仓库�
 - 参数类型由内置函数和扩展函数的签名反向推导；
 - 只做安全、可解释的数值提升，跨领域转换必须显式写 `int(...)`、`float(...)`、`string(...)` 或 `bool(...)`；
 - 编译产物只引用精确的函数签名，运行时注册表漂移会拒绝装载；
-- 内核只有 10 个函数名，惰性形式 `switch(...)`、`for(...)`、`reduce(...)`、`recur(...)` 由宿主按控制台逐个启用；
+- 内核只有 14 个函数名，惰性形式 `switch(...)`、列表推导 `[...]`、`reduce(...)`、`recur(...)` 由宿主按控制台逐个启用；
 - 启用 `recur(...)` 即得到图灵完备层，不终止的程序由 fuel 与递归深度拦截；
 - 源表达式可无损往返规范化 `ExprJSON`。
 
@@ -49,13 +49,15 @@ go run ./cmd/funroute run \
 switch(country,"SG","adyen_sg","MY","stripe_my","stripe_global")
 ```
 
-它会被推导为 `(country: string) -> string`。遍历和筛选也保持函数形态：
+它会被推导为 `(country: string) -> string`。遍历和筛选用**列表推导式**，和 Python / Haskell 同形：
 
 ```text
-for(channels,channel,route.is_healthy@1(channel),channel)
+[channel for channel in channels if route.is_healthy@1(channel)]
 ```
 
-四个参数依次是输入数组、局部名称、过滤条件和生成结果；过滤条件可省略。`channel` 是局部变量，不会出现在外部 `args` 中，结果类型自动推导为 `array<string>`。
+读作“产出什么 ← 从哪来 ← 什么条件”。`if` 子句可省略（纯映射）。`channel` 是局部变量，不会出现在外部 `args` 中，结果类型自动推导为 `array<string>`。
+
+推导式是一个**表达式**，返回新数组——这也是它不叫 `for` 的原因：在 C/Java/Go/Python 里 `for` 都是不返回值的语句，而这里的对应物是 Python 的 `[e for x in xs if c]`、LINQ 的 `.Where().Select()`、SQL 的 `SELECT e FROM xs WHERE c`。
 
 聚合用 `reduce`，同样保持函数形态：
 
@@ -76,6 +78,7 @@ primary    = integer | float | string | "true" | "false"
            | identifier
            | identifier "(" [ expression { "," expression } [ "," ] ] ")"
            | "[" [ expression { "," expression } [ "," ] ] "]"
+           | "[" expression "for" identifier "in" expression [ "if" expression ] "]"
            | "{" [ string ":" expression { "," string ":" expression } [ "," ] ] "}"
            | "(" expression ")"
 ```
@@ -111,14 +114,14 @@ switch(country, "SG", "a", "MY", "b", "c")   // 位置形式，仍然接受
 
 两种形态是**同一个节点**：ExprJSON 的 `switch` 节点里 `value` 缺失即条件形态，`case.match` 是一个列表。所以拖拽面板上仍然是一张多分支卡片（主体槽留空即切到条件模式，每个分支的匹配值可增删），不会退化成一串嵌套 `if` 卡片。分支按书写顺序惰性求值，未选中的分支不会被计算。
 
-`for` 与 `reduce` 还接受关键字形式，让位置参数的含义写在语法里（两种形式脱糖到同一个节点）：
+`reduce` 也接受关键字形式，让位置参数的含义写在语法里（与位置形式脱糖到同一个节点）：
 
 ```text
-for(channel in channels where is_healthy(channel), channel)
 reduce(price in prices, total from 0, total + price)
+reduce(prices, price, total, 0, add(total, price))      // 位置形式，仍然接受
 ```
 
-`in`、`where`、`from`、`else`、`case` 是保留名，不能用作变量名或函数名。
+`for`、`in`、`if`、`from`、`else`、`case` 在这些位置是关键字；`for`、`in`、`from`、`else`、`case` 同时是保留名，不能用作变量名或函数名。旧的 `for(...)` 函数写法已移除，写成它会得到明确的迁移提示。
 
 `switch`、`for`、`reduce` 和 `recur` 仍使用上面的函数调用外形；编译器把它们识别为惰性、多分支和局部变量结构，不引入语句式语法。
 
@@ -180,9 +183,28 @@ go run ./cmd/funroute inspect \
 - 算术：`add`、`sub`、`mul`、`div`
 - 转换：`int`、`float`、`string`、`bool`
 
-`!=`、`&&`、`||`、`!` **不是**内核函数，而是 `if` 的糖：`a != b` 是 `if(eq(a,b),false,true)`，`a && b` 是 `if(a,b,false)`。因为 `if` 惰性，`&&`/`||` 自动短路。
+布尔运算不在内核里——它们是**派生形式**，见下一节。
 
 其余一切都是宿主的选择：`lang.RegisterArrayPrimitives(registry)` 加上 `array.is_empty`/`array.prepend`/`array.head`/`array.tail` 四个列表原语，`registry.EnableForm(...)` 打开惰性形式。
+
+## 派生形式
+
+`and`、`or`、`not` 和 `!=` 是**派生表达式**（derived expression，与 Scheme R7RS 同义）：语言用它们的展开来定义它们，核心里并不存在。
+
+| 派生形式 | 写法 | 展开为 |
+|---|---|---|
+| and | `a && b` | `if(a, b, false)` |
+| or | `a \|\| b` | `if(a, true, b)` |
+| not | `!a` | `if(a, false, true)` |
+| ne | `a != b` | `if(eq(a, b), false, true)` |
+
+因为 `if` 惰性，`&&` 与 `||` 自动短路。这不是可选设计：在严格求值的语言里 `&&` **不可能**是普通函数，否则两侧都会被求值——Excel 的 `AND()` 就是这个坑（`IF(AND(A1<>0, 10/A1>2), …)` 会除零）。OCaml、Rust、Go 同样把它们定义为语言内建语法而非函数；只有 Haskell 那样整体惰性的语言才能让 `(&&)` 是普通函数。
+
+派生形式**不进注册表**，不增加节点类型、opcode 或推导规则，但仍是一等的命名构造：
+
+- `Registry.Catalog()` 把它们列在 `special_forms` 里（无需 `EnableForm`，因为 `if` 总在内核）；
+- 拖拽面板有独立的「逻辑与 / 逻辑或 / 逻辑非」卡片，只暴露真正的操作数槽，固定分支隐藏，所以卡片不会被编辑成别的东西；
+- 打印器把这三种 `if` 模式还原成 `&&` / `||` / `!` / `!=`，源码与节点树双向一致。
 
 ## 形式开关与控制台
 
@@ -199,7 +221,7 @@ engineer.EnableForm(lang.SwitchForm, lang.ForForm, lang.ReduceForm, lang.RecurFo
 | 形式 | 语义 | 终止性 |
 |---|---|---|
 | `switch(...)` | 值匹配或条件链，按顺序惰性选择一个结果 | 结构上总是终止 |
-| `for(source,item,[condition],result)` | 映射，可选筛选 | 只遍历输入数组 |
+| `[result for item in source if condition]` | 映射，可选筛选 | 只遍历输入数组 |
 | `reduce(source,item,acc,init,body)` | 折叠进累加器 | 只遍历输入数组 |
 | `recur(args...)` | 用新实参重新进入整个表达式 | 图灵完备，靠 fuel 与 `MaxRecursion` 拦截 |
 
@@ -335,7 +357,7 @@ Export(Import(Export(expr))) == Export(expr)
 - 从函数目录拖入函数卡片；
 - 把变量、整数、浮点数、字符串、布尔值、数组和字典拖入参数槽；
 - 移动、删除和嵌套已有节点；
-- 可增删分支的 `switch(...)` 卡片，带局部名称/可选过滤条件的 `for(...)` 卡片，带元素名/累加器名的 `reduce(...)` 卡片；
+- 可增删分支的 `switch(...)` 卡片，按“产出 → 输入 → 筛选”排列的列表推导卡片，带元素名/累加器名的 `reduce(...)` 卡片，以及逻辑与/或/非卡片；
 - 同名重载合并成一张卡，例如界面只显示一个 `add`，类型由编译器选择；
 - 函数分类、搜索、说明、签名和参数提示；
 - `value` 双向绑定规范化 ExprJSON，并触发 `funroute-change` 事件。

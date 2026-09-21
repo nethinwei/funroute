@@ -256,7 +256,7 @@ func TestIfIsLazyAndFuelIsEnforced(t *testing.T) {
 func TestFunctionalForBindsLocalFiltersAndMaps(t *testing.T) {
 	registry := consoleRegistry(t)
 	artifact, err := CompileExpr(
-		`for(channels,channel,eq(channel,"UP"),string(channel))`,
+		`[string(channel) for channel in channels if eq(channel,"UP")]`,
 		registry,
 		CompileOptions{},
 	)
@@ -409,19 +409,6 @@ func TestCoreCatalogIsMinimalAndCarriesDisplayMetadata(t *testing.T) {
 			t.Fatalf("low-level function %q leaked into operator catalog", hidden)
 		}
 	}
-	// The kernel enables no lazy form at all; a console opts into them.
-	if got := specialFormNames(catalog); got != "" {
-		t.Fatalf("core special forms = %s", got)
-	}
-	if got := specialFormNames(consoleRegistry(t).Catalog()); got != "switch,for,reduce" {
-		t.Fatalf("operator special forms = %s", got)
-	}
-	if got := specialFormNames(consoleRegistry(t, RecurForm).Catalog()); got != "switch,for,reduce,recur" {
-		t.Fatalf("engineer special forms = %s", got)
-	}
-	if err := registry.EnableForm("lambda"); err == nil {
-		t.Fatal("unknown form was accepted")
-	}
 	if err := registry.Register(FunctionSpec{
 		Name: "bad.color@1", Params: []Type{IntType}, Result: IntType,
 		Eval:    func(args []Value) (Value, error) { return args[0], nil },
@@ -554,7 +541,7 @@ func TestRecurNeedsItsFormAndStaysBounded(t *testing.T) {
 func TestReduceAndRecurSurviveExprJSONRoundTrip(t *testing.T) {
 	for _, source := range []string{
 		`reduce(prices,price,total,0,add(total,price))`,
-		`for(channels,channel,eq(channel,"UP"),channel)`,
+		`[channel for channel in channels if eq(channel,"UP")]`,
 		`if(eq(n,0),acc,recur(sub(n,1),add(acc,n)))`,
 	} {
 		expr, err := Parse(source)
@@ -580,7 +567,7 @@ func TestReduceAndRecurSurviveExprJSONRoundTrip(t *testing.T) {
 }
 
 func TestDisabledFormsAreRejectedWhenTheyArriveAsExprJSON(t *testing.T) {
-	expr, err := Parse(`for(channels,channel,recur(channel))`)
+	expr, err := Parse(`[recur(channel) for channel in channels]`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,5 +614,22 @@ func TestPanickingExtensionIsContained(t *testing.T) {
 	if _, err := runtime.Run(map[string]any{"n": 2}, RunOptions{Fuel: 100}); err == nil ||
 		!strings.Contains(err.Error(), "extension panicked") {
 		t.Fatalf("second run: %v", err)
+	}
+}
+
+func TestCatalogListsSwitchableAndDerivedForms(t *testing.T) {
+	// The kernel enables no switchable form; the derived forms are always there,
+	// because they expand to if, which the kernel always has.
+	if got := specialFormNames(CoreRegistry().Catalog()); got != "and,or,not" {
+		t.Fatalf("core special forms = %s", got)
+	}
+	if got := specialFormNames(consoleRegistry(t).Catalog()); got != "switch,for,reduce,and,or,not" {
+		t.Fatalf("operator special forms = %s", got)
+	}
+	if got := specialFormNames(consoleRegistry(t, RecurForm).Catalog()); got != "switch,for,reduce,recur,and,or,not" {
+		t.Fatalf("engineer special forms = %s", got)
+	}
+	if err := CoreRegistry().EnableForm("lambda"); err == nil {
+		t.Fatal("unknown form was accepted")
 	}
 }

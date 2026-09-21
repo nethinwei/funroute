@@ -118,7 +118,7 @@ var functionNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*(?:@[0-9]+
 var reservedNames = map[string]bool{
 	"expr": true, "true": true, "false": true,
 	"recur": true, "switch": true, "for": true, "reduce": true,
-	"in": true, "where": true, "from": true, "else": true, "case": true,
+	"in": true, "from": true, "else": true, "case": true,
 }
 
 func (r *Registry) Register(spec FunctionSpec) error {

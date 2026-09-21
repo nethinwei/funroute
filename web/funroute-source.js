@@ -15,6 +15,18 @@ const PRECEDENCE = {
 const isTrue = (node) => node?.node === "bool" && node.bool === true;
 const isFalse = (node) => node?.node === "bool" && node.bool === false;
 
+// logicalForm recognises the derived forms in an if node and reports which
+// argument slots are the real operands, so a host can render them as and/or/not
+// cards instead of a bare if.
+export function logicalForm(node) {
+  if (node?.node !== "call" || node.name !== "if" || (node.args || []).length !== 3) return null;
+  const [condition, whenTrue, whenFalse] = node.args;
+  if (isFalse(whenTrue) && isTrue(whenFalse)) return { kind: "not", slots: [0] };
+  if (isFalse(whenFalse) && !isTrue(whenTrue)) return { kind: "and", slots: [0, 1] };
+  if (isTrue(whenTrue) && !isFalse(whenFalse)) return { kind: "or", slots: [0, 2] };
+  return null;
+}
+
 function infixOf(node) {
   if (node?.node !== "call") return null;
   const args = node.args || [];
@@ -49,11 +61,22 @@ function branchSource(item) {
   return `case ${matches} => ${expressionSource(item.result)}`;
 }
 
-// forHead prints "item in source where condition", the keyword form the parser
-// accepts; accumulatorHead prints "acc from init".
+// comprehensionSource prints [yield for item in source if condition].
+function comprehensionSource(node) {
+  const clauses = [expressionSource(node.yield), ...comprehensionClauses(node)];
+  return `[${clauses.join(" ")}]`;
+}
+
+// comprehensionClauses returns the "for ... in ..." and "if ..." clauses, which
+// the formatter puts on their own lines.
+function comprehensionClauses(node) {
+  const clauses = [`for ${node.variable || "item"} in ${expressionSource(node.source)}`];
+  if (node.where) clauses.push(`if ${expressionSource(node.where)}`);
+  return clauses;
+}
+
 function forHead(node) {
-  const head = `${node.variable || "item"} in ${expressionSource(node.source)}`;
-  return node.where ? `${head} where ${expressionSource(node.where)}` : head;
+  return `${node.variable || "item"} in ${expressionSource(node.source)}`;
 }
 
 function accumulatorHead(node) {
@@ -72,18 +95,19 @@ export function expressionSource(node, parentPrecedence = 0) {
     case "float": return String(node.float ?? "0.0");
     case "string": return JSON.stringify(node.string ?? "");
     case "bool": return node.bool ? "true" : "false";
-    case "array": return `[${(node.items || []).map(expressionSource).join(",")}]`;
-    case "dict": return `{${(node.entries || []).map((entry) => `${JSON.stringify(entry.key || "")}:${expressionSource(entry.value)}`).join(",")}}`;
-    case "call": return `${node.name}(${(node.args || []).map(expressionSource).join(",")})`;
+    // The callbacks take one argument on purpose: passing expressionSource
+    // directly would feed the array index in as parentPrecedence.
+    case "array": return `[${(node.items || []).map((item) => expressionSource(item)).join(", ")}]`;
+    case "dict": return `{${(node.entries || []).map((entry) => `${JSON.stringify(entry.key || "")}: ${expressionSource(entry.value)}`).join(", ")}}`;
+    case "call": return `${node.name}(${(node.args || []).map((arg) => expressionSource(arg)).join(", ")})`;
     case "switch": {
       const head = node.value ? `${expressionSource(node.value)}, ` : "";
       const branches = (node.cases || []).map(branchSource);
       return `switch(${head}${branches.join(", ")}, else ${expressionSource(node.default)})`;
     }
-    case "for": return `for(${forHead(node)}, ${expressionSource(node.yield)})`;
+    case "for": return comprehensionSource(node);
     case "reduce":
       return `reduce(${forHead(node)}, ${accumulatorHead(node)}, ${expressionSource(node.body)})`;
-    case "prog": return `prog(${(node.steps || []).map(expressionSource).join(",")})`;
     default: return "_";
   }
 }
@@ -109,7 +133,7 @@ export function tokenize(text, formNames = new Set()) {
 
 // Contextual keywords: they are ordinary identifiers to the lexer, but they
 // read as syntax, so they get their own colour.
-const KEYWORDS = new Set(["case", "else", "in", "where", "from"]);
+const KEYWORDS = new Set(["case", "else", "in", "from", "for"]);
 
 function classifyToken(match, text, formNames) {
   const [raw, comment, string, number, identifier, operator] = match;
@@ -119,8 +143,10 @@ function classifyToken(match, text, formNames) {
   if (operator !== undefined) return { kind: "op", text: raw };
   if (identifier === undefined) return { kind: "punct", text: raw };
   if (identifier === "true" || identifier === "false") return { kind: "bool", text: raw };
-  if (KEYWORDS.has(identifier)) return { kind: "keyword", text: raw };
   const next = text.slice(match.index + raw.length).trimStart()[0];
+  // if is both a kernel function and the comprehension's filter keyword.
+  if (identifier === "if") return { kind: next === "(" ? "fn" : "keyword", text: raw };
+  if (KEYWORDS.has(identifier)) return { kind: "keyword", text: raw };
   if (next !== "(") return { kind: "var", text: raw };
   return { kind: formNames.has(identifier) ? "form" : "fn", text: raw };
 }
@@ -138,7 +164,8 @@ export function formatSource(node, indent = "") {
   if (!split) return inline;
   const inner = `${indent}  `;
   const parts = split.parts.map((part) => inner + formatPart(part, inner));
-  return `${split.open}\n${parts.join(",\n")}\n${indent}${split.close}`;
+  const separator = split.separator === "" ? "\n" : ",\n";
+  return `${split.open}\n${parts.join(separator)}\n${indent}${split.close}`;
 }
 
 function formatPart(part, indent) {
@@ -160,7 +187,7 @@ function splitNode(node) {
       parts: switchParts(node),
       close: ")",
     };
-    case "for": return { open: "for(", parts: forParts(node), close: ")" };
+    case "for": return { open: "[", parts: forParts(node), close: "]", separator: "" };
     case "reduce": return { open: "reduce(", parts: reduceParts(node), close: ")" };
     case "array": return { open: "[", parts: node.items || [], close: "]" };
     case "dict": return {
@@ -179,8 +206,9 @@ function switchParts(node) {
   return parts;
 }
 
+// A comprehension breaks one clause per line, like PEP 8 suggests.
 function forParts(node) {
-  return [{ literal: forHead(node) }, node.yield];
+  return [node.yield, ...comprehensionClauses(node).map((clause) => ({ literal: clause }))];
 }
 
 function reduceParts(node) {

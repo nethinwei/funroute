@@ -213,8 +213,11 @@ func (p *parser) parsePrimary() (Expr, error) {
 
 func (p *parser) parseCall(name token) (Expr, error) {
 	p.index++ // (
-	if name.text == "for" || name.text == "reduce" {
-		return p.parseLoopCall(name)
+	if name.text == "for" {
+		return nil, p.errorf(name, "for(...) is not part of the syntax; write a comprehension: [result for item in source if condition]")
+	}
+	if name.text == "reduce" {
+		return p.parseReduceCall(name)
 	}
 	if name.text == "switch" {
 		return p.parseSwitchCall(name)
@@ -226,57 +229,25 @@ func (p *parser) parseCall(name token) (Expr, error) {
 	return &CallExpr{ID: p.id(), Pos: name.pos, Name: name.text, Args: args}, nil
 }
 
-// parseLoopCall accepts both shapes of for/reduce: the keyword form
+// parseReduceCall accepts the keyword form
 //
-//	for(item in source where cond, yield)
 //	reduce(item in source, acc from init, body)
 //
-// and the original positional form, which is what ExprJSON round-trips to.
-func (p *parser) parseLoopCall(name token) (Expr, error) {
+// and the positional form reduce(source, item, acc, init, body).
+func (p *parser) parseReduceCall(name token) (Expr, error) {
 	first, err := p.parseExpr()
 	if err != nil {
 		return nil, err
 	}
 	if variable, ok := first.(*VariableExpr); ok && p.keyword("in") {
 		p.index++
-		if name.text == "for" {
-			return p.forKeywordForm(name, variable.Name)
-		}
 		return p.reduceKeywordForm(name, variable.Name)
 	}
 	args, err := p.parseRest(first, tokenRightParen)
 	if err != nil {
 		return nil, err
 	}
-	if name.text == "for" {
-		return p.forExpr(name, args)
-	}
 	return p.reduceExpr(name, args)
-}
-
-func (p *parser) forKeywordForm(name token, variable string) (Expr, error) {
-	source, err := p.parseExpr()
-	if err != nil {
-		return nil, err
-	}
-	var where Expr
-	if p.keyword("where") {
-		p.index++
-		if where, err = p.parseExpr(); err != nil {
-			return nil, err
-		}
-	}
-	if err := p.expect(tokenComma, "',' before the for result"); err != nil {
-		return nil, err
-	}
-	yield, err := p.parseExpr()
-	if err != nil {
-		return nil, err
-	}
-	if err := p.expect(tokenRightParen, "')'"); err != nil {
-		return nil, err
-	}
-	return &ForExpr{ID: p.id(), Pos: name.pos, Source: source, Variable: variable, Where: where, Yield: yield}, nil
 }
 
 func (p *parser) reduceKeywordForm(name token, variable string) (Expr, error) {
@@ -428,20 +399,6 @@ func (p *parser) positionalSwitch(name token, args []Expr) (Expr, error) {
 	return &SwitchExpr{ID: p.id(), Pos: name.pos, Value: args[0], Cases: cases, Default: args[len(args)-1]}, nil
 }
 
-func (p *parser) forExpr(name token, args []Expr) (Expr, error) {
-	if len(args) != 3 && len(args) != 4 {
-		return nil, p.errorf(name, "for expects source, local variable, optional condition, and result")
-	}
-	variable, err := p.localName(name, args[1], "for second argument")
-	if err != nil {
-		return nil, err
-	}
-	if len(args) == 3 {
-		return &ForExpr{ID: p.id(), Pos: name.pos, Source: args[0], Variable: variable, Yield: args[2]}, nil
-	}
-	return &ForExpr{ID: p.id(), Pos: name.pos, Source: args[0], Variable: variable, Where: args[2], Yield: args[3]}, nil
-}
-
 func (p *parser) reduceExpr(name token, args []Expr) (Expr, error) {
 	if len(args) != 5 {
 		return nil, p.errorf(name, "reduce expects source, item variable, accumulator variable, initial value, and body")
@@ -479,11 +436,56 @@ func (p *parser) localName(name token, arg Expr, what string) (string, error) {
 func (p *parser) parseArray() (Expr, error) {
 	start := p.peek()
 	p.index++
-	items, err := p.parseList(tokenRightBracket)
+	if p.peek().kind == tokenRightBracket {
+		p.index++
+		return &ArrayExpr{ID: p.id(), Pos: start.pos}, nil
+	}
+	first, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if p.keyword("for") {
+		return p.comprehension(start, first)
+	}
+	items, err := p.parseRest(first, tokenRightBracket)
 	if err != nil {
 		return nil, err
 	}
 	return &ArrayExpr{ID: p.id(), Pos: start.pos, Items: items}, nil
+}
+
+// comprehension reads [yield for item in source if condition], the same shape
+// Python and Haskell use. It produces the same node the positional form used
+// to, so ExprJSON and the canvas are unchanged.
+func (p *parser) comprehension(start token, yield Expr) (Expr, error) {
+	p.index++ // for
+	named, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	variable, ok := named.(*VariableExpr)
+	if !ok {
+		return nil, p.errorf(start, "expected a local variable name after 'for'")
+	}
+	if !p.keyword("in") {
+		return nil, p.errorf(p.peek(), "expected 'in' after the comprehension variable")
+	}
+	p.index++
+	source, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	var where Expr
+	if p.keyword("if") {
+		p.index++
+		if where, err = p.parseExpr(); err != nil {
+			return nil, err
+		}
+	}
+	if err := p.expect(tokenRightBracket, "']'"); err != nil {
+		return nil, err
+	}
+	return &ForExpr{ID: p.id(), Pos: start.pos, Source: source, Variable: variable.Name, Where: where, Yield: yield}, nil
 }
 
 func (p *parser) parseList(end tokenKind) ([]Expr, error) {

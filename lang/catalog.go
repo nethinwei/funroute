@@ -190,11 +190,71 @@ var formDescriptors = map[Form]func() FunctionDescriptor{
 
 func (r *Registry) specialForms() []FunctionDescriptor {
 	enabled := r.EnabledForms()
-	out := make([]FunctionDescriptor, 0, len(enabled))
+	out := make([]FunctionDescriptor, 0, len(enabled)+len(derivedForms))
 	for _, form := range enabled {
 		out = append(out, formDescriptors[form]())
 	}
+	// Derived forms need no switch: they expand to if, which the kernel always
+	// has. They are listed so a console can offer them as first-class cards.
+	for _, derived := range derivedForms {
+		out = append(out, derived())
+	}
 	return out
+}
+
+var derivedForms = []func() FunctionDescriptor{andDerivedForm, orDerivedForm, notDerivedForm}
+
+// andDerivedForm and friends are derived expressions in the sense of Scheme
+// R7RS: the language defines them by their expansion into if, so they add no
+// node type, no opcode and no inference rule, while staying named constructs
+// that documentation and the drag-and-drop catalog can show.
+func andDerivedForm() FunctionDescriptor {
+	return derivedForm(
+		"and", "and(bool,bool)->bool", "逻辑与", "∧", 2,
+		"两个条件同时成立。展开为 if(a,b,false)，因此右侧只在左侧成立时才求值。",
+		[]ParameterDisplay{{Name: "left", Label: "左条件", Description: "bool"}, {Name: "right", Label: "右条件", Description: "bool"}},
+	)
+}
+
+func orDerivedForm() FunctionDescriptor {
+	return derivedForm(
+		"or", "or(bool,bool)->bool", "逻辑或", "∨", 3,
+		"任一条件成立。展开为 if(a,true,b)，因此右侧只在左侧不成立时才求值。",
+		[]ParameterDisplay{{Name: "left", Label: "左条件", Description: "bool"}, {Name: "right", Label: "右条件", Description: "bool"}},
+	)
+}
+
+func notDerivedForm() FunctionDescriptor {
+	return derivedForm(
+		"not", "not(bool)->bool", "逻辑非", "¬", 4,
+		"条件取反。展开为 if(a,false,true)。",
+		[]ParameterDisplay{{Name: "condition", Label: "条件", Description: "bool"}},
+	)
+}
+
+func derivedForm(name, signature, label, icon string, order int, description string, params []ParameterDisplay) FunctionDescriptor {
+	types := make([]Type, len(params))
+	for i := range types {
+		types[i] = BoolType
+	}
+	return FunctionDescriptor{
+		Name:      name,
+		Signature: signature,
+		Params:    types,
+		Result:    BoolType,
+		Special:   name,
+		Cost:      1,
+		Display: FunctionDisplay{
+			Label:       label,
+			Description: description,
+			Category:    "逻辑",
+			Color:       "#4338CA",
+			Icon:        icon,
+			Parameters:  params,
+			Result:      ResultDisplay{Label: "判断结果", Description: "bool"},
+			Order:       order,
+		},
+	}
 }
 
 func reduceSpecialForm() FunctionDescriptor {
@@ -286,25 +346,25 @@ func forSpecialForm() FunctionDescriptor {
 	r := TypeVar("R")
 	return FunctionDescriptor{
 		Name:      "for",
-		Signature: "for(array<T>,item,[condition],result)->array<R>",
+		Signature: "[result for item in array<T> if condition] -> array<R>",
 		Params:    []Type{ArrayOf(t), t, BoolType, r},
 		Result:    ArrayOf(r),
 		Special:   "for",
 		Cost:      1,
 		Display: FunctionDisplay{
-			Label:       "遍历 / 筛选",
-			Description: "遍历数组，可选过滤条件并生成新数组；item 是局部名称，不会成为外部参数。",
+			Label:       "列表推导",
+			Description: "遍历数组，按可选条件筛选并产出新数组；item 是局部名称，不会成为外部参数。写法是 [产出 for item in 输入 if 条件]。",
 			Category:    "控制",
 			Color:       "#7C3AED",
 			Icon:        "∀",
 			Parameters: []ParameterDisplay{
-				{Name: "source", Label: "输入数组"},
+				{Name: "result", Label: "产出表达式"},
 				{Name: "item", Label: "局部名称", Placeholder: "item"},
-				{Name: "condition", Label: "过滤条件", Description: "可省略"},
-				{Name: "result", Label: "生成结果"},
+				{Name: "source", Label: "输入数组"},
+				{Name: "condition", Label: "筛选条件", Description: "可省略"},
 			},
 			Result:   ResultDisplay{Label: "结果数组", Description: "array<R>"},
-			Examples: []FunctionExample{{Title: "筛选健康渠道", Expression: `for(channels,channel,route.is_healthy@1(channel),channel)`}},
+			Examples: []FunctionExample{{Title: "筛选健康渠道", Expression: `[channel for channel in channels if route.is_healthy@1(channel)]`}},
 			Order:    40,
 		},
 	}

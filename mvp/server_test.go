@@ -97,7 +97,7 @@ func TestRunAPISupportsFunctionalSwitchAndFor(t *testing.T) {
 			want: "adyen",
 		},
 		{
-			body: `{"source":"for(channels,channel,route.is_healthy@1(channel),channel)","args":{"channels":["UP","DOWN","UP"]}}`,
+			body: `{"source":"[channel for channel in channels if route.is_healthy@1(channel)]","args":{"channels":["UP","DOWN","UP"]}}`,
 			want: []any{"UP", "UP"},
 		},
 	} {
@@ -218,8 +218,13 @@ func TestServerIsBoundedByItsRegistry(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &catalog); err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.SpecialForms) != 1 || catalog.SpecialForms[0].Name != "switch" {
-		t.Fatalf("special forms = %#v", catalog.SpecialForms)
+	// switch is enabled, recur is not; the derived forms are always listed.
+	listed := map[string]bool{}
+	for _, form := range catalog.SpecialForms {
+		listed[form.Name] = true
+	}
+	if !listed["switch"] || !listed["and"] || listed["recur"] || listed["for"] {
+		t.Fatalf("special forms = %v", listed)
 	}
 }
 
@@ -235,7 +240,8 @@ func TestCatalogAPIListsTheEnabledForms(t *testing.T) {
 	for i, form := range catalog.SpecialForms {
 		names[i] = form.Name
 	}
-	if fmt.Sprint(names) != fmt.Sprint([]string{"switch", "for", "reduce", "recur"}) {
-		t.Fatalf("special forms = %v", names)
+	want := []string{"switch", "for", "reduce", "recur", "and", "or", "not"}
+	if fmt.Sprint(names) != fmt.Sprint(want) {
+		t.Fatalf("special forms = %v, want %v", names, want)
 	}
 }
