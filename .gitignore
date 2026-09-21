@@ -1,0 +1,6 @@
+# 本地构建产物（go build 默认输出到当前目录）
+/funroute
+*.test
+
+# macOS
+.DS_Store

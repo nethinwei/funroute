@@ -1,0 +1,241 @@
+package mvp
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"funroute/extensions/paymentdemo"
+	"funroute/lang"
+)
+
+func testServer(t *testing.T) *Server {
+	t.Helper()
+	registry, err := paymentdemo.NewRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server
+}
+
+func TestCatalogAPIIncludesExtensionPresentation(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/catalog", nil)
+	response := httptest.NewRecorder()
+	testServer(t).ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var catalog lang.LanguageCatalog
+	if err := json.Unmarshal(response.Body.Bytes(), &catalog); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, function := range catalog.Functions {
+		if function.Name == "route.is_healthy@1" {
+			found = true
+			if function.Display.Label != "渠道是否健康" || function.Display.Description == "" {
+				t.Fatalf("display = %#v", function.Display)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("payment extension is missing from catalog")
+	}
+}
+
+func TestCompileAndRunAPI(t *testing.T) {
+	server := testServer(t)
+	compileBody := []byte(`{"source":"if(route.is_healthy@1(health),\"adyen\",\"stripe\")"}`)
+	compileRequest := httptest.NewRequest(http.MethodPost, "/api/compile", bytes.NewReader(compileBody))
+	compileRequest.Header.Set("Content-Type", "application/json")
+	compileRecorder := httptest.NewRecorder()
+	server.ServeHTTP(compileRecorder, compileRequest)
+	if compileRecorder.Code != http.StatusOK {
+		t.Fatalf("compile status = %d, body = %s", compileRecorder.Code, compileRecorder.Body.String())
+	}
+	var compiled compileResponse
+	if err := json.Unmarshal(compileRecorder.Body.Bytes(), &compiled); err != nil {
+		t.Fatal(err)
+	}
+	if len(compiled.Args) != 1 || compiled.Args[0].Name != "health" || !compiled.Result.Equal(lang.StringType) {
+		t.Fatalf("compiled = %#v", compiled)
+	}
+
+	runBody := []byte(`{"source":"if(route.is_healthy@1(health),\"adyen\",\"stripe\")","args":{"health":"UP"}}`)
+	runRequest := httptest.NewRequest(http.MethodPost, "/api/run", bytes.NewReader(runBody))
+	runRequest.Header.Set("Content-Type", "application/json")
+	runResponse := httptest.NewRecorder()
+	server.ServeHTTP(runResponse, runRequest)
+	if runResponse.Code != http.StatusOK {
+		t.Fatalf("run status = %d, body = %s", runResponse.Code, runResponse.Body.String())
+	}
+	var result map[string]any
+	if err := json.Unmarshal(runResponse.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["value"] != "adyen" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestRunAPISupportsFunctionalSwitchAndFor(t *testing.T) {
+	server := testServer(t)
+	for _, test := range []struct {
+		body string
+		want any
+	}{
+		{
+			body: `{"source":"switch(country,\"SG\",\"adyen\",\"stripe\")","args":{"country":"SG"}}`,
+			want: "adyen",
+		},
+		{
+			body: `{"source":"for(channels,channel,route.is_healthy@1(channel),channel)","args":{"channels":["UP","DOWN","UP"]}}`,
+			want: []any{"UP", "UP"},
+		},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/api/run", strings.NewReader(test.body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+		}
+		var result map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(result["value"]) != fmt.Sprint(test.want) {
+			t.Fatalf("value = %#v, want %#v", result["value"], test.want)
+		}
+	}
+}
+
+func TestStaticMVPIsEmbedded(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+	testServer(t).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "FunRoute Designer") {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func postJSON(t *testing.T, server *Server, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	return response
+}
+
+func TestParseAPIReturnsCanonicalExprJSON(t *testing.T) {
+	server := testServer(t)
+	response := postJSON(t, server, "/api/parse", `{"source":"reduce(prices,price,total,0,add(total,price))"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var parsed struct {
+		ExprJSON json.RawMessage `json:"expr_json"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	expr, err := lang.ImportExprJSON(parsed.ExprJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reduce, ok := expr.(*lang.ReduceExpr)
+	if !ok || reduce.Variable != "price" || reduce.Accumulator != "total" {
+		t.Fatalf("expr = %#v", expr)
+	}
+
+	// The parse endpoint does not type check; a malformed expression still fails.
+	rejected := postJSON(t, server, "/api/parse", `{"source":"add(1,"}`)
+	if rejected.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, body = %s", rejected.Code, rejected.Body.String())
+	}
+}
+
+func TestRunAPISupportsReduceAndRecur(t *testing.T) {
+	server := testServer(t)
+	for _, test := range []struct {
+		name string
+		body string
+		want any
+	}{
+		{
+			name: "reduce",
+			body: `{"source":"reduce(prices,price,total,0,add(total,price))","args":{"prices":[10,20,30]}}`,
+			want: int64(60),
+		},
+		{
+			name: "recur",
+			body: `{"source":"if(eq(n,0),acc,recur(sub(n,1),add(acc,n)))","args":{"n":100,"acc":0},"fuel":100000}`,
+			want: int64(5050),
+		},
+	} {
+		response := postJSON(t, server, "/api/run", test.body)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, body = %s", test.name, response.Code, response.Body.String())
+		}
+		var result map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(result["value"]) != fmt.Sprint(test.want) {
+			t.Fatalf("%s: value = %#v, want %#v", test.name, result["value"], test.want)
+		}
+	}
+}
+
+// A console is exactly its registry: a server built on a registry without
+// RecurForm rejects recur, and its catalog does not advertise it.
+func TestServerIsBoundedByItsRegistry(t *testing.T) {
+	registry := lang.CoreRegistry()
+	if err := registry.EnableForm(lang.SwitchForm); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := postJSON(t, server, "/api/run", `{"source":"if(eq(n,0),n,recur(sub(n,1)))","args":{"n":1}}`)
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "recur is not enabled") {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/catalog", nil)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	var catalog lang.LanguageCatalog
+	if err := json.Unmarshal(recorder.Body.Bytes(), &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.SpecialForms) != 1 || catalog.SpecialForms[0].Name != "switch" {
+		t.Fatalf("special forms = %#v", catalog.SpecialForms)
+	}
+}
+
+func TestCatalogAPIListsTheEnabledForms(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/catalog", nil)
+	response := httptest.NewRecorder()
+	testServer(t).ServeHTTP(response, request)
+	var catalog lang.LanguageCatalog
+	if err := json.Unmarshal(response.Body.Bytes(), &catalog); err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, len(catalog.SpecialForms))
+	for i, form := range catalog.SpecialForms {
+		names[i] = form.Name
+	}
+	if fmt.Sprint(names) != fmt.Sprint([]string{"switch", "for", "reduce", "recur"}) {
+		t.Fatalf("special forms = %v", names)
+	}
+}
