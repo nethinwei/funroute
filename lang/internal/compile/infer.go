@@ -1,13 +1,15 @@
-package lang
+package compile
 
 import (
 	"fmt"
+	"funroute/lang/internal/machine"
+	"funroute/lang/internal/syntax"
 	"sort"
 	"strings"
 )
 
 type typeTerm struct {
-	kind Kind
+	kind machine.Kind
 	id   int
 	elem *typeTerm
 }
@@ -50,20 +52,20 @@ func (s *inferState) clone() *inferState {
 }
 
 func (s *inferState) fresh() typeTerm {
-	term := typeTerm{kind: VarKind, id: s.nextVar}
+	term := typeTerm{kind: machine.VarKind, id: s.nextVar}
 	s.nextVar++
 	return term
 }
 
-func scalarTerm(kind Kind) typeTerm { return typeTerm{kind: kind} }
+func scalarTerm(kind machine.Kind) typeTerm { return typeTerm{kind: kind} }
 
-func containerTerm(kind Kind, elem typeTerm) typeTerm {
+func containerTerm(kind machine.Kind, elem typeTerm) typeTerm {
 	return typeTerm{kind: kind, elem: &elem}
 }
 
 func (s *inferState) deref(term typeTerm) typeTerm {
 	seen := map[int]bool{}
-	for term.kind == VarKind {
+	for term.kind == machine.VarKind {
 		if seen[term.id] {
 			return term
 		}
@@ -80,8 +82,8 @@ func (s *inferState) deref(term typeTerm) typeTerm {
 func (s *inferState) unify(left, right typeTerm) error {
 	left = s.deref(left)
 	right = s.deref(right)
-	if left.kind == VarKind {
-		if right.kind == VarKind && left.id == right.id {
+	if left.kind == machine.VarKind {
+		if right.kind == machine.VarKind && left.id == right.id {
 			return nil
 		}
 		if s.occurs(left.id, right) {
@@ -90,13 +92,13 @@ func (s *inferState) unify(left, right typeTerm) error {
 		s.subst[left.id] = right
 		return nil
 	}
-	if right.kind == VarKind {
+	if right.kind == machine.VarKind {
 		return s.unify(right, left)
 	}
 	if left.kind != right.kind {
 		return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
 	}
-	if left.kind == ArrayKind || left.kind == DictKind {
+	if left.kind == machine.ArrayKind || left.kind == machine.DictKind {
 		if left.elem == nil || right.elem == nil {
 			return fmt.Errorf("malformed container type")
 		}
@@ -107,7 +109,7 @@ func (s *inferState) unify(left, right typeTerm) error {
 
 func (s *inferState) occurs(id int, term typeTerm) bool {
 	term = s.deref(term)
-	if term.kind == VarKind {
+	if term.kind == machine.VarKind {
 		return term.id == id
 	}
 	if term.elem != nil {
@@ -116,18 +118,18 @@ func (s *inferState) occurs(id int, term typeTerm) bool {
 	return false
 }
 
-func (s *inferState) instantiate(t Type, vars map[string]typeTerm) typeTerm {
+func (s *inferState) instantiate(t machine.Type, vars map[string]typeTerm) typeTerm {
 	switch t.Kind {
-	case VarKind:
+	case machine.VarKind:
 		if existing, ok := vars[t.Name]; ok {
 			return existing
 		}
 		fresh := s.fresh()
 		vars[t.Name] = fresh
 		return fresh
-	case ArrayKind, DictKind:
+	case machine.ArrayKind, machine.DictKind:
 		if t.Elem == nil {
-			return typeTerm{kind: InvalidKind}
+			return typeTerm{kind: machine.InvalidKind}
 		}
 		elem := s.instantiate(*t.Elem, vars)
 		return containerTerm(t.Kind, elem)
@@ -136,33 +138,33 @@ func (s *inferState) instantiate(t Type, vars map[string]typeTerm) typeTerm {
 	}
 }
 
-func concreteTerm(t Type) typeTerm {
-	if t.Kind == ArrayKind || t.Kind == DictKind {
+func concreteTerm(t machine.Type) typeTerm {
+	if t.Kind == machine.ArrayKind || t.Kind == machine.DictKind {
 		elem := concreteTerm(*t.Elem)
 		return containerTerm(t.Kind, elem)
 	}
 	return scalarTerm(t.Kind)
 }
 
-func (s *inferState) publicType(term typeTerm) (Type, bool) {
+func (s *inferState) publicType(term typeTerm) (machine.Type, bool) {
 	term = s.deref(term)
 	switch term.kind {
-	case VarKind, InvalidKind:
-		return Type{}, false
-	case ArrayKind, DictKind:
+	case machine.VarKind, machine.InvalidKind:
+		return machine.Type{}, false
+	case machine.ArrayKind, machine.DictKind:
 		if term.elem == nil {
-			return Type{}, false
+			return machine.Type{}, false
 		}
 		elem, ok := s.publicType(*term.elem)
 		if !ok {
-			return Type{}, false
+			return machine.Type{}, false
 		}
-		if term.kind == ArrayKind {
-			return ArrayOf(elem), true
+		if term.kind == machine.ArrayKind {
+			return machine.ArrayOf(elem), true
 		}
-		return DictOf(elem), true
+		return machine.DictOf(elem), true
 	default:
-		return Type{Kind: term.kind}, true
+		return machine.Type{Kind: term.kind}, true
 	}
 }
 
@@ -171,7 +173,7 @@ func (s *inferState) describe(term typeTerm) string {
 	if typ, ok := s.publicType(term); ok {
 		return typ.String()
 	}
-	if term.kind == VarKind {
+	if term.kind == machine.VarKind {
 		return fmt.Sprintf("?%d", term.id)
 	}
 	if term.elem != nil {
@@ -186,28 +188,39 @@ type inferResult struct {
 }
 
 type inference struct {
-	Params     []Parameter
-	Result     Type
-	NodeTypes  map[int]Type
+	Params     []machine.Parameter
+	Result     machine.Type
+	ResultDoc  string
+	NodeTypes  map[int]machine.Type
 	Selections map[int]string
 }
 
 type inferContext struct {
-	args            map[string]typeTerm
-	recursiveParams []typeTerm
-	recursiveResult typeTerm
-	registry        *Registry
+	args     map[string]typeTerm
+	registry *machine.Registry
 }
 
 type programCandidate struct {
 	key       string
 	result    inferResult
-	params    []Parameter
-	resultTyp Type
+	params    []machine.Parameter
+	resultTyp machine.Type
 }
 
-func inferProgram(expr Expr, registry *Registry, hints map[string]Type) (*inference, error) {
-	names := collectVariables(expr)
+// inferProgram infers the argument and result types.
+//
+// order, when non-nil, replaces the appearance order of the free variables as
+// the argument order: that is how `@arg` declarations pin the ABI down, and it
+// is also what lets a declared-but-unused argument stay in the signature.
+//
+// ret, when non-nil, is unified with the result rather than compared to it
+// afterwards, so `@ret float` settles `1 + 2` as float arithmetic instead of
+// rejecting it.
+func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string]machine.Type, order []string, ret *machine.Type) (*inference, error) {
+	names := syntax.FreeVariables(expr)
+	if order != nil {
+		names = order
+	}
 	if err := validateHints(hints, names); err != nil {
 		return nil, err
 	}
@@ -220,7 +233,11 @@ func inferProgram(expr Expr, registry *Registry, hints map[string]Type) (*infere
 	if err != nil {
 		return nil, err
 	}
-	candidates, unresolved := programCandidates(unifyRoot(results, context.recursiveResult), names, context.args)
+	results, err = applyResultType(results, ret)
+	if err != nil {
+		return nil, err
+	}
+	candidates, unresolved := programCandidates(results, names, context.args)
 	chosen, err := chooseCandidate(candidates, unresolved)
 	if err != nil {
 		return nil, err
@@ -228,7 +245,33 @@ func inferProgram(expr Expr, registry *Registry, hints map[string]Type) (*infere
 	return buildInference(chosen), nil
 }
 
-func validateHints(hints map[string]Type, names []string) error {
+// applyResultType keeps the candidates whose result unifies with the declared
+// type. Dropping the rest before scoring is what makes @ret disambiguating
+// rather than merely checking.
+func applyResultType(results []inferResult, ret *machine.Type) ([]inferResult, error) {
+	if ret == nil {
+		return results, nil
+	}
+	kept := make([]inferResult, 0, len(results))
+	var rejected string
+	for _, result := range results {
+		state := result.state.clone()
+		if err := state.unify(result.typ, concreteTerm(*ret)); err != nil {
+			rejected = result.state.describe(result.typ)
+			continue
+		}
+		kept = append(kept, inferResult{typ: result.typ, state: state})
+	}
+	if len(kept) == 0 {
+		if rejected == "" {
+			rejected = "nothing"
+		}
+		return nil, fmt.Errorf("@ret declares %s but the expression returns %s", ret, rejected)
+	}
+	return kept, nil
+}
+
+func validateHints(hints map[string]machine.Type, names []string) error {
 	known := make(map[string]bool, len(names))
 	for _, name := range names {
 		known[name] = true
@@ -246,41 +289,21 @@ func validateHints(hints map[string]Type, names []string) error {
 
 // newInferContext allocates one type variable per free variable, in the order
 // the variables appear, which is also the argument order of the program.
-func newInferContext(state *inferState, names []string, registry *Registry) inferContext {
+func newInferContext(state *inferState, names []string, registry *machine.Registry) inferContext {
 	args := make(map[string]typeTerm, len(names))
 	for _, name := range names {
 		args[name] = state.fresh()
 	}
-	recursiveParams := make([]typeTerm, len(names))
-	for i, name := range names {
-		recursiveParams[i] = args[name]
-	}
-	return inferContext{
-		args:            args,
-		recursiveParams: recursiveParams,
-		recursiveResult: state.fresh(),
-		registry:        registry,
-	}
+	return inferContext{args: args, registry: registry}
 }
 
-func applyHints(state *inferState, args map[string]typeTerm, hints map[string]Type) error {
+func applyHints(state *inferState, args map[string]typeTerm, hints map[string]machine.Type) error {
 	for name, hint := range hints {
 		if err := state.unify(args[name], concreteTerm(hint)); err != nil {
 			return fmt.Errorf("type hint for %q: %w", name, err)
 		}
 	}
 	return nil
-}
-
-func unifyRoot(results []inferResult, recursiveResult typeTerm) []inferResult {
-	out := make([]inferResult, 0, len(results))
-	for _, result := range results {
-		candidate := result.state.clone()
-		if err := candidate.unify(recursiveResult, result.typ); err == nil {
-			out = append(out, inferResult{typ: recursiveResult, state: candidate})
-		}
-	}
-	return out
 }
 
 func programCandidates(results []inferResult, names []string, args map[string]typeTerm) (map[string]programCandidate, []string) {
@@ -307,19 +330,19 @@ func programCandidates(results []inferResult, names []string, args map[string]ty
 
 // candidateParams returns the resolved parameters, or the name of the first
 // argument whose type stayed open.
-func candidateParams(result inferResult, names []string, args map[string]typeTerm) ([]Parameter, string) {
-	params := make([]Parameter, len(names))
+func candidateParams(result inferResult, names []string, args map[string]typeTerm) ([]machine.Parameter, string) {
+	params := make([]machine.Parameter, len(names))
 	for i, name := range names {
 		typ, ok := result.state.publicType(args[name])
 		if !ok {
 			return nil, name
 		}
-		params[i] = Parameter{Name: name, Type: typ}
+		params[i] = machine.Parameter{Name: name, Type: typ}
 	}
 	return params, ""
 }
 
-func candidateKey(params []Parameter, result Type) string {
+func candidateKey(params []machine.Parameter, result machine.Type) string {
 	parts := make([]string, len(params))
 	for i, param := range params {
 		parts[i] = param.Name + ":" + param.Type.String()
@@ -365,7 +388,7 @@ func cheapestCandidates(byKey map[string]programCandidate) []programCandidate {
 
 func buildInference(chosen programCandidate) *inference {
 	state := chosen.result.state
-	nodeTypes := make(map[int]Type, len(state.nodeTypes))
+	nodeTypes := make(map[int]machine.Type, len(state.nodeTypes))
 	for id, term := range state.nodeTypes {
 		if typ, ok := state.publicType(term); ok {
 			nodeTypes[id] = typ
@@ -385,7 +408,7 @@ func buildInference(chosen programCandidate) *inference {
 // it only loses when a same-type reading exists.
 const mixedPenalty = 100
 
-func implicitCandidateScore(params []Parameter, result Type) int {
+func implicitCandidateScore(params []machine.Parameter, result machine.Type) int {
 	score := implicitTypeScore(result)
 	for _, param := range params {
 		score += implicitTypeScore(param.Type)
@@ -393,17 +416,17 @@ func implicitCandidateScore(params []Parameter, result Type) int {
 	return score
 }
 
-func implicitTypeScore(typ Type) int {
+func implicitTypeScore(typ machine.Type) int {
 	switch typ.Kind {
-	case IntKind:
+	case machine.IntKind:
 		return 0
-	case BoolKind:
+	case machine.BoolKind:
 		return 1
-	case FloatKind:
+	case machine.FloatKind:
 		return 10
-	case StringKind:
+	case machine.StringKind:
 		return 20
-	case ArrayKind, DictKind:
+	case machine.ArrayKind, machine.DictKind:
 		if typ.Elem == nil {
 			return 100
 		}

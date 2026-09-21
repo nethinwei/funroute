@@ -55,15 +55,59 @@ func (s *Server) health(response http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) catalog(response http.ResponseWriter, _ *http.Request) {
-	writeJSON(response, http.StatusOK, s.registry.Catalog())
+	writeJSON(response, http.StatusOK, lang.Catalog(s.registry))
 }
 
+// The contract is the host's, and this server is the host: a console would
+// read it from its rule record, so the API takes it alongside the expression.
+// Contract and expression arrive as separate fields and are never merged into
+// one text, which is why the page needs no source-to-panel synchronisation.
 type expressionRequest struct {
-	Source       string          `json:"source,omitempty"`
-	ExprJSON     json.RawMessage `json:"expr_json,omitempty"`
-	Args         map[string]any  `json:"args,omitempty"`
-	Fuel         uint64          `json:"fuel,omitempty"`
-	MaxRecursion int             `json:"max_recursion,omitempty"`
+	Source   string          `json:"source,omitempty"`
+	ExprJSON json.RawMessage `json:"expr_json,omitempty"`
+	Contract *contractJSON   `json:"contract,omitempty"`
+	Args     map[string]any  `json:"args,omitempty"`
+	Fuel     uint64          `json:"fuel,omitempty"`
+}
+
+type contractJSON struct {
+	Args   []argJSON   `json:"args,omitempty"`
+	Result *resultJSON `json:"result,omitempty"`
+}
+
+type argJSON struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Doc  string `json:"doc,omitempty"`
+}
+
+type resultJSON struct {
+	Type string `json:"type"`
+	Doc  string `json:"doc,omitempty"`
+}
+
+// compileOptions turns the request's contract into what the compiler takes.
+func (c *contractJSON) compileOptions() (lang.CompileOptions, error) {
+	var options lang.CompileOptions
+	if c == nil {
+		return options, nil
+	}
+	for _, arg := range c.Args {
+		typ, err := lang.ParseType(arg.Type)
+		if err != nil {
+			return options, fmt.Errorf("argument %q: %w", arg.Name, err)
+		}
+		options.Args = append(options.Args, lang.ArgSpec{Name: arg.Name, Type: typ, Doc: arg.Doc})
+	}
+	if c.Result != nil {
+		typ, err := lang.ParseType(c.Result.Type)
+		if err != nil {
+			return options, fmt.Errorf("result: %w", err)
+		}
+		options.Result = &typ
+		options.ResultDoc = c.Result.Doc
+	}
+	return options, nil
 }
 
 type compileResponse struct {
@@ -82,12 +126,7 @@ func (s *Server) parse(response http.ResponseWriter, request *http.Request) {
 	if !ok {
 		return
 	}
-	expr, err := s.parsePayload(payload)
-	if err != nil {
-		writeAPIError(response, http.StatusUnprocessableEntity, "PARSE_ERROR", err)
-		return
-	}
-	encoded, err := lang.ExportExprJSON(expr)
+	encoded, err := s.parsePayload(payload)
 	if err != nil {
 		writeAPIError(response, http.StatusUnprocessableEntity, "PARSE_ERROR", err)
 		return
@@ -95,11 +134,11 @@ func (s *Server) parse(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]any{"expr_json": json.RawMessage(encoded)})
 }
 
-func (s *Server) parsePayload(payload expressionRequest) (lang.Expr, error) {
+func (s *Server) parsePayload(payload expressionRequest) ([]byte, error) {
 	if strings.TrimSpace(payload.Source) == "" {
 		return nil, fmt.Errorf("source is required")
 	}
-	return lang.Parse(payload.Source)
+	return lang.ParseToJSON(payload.Source)
 }
 
 func (s *Server) compile(response http.ResponseWriter, request *http.Request) {
@@ -130,9 +169,7 @@ func (s *Server) run(response http.ResponseWriter, request *http.Request) {
 		writeAPIError(response, http.StatusInternalServerError, "INSTANTIATE_ERROR", err)
 		return
 	}
-	result, err := runtime.Run(payload.Args, lang.RunOptions{
-		Fuel: payload.Fuel, MaxRecursion: payload.MaxRecursion,
-	})
+	result, err := runtime.Run(payload.Args, lang.RunOptions{Fuel: payload.Fuel})
 	if err != nil {
 		writeAPIError(response, http.StatusUnprocessableEntity, "RUN_ERROR", err)
 		return
@@ -176,17 +213,19 @@ func (s *Server) compilePayload(payload expressionRequest) (*lang.Artifact, erro
 	if len(payload.ExprJSON) > 0 && strings.TrimSpace(payload.Source) != "" {
 		return nil, fmt.Errorf("provide either source or expr_json, not both")
 	}
+	options, err := payload.Contract.compileOptions()
+	if err != nil {
+		return nil, err
+	}
+	// Source and ExprJSON meet at the same compile path, so one can never be
+	// accepted while the other is refused.
 	if len(payload.ExprJSON) > 0 {
-		expr, err := lang.ImportExprJSON(payload.ExprJSON)
-		if err != nil {
-			return nil, err
-		}
-		return lang.CompileAST(expr, s.registry, lang.CompileOptions{})
+		return lang.CompileJSON(payload.ExprJSON, s.registry, options)
 	}
 	if strings.TrimSpace(payload.Source) == "" {
 		return nil, fmt.Errorf("source or expr_json is required")
 	}
-	return lang.CompileExpr(payload.Source, s.registry, lang.CompileOptions{})
+	return lang.CompileExpr(payload.Source, s.registry, options)
 }
 
 func summarize(artifact *lang.Artifact) compileResponse {

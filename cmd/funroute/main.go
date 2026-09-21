@@ -45,24 +45,22 @@ Commands:
   compile -expr 'if(a,b,add(1,1))'
   run     -expr 'if(a,b,add(1,1))' -args '{"a":true,"b":7}'
 
-Optional type hints use -types 'a=bool,b=int'.
-Use -profile engineer to also enable recur (Turing-complete layer).`)
+The contract is the host's: -types 'a=bool,b=int' declares the arguments and
+their order. Without it both are inferred.`)
 }
 
 type commonFlags struct {
-	set     *flag.FlagSet
-	expr    *string
-	types   *string
-	profile *string
+	set   *flag.FlagSet
+	expr  *string
+	types *string
 }
 
 func flags(name string) commonFlags {
 	set := flag.NewFlagSet(name, flag.ContinueOnError)
 	return commonFlags{
-		set:     set,
-		expr:    set.String("expr", "", "expression source"),
-		types:   set.String("types", "", "comma-separated argument type hints"),
-		profile: set.String("profile", "operator", "authoring profile: operator or engineer"),
+		set:   set,
+		expr:  set.String("expr", "", "expression source"),
+		types: set.String("types", "", "comma-separated argument type hints"),
 	}
 }
 
@@ -93,11 +91,7 @@ func exportExpr(args []string) error {
 	if *common.expr == "" {
 		return fmt.Errorf("-expr is required")
 	}
-	expr, err := lang.Parse(*common.expr)
-	if err != nil {
-		return err
-	}
-	encoded, err := lang.ExportExprJSON(expr)
+	encoded, err := lang.ParseToJSON(*common.expr)
 	if err != nil {
 		return err
 	}
@@ -130,7 +124,6 @@ func run(args []string) error {
 	common := flags("run")
 	argsSource := common.set.String("args", "{}", "JSON object containing argument values")
 	fuel := common.set.Uint64("fuel", 10_000, "execution fuel")
-	maxRecursion := common.set.Int("max-recursion", 128, "maximum recursive calls")
 	if err := common.set.Parse(args); err != nil {
 		return err
 	}
@@ -138,7 +131,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	registry, err := newRegistry(*common.profile)
+	registry, err := newRegistry()
 	if err != nil {
 		return err
 	}
@@ -150,7 +143,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := runtime.Run(rawArgs, lang.RunOptions{Fuel: *fuel, MaxRecursion: *maxRecursion})
+	result, err := runtime.Run(rawArgs, lang.RunOptions{Fuel: *fuel})
 	if err != nil {
 		return err
 	}
@@ -180,42 +173,35 @@ func compileSource(common commonFlags) (*lang.Artifact, error) {
 	if *common.expr == "" {
 		return nil, fmt.Errorf("-expr is required")
 	}
-	hints, err := parseTypes(*common.types)
+	contract, err := parseContract(*common.types)
 	if err != nil {
 		return nil, err
 	}
-	registry, err := newRegistry(*common.profile)
+	registry, err := newRegistry()
 	if err != nil {
 		return nil, err
 	}
-	return lang.CompileExpr(*common.expr, registry, lang.CompileOptions{ArgTypes: hints})
+	return lang.CompileExpr(*common.expr, registry, lang.CompileOptions{Args: contract})
 }
 
-// newRegistry builds the console the flag asks for: which lazy forms are
-// enabled is the whole difference between the two.
-func newRegistry(profile string) (*lang.Registry, error) {
-	forms := []lang.Form{lang.SwitchForm, lang.ForForm, lang.ReduceForm}
-	switch profile {
-	case "", "operator":
-	case "engineer":
-		forms = append(forms, lang.RecurForm)
-	default:
-		return nil, fmt.Errorf("unknown profile %q", profile)
-	}
+// newRegistry is the kernel with every lazy form enabled. Domain functions are
+// the host's business, so the CLI registers none.
+func newRegistry() (*lang.Registry, error) {
 	registry := lang.CoreRegistry()
-	if err := registry.EnableForm(forms...); err != nil {
+	if err := registry.EnableForm(lang.SwitchForm, lang.ForForm, lang.ReduceForm); err != nil {
 		return nil, err
 	}
 	return registry, nil
 }
 
-func parseTypes(source string) (map[string]lang.Type, error) {
-	hints := map[string]lang.Type{}
+// parseContract reads -types 'a=bool,b=int'. The text is ordered, so the
+// contract it produces is ordered too, and that order is the artifact's ABI.
+func parseContract(source string) ([]lang.ArgSpec, error) {
 	if strings.TrimSpace(source) == "" {
-		return hints, nil
+		return nil, nil
 	}
-	parts := splitTopLevel(source)
-	for _, part := range parts {
+	var contract []lang.ArgSpec
+	for _, part := range splitTopLevel(source) {
 		pair := strings.SplitN(strings.TrimSpace(part), "=", 2)
 		if len(pair) != 2 || strings.TrimSpace(pair[0]) == "" {
 			return nil, fmt.Errorf("invalid type hint %q", part)
@@ -225,12 +211,9 @@ func parseTypes(source string) (map[string]lang.Type, error) {
 		if err != nil {
 			return nil, fmt.Errorf("type hint %s: %w", name, err)
 		}
-		if _, exists := hints[name]; exists {
-			return nil, fmt.Errorf("duplicate type hint %q", name)
-		}
-		hints[name] = typ
+		contract = append(contract, lang.ArgSpec{Name: name, Type: typ})
 	}
-	return hints, nil
+	return contract, nil
 }
 
 func splitTopLevel(source string) []string {

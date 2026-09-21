@@ -1,42 +1,46 @@
-package lang
+package compile
 
 import (
 	"fmt"
+	"funroute/lang/internal/machine"
+	"funroute/lang/internal/syntax"
 	"strings"
 )
 
 // record stamps the inferred type of expr into every candidate state.
-func record(expr Expr, results []inferResult) []inferResult {
+func record(expr syntax.Expr, results []inferResult) []inferResult {
 	for _, result := range results {
 		result.state.nodeTypes[expr.NodeID()] = result.typ
 	}
 	return results
 }
 
-func inferExpr(expr Expr, state *inferState, context inferContext) ([]inferResult, error) {
+func inferExpr(expr syntax.Expr, state *inferState, context inferContext) ([]inferResult, error) {
 	switch node := expr.(type) {
-	case *LiteralExpr:
+	case *syntax.LiteralExpr:
 		return record(node, []inferResult{{typ: concreteTerm(node.Value.Type()), state: state}}), nil
-	case *VariableExpr:
+	case *syntax.VariableExpr:
 		return inferVariable(node, state, context)
-	case *ArrayExpr:
-		return inferHomogeneous(node, node.Items, ArrayKind, node.Pos, "array elements must have one type", state, context)
-	case *DictExpr:
+	case *syntax.ArrayExpr:
+		return inferHomogeneous(node, node.Items, machine.ArrayKind, node.Pos, "array elements must have one type", state, context)
+	case *syntax.DictExpr:
 		return inferDict(node, state, context)
-	case *SwitchExpr:
+	case *syntax.SwitchExpr:
 		return inferSwitch(node, state, context)
-	case *ForExpr:
+	case *syntax.ForExpr:
 		return inferFor(node, state, context)
-	case *ReduceExpr:
+	case *syntax.ReduceExpr:
 		return inferReduce(node, state, context)
-	case *CallExpr:
+	case *syntax.LetExpr:
+		return inferLet(node, state, context)
+	case *syntax.CallExpr:
 		return inferCall(node, state, context)
 	default:
 		return nil, fmt.Errorf("internal error: unsupported expression %T", expr)
 	}
 }
 
-func inferVariable(node *VariableExpr, state *inferState, context inferContext) ([]inferResult, error) {
+func inferVariable(node *syntax.VariableExpr, state *inferState, context inferContext) ([]inferResult, error) {
 	term, ok := context.args[node.Name]
 	if !ok {
 		return nil, fmt.Errorf("internal error: variable %q was not collected", node.Name)
@@ -44,17 +48,17 @@ func inferVariable(node *VariableExpr, state *inferState, context inferContext) 
 	return record(node, []inferResult{{typ: term, state: state}}), nil
 }
 
-func inferDict(node *DictExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	values := make([]Expr, len(node.Entries))
+func inferDict(node *syntax.DictExpr, state *inferState, context inferContext) ([]inferResult, error) {
+	values := make([]syntax.Expr, len(node.Entries))
 	for i, entry := range node.Entries {
 		values[i] = entry.Value
 	}
-	return inferHomogeneous(node, values, DictKind, node.Pos, "dictionary values must have one type", state, context)
+	return inferHomogeneous(node, values, machine.DictKind, node.Pos, "dictionary values must have one type", state, context)
 }
 
 // inferHomogeneous infers an array or dictionary node, whose elements all share
 // one element type.
-func inferHomogeneous(node Expr, items []Expr, kind Kind, pos int, message string, state *inferState, context inferContext) ([]inferResult, error) {
+func inferHomogeneous(node syntax.Expr, items []syntax.Expr, kind machine.Kind, pos int, message string, state *inferState, context inferContext) ([]inferResult, error) {
 	elem := state.fresh()
 	states := []*inferState{state}
 	for _, item := range items {
@@ -74,7 +78,7 @@ func inferHomogeneous(node Expr, items []Expr, kind Kind, pos int, message strin
 	return record(node, out), nil
 }
 
-func unifyElement(item Expr, elem typeTerm, states []*inferState, context inferContext) ([]*inferState, error) {
+func unifyElement(item syntax.Expr, elem typeTerm, states []*inferState, context inferContext) ([]*inferState, error) {
 	var next []*inferState
 	for _, partial := range states {
 		inferred, err := inferExpr(item, partial, context)
@@ -97,7 +101,7 @@ type partialSwitch struct {
 	result  typeTerm
 }
 
-func inferSwitch(node *SwitchExpr, state *inferState, context inferContext) ([]inferResult, error) {
+func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContext) ([]inferResult, error) {
 	subjects, err := inferSwitchSubject(node, state, context)
 	if err != nil {
 		return nil, err
@@ -129,14 +133,14 @@ func inferSwitch(node *SwitchExpr, state *inferState, context inferContext) ([]i
 // inferSwitchSubject types the subject. The subjectless form has none, and its
 // matches are conditions — which is exactly a bool subject, so both forms share
 // the unification below.
-func inferSwitchSubject(node *SwitchExpr, state *inferState, context inferContext) ([]inferResult, error) {
+func inferSwitchSubject(node *syntax.SwitchExpr, state *inferState, context inferContext) ([]inferResult, error) {
 	if node.Value != nil {
 		return inferExpr(node.Value, state, context)
 	}
-	return []inferResult{{typ: scalarTerm(BoolKind), state: state}}, nil
+	return []inferResult{{typ: scalarTerm(machine.BoolKind), state: state}}, nil
 }
 
-func inferSwitchCase(item SwitchCaseExpr, partials []partialSwitch, context inferContext) ([]partialSwitch, error) {
+func inferSwitchCase(item syntax.SwitchCaseExpr, partials []partialSwitch, context inferContext) ([]partialSwitch, error) {
 	var next []partialSwitch
 	for _, partial := range partials {
 		matched, err := inferMatches(item.Match, partial, context)
@@ -155,7 +159,7 @@ func inferSwitchCase(item SwitchCaseExpr, partials []partialSwitch, context infe
 }
 
 // inferMatches unifies every value of a multi-value branch with the subject.
-func inferMatches(matches []Expr, partial partialSwitch, context inferContext) ([]*inferState, error) {
+func inferMatches(matches []syntax.Expr, partial partialSwitch, context inferContext) ([]*inferState, error) {
 	states := []*inferState{partial.state}
 	for _, match := range matches {
 		candidates, err := unifyElement(match, partial.subject, states, context)
@@ -181,7 +185,7 @@ func unifyResults(results []inferResult, partial partialSwitch) []partialSwitch 
 	return next
 }
 
-func inferSwitchDefault(fallback Expr, partials []partialSwitch, context inferContext) ([]inferResult, error) {
+func inferSwitchDefault(fallback syntax.Expr, partials []partialSwitch, context inferContext) ([]inferResult, error) {
 	var out []inferResult
 	for _, partial := range partials {
 		fallbacks, err := inferExpr(fallback, partial.state, context)
@@ -198,7 +202,7 @@ func inferSwitchDefault(fallback Expr, partials []partialSwitch, context inferCo
 	return out, nil
 }
 
-func inferFor(node *ForExpr, state *inferState, context inferContext) ([]inferResult, error) {
+func inferFor(node *syntax.ForExpr, state *inferState, context inferContext) ([]inferResult, error) {
 	sources, err := inferExpr(node.Source, state, context)
 	if err != nil {
 		return nil, err
@@ -212,23 +216,41 @@ func inferFor(node *ForExpr, state *inferState, context inferContext) ([]inferRe
 		out = append(out, yielded...)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("type error at byte %d: for source must be an array and condition must be bool", node.Pos)
+		return nil, fmt.Errorf("type error at byte %d: %s and the condition must be bool", node.Pos, loopSourceHint(node.KeyVariable))
 	}
 	return record(node, out), nil
 }
 
-func inferForSource(node *ForExpr, source inferResult, context inferContext) ([]inferResult, error) {
+func inferForSource(node *syntax.ForExpr, source inferResult, context inferContext) ([]inferResult, error) {
 	candidate := source.state.clone()
 	elem := candidate.fresh()
-	if err := candidate.unify(source.typ, containerTerm(ArrayKind, elem)); err != nil {
+	if err := candidate.unify(source.typ, containerTerm(loopKind(node.KeyVariable), elem)); err != nil {
 		return nil, nil
 	}
-	local := withLocal(context, node.Variable, elem)
+	local := withLoopLocals(context, node.KeyVariable, node.Variable, elem)
 	states, err := filterCondition(node.Where, []*inferState{candidate}, local)
 	if err != nil {
 		return nil, err
 	}
 	return inferYield(node.Yield, states, local)
+}
+
+// loopKind is what the source must be: two loop variables mean a dictionary.
+func loopKind(key string) machine.Kind {
+	if key == "" {
+		return machine.ArrayKind
+	}
+	return machine.DictKind
+}
+
+// withLoopLocals binds the value variable, plus the key variable (always
+// string) when the loop walks a dictionary.
+func withLoopLocals(context inferContext, key, value string, elem typeTerm) inferContext {
+	local := withLocal(context, value, elem)
+	if key == "" {
+		return local
+	}
+	return withLocal(local, key, scalarTerm(machine.StringKind))
 }
 
 // withLocal binds a `for` local name without touching the outer arguments.
@@ -242,7 +264,7 @@ func withLocal(context inferContext, name string, term typeTerm) inferContext {
 	return local
 }
 
-func filterCondition(where Expr, states []*inferState, context inferContext) ([]*inferState, error) {
+func filterCondition(where syntax.Expr, states []*inferState, context inferContext) ([]*inferState, error) {
 	if where == nil {
 		return states, nil
 	}
@@ -254,7 +276,7 @@ func filterCondition(where Expr, states []*inferState, context inferContext) ([]
 		}
 		for _, condition := range conditions {
 			candidate := condition.state.clone()
-			if err := candidate.unify(condition.typ, scalarTerm(BoolKind)); err == nil {
+			if err := candidate.unify(condition.typ, scalarTerm(machine.BoolKind)); err == nil {
 				filtered = append(filtered, candidate)
 			}
 		}
@@ -262,7 +284,7 @@ func filterCondition(where Expr, states []*inferState, context inferContext) ([]
 	return filtered, nil
 }
 
-func inferYield(yield Expr, states []*inferState, context inferContext) ([]inferResult, error) {
+func inferYield(yield syntax.Expr, states []*inferState, context inferContext) ([]inferResult, error) {
 	var out []inferResult
 	for _, partial := range states {
 		yields, err := inferExpr(yield, partial, context)
@@ -270,7 +292,7 @@ func inferYield(yield Expr, states []*inferState, context inferContext) ([]infer
 			return nil, err
 		}
 		for _, result := range yields {
-			out = append(out, inferResult{typ: containerTerm(ArrayKind, result.typ), state: result.state})
+			out = append(out, inferResult{typ: containerTerm(machine.ArrayKind, result.typ), state: result.state})
 		}
 	}
 	return out, nil
@@ -282,31 +304,47 @@ type partialArgs struct {
 }
 
 // inferArgs expands one candidate state per combination of argument overloads.
-func inferArgs(args []Expr, state *inferState, context inferContext) ([]partialArgs, error) {
+//
+// A candidate whose sub-expression does not type is *dropped*, not fatal: in
+// `x > 1 && x == 99` the comparison leaves two candidates (x:int from gt(int,int)
+// and x:float from the mixed gt(float,int)), and only the int one survives the
+// equality. Failing the whole inference on the first dead branch would reject a
+// perfectly good program — and which branch dies depends on the order the
+// operators were written, so it would fail inconsistently too.
+func inferArgs(args []syntax.Expr, state *inferState, context inferContext) ([]partialArgs, error) {
 	partials := []partialArgs{{state: state}}
 	for _, arg := range args {
 		var next []partialArgs
+		var dropped error
 		for _, partial := range partials {
 			inferred, err := inferExpr(arg, partial.state, context)
 			if err != nil {
-				return nil, err
+				dropped = err
+				continue
 			}
 			for _, result := range inferred {
 				argTypes := append([]typeTerm(nil), partial.args...)
 				next = append(next, partialArgs{state: result.state, args: append(argTypes, result.typ)})
 			}
 		}
+		if len(next) == 0 {
+			if dropped != nil {
+				return nil, dropped
+			}
+			return nil, nil
+		}
 		partials = next
 	}
 	return partials, nil
 }
 
-func inferCall(node *CallExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	if node.Name == "recur" {
-		return inferRecur(node, state, context)
-	}
-	functions := context.registry.functions(node.Name)
+func inferCall(node *syntax.CallExpr, state *inferState, context inferContext) ([]inferResult, error) {
+	functions := context.registry.Overloads(node.Name)
 	if len(functions) == 0 {
+		if node.Name == "recur" {
+			return nil, fmt.Errorf("recur was removed at byte %d: the language only iterates finite inputs, "+
+				"so use a comprehension or reduce (unbounded iteration belongs in an extension function)", node.Pos)
+		}
 		return nil, fmt.Errorf("unknown function %q at byte %d", node.Name, node.Pos)
 	}
 	partials, err := inferArgs(node.Args, state, context)
@@ -323,7 +361,7 @@ func inferCall(node *CallExpr, state *inferState, context inferContext) ([]infer
 	return record(node, out), nil
 }
 
-func selectOverloads(node *CallExpr, partial partialArgs, functions []*registeredFunction) []inferResult {
+func selectOverloads(node *syntax.CallExpr, partial partialArgs, functions []*machine.RegisteredFunction) []inferResult {
 	var out []inferResult
 	for _, function := range functions {
 		if len(function.Params) != len(node.Args) {
@@ -338,7 +376,7 @@ func selectOverloads(node *CallExpr, partial partialArgs, functions []*registere
 			candidate.mixed++
 		}
 		resultType := candidate.instantiate(function.Result, vars)
-		candidate.selections[node.ID] = function.key
+		candidate.selections[node.ID] = function.Key()
 		out = append(out, inferResult{typ: resultType, state: candidate})
 	}
 	return out
@@ -346,16 +384,16 @@ func selectOverloads(node *CallExpr, partial partialArgs, functions []*registere
 
 // isMixedNumeric reports a signature like (int, float) — one that only exists
 // to allow safe promotion.
-func isMixedNumeric(params []Type) bool {
+func isMixedNumeric(params []machine.Type) bool {
 	if len(params) != 2 || params[0].Equal(params[1]) {
 		return false
 	}
 	return numericKind(params[0].Kind) && numericKind(params[1].Kind)
 }
 
-func numericKind(kind Kind) bool { return kind == IntKind || kind == FloatKind }
+func numericKind(kind machine.Kind) bool { return kind == machine.IntKind || kind == machine.FloatKind }
 
-func unifyParams(state *inferState, args []typeTerm, params []Type, vars map[string]typeTerm) bool {
+func unifyParams(state *inferState, args []typeTerm, params []machine.Type, vars map[string]typeTerm) bool {
 	for i, param := range params {
 		if err := state.unify(args[i], state.instantiate(param, vars)); err != nil {
 			return false
@@ -364,7 +402,7 @@ func unifyParams(state *inferState, args []typeTerm, params []Type, vars map[str
 	return true
 }
 
-func noOverloadError(node *CallExpr, partials []partialArgs) error {
+func noOverloadError(node *syntax.CallExpr, partials []partialArgs) error {
 	actual := make([]string, len(node.Args))
 	if len(partials) > 0 {
 		for i, arg := range partials[0].args {
@@ -374,41 +412,7 @@ func noOverloadError(node *CallExpr, partials []partialArgs) error {
 	return fmt.Errorf("type error at byte %d: no overload %s(%s)", node.Pos, node.Name, strings.Join(actual, ", "))
 }
 
-// inferRecur keeps the legacy recursive opcode inferable for old artifacts; the
-// source parser rejects `recur` in the operator-facing language.
-func inferRecur(node *CallExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	if len(node.Args) != len(context.recursiveParams) {
-		return nil, fmt.Errorf("type error at byte %d: recur expects %d arguments, got %d", node.Pos, len(context.recursiveParams), len(node.Args))
-	}
-	partials, err := inferArgs(node.Args, state, context)
-	if err != nil {
-		return nil, err
-	}
-	var out []inferResult
-	for _, partial := range partials {
-		candidate := partial.state.clone()
-		if !unifyTerms(candidate, partial.args, context.recursiveParams) {
-			continue
-		}
-		candidate.selections[node.ID] = "$recur"
-		out = append(out, inferResult{typ: context.recursiveResult, state: candidate})
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("type error at byte %d: recur arguments do not match the expression arguments", node.Pos)
-	}
-	return record(node, out), nil
-}
-
-func unifyTerms(state *inferState, left, right []typeTerm) bool {
-	for i := range left {
-		if err := state.unify(left[i], right[i]); err != nil {
-			return false
-		}
-	}
-	return true
-}
-
-func inferReduce(node *ReduceExpr, state *inferState, context inferContext) ([]inferResult, error) {
+func inferReduce(node *syntax.ReduceExpr, state *inferState, context inferContext) ([]inferResult, error) {
 	sources, err := inferExpr(node.Source, state, context)
 	if err != nil {
 		return nil, err
@@ -422,15 +426,15 @@ func inferReduce(node *ReduceExpr, state *inferState, context inferContext) ([]i
 		out = append(out, folded...)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("type error at byte %d: reduce source must be an array and the body must return the accumulator type", node.Pos)
+		return nil, fmt.Errorf("type error at byte %d: %s and the body must return the accumulator type", node.Pos, loopSourceHint(node.KeyVariable))
 	}
 	return record(node, out), nil
 }
 
-func inferReduceSource(node *ReduceExpr, source inferResult, context inferContext) ([]inferResult, error) {
+func inferReduceSource(node *syntax.ReduceExpr, source inferResult, context inferContext) ([]inferResult, error) {
 	candidate := source.state.clone()
 	elem := candidate.fresh()
-	if err := candidate.unify(source.typ, containerTerm(ArrayKind, elem)); err != nil {
+	if err := candidate.unify(source.typ, containerTerm(loopKind(node.KeyVariable), elem)); err != nil {
 		return nil, nil
 	}
 	inits, err := inferExpr(node.Init, candidate, context)
@@ -450,8 +454,8 @@ func inferReduceSource(node *ReduceExpr, source inferResult, context inferContex
 
 // inferReduceBody binds the item and the accumulator locally; the body must
 // unify with the accumulator so the fold keeps one type.
-func inferReduceBody(node *ReduceExpr, init inferResult, elem typeTerm, context inferContext) ([]inferResult, error) {
-	local := withLocal(withLocal(context, node.Variable, elem), node.Accumulator, init.typ)
+func inferReduceBody(node *syntax.ReduceExpr, init inferResult, elem typeTerm, context inferContext) ([]inferResult, error) {
+	local := withLocal(withLoopLocals(context, node.KeyVariable, node.Variable, elem), node.Accumulator, init.typ)
 	bodies, err := inferExpr(node.Body, init.state, local)
 	if err != nil {
 		return nil, err
@@ -464,4 +468,73 @@ func inferReduceBody(node *ReduceExpr, init inferResult, elem typeTerm, context 
 		}
 	}
 	return out, nil
+}
+
+// loopSourceHint explains which source shape the variable count asks for.
+func loopSourceHint(key string) string {
+	if key == "" {
+		return "the source must be an array (use two variables, [e for k, v in d], to walk a dictionary)"
+	}
+	return "two loop variables walk a dictionary, so the source must be a dict (use one variable for an array)"
+}
+
+// letScope is one candidate while walking the bindings: the inference state
+// plus the context the following bindings and the body will see.
+type letScope struct {
+	state   *inferState
+	context inferContext
+}
+
+func inferLet(node *syntax.LetExpr, state *inferState, context inferContext) ([]inferResult, error) {
+	scopes, err := inferLetBindings(node, state, context)
+	if err != nil {
+		return nil, err
+	}
+	var out []inferResult
+	var dropped error
+	for _, scope := range scopes {
+		bodies, err := inferExpr(node.Body, scope.state, scope.context)
+		if err != nil {
+			dropped = err
+			continue
+		}
+		out = append(out, bodies...)
+	}
+	if len(out) == 0 {
+		if dropped != nil {
+			return nil, dropped
+		}
+		return nil, fmt.Errorf("type error at byte %d: the let body is not typeable", node.Pos)
+	}
+	return record(node, out), nil
+}
+
+// inferLetBindings types the bindings in order, each one visible to the next.
+func inferLetBindings(node *syntax.LetExpr, state *inferState, context inferContext) ([]letScope, error) {
+	scopes := []letScope{{state: state, context: context}}
+	for _, binding := range node.Bindings {
+		var next []letScope
+		var dropped error
+		for _, scope := range scopes {
+			values, err := inferExpr(binding.Value, scope.state, scope.context)
+			if err != nil {
+				dropped = err
+				continue
+			}
+			for _, value := range values {
+				next = append(next, letScope{
+					state:   value.state,
+					context: withLocal(scope.context, binding.Name, value.typ),
+				})
+			}
+		}
+		if len(next) == 0 {
+			if dropped != nil {
+				return nil, dropped
+			}
+			return nil, fmt.Errorf("type error at byte %d: let binding %q is not typeable", node.Pos, binding.Name)
+		}
+		scopes = next
+	}
+	return scopes, nil
 }

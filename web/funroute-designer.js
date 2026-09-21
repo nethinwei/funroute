@@ -1,4 +1,4 @@
-import { expressionSource, logicalForm } from "./funroute-source.js";
+import { VALUE_TEMPLATES, blankFields, blankNode, clone, cleanNode, formatSource, indexNodes, logicalForm } from "./funroute-source.js";
 
 const MIME = "application/x-funroute-node";
 
@@ -14,15 +14,38 @@ const DERIVED_TEMPLATES = {
   not: () => ({ node: "call", name: "if", args: [null, { node: "bool", bool: false }, { node: "bool", bool: true }] }),
 };
 
-const VALUE_TEMPLATES = [
-  { id: "value:var", node: "var", label: "参数", description: "自动成为 args 参数", icon: "𝑥", color: "#475569" },
-  { id: "value:int", node: "int", label: "整数", description: "int64 立即值", icon: "1", color: "#2563EB" },
-  { id: "value:float", node: "float", label: "浮点数", description: "有限 float64 立即值", icon: ".", color: "#0891B2" },
-  { id: "value:string", node: "string", label: "字符串", description: "UTF-8 立即值", icon: "”", color: "#059669" },
-  { id: "value:bool", node: "bool", label: "布尔值", description: "true / false", icon: "?", color: "#0EA5E9" },
-  { id: "value:array", node: "array", label: "数组", description: "元素必须同型", icon: "[ ]", color: "#D97706" },
-  { id: "value:dict", node: "dict", label: "字典", description: "string key、value 同型", icon: "{ }", color: "#EA580C" },
-];
+// The canvas renders a node from its schema, which the catalog carries from
+// the compiler's own definitions: which fields it has, which hold expressions,
+// names or lists. Only the wording is the front end's, and it lives here; a
+// field without an entry is labelled by its name.
+const FIELD_TEXT = {
+  "array.items": ["元素", "元素必须同型"],
+  "dict.entries": ["键值", "value 同型"],
+  "dict.entries.key": ["键", "string"],
+  "dict.entries.value": ["值", "与其他值同型"],
+  "switch.value": ["待匹配值", "留空则每个分支是 bool 条件"],
+  "switch.cases": ["分支", "任一匹配即选中"],
+  "switch.cases.match": ["匹配值", "与待匹配值同类型；无待匹配值时为 bool"],
+  "switch.cases.result": ["返回结果", "所有结果同类型"],
+  "switch.default": ["默认结果（else）", "未匹配时返回"],
+  "for.source": ["输入", "array<T> 或 dict<T>"],
+  "for.variable": ["元素局部名", "仅本节点可见"],
+  "for.key_variable": ["键局部名", "填写即遍历字典"],
+  "for.where": ["筛选条件", "bool；留空表示全部"],
+  "for.yield": ["产出表达式", "每个保留元素产出一个值"],
+  "reduce.source": ["输入", "array<T> 或 dict<T>"],
+  "reduce.variable": ["元素局部名", "仅本节点可见"],
+  "reduce.key_variable": ["键局部名", "填写即遍历字典"],
+  "reduce.accumulator": ["累加器局部名", "仅本节点可见"],
+  "reduce.init": ["初始值", "累加器初值 R"],
+  "reduce.body": ["累加表达式", "必须返回 R"],
+  "let.bindings": ["绑定", "后续绑定与主体可引用"],
+  "let.bindings.name": ["名称", "仅本节点可见"],
+  "let.bindings.value": ["值", ""],
+  "let.body": ["主体", "整体结果"],
+};
+
+const NAME_PATTERN = "[A-Za-z_][A-Za-z0-9_]*";
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -31,82 +54,23 @@ function element(tag, className, text) {
   return node;
 }
 
-function clone(value) {
-  return value == null ? value : JSON.parse(JSON.stringify(value));
+function button(label, ghost, onClick) {
+  const control = element("button", `fr-button fr-button--small${ghost ? " fr-button--ghost" : ""}`, label);
+  control.type = "button";
+  control.addEventListener("click", onClick);
+  return control;
 }
 
-function cleanNode(node) {
-  if (!node) return null;
-  switch (node.node) {
-    case "call":
-      return { node: "call", name: node.name, args: (node.args || []).map(cleanNode) };
-    case "array":
-      return { node: "array", items: (node.items || []).map(cleanNode) };
-    case "dict":
-      return {
-        node: "dict",
-        entries: (node.entries || []).map((entry) => ({ key: entry.key || "", value: cleanNode(entry.value) })),
-      };
-    case "switch":
-      return {
-        node: "switch",
-        // A missing subject is the condition form; the field is omitted so the
-        // JSON matches what the Go side exports.
-        ...(node.value ? { value: cleanNode(node.value) } : {}),
-        cases: (node.cases || []).map((item) => ({
-          match: (item.match || []).map(cleanNode),
-          result: cleanNode(item.result),
-        })),
-        default: cleanNode(node.default),
-      };
-    case "for":
-      return {
-        node: "for",
-        source: cleanNode(node.source),
-        variable: node.variable || "item",
-        ...(node.where ? { where: cleanNode(node.where) } : {}),
-        yield: cleanNode(node.yield),
-      };
-    case "reduce":
-      return {
-        node: "reduce",
-        source: cleanNode(node.source),
-        variable: node.variable || "item",
-        accumulator: node.accumulator || "acc",
-        init: cleanNode(node.init),
-        body: cleanNode(node.body),
-      };
-    case "prog":
-      return { node: "prog", steps: (node.steps || []).map(cleanNode) };
-    case "var":
-      return { node: "var", name: node.name || "value" };
-    case "int":
-      return { node: "int", int: Number.isFinite(Number(node.int)) ? Math.trunc(Number(node.int)) : 0 };
-    case "float":
-      return { node: "float", float: String(node.float ?? "0.0") };
-    case "string":
-      return { node: "string", string: String(node.string ?? "") };
-    case "bool":
-      return { node: "bool", bool: Boolean(node.bool) };
-    default:
-      throw new Error(`不支持的节点 ${node.node}`);
-  }
+function fieldText(key, field) {
+  const [label, hint] = FIELD_TEXT[key] || [field.name, ""];
+  return { label: field.optional ? `${label}（可空）` : label, hint };
 }
-
-function typeName(type) {
-  if (!type) return "动态";
-  if (type.kind === "array" || type.kind === "dict") return `${type.kind}<${typeName(type.elem)}>`;
-  return type.name || type.kind || "动态";
-}
-
-// SPECIAL_NODES are the lazy forms the catalog describes as special forms; they
-// are rendered by dedicated cards instead of the generic call card.
-const SPECIAL_NODES = new Set(["switch", "for", "reduce", "prog"]);
 
 export class FunRouteDesigner extends HTMLElement {
   constructor() {
     super();
     this._catalog = { functions: [], special_forms: [] };
+    this._nodes = new Map();
     this._root = null;
     this._templates = new Map();
     this._functionDescriptors = new Map();
@@ -121,6 +85,7 @@ export class FunRouteDesigner extends HTMLElement {
 
   set catalog(value) {
     this._catalog = clone(value || { functions: [], special_forms: [] });
+    this._nodes = indexNodes(this._catalog.nodes);
     this._rebuildTemplates();
     this.render();
   }
@@ -135,10 +100,10 @@ export class FunRouteDesigner extends HTMLElement {
   }
 
   get value() {
-    return { version: EXPR_JSON_VERSION, expr: cleanNode(this._root) };
+    return { version: EXPR_JSON_VERSION, expr: cleanNode(this._root, this._nodes) };
   }
 
-  get source() { return expressionSource(this._root); }
+  get source() { return formatSource(this._root); }
 
   clear() {
     this._root = null;
@@ -278,39 +243,18 @@ export class FunRouteDesigner extends HTMLElement {
     return card;
   }
 
+  // A fresh node comes from its schema: a value or a lazy form is blankNode of
+  // its definition, a function call has one empty slot per parameter, and a
+  // derived form is its fixed if shape.
   _createTemplate(templateId) {
     const template = this._templates.get(templateId);
     if (!template) throw new Error(`未知模板 ${templateId}`);
-    if (template.kind === "value") {
-      switch (template.descriptor.node) {
-        case "var": return { node: "var", name: "value" };
-        case "int": return { node: "int", int: 0 };
-        case "float": return { node: "float", float: "0.0" };
-        case "string": return { node: "string", string: "" };
-        case "bool": return { node: "bool", bool: false };
-        case "array": return { node: "array", items: [] };
-        case "dict": return { node: "dict", entries: [] };
-      }
-    }
     const descriptor = template.descriptor;
-    if (DERIVED_TEMPLATES[descriptor.special]) {
-      return DERIVED_TEMPLATES[descriptor.special]();
-    }
-    if (descriptor.special === "switch") {
-      return { node: "switch", value: null, cases: [{ match: [null], result: null }], default: null };
-    }
-    if (descriptor.special === "for") {
-      return { node: "for", source: null, variable: "item", where: null, yield: { node: "var", name: "item" } };
-    }
-    if (descriptor.special === "reduce") {
-      return {
-        node: "reduce", source: null, variable: "item", accumulator: "acc",
-        init: null, body: { node: "var", name: "acc" },
-      };
-    }
-    if (descriptor.special === "prog") {
-      return { node: "prog", steps: [null, null] };
-    }
+    if (template.kind === "value") return blankNode(this._schema(descriptor.node));
+    if (DERIVED_TEMPLATES[descriptor.special]) return DERIVED_TEMPLATES[descriptor.special]();
+    // A lazy form is its own node; the kernel's if is special too, but it is
+    // still a call.
+    if (this._nodes.has(descriptor.special)) return blankNode(this._schema(descriptor.special));
     const arity = descriptor.variadic ? 1 : (descriptor.params || []).length;
     return {
       node: "call",
@@ -318,6 +262,12 @@ export class FunRouteDesigner extends HTMLElement {
       args: Array(arity).fill(null),
       ...(descriptor.overloads?.length === 1 ? { _signature: descriptor.signature } : {}),
     };
+  }
+
+  _schema(node) {
+    const schema = this._nodes.get(node);
+    if (!schema) throw new Error(`目录没有描述节点 ${node}`);
+    return schema;
   }
 
   _descriptor(node) {
@@ -328,36 +278,35 @@ export class FunRouteDesigner extends HTMLElement {
       || { name: node.name, params: [], result: null, display: { label: node.name, category: "未知", color: "#64748B" } };
   }
 
+  _specialDescriptor(special) {
+    return (this._catalog.special_forms || []).find((item) => item.special === special) || null;
+  }
+
+  // _presentation is the card's colour, title, icon and blurb: from the
+  // function catalog for a call, from the special-form catalog for a lazy form,
+  // from the value templates for the rest.
+  _presentation(node, logical) {
+    if (node.node === "call") {
+      const descriptor = logical ? this._specialDescriptor(logical.kind) : this._descriptor(node);
+      const display = descriptor?.display || {};
+      return { descriptor, color: display.color, title: display.label || node.name, icon: display.icon || "ƒ",
+        description: display.description || descriptor?.signature || "" };
+    }
+    const special = this._specialDescriptor(node.node);
+    if (special) {
+      const display = special.display || {};
+      return { color: display.color || "#7C3AED", title: display.label || node.node, icon: display.icon || "ƒ", description: display.description || "" };
+    }
+    const value = VALUE_TEMPLATES.find((item) => item.node === node.node);
+    return value ? { color: value.color, title: value.label, icon: value.icon, description: value.description }
+      : { title: node.node, icon: "•", description: "" };
+  }
+
   _renderNode(node, path) {
     const card = element("div", `fr-node fr-node--${node.node}`);
-    let color = "#64748B";
-    let title = node.node;
-    let iconText = "•";
-    let description = "";
-    let descriptor = null;
     const logical = logicalForm(node);
-    if (node.node === "call") {
-      descriptor = logical ? this._specialDescriptor(logical.kind) : this._descriptor(node);
-      color = descriptor.display?.color || color;
-      title = descriptor.display?.label || node.name;
-      iconText = descriptor.display?.icon || "ƒ";
-      description = descriptor.display?.description || descriptor.signature || "";
-    } else if (SPECIAL_NODES.has(node.node)) {
-      descriptor = (this._catalog.special_forms || []).find((item) => item.special === node.node);
-      color = descriptor?.display?.color || "#7C3AED";
-      title = descriptor?.display?.label || node.node;
-      iconText = descriptor?.display?.icon || "ƒ";
-      description = descriptor?.display?.description || "";
-    } else {
-      const valueDescriptor = VALUE_TEMPLATES.find((item) => item.node === node.node);
-      if (valueDescriptor) {
-        color = valueDescriptor.color;
-        title = valueDescriptor.label;
-        iconText = valueDescriptor.icon;
-        description = valueDescriptor.description;
-      }
-    }
-    card.style.setProperty("--fr-accent", color);
+    const look = this._presentation(node, logical);
+    card.style.setProperty("--fr-accent", look.color || "#64748B");
     const header = element("div", "fr-node__header");
     const drag = element("span", "fr-drag", "⠿");
     drag.draggable = true;
@@ -367,31 +316,30 @@ export class FunRouteDesigner extends HTMLElement {
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData(MIME, JSON.stringify({ origin: "node", path }));
     });
-    const icon = element("span", "fr-node__icon", iconText);
     const heading = element("span", "fr-node__heading");
-    heading.append(element("strong", "", title));
-    if (description) heading.append(element("small", "", description));
+    heading.append(element("strong", "", look.title));
+    if (look.description) heading.append(element("small", "", look.description));
     const remove = element("button", "fr-node__remove", "×");
     remove.type = "button";
     remove.title = "删除节点";
     remove.addEventListener("click", () => this._removeAtPath(path));
-    header.append(drag, icon, heading, remove);
-    card.append(header);
-
-    if (logical) card.append(this._renderLogical(node, path, logical, descriptor));
-    else if (node.node === "call") card.append(this._renderCall(node, path, descriptor));
-    else if (node.node === "switch") card.append(this._renderSwitch(node, path));
-    else if (node.node === "for") card.append(this._renderFor(node, path));
-    else if (node.node === "reduce") card.append(this._renderReduce(node, path));
-    else if (node.node === "prog") card.append(this._renderProg(node, path));
-    else if (node.node === "array") card.append(this._renderArray(node, path));
-    else if (node.node === "dict") card.append(this._renderDict(node, path));
-    else card.append(this._renderValueEditor(node, path));
+    header.append(drag, element("span", "fr-node__icon", look.icon), heading, remove);
+    card.append(header, this._renderBody(node, path, logical, look.descriptor));
     return card;
   }
 
-  _specialDescriptor(special) {
-    return (this._catalog.special_forms || []).find((item) => item.special === special) || null;
+  // A call is laid out by the function catalog, a literal or variable by its
+  // editor, and every other node by its schema.
+  _renderBody(node, path, logical, descriptor) {
+    if (logical) return this._renderLogical(node, path, logical, descriptor);
+    if (node.node === "call") return this._renderCall(node, path, descriptor);
+    const schema = this._schema(node.node);
+    if (schema.fields.every((field) => !["expr", "exprs", "list"].includes(field.kind))) {
+      return this._renderValueEditor(node, schema);
+    }
+    const body = element("div", "fr-node__body");
+    this._renderFields(body, node, schema.fields, path, node.node);
+    return body;
   }
 
   // A derived form shows only its operands; the fixed branch stays hidden so it
@@ -420,177 +368,93 @@ export class FunRouteDesigner extends HTMLElement {
       row.append(label, arg ? this._renderNode(arg, argPath) : this._dropZone(argPath, labels[index]?.placeholder || "拖入参数"));
       body.append(row);
     });
-    if (descriptor.variadic) {
-      const controls = element("div", "fr-inline-actions");
-      const add = element("button", "fr-button fr-button--small", "+ 参数槽");
-      add.type = "button";
-      add.addEventListener("click", () => {
-        node.args.push(null);
-        this.render();
-        this._emitChange();
-      });
-      const subtract = element("button", "fr-button fr-button--small fr-button--ghost", "− 参数槽");
-      subtract.type = "button";
-      subtract.disabled = node.args.length === 0;
-      subtract.addEventListener("click", () => {
-        node.args.pop();
-        this.render();
-        this._emitChange();
-      });
-      controls.append(add, subtract);
-      body.append(controls);
+    if (descriptor.variadic) body.append(this._listControls(node.args, 0, () => null));
+    return body;
+  }
+
+  // _renderFields lays out one struct — a node or a list item — field by field.
+  // key prefixes the wording lookup, so "let.bindings.name" finds its label.
+  _renderFields(body, target, fields, path, key) {
+    for (const field of fields) {
+      const text = fieldText(`${key}.${field.name}`, field);
+      const fieldPath = [...path, field.name];
+      switch (field.kind) {
+        case "expr":
+          body.append(this._labeledSlot(text.label, text.hint, fieldPath, target[field.name]));
+          break;
+        case "exprs":
+          this._renderExprs(body, target, field, fieldPath, text);
+          break;
+        case "list":
+          this._renderList(body, target, field, fieldPath, `${key}.${field.name}`, text);
+          break;
+        default:
+          body.append(this._nameRow(text, target, field));
+      }
     }
-    return body;
   }
 
-  _renderSwitch(node, path) {
-    const body = element("div", "fr-node__body");
-    const hint = node.value ? "所有匹配值与它同类型" : "留空则每个分支是 bool 条件";
-    body.append(this._labeledSlot("待匹配值（可空）", hint, [...path, "value"], node.value));
-    (node.cases || []).forEach((item, index) => {
-      body.append(this._renderSwitchBranch(node, item, index, path));
+  _renderExprs(body, target, field, path, text) {
+    const items = target[field.name] || (target[field.name] = []);
+    items.forEach((item, index) => {
+      body.append(this._labeledSlot(`${text.label} ${index + 1}`, text.hint, [...path, index], item));
     });
-    const add = element("button", "fr-button fr-button--small", "+ 分支");
-    add.type = "button";
-    add.addEventListener("click", () => {
-      node.cases.push({ match: [null], result: null });
-      this.render();
-      this._emitChange();
-    });
-    body.append(add, this._labeledSlot("默认结果（else）", "未匹配时返回", [...path, "default"], node.default));
-    return body;
+    body.append(this._listControls(items, field.min || 0, () => null));
   }
 
-  _renderSwitchBranch(node, item, index, path) {
-    const group = element("div", "fr-special-group");
-    const heading = element("div", "fr-special-group__header");
-    heading.append(element("strong", "", `分支 ${index + 1}`));
-    const remove = element("button", "fr-node__remove", "删除分支");
-    remove.type = "button";
-    remove.disabled = (node.cases || []).length <= 1;
-    remove.addEventListener("click", () => {
-      node.cases.splice(index, 1);
-      this.render();
-      this._emitChange();
+  _renderList(body, target, field, path, key, text) {
+    const items = target[field.name] || (target[field.name] = []);
+    items.forEach((item, index) => {
+      const group = element("div", "fr-special-group");
+      const heading = element("div", "fr-special-group__header");
+      heading.append(element("strong", "", `${text.label} ${index + 1}`));
+      const remove = element("button", "fr-node__remove", "删除");
+      remove.type = "button";
+      remove.disabled = items.length <= (field.min || 0);
+      remove.addEventListener("click", () => { items.splice(index, 1); this._changed(); });
+      heading.append(remove);
+      group.append(heading);
+      this._renderFields(group, item, field.fields, [...path, index], key);
+      body.append(group);
     });
-    heading.append(remove);
-    group.append(heading);
-    const label = node.value ? "匹配值" : "条件";
-    const typeHint = node.value ? "与待匹配值同类型" : "bool";
-    (item.match || []).forEach((match, matchIndex) => {
-      const slotPath = [...path, "cases", index, "match", matchIndex];
-      group.append(this._labeledSlot(`${label} ${matchIndex + 1}`, typeHint, slotPath, match));
-    });
-    group.append(this._matchControls(item));
-    group.append(this._labeledSlot("返回结果", "所有结果同类型", [...path, "cases", index, "result"], item.result));
-    return group;
+    body.append(this._listControls(items, field.min || 0, () => blankFields(field.fields), text.label));
   }
 
-  // A branch may list several values or conditions; any one of them selects it.
-  _matchControls(item) {
+  // _listControls adds and removes items of a list whose length the schema
+  // bounds from below.
+  _listControls(items, min, blank, label = "") {
     const controls = element("div", "fr-inline-actions");
-    const add = element("button", "fr-button fr-button--small", "+ 匹配值");
-    add.type = "button";
-    add.addEventListener("click", () => {
-      item.match.push(null);
-      this.render();
-      this._emitChange();
-    });
-    const subtract = element("button", "fr-button fr-button--small fr-button--ghost", "− 匹配值");
-    subtract.type = "button";
-    subtract.disabled = (item.match || []).length <= 1;
-    subtract.addEventListener("click", () => {
-      item.match.pop();
-      this.render();
-      this._emitChange();
-    });
+    const add = button(`+ ${label || "项"}`, false, () => { items.push(blank()); this._changed(); });
+    const subtract = button(`− ${label || "项"}`, true, () => { items.pop(); this._changed(); });
+    subtract.disabled = items.length <= min;
     controls.append(add, subtract);
     return controls;
   }
 
-  // The card follows the comprehension's reading order: what is produced, then
-  // where it comes from, then the filter.
-  _renderFor(node, path) {
-    const body = element("div", "fr-node__body");
-    body.append(this._labeledSlot("产出表达式", "每个保留元素产出一个值", [...path, "yield"], node.yield));
-    body.append(this._labeledSlot("输入数组", "array<T>", [...path, "source"], node.source));
-    const variableRow = element("label", "fr-local-name");
-    variableRow.append(element("span", "", "局部名称"));
-    const variable = element("input", "fr-input");
-    variable.value = node.variable || "item";
-    variable.pattern = "[A-Za-z_][A-Za-z0-9_]*";
-    variable.addEventListener("change", () => {
-      const previous = node.variable || "item";
-      node.variable = variable.value || "item";
-      if (node.yield?.node === "var" && node.yield.name === previous) node.yield.name = node.variable;
-      this.render();
-      this._emitChange();
-    });
-    variableRow.append(variable);
-    body.append(variableRow);
-    body.append(this._labeledSlot("筛选条件（可空）", "bool；留空表示全部", [...path, "where"], node.where));
-    return body;
-  }
-
-  _renderReduce(node, path) {
-    const body = element("div", "fr-node__body");
-    body.append(this._labeledSlot("输入数组", "array<T>", [...path, "source"], node.source));
-    body.append(this._localNameRow("元素局部名", node.variable || "item", (name) => {
-      node.variable = name;
-    }));
-    body.append(this._localNameRow("累加器局部名", node.accumulator || "acc", (name) => {
-      node.accumulator = name;
-    }));
-    body.append(this._labeledSlot("初始值", "累加器初值 R", [...path, "init"], node.init));
-    body.append(this._labeledSlot("累加表达式", "必须返回 R", [...path, "body"], node.body));
-    return body;
-  }
-
-  _renderProg(node, path) {
-    const body = element("div", "fr-node__body");
-    const steps = node.steps || [];
-    steps.forEach((step, index) => {
-      const last = index === steps.length - 1;
-      const label = last ? `末步骤 ${index + 1}` : `步骤 ${index + 1}`;
-      const hint = last ? "其类型即结果类型" : "求值后丢弃";
-      body.append(this._labeledSlot(label, hint, [...path, "steps", index], step));
-    });
-    const controls = element("div", "fr-inline-actions");
-    const add = element("button", "fr-button fr-button--small", "+ 步骤");
-    add.type = "button";
-    add.addEventListener("click", () => {
-      node.steps.push(null);
-      this.render();
-      this._emitChange();
-    });
-    const subtract = element("button", "fr-button fr-button--small fr-button--ghost", "− 步骤");
-    subtract.type = "button";
-    subtract.disabled = steps.length <= 1;
-    subtract.addEventListener("click", () => {
-      node.steps.pop();
-      this.render();
-      this._emitChange();
-    });
-    controls.append(add, subtract);
-    body.append(controls);
-    return body;
-  }
-
-  // _localNameRow edits a locally bound name; the name is not a program
-  // argument, so only this subtree sees it.
-  _localNameRow(labelText, current, apply) {
+  // _nameRow edits a name field. A local is only visible in this node; an
+  // optional one left empty is omitted, which for a loop means an array walk.
+  _nameRow(text, target, field) {
     const row = element("label", "fr-local-name");
-    row.append(element("span", "", labelText));
+    row.append(element("span", "", text.label));
     const input = element("input", "fr-input");
-    input.value = current;
-    input.pattern = "[A-Za-z_][A-Za-z0-9_]*";
+    input.value = target[field.name] || "";
+    input.placeholder = field.optional ? "留空 = 不使用" : (field.default || "");
+    if (field.kind === "name") input.pattern = NAME_PATTERN;
     input.addEventListener("change", () => {
-      apply(input.value || current);
-      this.render();
-      this._emitChange();
+      const name = input.value.trim();
+      if (name) target[field.name] = name;
+      else if (field.optional) delete target[field.name];
+      else target[field.name] = field.default || "";
+      this._changed();
     });
     row.append(input);
+    if (text.hint) row.title = text.hint;
     return row;
+  }
+
+  _changed() {
+    this.render();
+    this._emitChange();
   }
 
   _labeledSlot(labelText, typeText, path, value) {
@@ -601,10 +465,12 @@ export class FunRouteDesigner extends HTMLElement {
     return row;
   }
 
-  _renderValueEditor(node) {
+  // Literals and variables are single fields with their own input.
+  _renderValueEditor(node, schema) {
     const body = element("div", "fr-node__body fr-value-editor");
+    const field = schema.fields[0];
     let input;
-    if (node.node === "bool") {
+    if (field.kind === "bool") {
       input = element("select", "fr-input");
       for (const [label, value] of [["false", "false"], ["true", "true"]]) {
         const option = element("option", "", label);
@@ -615,64 +481,18 @@ export class FunRouteDesigner extends HTMLElement {
       input.addEventListener("change", () => { node.bool = input.value === "true"; this._emitChange(); });
     } else {
       input = element("input", "fr-input");
-      if (node.node === "int") {
-        input.type = "number";
-        input.step = "1";
-        input.value = String(node.int ?? 0);
-        input.addEventListener("change", () => { node.int = Math.trunc(Number(input.value || 0)); this._emitChange(); });
-      } else if (node.node === "float") {
-        input.type = "text";
-        input.inputMode = "decimal";
-        input.value = String(node.float ?? "0.0");
-        input.addEventListener("change", () => { node.float = input.value || "0.0"; this._emitChange(); });
-      } else if (node.node === "string") {
-        input.type = "text";
-        input.value = node.string || "";
-        input.placeholder = "字符串";
-        input.addEventListener("change", () => { node.string = input.value; this._emitChange(); });
-      } else {
-        input.type = "text";
-        input.value = node.name || "value";
-        input.placeholder = "参数名";
-        input.pattern = "[A-Za-z_][A-Za-z0-9_.@]*";
-        input.addEventListener("change", () => { node.name = input.value || "value"; this._emitChange(); });
-      }
+      input.type = field.kind === "int" ? "number" : "text";
+      if (field.kind === "int") input.step = "1";
+      if (field.kind === "float") input.inputMode = "decimal";
+      if (field.kind === "name") input.pattern = "[A-Za-z_][A-Za-z0-9_.]*";
+      input.placeholder = field.kind === "name" ? "参数名" : field.kind;
+      input.value = String(node[field.name] ?? field.default ?? "");
+      input.addEventListener("change", () => {
+        node[field.name] = field.kind === "int" ? Math.trunc(Number(input.value || 0)) : (input.value || field.default || "");
+        this._emitChange();
+      });
     }
     body.append(input);
-    return body;
-  }
-
-  _renderArray(node, path) {
-    const body = element("div", "fr-node__body");
-    (node.items || []).forEach((item, index) => {
-      const itemPath = [...path, "items", index];
-      const row = element("div", "fr-collection-row");
-      row.append(element("span", "fr-index", String(index)), item ? this._renderNode(item, itemPath) : this._dropZone(itemPath, "数组元素"));
-      body.append(row);
-    });
-    const add = element("button", "fr-button fr-button--small", "+ 元素");
-    add.type = "button";
-    add.addEventListener("click", () => { node.items.push(null); this.render(); this._emitChange(); });
-    body.append(add);
-    return body;
-  }
-
-  _renderDict(node, path) {
-    const body = element("div", "fr-node__body");
-    (node.entries || []).forEach((entry, index) => {
-      const row = element("div", "fr-dict-row");
-      const key = element("input", "fr-input fr-input--key");
-      key.value = entry.key || "";
-      key.placeholder = "key";
-      key.addEventListener("change", () => { entry.key = key.value; this._emitChange(); });
-      const valuePath = [...path, "entries", index, "value"];
-      row.append(key, entry.value ? this._renderNode(entry.value, valuePath) : this._dropZone(valuePath, "字典值"));
-      body.append(row);
-    });
-    const add = element("button", "fr-button fr-button--small", "+ 键值");
-    add.type = "button";
-    add.addEventListener("click", () => { node.entries.push({ key: "key", value: null }); this.render(); this._emitChange(); });
-    body.append(add);
     return body;
   }
 
@@ -701,8 +521,7 @@ export class FunRouteDesigner extends HTMLElement {
         this._setAtPath(sourcePath, null, false);
         this._setAtPath(path, moving, false);
       }
-      this.render();
-      this._emitChange();
+      this._changed();
     });
     return zone;
   }
@@ -719,17 +538,13 @@ export class FunRouteDesigner extends HTMLElement {
       const parent = this._getAtPath(path.slice(0, -1));
       parent[path[path.length - 1]] = value;
     }
-    if (notify) {
-      this.render();
-      this._emitChange();
-    }
+    if (notify) this._changed();
   }
 
   _removeAtPath(path) {
     if (path.length === 0) this._root = null;
     else this._setAtPath(path, null, false);
-    this.render();
-    this._emitChange();
+    this._changed();
   }
 
   _isPrefix(prefix, path) {
@@ -743,4 +558,12 @@ export class FunRouteDesigner extends HTMLElement {
   }
 }
 
-if (!customElements.get("funroute-designer")) customElements.define("funroute-designer", FunRouteDesigner);
+function typeName(type) {
+  if (!type) return "动态";
+  if (type.kind === "array" || type.kind === "dict") return `${type.kind}<${typeName(type.elem)}>`;
+  return type.name || type.kind || "动态";
+}
+
+if (!customElements.get("funroute-designer")) {
+  customElements.define("funroute-designer", FunRouteDesigner);
+}

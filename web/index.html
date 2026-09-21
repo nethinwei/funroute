@@ -18,17 +18,17 @@
   <main>
     <section class="toolbar">
       <div class="toolbar__group">
-        <button id="route-template" class="secondary" type="button">支付路由示例</button>
-        <button id="switch-template" class="secondary" type="button">switch 示例</button>
-        <button id="for-template" class="secondary" type="button">推导式示例</button>
-        <button id="reduce-template" class="secondary" type="button">reduce 示例</button>
-        <button id="cond-template" class="secondary" type="button">条件链示例</button>
-        <button id="recur-template" class="secondary" type="button">递归示例</button>
+        <!-- The example buttons are generated from funroute-examples.js. -->
+        <div id="examples" class="toolbar__examples"></div>
         <button id="compile" type="button">编译检查</button>
         <button id="run" class="run" type="button">运行</button>
       </div>
       <div id="status" class="status">正在载入函数目录…</div>
     </section>
+
+    <!-- The contract is the host's data, edited beside the canvas and sent as
+         its own field; it never becomes part of the expression text. -->
+    <section id="contract" class="contract"></section>
 
     <section class="expression-bar">
       <label for="expression">表达式（与下方节点双向同步）</label>
@@ -36,7 +36,7 @@
         <div class="editor">
           <pre class="editor__highlight" aria-hidden="true"><code id="expression-highlight"></code></pre>
           <textarea id="expression" class="editor__input" rows="1" spellcheck="false" autocomplete="off"
-                    placeholder='if(route.is_healthy@1(health),"adyen_primary","stripe_backup")'></textarea>
+                    placeholder='if(route.is_healthy_v1(health),"adyen_primary","stripe_backup")'></textarea>
         </div>
         <div class="expression-bar__actions">
           <button id="apply-expression" type="button">生成节点</button>

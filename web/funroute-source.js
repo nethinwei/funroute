@@ -2,6 +2,101 @@
 // source text into tokens. It touches no DOM, so the designer, a host console
 // and a syntax highlighter can all share it.
 
+export const VALUE_TEMPLATES = [
+  { id: "value:var", node: "var", label: "参数", description: "自动成为 args 参数", icon: "𝑥", color: "#475569" },
+  { id: "value:int", node: "int", label: "整数", description: "int64 立即值", icon: "1", color: "#2563EB" },
+  { id: "value:float", node: "float", label: "浮点数", description: "有限 float64 立即值", icon: ".", color: "#0891B2" },
+  { id: "value:string", node: "string", label: "字符串", description: "UTF-8 立即值", icon: "”", color: "#059669" },
+  { id: "value:bool", node: "bool", label: "布尔值", description: "true / false", icon: "?", color: "#0EA5E9" },
+  { id: "value:array", node: "array", label: "数组", description: "元素必须同型", icon: "[ ]", color: "#D97706" },
+  { id: "value:dict", node: "dict", label: "字典", description: "string key、value 同型", icon: "{ }", color: "#EA580C" },
+];
+
+
+export function clone(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+// indexNodes turns the catalog's node list into a lookup by node tag. The
+// schemas come from the compiler's own node definitions, so what the canvas
+// builds is what the compiler accepts.
+export function indexNodes(list) {
+  const nodes = new Map();
+  for (const schema of list || []) nodes.set(schema.node, schema);
+  return nodes;
+}
+
+// cleanNode normalises a node tree into canonical ExprJSON, field by field as
+// the schema says: an absent optional field is omitted so the JSON matches what
+// the Go side exports, and a missing name falls back to the schema's default.
+export function cleanNode(node, nodes) {
+  if (!node) return null;
+  const schema = nodes.get(node.node);
+  if (!schema) throw new Error(`不支持的节点 ${node.node}`);
+  return { node: node.node, ...cleanFields(node, schema.fields, nodes) };
+}
+
+function cleanFields(target, fields, nodes) {
+  const out = {};
+  for (const field of fields) {
+    const value = cleanField(target?.[field.name], field, nodes);
+    if (value !== undefined) out[field.name] = value;
+  }
+  return out;
+}
+
+function cleanField(value, field, nodes) {
+  switch (field.kind) {
+    case "expr": return value || !field.optional ? cleanNode(value, nodes) : undefined;
+    case "exprs": return (value || []).map((item) => cleanNode(item, nodes));
+    case "list": return (value || []).map((item) => cleanFields(item, field.fields, nodes));
+    case "name":
+    case "text": {
+      const name = value || field.default || "";
+      return name === "" && field.optional ? undefined : name;
+    }
+    case "int": return Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : 0;
+    case "float": return String(value ?? "0.0");
+    case "string": return String(value ?? "");
+    case "bool": return Boolean(value);
+    default: throw new Error(`不支持的字段类型 ${field.kind}`);
+  }
+}
+
+// blankNode is a fresh node for the canvas: every slot empty, every name at its
+// default, every list at its minimum length.
+export function blankNode(schema) {
+  return { node: schema.node, ...blankFields(schema.fields) };
+}
+
+export function blankFields(fields) {
+  const out = {};
+  for (const field of fields) {
+    const value = blankField(field);
+    if (value !== undefined) out[field.name] = value;
+  }
+  return out;
+}
+
+const LITERAL_DEFAULTS = { int: 0, float: "0.0", string: "", bool: false };
+
+function blankField(field) {
+  switch (field.kind) {
+    case "expr": return field.optional ? undefined : null;
+    case "exprs": return Array(field.min || 0).fill(null);
+    case "list": return Array.from({ length: field.min || 0 }, () => blankFields(field.fields));
+    case "name":
+    case "text": return field.optional && !field.default ? undefined : (field.default || "");
+    default: return LITERAL_DEFAULTS[field.kind];
+  }
+}
+
+function typeName(type) {
+  if (!type) return "动态";
+  if (type.kind === "array" || type.kind === "dict") return `${type.kind}<${typeName(type.elem)}>`;
+  return type.name || type.kind || "动态";
+}
+
 // Printing mirrors the parser's sugar: add(a,b) comes back as a + b, and the
 // if-patterns the parser generates for &&, ||, != and ! are recognised again,
 // so source -> nodes -> source round-trips to what the user typed.
@@ -70,13 +165,31 @@ function comprehensionSource(node) {
 // comprehensionClauses returns the "for ... in ..." and "if ..." clauses, which
 // the formatter puts on their own lines.
 function comprehensionClauses(node) {
-  const clauses = [`for ${node.variable || "item"} in ${expressionSource(node.source)}`];
+  const clauses = [`for ${loopVariables(node)} in ${expressionSource(node.source)}`];
   if (node.where) clauses.push(`if ${expressionSource(node.where)}`);
   return clauses;
 }
 
 function forHead(node) {
-  return `${node.variable || "item"} in ${expressionSource(node.source)}`;
+  return `${loopVariables(node)} in ${expressionSource(node.source)}`;
+}
+
+// floatLiteral keeps a float looking like one: ExprJSON stores 1.0 as "1", and
+// printing that back would re-parse as an int and change the program's type.
+function floatLiteral(text) {
+  const value = String(text ?? "0.0");
+  return /[.eE]/.test(value) ? value : `${value}.0`;
+}
+
+// letBindings prints "name = value" for each binding, in order.
+function letBindings(node) {
+  return (node.bindings || []).map((binding) => `${binding.name} = ${expressionSource(binding.value)}`);
+}
+
+// Two variables mean a dictionary walk, with the key first.
+function loopVariables(node) {
+  const value = node.variable || "item";
+  return node.key_variable ? `${node.key_variable}, ${value}` : value;
 }
 
 function accumulatorHead(node) {
@@ -92,7 +205,7 @@ export function expressionSource(node, parentPrecedence = 0) {
   switch (node.node) {
     case "var": return node.name || "value";
     case "int": return String(node.int ?? 0);
-    case "float": return String(node.float ?? "0.0");
+    case "float": return floatLiteral(node.float);
     case "string": return JSON.stringify(node.string ?? "");
     case "bool": return node.bool ? "true" : "false";
     // The callbacks take one argument on purpose: passing expressionSource
@@ -108,6 +221,8 @@ export function expressionSource(node, parentPrecedence = 0) {
     case "for": return comprehensionSource(node);
     case "reduce":
       return `reduce(${forHead(node)}, ${accumulatorHead(node)}, ${expressionSource(node.body)})`;
+    case "let":
+      return `let(${letBindings(node).join(", ")}, ${expressionSource(node.body)})`;
     default: return "_";
   }
 }
@@ -115,7 +230,7 @@ export function expressionSource(node, parentPrecedence = 0) {
 // One token pattern for the whole language: string, number, identifier,
 // punctuation, whitespace. It mirrors the Go lexer, which has no infix
 // operators, so a leading "-" is always part of a number literal.
-const TOKEN_PATTERN = /(\/\/[^\n]*)|("(?:[^"\\]|\\.)*")|(\d[\d_]*(?:\.\d[\d_]*)?)|([A-Za-z_][A-Za-z0-9_.]*(?:@\d+)?)|(=>|<=|>=|==|!=|&&|\|\||[+\-*/<>!])|([(),:[\]{}])|(\s+)/g;
+const TOKEN_PATTERN = /(\/\/[^\n]*)|("(?:[^"\\]|\\.)*")|(\d[\d_]*(?:\.\d[\d_]*)?)|([A-Za-z_][A-Za-z0-9_.]*)|(=>|<=|>=|==|!=|&&|\|\||[+\-*/<>!=])|([(),:[\]{}])|(\s+)/g;
 
 export function tokenize(text, formNames = new Set()) {
   const tokens = [];
@@ -133,7 +248,7 @@ export function tokenize(text, formNames = new Set()) {
 
 // Contextual keywords: they are ordinary identifiers to the lexer, but they
 // read as syntax, so they get their own colour.
-const KEYWORDS = new Set(["case", "else", "in", "from", "for"]);
+const KEYWORDS = new Set(["case", "else", "in", "from", "for", "let"]);
 
 function classifyToken(match, text, formNames) {
   const [raw, comment, string, number, identifier, operator] = match;
@@ -149,6 +264,27 @@ function classifyToken(match, text, formNames) {
   if (KEYWORDS.has(identifier)) return { kind: "keyword", text: raw };
   if (next !== "(") return { kind: "var", text: raw };
   return { kind: formNames.has(identifier) ? "form" : "fn", text: raw };
+}
+
+// contractComments renders the host's contract as comments above the
+// expression, matching what RenderWithContract produces on the Go side. The
+// comments are not syntax: the text parses to the same program with or without
+// them, and they are not carried back on a re-parse.
+export function contractComments(contract, source) {
+  const args = contract?.args || [];
+  const result = contract?.result;
+  if (!args.length && !result) return source;
+  let width = 0;
+  for (const arg of args) width = Math.max(width, arg.name.length + 1);
+  if (result) width = Math.max(width, 2);
+  const lines = args.map((arg) => commentLine(`${arg.name}:`, width, arg.type, arg.doc));
+  if (result) lines.push(commentLine("→", width, result.type, result.doc));
+  return `${lines.join("\n")}\n\n${source}`;
+}
+
+function commentLine(label, width, typeName, doc) {
+  const head = `// ${label.padEnd(width)} ${typeName}`;
+  return doc ? `${head.padEnd(28)} ${doc}` : head;
 }
 
 // Formatting keeps short expressions on one line and breaks long ones one
@@ -189,6 +325,11 @@ function splitNode(node) {
     };
     case "for": return { open: "[", parts: forParts(node), close: "]", separator: "" };
     case "reduce": return { open: "reduce(", parts: reduceParts(node), close: ")" };
+    case "let": return {
+      open: "let(",
+      parts: [...letBindings(node).map((binding) => ({ literal: binding })), node.body],
+      close: ")",
+    };
     case "array": return { open: "[", parts: node.items || [], close: "]" };
     case "dict": return {
       open: "{",

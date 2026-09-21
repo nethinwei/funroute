@@ -1,4 +1,4 @@
-package lang
+package syntax
 
 import (
 	"fmt"
@@ -37,6 +37,8 @@ const (
 	tokenOrOr
 	tokenBang
 	tokenFatArrow
+	tokenAssign
+	tokenAt
 )
 
 // operatorTokens is scanned longest-first, so "<=" wins over "<" and "->" over
@@ -47,7 +49,8 @@ var operatorTokens = []struct {
 }{
 	{"<=", tokenLessEq}, {">=", tokenGreaterEq}, {"==", tokenEqEq}, {"!=", tokenBangEq},
 	{"&&", tokenAndAnd}, {"||", tokenOrOr}, {"->", tokenArrow}, {"=>", tokenFatArrow},
-	{"+", tokenPlus}, {"-", tokenMinus}, {"*", tokenStar}, {"/", tokenSlash},
+	{"+", tokenPlus}, {"-", tokenMinus}, {"*", tokenStar}, {"/", tokenSlash}, {"=", tokenAssign},
+	{"@", tokenAt},
 	{"<", tokenLess}, {">", tokenGreater}, {"!", tokenBang},
 }
 
@@ -155,7 +158,7 @@ func isIdentifierStart(ch byte) bool {
 }
 
 func isIdentifierPart(ch byte) bool {
-	return isIdentifierStart(ch) || (ch >= '0' && ch <= '9') || ch == '.' || ch == '@'
+	return isIdentifierStart(ch) || (ch >= '0' && ch <= '9') || ch == '.'
 }
 
 func (l *lexer) number() (token, error) {

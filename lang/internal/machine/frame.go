@@ -1,67 +1,99 @@
-package lang
+package machine
 
 import "fmt"
 
 // loopFrame tracks one active `for` iteration: the input items, the local slot
 // holding the current item, and the array being built.
-// noAccumulator marks a mapping loop (for): it collects into output instead of
-// folding into an accumulator slot.
-const noAccumulator = -1
-
-// tailCall marks a recur whose value is the value of the whole program.
-const tailCall = 1
+// NoAccumulator marks a mapping loop (for): it collects into output instead of
+// folding into an accumulator slot. NoKey marks a loop over an array rather
+// than a dictionary.
+// NoAccumulator marks a loop instruction as a mapping rather than a fold, and
+// NoKey marks it as walking an array rather than a dictionary. The compiler
+// emits them; the frame reads them.
+const (
+	NoAccumulator = -1
+	NoKey         = -1
+)
 
 type loopFrame struct {
-	items      []Value
-	index      int
-	local      int
-	acc        int
-	output     []Value
-	resultType Type
+	source   Value
+	keys     []string // non-nil for a dictionary walk, sorted
+	length   int
+	index    int
+	local    int
+	keyLocal int
+	acc      int
+	output   arrayBuilder
 }
 
-func (l *loopFrame) folds() bool { return l.acc != noAccumulator }
+// item is the value the loop binds at index: an array item, or the entry
+// under the index-th sorted key.
+func (l *loopFrame) item(index int) Value {
+	if l.keys == nil {
+		return l.source.at(index)
+	}
+	value, _ := l.source.lookup(l.keys[index])
+	return value
+}
 
-// frame is one activation of the bytecode: its own stack, locals and loops,
-// sharing the fuel budget with the whole run.
+func (l *loopFrame) folds() bool { return l.acc != NoAccumulator }
+
+// frame is one activation of the bytecode: its own stack, locals and loops.
+// Without recursion there is exactly one activation per run.
 type frame struct {
-	runtime      *Runtime
-	args         []Value
-	stack        []Value
-	locals       []Value
-	localSet     []bool
-	loops        []loopFrame
-	fuel         *uint64
-	fuelLeft     uint64
-	fuelCell     uint64 // budget storage for a top-level run, kept off the heap
-	maxStack     int
-	maxRecursion int
-	depth        int
-	stackArray   [16]Value
-	argsArray    [8]Value
+	runtime    *Runtime
+	args       []Value
+	stack      []Value
+	locals     []Value
+	localSet   []bool
+	loops      []loopFrame
+	fuel       *uint64
+	fuelLeft   uint64
+	fuelCell   uint64 // budget storage for a top-level run, kept off the heap
+	maxStack   int
+	reserved   int
+	overflow   int // how far past the reservation this activation pushed
+	argsUsed   int
+	stackArray [16]Value
+	argsArray  [8]Value
 }
 
 // reset rebinds a frame — pooled or fresh — to one activation.
-func (f *frame) reset(runtime *Runtime, args []Value, fuel *uint64, maxStack, maxRecursion, depth int) {
+func (f *frame) reset(runtime *Runtime, args []Value, fuel *uint64, maxStack int) {
 	f.runtime = runtime
 	f.args = args
 	f.fuel = fuel
 	f.fuelLeft = *fuel
 	f.maxStack = maxStack
-	f.maxRecursion = maxRecursion
-	f.depth = depth
 	f.stack = f.stackArray[:0]
 	f.loops = f.loops[:0]
+	// The compiler knows how deep the stack gets. Reserving it here is what
+	// lets push skip its bounds check; an artifact without the figure keeps
+	// the per-push check.
+	f.reserved = runtime.artifact.MaxStack
+	if f.reserved > maxStack {
+		f.reserved = 0
+	}
+	f.overflow = 0
+	f.argsUsed = len(args)
+	if f.reserved > cap(f.stack) {
+		f.stack = make([]Value, 0, f.reserved)
+	}
 	locals := runtime.artifact.Locals
+	if locals == 0 {
+		// Constant folding leaves many programs with no locals at all; there
+		// is nothing to clear.
+		f.locals = f.locals[:0]
+		f.localSet = f.localSet[:0]
+		return
+	}
 	if cap(f.locals) < locals {
 		f.locals = make([]Value, locals)
 		f.localSet = make([]bool, locals)
 	}
 	f.locals = f.locals[:locals]
 	f.localSet = f.localSet[:locals]
-	for i := range f.localSet {
-		f.localSet[i] = false
-	}
+	clear(f.localSet)
 }
 
 // argSpace returns storage for n top-level arguments, using the frame's inline
@@ -74,14 +106,31 @@ func (f *frame) argSpace(n int) []Value {
 }
 
 // release drops references so a pooled frame keeps nothing alive.
+//
+// It clears only the part of each inline array that was written. The tail was
+// never touched, so clearing it would be pure work — and these arrays hold
+// pointers, which makes that work the expensive kind.
 func (f *frame) release() {
 	f.runtime = nil
 	f.args = nil
 	f.fuel = nil
-	clearValues(f.stackArray[:])
-	clearValues(f.argsArray[:])
+	clearValues(f.stackArray[:f.stackUsed()])
+	clearValues(f.argsArray[:min(f.argsUsed, len(f.argsArray))])
 	clearValues(f.locals)
 	f.loops = f.loops[:0]
+}
+
+// stackUsed is how much of the inline stack array may hold a value: the
+// compiler's figure, or how far an activation actually pushed past it.
+func (f *frame) stackUsed() int {
+	used := f.reserved
+	if f.overflow > used {
+		used = f.overflow
+	}
+	if used > len(f.stackArray) {
+		used = len(f.stackArray)
+	}
+	return used
 }
 
 func clearValues(values []Value) {
@@ -130,6 +179,8 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 		return pc + 1, f.push(f.args[instruction.A])
 	case OpLoadLocal:
 		return pc + 1, f.loadLocal(instruction)
+	case OpStoreLocal:
+		return pc + 1, f.storeLocal(instruction)
 	case OpMakeArray:
 		return pc + 1, f.makeArray(instruction)
 	case OpMakeDict:
@@ -138,8 +189,6 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 		return pc + 1, f.equal()
 	case OpCall:
 		return pc + 1, f.call(instruction)
-	case OpRecur:
-		return f.recur(pc, instruction)
 	case OpLoopInit:
 		return f.loopInit(pc, instruction)
 	case OpLoopCollect:
@@ -167,10 +216,21 @@ func (f *frame) result() (Value, error) {
 }
 
 func (f *frame) push(value Value) error {
+	// Within the reserved depth the bound is already proven, so the common
+	// case is a single append with no comparison against the limit.
+	if len(f.stack) < f.reserved {
+		f.stack = append(f.stack, value)
+		return nil
+	}
 	if len(f.stack) >= f.maxStack {
 		return fmt.Errorf("stack limit %d exceeded", f.maxStack)
 	}
 	f.stack = append(f.stack, value)
+	// Past the reservation, remember how far we got: release clears exactly
+	// this much, and nothing above it was ever written.
+	if len(f.stack) > f.overflow {
+		f.overflow = len(f.stack)
+	}
 	return nil
 }
 
@@ -197,6 +257,31 @@ func (f *frame) pop1() (Value, error) {
 	return value, nil
 }
 
+// loopKeys checks the source's shape and, for a dictionary walk, lists its
+// keys in sorted order: the language guarantees a program replays identically
+// and Go's map order does not. An array walk needs no key list.
+func loopKeys(source Value, keySlot int) ([]string, error) {
+	if keySlot == NoKey {
+		if source.kind != ArrayKind {
+			return nil, fmt.Errorf("loop source is %s, want array", source.Type())
+		}
+		return nil, nil
+	}
+	if source.kind != DictKind {
+		return nil, fmt.Errorf("loop source is %s, want dictionary", source.Type())
+	}
+	return source.keys(), nil
+}
+
+// bindItem binds the loop's value variable, plus its key variable when walking
+// a dictionary.
+func (f *frame) bindItem(loop *loopFrame, index int) {
+	f.bindLocal(loop.local, loop.item(index))
+	if loop.keyLocal != NoKey {
+		f.bindLocal(loop.keyLocal, String(loop.keys[index]))
+	}
+}
+
 func (f *frame) bindLocal(slot int, value Value) {
 	f.locals[slot] = value
 	f.localSet[slot] = true
@@ -207,6 +292,16 @@ func (f *frame) loadLocal(instruction Instruction) error {
 		return fmt.Errorf("local %d is not bound", instruction.A)
 	}
 	return f.push(f.locals[instruction.A])
+}
+
+// storeLocal binds a let binding's value to its slot.
+func (f *frame) storeLocal(instruction Instruction) error {
+	value, err := f.pop1()
+	if err != nil {
+		return err
+	}
+	f.bindLocal(instruction.A, value)
+	return nil
 }
 
 func (f *frame) makeArray(instruction Instruction) error {
@@ -268,48 +363,8 @@ func (f *frame) call(instruction Instruction) error {
 	return f.push(value)
 }
 
-func (f *frame) recur(pc int, instruction Instruction) (int, error) {
-	callArgs, err := f.popN(instruction.B)
-	if err != nil {
-		return 0, err
-	}
-	for i, param := range f.runtime.artifact.Args {
-		if !callArgs[i].hasType(param.Type) {
-			return 0, fmt.Errorf("recursive argument %q is %s, want %s", param.Name, callArgs[i].Type(), param.Type)
-		}
-	}
-	if instruction.C == tailCall {
-		return 0, f.restart(callArgs)
-	}
-	*f.fuel = f.fuelLeft
-	value, err := f.runtime.execute(callArgs, f.fuel, f.maxStack, f.maxRecursion, f.depth+1)
-	f.fuelLeft = *f.fuel
-	if err != nil {
-		return 0, err
-	}
-	if !value.hasType(*instruction.Type) {
-		return 0, fmt.Errorf("recursion returned %s, contract requires %s", value.Type(), *instruction.Type)
-	}
-	return pc + 1, f.push(value)
-}
-
-// restart rebinds the arguments and jumps back to instruction 0. Fuel still
-// counts every instruction, so a non-terminating tail loop is caught by fuel
-// rather than by the recursion limit.
-func (f *frame) restart(args []Value) error {
-	copy(f.args, args)
-	f.stack = f.stack[:0]
-	f.loops = f.loops[:0]
-	for i := range f.localSet {
-		f.localSet[i] = false
-	}
-	return nil
-}
-
-// loopInit consumes the source array — plus the initial accumulator when the
-// loop folds — and either enters the loop or yields the empty result.
 func (f *frame) loopInit(pc int, instruction Instruction) (int, error) {
-	folds := instruction.C != noAccumulator
+	folds := instruction.C != NoAccumulator
 	operands := 1
 	if folds {
 		operands = 2
@@ -318,28 +373,29 @@ func (f *frame) loopInit(pc int, instruction Instruction) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if values[0].kind != ArrayKind {
-		return 0, fmt.Errorf("loop source is %s, want array", values[0].Type())
+	keys, err := loopKeys(values[0], instruction.D)
+	if err != nil {
+		return 0, err
 	}
-	items := values[0].items
 	seed, err := f.loopSeed(instruction, values, folds)
 	if err != nil {
 		return 0, err
 	}
-	if len(items) == 0 {
+	length := values[0].length()
+	if length == 0 {
 		return instruction.A, f.push(seed)
 	}
 	if folds {
 		f.bindLocal(instruction.C, seed)
 	}
-	f.bindLocal(instruction.B, items[0])
 	loop := loopFrame{
-		items: items, local: instruction.B, acc: instruction.C,
-		resultType: cloneType(*instruction.Type),
+		source: values[0], keys: keys, length: length,
+		local: instruction.B, keyLocal: instruction.D, acc: instruction.C,
 	}
 	if !loop.folds() {
-		loop.output = make([]Value, 0, len(items))
+		loop.output = newArrayBuilder(*instruction.Type.Elem, length)
 	}
+	f.bindItem(&loop, 0)
 	f.loops = append(f.loops, loop)
 	return pc + 1, nil
 }
@@ -374,7 +430,7 @@ func (f *frame) loopCollect(instruction Instruction) error {
 		f.bindLocal(loop.acc, value)
 		return nil
 	}
-	loop.output = append(loop.output, value)
+	loop.output.add(value)
 	return nil
 }
 
@@ -385,8 +441,8 @@ func (f *frame) loopNext(pc int, instruction Instruction) (int, error) {
 	index := len(f.loops) - 1
 	loop := &f.loops[index]
 	loop.index++
-	if loop.index < len(loop.items) {
-		f.bindLocal(loop.local, loop.items[loop.index])
+	if loop.index < loop.length {
+		f.bindItem(loop, loop.index)
 		return instruction.A, nil
 	}
 	result, err := f.loopResult(loop)
@@ -394,6 +450,9 @@ func (f *frame) loopNext(pc int, instruction Instruction) (int, error) {
 		return 0, err
 	}
 	f.localSet[loop.local] = false
+	if loop.keyLocal != NoKey {
+		f.localSet[loop.keyLocal] = false
+	}
 	if loop.folds() {
 		f.localSet[loop.acc] = false
 	}
@@ -401,13 +460,13 @@ func (f *frame) loopNext(pc int, instruction Instruction) (int, error) {
 	return pc + 1, f.push(result)
 }
 
-// loopResult hands the accumulated slice over directly: every element was type
-// checked by loop_collect on its way in, so Array's re-checking copy is waste.
+// loopResult hands the built array over directly: every element was type
+// checked by loop_collect on its way in.
 func (f *frame) loopResult(loop *loopFrame) (Value, error) {
 	if loop.folds() {
 		return f.locals[loop.acc], nil
 	}
-	return Value{kind: ArrayKind, items: loop.output, elemType: *loop.resultType.Elem}, nil
+	return loop.output.finish(), nil
 }
 
 func (f *frame) jumpIfFalse(pc int, instruction Instruction) (int, error) {

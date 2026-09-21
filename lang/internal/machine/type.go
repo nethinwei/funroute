@@ -1,4 +1,4 @@
-package lang
+package machine
 
 import (
 	"fmt"
@@ -66,10 +66,12 @@ func TypeVar(name string) Type {
 
 func typePtr(t Type) *Type { return &t }
 
-func cloneType(t Type) Type {
+// Clone deep-copies a type, so a caller that stores one cannot reach into the
+// element type of another.
+func CloneType(t Type) Type {
 	out := t
 	if t.Elem != nil {
-		elem := cloneType(*t.Elem)
+		elem := CloneType(*t.Elem)
 		out.Elem = &elem
 	}
 	return out

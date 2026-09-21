@@ -1,4 +1,4 @@
-package lang
+package machine
 
 import (
 	"fmt"
@@ -65,6 +65,32 @@ type LanguageCatalog struct {
 	Functions    []FunctionDescriptor  `json:"functions"`
 	SpecialForms []FunctionDescriptor  `json:"special_forms"`
 	ValueTypes   []ValueTypeDescriptor `json:"value_types"`
+	// Nodes describes the shape of every ExprJSON node. The syntax layer fills
+	// it in, from the same definitions its importer reads, so a front end that
+	// builds nodes from it cannot disagree with the compiler.
+	Nodes []NodeSchema `json:"nodes,omitempty"`
+}
+
+// NodeSchema is one ExprJSON node as a front end needs to know it: its tag,
+// the lazy form it belongs to (if the registry can switch it off), and its
+// fields.
+type NodeSchema struct {
+	Node   string        `json:"node"`
+	Form   string        `json:"form,omitempty"`
+	Fields []FieldSchema `json:"fields"`
+}
+
+// FieldSchema is one field of a node. Kind is expr, exprs, name, text, list,
+// or the literal kinds int, float, string and bool. A list's items have their
+// own Fields.
+type FieldSchema struct {
+	Name     string        `json:"name"`
+	Kind     string        `json:"kind"`
+	Optional bool          `json:"optional,omitempty"`
+	Role     string        `json:"role,omitempty"`
+	Default  string        `json:"default,omitempty"`
+	Min      int           `json:"min,omitempty"`
+	Fields   []FieldSchema `json:"fields,omitempty"`
 }
 
 var displayColorPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
@@ -134,10 +160,10 @@ func (r *Registry) visibleFunctions() []FunctionDescriptor {
 	return functions
 }
 
-func describeFunction(function *registeredFunction) FunctionDescriptor {
+func describeFunction(function *RegisteredFunction) FunctionDescriptor {
 	params := make([]Type, len(function.Params))
 	for i := range function.Params {
-		params[i] = cloneType(function.Params[i])
+		params[i] = CloneType(function.Params[i])
 	}
 	special := ""
 	if function.special == specialIf {
@@ -147,7 +173,7 @@ func describeFunction(function *registeredFunction) FunctionDescriptor {
 		Name:      function.Name,
 		Signature: function.key,
 		Params:    params,
-		Result:    cloneType(function.Result),
+		Result:    CloneType(function.Result),
 		Cost:      function.Cost,
 		Special:   special,
 		Display:   cloneFunctionDisplay(function.Display),
@@ -185,7 +211,6 @@ var formDescriptors = map[Form]func() FunctionDescriptor{
 	SwitchForm: switchSpecialForm,
 	ForForm:    forSpecialForm,
 	ReduceForm: reduceSpecialForm,
-	RecurForm:  recurSpecialForm,
 }
 
 func (r *Registry) specialForms() []FunctionDescriptor {
@@ -194,8 +219,10 @@ func (r *Registry) specialForms() []FunctionDescriptor {
 	for _, form := range enabled {
 		out = append(out, formDescriptors[form]())
 	}
-	// Derived forms need no switch: they expand to if, which the kernel always
-	// has. They are listed so a console can offer them as first-class cards.
+	// let and the derived forms need no switch: let binds names and the
+	// derived forms expand to if, which the kernel always has. They are listed
+	// so a console can offer them as first-class cards.
+	out = append(out, letSpecialForm())
 	for _, derived := range derivedForms {
 		out = append(out, derived())
 	}
@@ -203,6 +230,27 @@ func (r *Registry) specialForms() []FunctionDescriptor {
 }
 
 var derivedForms = []func() FunctionDescriptor{andDerivedForm, orDerivedForm, notDerivedForm}
+
+func letSpecialForm() FunctionDescriptor {
+	return FunctionDescriptor{
+		Name:      "let",
+		Signature: "let(name = value, ..., body)",
+		Special:   "let",
+		Display: FunctionDisplay{
+			Label:       "局部绑定",
+			Description: "按顺序给名字绑定值，后面的绑定与主体可以引用前面的名字；名字不会成为程序参数。",
+			Category:    "控制",
+			Color:       "#7C3AED",
+			Icon:        "≔",
+			Parameters: []ParameterDisplay{
+				{Name: "bindings", Label: "绑定", Description: "name = value，可多个"},
+				{Name: "body", Label: "主体", Description: "整体结果"},
+			},
+			Result: ResultDisplay{Label: "主体的值"},
+			Order:  15,
+		},
+	}
+}
 
 // andDerivedForm and friends are derived expressions in the sense of Scheme
 // R7RS: the language defines them by their expansion into if, so they add no
@@ -287,30 +335,6 @@ func reduceSpecialForm() FunctionDescriptor {
 	}
 }
 
-func recurSpecialForm() FunctionDescriptor {
-	r := TypeVar("R")
-	return FunctionDescriptor{
-		Name:      "recur",
-		Signature: "recur(args...)->R",
-		Params:    []Type{r},
-		Result:    r,
-		Variadic:  true,
-		Special:   "recur",
-		Cost:      1,
-		Display: FunctionDisplay{
-			Label:       "自递归",
-			Description: "用新的实参重新进入整个表达式，实参个数和类型必须与 args 一致。不终止的程序由 fuel 与递归深度限制拦截。",
-			Category:    "工程师",
-			Color:       "#B91C1C",
-			Icon:        "↻",
-			Parameters:  []ParameterDisplay{{Name: "args", Label: "新实参", Description: "与 args 同序同型"}},
-			Result:      ResultDisplay{Label: "递归结果", Description: "与整体结果同型"},
-			Examples:    []FunctionExample{{Title: "累加到 0", Expression: `if(eq(n,0),acc,recur(sub(n,1),add(acc,n)))`}},
-			Order:       20,
-		},
-	}
-}
-
 func switchSpecialForm() FunctionDescriptor {
 	t := TypeVar("T")
 	r := TypeVar("R")
@@ -364,7 +388,7 @@ func forSpecialForm() FunctionDescriptor {
 				{Name: "condition", Label: "筛选条件", Description: "可省略"},
 			},
 			Result:   ResultDisplay{Label: "结果数组", Description: "array<R>"},
-			Examples: []FunctionExample{{Title: "筛选健康渠道", Expression: `[channel for channel in channels if route.is_healthy@1(channel)]`}},
+			Examples: []FunctionExample{{Title: "筛选健康渠道", Expression: `[channel for channel in channels if route.is_healthy_v1(channel)]`}},
 			Order:    40,
 		},
 	}

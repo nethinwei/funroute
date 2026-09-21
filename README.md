@@ -3,12 +3,14 @@
 FunRoute 是面向支付路由的强类型、纯表达式函数语言。仓库同时提供 Go SDK、无框架拖拽式 JS 组件和可直接运行的 MVP。它的核心约束是：
 
 - 没有语句、赋值、可变变量、反射或隐式宿主能力；
+- 程序文本只是表达式；参数、类型与返回类型是**宿主的契约**，编译时传入（省了就全靠推导）；
 - 自由变量自动成为函数参数；
 - 参数类型由内置函数和扩展函数的签名反向推导；
+- 不依赖参数的子表达式在**编译期**算掉，包括头部的常量绑定；
 - 只做安全、可解释的数值提升，跨领域转换必须显式写 `int(...)`、`float(...)`、`string(...)` 或 `bool(...)`；
 - 编译产物只引用精确的函数签名，运行时注册表漂移会拒绝装载；
-- 内核只有 14 个函数名，惰性形式 `switch(...)`、列表推导 `[...]`、`reduce(...)`、`recur(...)` 由宿主按控制台逐个启用；
-- 启用 `recur(...)` 即得到图灵完备层，不终止的程序由 fuel 与递归深度拦截；
+- 内核只有 14 个函数名，惰性形式 `switch(...)`、列表推导 `[...]`、`reduce(...)` 由宿主按需启用；
+- **所有程序保证终止**：迭代只遍历有限输入，语言刻意不图灵完备，fuel 是成本上限而非安全兜底；
 - 源表达式可无损往返规范化 `ExprJSON`。
 
 ## 示例
@@ -52,7 +54,7 @@ switch(country,"SG","adyen_sg","MY","stripe_my","stripe_global")
 它会被推导为 `(country: string) -> string`。遍历和筛选用**列表推导式**，和 Python / Haskell 同形：
 
 ```text
-[channel for channel in channels if route.is_healthy@1(channel)]
+[channel for channel in channels if route.is_healthy_v1(channel)]
 ```
 
 读作“产出什么 ← 从哪来 ← 什么条件”。`if` 子句可省略（纯映射）。`channel` 是局部变量，不会出现在外部 `args` 中，结果类型自动推导为 `array<string>`。
@@ -70,7 +72,7 @@ reduce(prices,price,total,0,add(total,price))
 ## 语法
 
 ```text
-program    = expression
+program    = expression                        // 契约是宿主的，不在文本里
 expression = expression binary expression      // 中缀，见下表
            | unary expression                  // ! -
            | primary
@@ -123,7 +125,7 @@ reduce(prices, price, total, 0, add(total, price))      // 位置形式，仍然
 
 `for`、`in`、`if`、`from`、`else`、`case` 在这些位置是关键字；`for`、`in`、`from`、`else`、`case` 同时是保留名，不能用作变量名或函数名。旧的 `for(...)` 函数写法已移除，写成它会得到明确的迁移提示。
 
-`switch`、`for`、`reduce` 和 `recur` 仍使用上面的函数调用外形；编译器把它们识别为惰性、多分支和局部变量结构，不引入语句式语法。
+`switch` 与 `reduce` 仍使用上面的函数调用外形；编译器把它们识别为惰性、多分支和局部变量结构，不引入语句式语法。
 
 支持的值类型：
 
@@ -138,6 +140,84 @@ reduce(prices, price, total, 0, add(total, price))      // 位置形式，仍然
 
 空数组/字典必须从所在函数签名或编译参数提示中获得元素类型。金额不应使用 `float`；生产版应注册独立的 `money`/`decimal` 类型和函数族。
 
+## 契约
+
+程序文本**只是表达式**。谁传进来、叫什么、什么类型、返回什么，是**宿主的数据**，编译时传入：
+
+```go
+result := lang.IntType
+artifact, err := lang.CompileExpr(
+    `switch(country, case "SG", "MY" => amount * 2, else amount)`,
+    registry,
+    lang.CompileOptions{
+        Args: []lang.ArgSpec{
+            {Name: "country", Type: lang.StringType, Doc: "ISO 3166-1 二字码"},
+            {Name: "amount", Type: lang.IntType, Doc: "订单金额，单位：分"},
+        },
+        Result:    &result,
+        ResultDoc: "应收总额，单位：分",
+    },
+)
+```
+
+### 为什么不放在语言里
+
+早期版本有 `@arg` / `@let` / `@ret` 头部，让一段文本自包含。删掉了，理由是：
+
+- 一个支付控制台**本来就存**规则元数据 —— 规则 ID、版本号、生效窗口、灰度比例、审批记录、回滚指针。参数类型和说明是同类信息。放进语言就有了两份平行的元数据，迟早不一致。
+- `@arg legacy_flag: bool "调用方仍在传"` 这条信息的权威是**调用方契约**。表达式作者凭什么知道调用方还在传什么？宿主知道。
+- 语言里的头部要求源码文本与结构化面板**双向同步**；契约在宿主则两者各管一块，少一整类 bug。
+- 少 580 行生产代码、21 处对其他文件的侵入、224 行前端。
+
+代价是一段裸表达式不自包含 —— 这一条由导出视图补上（见下）。
+
+### 规则
+
+| | |
+|---|---|
+| `Args` 非空 | 顺序即 ABI；为空则按自由变量首次出现顺序推导 |
+| 声明了不用 | **可以** —— 表达式不再需要某个值时，调用方 ABI 不必跟着改 |
+| 用了不声明 | 错误：`the expression reads "x" but the contract does not declare it` |
+| `Result` | 参与 unify 而非事后比对，所以能定死 `[]` 的元素类型、能在重载里选签名 |
+| `Doc` / `ResultDoc` | 唯一不进 digest 的东西 —— 改文案不会让已部署的 artifact 失效 |
+
+`Result` 定不了字面量的类型：`1 + 2` 是 int 加法，声明 float 是真错误而不是转换请求。
+
+### 导出视图
+
+规则离开控制台时（工单、RFC、聊天里），裸表达式读者不知道 `amount` 是分还是元。`RenderWithContract` 把契约写成注释：
+
+```text
+// amount:  int              订单金额，单位：分
+// country: string           ISO 3166-1 二字码
+// →        int              应收总额，单位：分
+
+switch(country, case "SG", "MY" => amount * 2, else amount)
+```
+
+注释**不是语法**：这段文本解析成同一个程序、编译出同一个 digest，粘回控制台照样工作；再次解析不会把注释带回来。权威始终是宿主记录。
+
+### 编译期算清
+
+"这个值是常量吗"由**编译器**判断，不需要关键字声明 —— 所以没有 `@const`：在一个无可变性、无类型层计算的纯语言里，求值时机完全由"它依赖什么"决定，而那是编译器 100% 算得准的事。
+
+不读参数也不读循环变量的子表达式，在编译期就用真正的 VM 跑掉：
+
+```text
+let(
+  bps       = 250,
+  base_fee  = 3 * 100 + 50,
+  total_bps = bps * 2,
+  amount * total_bps / 10000 + base_fee
+)
+```
+
+编译结果是 7 条指令、**0 个局部槽**：三个绑定全部折成常量（250、350、500），`total_bps` 说明折叠是传递的。运行时只剩一次乘、一次除、一次加。
+
+- 折叠用同一个 VM，代码库里只有一套语义。
+- 折不动就原样发指令，所以语义绝不改变 —— 这也是它能安全穿过惰性 `if` 的原因：`if(flag, 1 / 0, 42)` 里那个除零分支只是没被折叠，flag 为假照旧返回 42，为真照旧是运行时错误。
+- 常量池只存标量，所以闭合的数组/字典仍在运行时构造。
+
 ## 类型推导
 
 类型的唯一权威来源是函数注册表：
@@ -145,13 +225,13 @@ reduce(prices, price, total, 0, add(total, price))      // 位置形式，仍然
 1. 内置函数；
 2. 业务扩展函数。
 
-变量在规范化 AST 中第一次出现的顺序决定参数顺序；字典节点会先按 key 排序，保证源码与 ExprJSON 往返后的参数 ABI 不变。编译器为每个参数建立类型变量，再使用所有函数签名做统一（unification）。例如：
+不写声明时，变量在规范化 AST 中第一次出现的顺序决定参数顺序；字典节点会先按 key 排序，保证源码与 ExprJSON 往返后的参数 ABI 不变。写了 `param` 声明则由声明顺序决定（见「参数声明」）。编译器为每个参数建立类型变量，再使用所有函数签名做统一（unification）。例如：
 
 ```text
-if(risk.approved@1(country,amount),"primary","backup")
+if(risk.approved_v1(country,amount),"primary","backup")
 ```
 
-扩展函数若声明 `risk.approved@1(string, int) -> bool`，编译器会联合
+扩展函数若声明 `risk.approved_v1(string, int) -> bool`，编译器会联合
 `if(bool,T,T)->T` 自动推导：
 
 ```text
@@ -164,7 +244,7 @@ if(risk.approved@1(country,amount),"primary","backup")
 - `add(1,1.5)` 这类混合数值会把整数精确提升为 `float`；超过 float64 精确整数范围时拒绝，而不是静默丢精度；
 - 表达式里出现浮点字面量时，变量会被拉成 `float`：`risk < 0.5` 推出 `(risk: float)`，`amount * 1.5` 推出 `(amount: float)`。混合数值签名（`(int,float)`）是**末选**，只在不存在同型解读时才用；
 - 字符串和数值之间不做隐式转换，使用 `int(...)`、`float(...)`、`string(...)`、`bool(...)` 明确表达；
-- 扩展函数签名和字面量优先决定类型，例如 `route.score@1(success,cost)` 会推出两个参数都是 `float`。
+- 扩展函数签名和字面量优先决定类型，例如 `route.score_v1(success,cost)` 会推出两个参数都是 `float`。
 
 Go 调用方仍可通过编译环境覆盖默认值：
 
@@ -214,8 +294,8 @@ go run ./cmd/funroute inspect \
 operator := lang.CoreRegistry()
 operator.EnableForm(lang.SwitchForm, lang.ForForm, lang.ReduceForm)
 
-engineer := lang.CoreRegistry()
-engineer.EnableForm(lang.SwitchForm, lang.ForForm, lang.ReduceForm, lang.RecurForm)
+minimal := lang.CoreRegistry()
+minimal.EnableForm(lang.SwitchForm)      // 只给多分支，不给遍历
 ```
 
 | 形式 | 语义 | 终止性 |
@@ -223,28 +303,17 @@ engineer.EnableForm(lang.SwitchForm, lang.ForForm, lang.ReduceForm, lang.RecurFo
 | `switch(...)` | 值匹配或条件链，按顺序惰性选择一个结果 | 结构上总是终止 |
 | `[result for item in source if condition]` | 映射，可选筛选 | 只遍历输入数组 |
 | `reduce(source,item,acc,init,body)` | 折叠进累加器 | 只遍历输入数组 |
-| `recur(args...)` | 用新实参重新进入整个表达式 | 图灵完备，靠 fuel 与 `MaxRecursion` 拦截 |
 
-一个注册表就是一个控制台：运营控制台开 `switch/for/reduce`，工程师控制台再加 `recur`。用未启用的形式会在编译期被拒绝：
 
-```text
-recur is not enabled in this registry
-```
-
-这条检查在 AST 上做，源码和 ExprJSON 走同一条路径，所以运营侧直接提交 ExprJSON 也拿不到递归。`recur(args...)` 的实参个数与类型必须与推导出的参数完全一致：
-
-```bash
-go run ./cmd/funroute run -profile engineer \
-  -expr 'if(eq(n,0),acc,recur(sub(n,1),add(acc,n)))' \
-  -args '{"n":100,"acc":0}'
-```
-
-返回 `5050`。不终止的程序不是编译期错误，而是运行期被拦截：
+一个注册表就是一个控制台：想给多少语言就开多少。用未启用的形式会在编译期被拒绝：
 
 ```text
-recursion limit 8 exceeded
-execution fuel exhausted at instruction 3
+reduce is not enabled in this registry
 ```
+
+这条检查在 AST 上做，源码和 ExprJSON 走同一条路径，所以运营侧直接提交 ExprJSON 也绕不过去。
+
+**没有无界循环**：`recur`（v0.0.2 及以前的自递归原语）已移除，写它会得到明确提示。迭代一律用推导式与 `reduce`——它们的局部变量（`item`、累加器）是局部的，不会泄漏成参数契约，而且遍历次数由输入长度界定，所以程序必然终止。需要无界搜索的计算交给扩展函数，在 Go 侧设自己的上限与超时。
 
 `Registry.Catalog()` 只列出该注册表启用的形式，因此拖拽面板看到的就是它实际能用的语言。
 
@@ -258,7 +327,7 @@ execution fuel exhausted at instruction 3
 registry := lang.CoreRegistry()
 
 err := registry.Register(lang.FunctionSpec{
-    Name:   "risk.score@1",
+    Name:   "risk.score_v1",
     Params: []lang.Type{lang.StringType, lang.IntType},
     Result: lang.FloatType,
     Cost:   25,
@@ -281,44 +350,98 @@ err := registry.Register(lang.FunctionSpec{
 })
 ```
 
-名称中的 `@1` 是推荐的 ABI 版本。Artifact 同时冻结完整签名和 fuel 成本；同名函数被改成不同类型或成本时，旧 Artifact 会拒绝实例化。
+名称里的 `_v1` 只是命名约定，语言不解析它：函数身份是完整签名，版本表达在名字本身。Artifact 同时冻结完整签名和 fuel 成本；同名函数被改成不同类型或成本时，旧 Artifact 会拒绝实例化。
 
 `Display` 只用于控制台展示，不参与类型推导和执行。`Registry.Catalog()` 会输出全部可展示函数的标签、说明、分类、颜色、图标、参数说明、结果说明、示例、成本和类型签名。拖拽组件直接消费该目录，所以新增扩展函数不需要再维护一份前端清单。完整示例见 `extensions/paymentdemo/`。
 
-Go 无法从语言层证明回调实现真的无副作用，因此生产扩展 SDK 仍需代码审查、静态检查和 capability 封装。VM 会克隆输入值，并捕获 extension panic，但不会把数据库、网络、时钟等能力主动暴露给函数。
+用 `Fn1/Fn2/Fn3` 按 Go 签名注册时，参数与结果的转换由 `ToValue`/`FromValue` 生成 —— 与宿主调用 `RunValues` 用的是同一对函数、同一份 Go 类型清单（`bool`、`int64`、`float64`、`string`、它们的切片与 string 键映射、`[][]float64`）。**容器不转换也不拷贝**：`func(xs []float64) (float64, error)` 收到的就是宿主传进来的那个切片；返回的切片原样成为 VM 里的值。代价是一条包无法强制的约定：交给 `Value` 的切片或映射，以及从 `Value` 取出的，从那一刻起只读。
+
+Go 无法从语言层证明回调实现真的无副作用，因此生产扩展 SDK 仍需代码审查、静态检查和 capability 封装。VM 捕获 extension panic，但不会把数据库、网络、时钟等能力主动暴露给函数。
+
+## 包边界
+
+```text
+lang/lang.go              唯一的公开接口：类型别名与转发，约 40 个标识符
+lang/internal/machine/    值、类型、字节码、VM、帧、注册表、目录     ← 不依赖任何上层
+lang/internal/syntax/     词法、语法、AST、ExprJSON                 ← 只依赖 machine
+lang/internal/compile/    推导、编译、常量折叠、契约、导出视图        ← 依赖 syntax + machine
+```
+
+依赖严格单向，`go list -deps ./lang/internal/machine` 可验证。宿主需要的只有四样：
+
+| | |
+|---|---|
+| `Registry` | 有哪些函数与惰性形式 —— 类型的唯一权威 |
+| `CompileOptions` | 契约：参数、顺序、类型、说明、返回类型 |
+| `Artifact` | 不可变字节码 + digest，可存储、可传输 |
+| `Runtime` | 绑定到注册表的 Artifact，可运行 |
+
+**AST 类型故意不公开**，也没有任何函数交出一个：程序用 ExprJSON 交换 —— 那正是 ExprJSON 存在的理由。`ParseToJSON` 把文本变成规范文档，`CompileExpr` / `CompileJSON` 接受文本或文档。`lang/lang_test.go` 是 `package lang_test`，只能用公开 API，所以它同时守着这条边界。
+
+`machine` 为什么是一个包而不是拆得更细：`Value` 的容器 backing（原生 Go 切片/映射）是私有字段，VM 的循环、索引、构造直接在上面操作；拆开 value 与 vm 就只能走公开 accessor，每次取元素都要经过一层。
+
+语法节点只在一处定义：`syntax/ast.go` 的每个节点 struct 用 tag 说明它的 JSON 字段、绑定哪些局部名及可见范围、前端默认值与列表下限；导入、导出、自由变量收集、`Children`、给前端的 `NodeSchema` 全部由 `syntax/walk.go` 从这些 tag 派生。
 
 ## API
 
-```go
-expr, _ := lang.Parse(`if(a,b,add(1,1))`)
-exprJSON, _ := lang.ExportExprJSON(expr)
-sameExpr, _ := lang.ImportExprJSON(exprJSON)
+宿主从不接触 AST：文本进去，规范文档或 artifact 出来。
 
-artifact, _ := lang.CompileAST(sameExpr, registry, lang.CompileOptions{})
+```go
+// 文本 → 规范 ExprJSON，前端要渲染的就是它
+document, _ := lang.ParseToJSON(`if(a, b, add(1, 1))`)
+
+// 文本或文档 → artifact，两条路在编译器里汇合
+artifact, _ := lang.CompileJSON(document, registry, lang.CompileOptions{
+    Args: []lang.ArgSpec{
+        {Name: "a", Type: lang.BoolType},
+        {Name: "b", Type: lang.IntType},
+    },
+})
+
 runtime, _ := lang.Instantiate(artifact, registry)
-result, _ := runtime.Run(
-    map[string]any{"a": false, "b": 9},
-	lang.RunOptions{Fuel: 10_000},
-)
+
+// 按名字传（控制台填表单）
+result, _ := runtime.Run(map[string]any{"a": false, "b": 9}, lang.RunOptions{Fuel: 10_000})
+
+// 按 ABI 顺序传（服务热路径，省掉名字查找与转换）
+result, _ = runtime.RunValues([]lang.Value{lang.Bool(false), lang.Int(9)}, lang.RunOptions{Fuel: 10_000})
+
+// 容器零拷贝：特征向量包一层就进 VM，扩展函数拿到的是同一个切片
+features, _ := lang.ToValue([]float64{0.2, 0.7, 0.1})
+score, _ := runtime.RunValues([]lang.Value{features}, lang.RunOptions{Fuel: 10_000})
+value, _ := lang.FromValue[float64](score)
 ```
+
+`Run(map)` 也走同一条路：`map[string]any` 里放的是 `[]float64` 时直接包装；只有 JSON 解码出的 `[]any`、`float64` 当 int 这类形态才逐元素转换。前端要渲染的目录用 `lang.Catalog(registry)` 取 —— 它比 `Registry.Catalog()` 多带每种 ExprJSON 节点的 schema。
 
 职责划分：
 
 ```text
-Parse / ImportExprJSON
+ParseToJSON（文本）       CompileJSON（文档）
+        ↓                      ↓
+     语法 → AST ──────────────┘
         ↓
-类型推导 + 重载选择
+类型推导 + 重载选择（契约参与其中）
         ↓
-CompileAST → 不可变字节码 Artifact
+常量折叠 → 不可变字节码 Artifact + digest
         ↓
-Instantiate → 绑定精确扩展签名
+Instantiate → 绑定精确扩展签名，拒绝漂移
         ↓
-Run(args) → Value
+Run(map) / RunValues(slice) → Value
 ```
 
 ## ExprJSON
 
 ExprJSON 当前是 **v2**：v1 的 `switch` 节点把 `match` 存成单个节点且要求 `value` 必须存在，v2 改成列表与可选主体，旧文档会被明确拒绝而不是猜测解读。
+
+文档只有表达式 —— 契约不在里面，它是宿主记录的一部分：
+
+```json
+{
+  "version": 2,
+  "expr": { "node": "call", "name": "mul", "args": [] }
+}
+```
 
 `export` 命令导出的是代码 AST，不是求值结果：
 
@@ -327,13 +450,26 @@ go run ./cmd/funroute export \
   -expr 'if(a,b,add(1,1))'
 ```
 
-整数、浮点、字符串和变量均有不同的 node tag；字典键会排序。因此：
+整数、浮点、字符串和变量均有不同的 node tag；字典键会排序；字段顺序就是节点 struct 的定义顺序。因此：
 
 ```text
 Export(Import(Export(expr))) == Export(expr)
 ```
 
 可以直接用于可视化编辑、版本 diff、digest 和回放。
+
+节点的形状只写在 `syntax/ast.go` 的 struct tag 里，导入器按 tag 校验（缺字段、未知字段、列表下限、名字合法性），解析器与导入器共用同一份节点自检（重名、重复键）。同一份定义还以 `nodes` 字段随目录下发给前端：
+
+```json
+{ "node": "for", "form": "for", "fields": [
+  { "name": "source", "kind": "expr" },
+  { "name": "variable", "kind": "name", "role": "local", "default": "item" },
+  { "name": "key_variable", "kind": "name", "optional": true, "role": "local" },
+  { "name": "where", "kind": "expr", "optional": true },
+  { "name": "yield", "kind": "expr" } ] }
+```
+
+前端的 `cleanNode`、空白模板与卡片布局都从它生成，所以新增或修改节点时，Go 与 JS 之间没有第二份要同步的清单。
 
 ## 拖拽式 JS 库
 
@@ -345,8 +481,8 @@ Export(Import(Export(expr))) == Export(expr)
 <script type="module">
   import "./funroute-designer.js";
   const designer = document.querySelector("#designer");
-  designer.catalog = await fetch("/api/catalog").then(r => r.json());
-  designer.value = {version: 1, expr: {node: "int", int: 1}};
+  designer.catalog = await fetch("/api/catalog").then(r => r.json()); // lang.Catalog(registry) 的输出，含 nodes
+  designer.value = {version: 2, expr: {node: "int", int: 1}};
   console.log(designer.value);  // ExprJSON
   console.log(designer.source); // 1
 </script>
@@ -357,7 +493,7 @@ Export(Import(Export(expr))) == Export(expr)
 - 从函数目录拖入函数卡片；
 - 把变量、整数、浮点数、字符串、布尔值、数组和字典拖入参数槽；
 - 移动、删除和嵌套已有节点；
-- 可增删分支的 `switch(...)` 卡片，按“产出 → 输入 → 筛选”排列的列表推导卡片，带元素名/累加器名的 `reduce(...)` 卡片，以及逻辑与/或/非卡片；
+- `switch`、列表推导、`reduce`、`let`、数组、字典的卡片由目录里的节点 schema 生成：表达式槽、局部名输入、可增删的分支/绑定/键值，下限与默认名来自 schema，只有文案（`FIELD_TEXT`）是前端自己的；另有逻辑与/或/非卡片；
 - 同名重载合并成一张卡，例如界面只显示一个 `add`，类型由编译器选择；
 - 函数分类、搜索、说明、签名和参数提示；
 - `value` 双向绑定规范化 ExprJSON，并触发 `funroute-change` 事件。
@@ -374,7 +510,7 @@ go run ./cmd/mvp
 
 打开 `http://127.0.0.1:8080`。页面内置三个模板：
 
-- 支付路由：根据扩展函数 `route.is_healthy@1` 选择主备渠道；
+- 支付路由：根据扩展函数 `route.is_healthy_v1` 选择主备渠道；
 - `switch`：按国家选择渠道；
 - `for`：筛选健康渠道数组。
 
@@ -382,7 +518,7 @@ go run ./cmd/mvp
 
 编辑器里直接键入表达式再点“生成节点”就解析成节点树（回车等价，Shift+回车换行），“格式化”把超过 40 字符的表达式按参数逐行缩进，“复制”把当前表达式送进剪贴板；拖拽修改节点时编辑器内容同步刷新为格式化后的源码。
 
-MVP 服务只持有一个注册表，页面上没有权限开关：这个 demo 注册表启用了全部形式（含 `recur`），所以“递归示例”能直接跑。真实部署应按登录身份给不同注册表，运营控制台少写一个 `lang.RecurForm` 就是了。
+MVP 服务只持有一个注册表，页面上没有权限开关：这个 demo 注册表启用了全部形式。真实部署应按登录身份给不同注册表，少写一个 `EnableForm` 参数就是一档更小的语言。
 
 MVP 提供：
 
@@ -398,35 +534,44 @@ GET  /api/health   健康检查
 
 ## 性能
 
-VM 是确定性栈式字节码解释器，**程序执行本身不分配内存**——只有程序构造的数据（输入转换、`for` 的输出数组）才分配。Apple M5，`go test ./lang -bench .`：
+VM 是确定性栈式字节码解释器，**程序执行本身不分配内存**——只有程序构造的数据（`for` 的输出数组）才分配。Apple M5，`go test ./lang/internal/compile -bench . -benchtime 1s`：
 
 | 基准 | 耗时 | 分配 |
 |---|---|---|
-| 2000 次尾递归（`recur` 求和） | 347 µs | 0 次 |
-| 500 元素列表遍历（`head`/`tail` 递归） | 94 µs | 1 次 |
-| 500 元素 `reduce` 折叠 | 48 µs | 1 次 |
-| 500 元素 `for` 映射 | 49 µs | 3 次 |
-| 简单表达式一次求值 | 239 ns | 0 次 |
-| 编译（含类型推导） | 28 µs | — |
+| 200 层嵌套算术（纯分派） | 4.5 µs | 0 次 |
+| 500 元素嵌套推导式 | 64 µs | 8 次 / 12 KB |
+| 500 元素 `reduce` 折叠 | 35 µs | 2 次 |
+| 500 元素推导式映射 | 36 µs | 5 次 / 8 KB |
+| 简单表达式一次求值 `Run(map)` | 165 ns | 0 次 |
+| 简单表达式一次求值 `RunValues` | 139 ns | 0 次 |
+| 向量透传 `model.score(features)`，n = 16 / 1 024 / 65 536 | 90 / 91 / 94 ns | 0 次 |
+| 编译（含类型推导与常量折叠） | 35 µs | — |
+
+向量透传的耗时不随长度变化，是零拷贝的直接证据：宿主的 `[]float64` 进 VM、进扩展函数、出来，始终是同一个底层数组。
 
 支撑这些数字的实现要点：
 
-- **值不可变，内部零拷贝**：`items`/`entries` 是私有字段，包外只能通过 `Array()`/`Dict()` 拿到副本，所以 VM 压栈、绑定局部、折叠累加器都不深拷贝；`array.tail` 直接共享后缀，O(1)。
-- **正确的尾调用**：尾位置的 `recur` 复用当前帧（编译期标记，`Instruction.C = tailCall`），尾递归是循环而非嵌套激活，因此只受 fuel 约束、不受 `MaxRecursion` 约束。参数位置的 `recur` 仍是真正的嵌套，受深度限制。
-- **帧池化**：`Runtime` 用 `sync.Pool` 复用激活帧，栈与顶层参数存在帧内联数组里。
+- **容器就是原生 Go 值**：`array<float>` 的 backing 是 `[]float64`，`dict<int>` 是 `map[string]int64`，只有容器的容器才用 `[]Value`；宿主传入、扩展函数取出、返回值包装都是同一个 backing。元素占 8 字节而不是一个 `Value`，500 元素推导式的内存从 172 KB 降到 12 KB。
+- **值不可变靠约定而非拷贝**：`Array()`/`Dict()`/`Any()`/`FromValue` 交出的是 backing 本身，持有者只读；VM 自身从不原地修改。`Value` 本体 56 字节（原 96），每次压栈、弹栈、绑定局部都少拷 40 字节。
+- **`array.tail` 共享后缀**，O(1)。
+- **单一激活**：没有递归就没有嵌套激活，每次 `Run` 只有一个帧，且帧来自 `sync.Pool`；栈与顶层参数存在帧内联数组里。
 - **操作数零拷贝**：出栈返回栈上视窗而非副本，因此扩展函数收到的 `[]Value` 只在调用期间有效（`EvalFunc` 文档已说明，需要保留就自行复制）。
+- **边界不分配**：`Run(map)` 对每个参数先试精确 Go 类型再走宽松路径，失败用哨兵错误而非 `fmt.Errorf`；`ToValue`/`FromValue` 的标量经指针匹配，不装箱。
 - **紧凑枚举**：`Kind` 与 `OpCode` 是 `uint8`，指令分派走跳表；两者的 JSON 表示仍是原来的名字，因此 Artifact digest 与既有 ExprJSON 不受影响。
 - **panic 防护在激活层**：`recover` 每次激活一次，不在每次扩展调用上。
+- **不依赖参数的运算不进运行时**：常量折叠在编译期把闭合子表达式算成常量，折成常量的 `let` 绑定连局部槽都不占。编译因此略慢（一次性），运行时更短。
+- **两条调用路径**：`Run(map)` 按名字转换，`RunValues(slice)` 按 ABI 顺序直接传 —— profile 显示名字查找与转换占一次短决策的 22%，所以热路径值得走后者。
 
 ## 当前实现边界
 
 当前是语言内核 v0.3：
 
-- 已实现解析、类型推导、泛型与重载、数值安全提升、显式转换、扩展注册、规范化 JSON AST、字节码编译、Artifact digest、惰性 `if/switch`、共用一套循环指令的 `for/reduce`、可开关的 `recur`、fuel/stack/递归深度限制和 VM；
-- `for`/`reduce` 的局部变量由编译器分配，不污染外部参数；语言不提供一等 lambda、闭包和自定义局部函数，图灵完备只通过 `recur` 自递归达成；
+- 已实现解析、宿主契约（参数顺序/类型/说明、返回类型参与推导）、类型推导、泛型与重载、数值安全提升、显式转换、扩展注册、规范化 JSON AST、字节码编译、常量折叠、Artifact digest、惰性 `if/switch`、共用一套循环指令的推导式与 `reduce`、fuel/stack 限制和 VM；
+- 推导式与 `reduce` 的局部变量由编译器分配，不污染外部参数；语言不提供一等 lambda、闭包、自定义局部函数与无界循环；
 - 编译后端当前是确定性栈式字节码，稳定 API 已把后续 Wasm/JIT 与语言前端隔离；
-图灵完备性的形式化证明（含不启用 `recur` 时的强正规化证明）见 [`docs/turing-completeness.md`](docs/turing-completeness.md)。
+终止性与表达力的形式化论证（强正规化、多项式时间上界、表达力边界，以及“如果要图灵完备该怎么加”）见 [`docs/termination.md`](docs/termination.md)。
 
+- 常量池只存标量，所以闭合的数组/字典仍在运行时构造；要折叠它们需要扩展 Artifact 的常量格式（会 bump `ArtifactVersion`）；
 - 正式用于支付前，还需要 `decimal/money`、结构化 record、错误/Option 类型、决策 trace、Wasm 后端和独立宿主 ABI manifest。
 
 选择这个顺序是为了先冻结函数式语法、类型便利规则和扩展边界，再替换机器码后端，避免语言语义与 JIT 同时变化。
@@ -436,9 +581,9 @@ VM 是确定性栈式字节码解释器，**程序执行本身不分配内存**�
 ```bash
 make ci     # check-fmt + vet + lint + build + test
 make test   # 只跑测试
-go test ./lang -bench . -benchtime 2000x   # VM 基准
+go test ./lang/internal/compile -bench . -benchtime 2000x   # VM 基准
 ```
 
 `make lint` 由 `tools/lint`（仅标准库）实现，强制风格预算：单个方法不超过 50 行、嵌套不超过 3 层、单个文件不超过 800 行。
 
-测试覆盖样例推导、数值提升与显式转换、同型容器拒绝、扩展函数推导、函数式 `switch/for/reduce`、形式开关边界（含 ExprJSON 路径）、递归深度与 fuel 拦截、局部变量、展示目录、ExprJSON 往返、惰性分支、Artifact 防篡改和 MVP HTTP API。
+测试覆盖样例推导、数值提升与显式转换、同型容器拒绝、扩展函数推导、函数式 `switch/for/reduce`、形式开关边界（含 ExprJSON 路径）、递归深度与 fuel 拦截、局部变量、展示目录、ExprJSON 往返与导入校验、节点 schema 与定义一致、容器跨边界零拷贝（指针相等断言）、惰性分支、Artifact 防篡改和 MVP HTTP API。

@@ -1,4 +1,4 @@
-package lang
+package machine
 
 import (
 	"fmt"
@@ -20,8 +20,8 @@ const (
 	specialIf
 )
 
-// FunctionSpec defines a pure host function. The evaluator receives cloned
-// values and no ambient runtime capabilities.
+// FunctionSpec defines a pure host function. The evaluator receives the values
+// themselves — read-only, never copied — and no ambient runtime capabilities.
 type FunctionSpec struct {
 	Name    string
 	Params  []Type
@@ -41,43 +41,53 @@ func (s FunctionSpec) Signature() string {
 	return fmt.Sprintf("%s(%s)->%s", s.Name, strings.Join(params, ","), s.Result)
 }
 
-type registeredFunction struct {
+// RegisteredFunction is a function as the registry holds it: its spec plus the
+// key that identifies the exact signature a call is bound to. The compiler
+// reads it; nothing outside this module sees it.
+type RegisteredFunction struct {
 	FunctionSpec
 	key string
 }
+
+// Key is the signature key an artifact records, so a registry that drifts
+// fails to bind rather than binding the wrong function.
+func (f *RegisteredFunction) Key() string { return f.key }
+
+// IsLazyIf reports whether this is the kernel's `if`, which the compiler emits
+// as jumps instead of a call so the untaken branch is never evaluated.
+func (f *RegisteredFunction) IsLazyIf() bool { return f.special == specialIf }
 
 // Registry is immutable from the point of view of a running VM. Registration
 // is synchronized so applications can build a registry during startup.
 type Registry struct {
 	mu     sync.RWMutex
-	byName map[string][]*registeredFunction
-	byKey  map[string]*registeredFunction
+	byName map[string][]*RegisteredFunction
+	byKey  map[string]*RegisteredFunction
 	forms  map[Form]bool
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		byName: map[string][]*registeredFunction{},
-		byKey:  map[string]*registeredFunction{},
+		byName: map[string][]*RegisteredFunction{},
+		byKey:  map[string]*RegisteredFunction{},
 		forms:  map[Form]bool{},
 	}
 }
 
 // Form is a lazy special form. The parser always recognises the syntax, but a
 // program may only use the forms its registry enables, so the host decides how
-// much language each console gets: an operator console enables switch/for/
-// reduce, an engineer console also enables recur and becomes Turing complete.
+// much language each console gets. Every form iterates a finite input, so a
+// program is guaranteed to terminate whatever is enabled.
 type Form string
 
 const (
 	SwitchForm Form = "switch"
 	ForForm    Form = "for"
 	ReduceForm Form = "reduce"
-	RecurForm  Form = "recur"
 )
 
 // knownForms is also the display order of the catalog.
-var knownForms = []Form{SwitchForm, ForForm, ReduceForm, RecurForm}
+var knownForms = []Form{SwitchForm, ForForm, ReduceForm}
 
 func (r *Registry) EnableForm(forms ...Form) error {
 	for _, form := range forms {
@@ -111,14 +121,28 @@ func (r *Registry) EnabledForms() []Form {
 	return out
 }
 
-var functionNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*(?:@[0-9]+)?$`)
+// The shape of a name and the list of names the language keeps for itself are
+// one authority, used both here (a function may not claim a reserved name) and
+// by the parser and the JSON importer (a name in a document must be one a
+// function could have). Two copies would drift.
+var functionNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*$`)
 
 // reservedNames are parsed as literals or special forms, so no function may
 // claim them.
 var reservedNames = map[string]bool{
 	"expr": true, "true": true, "false": true,
-	"recur": true, "switch": true, "for": true, "reduce": true,
-	"in": true, "from": true, "else": true, "case": true,
+	"switch": true, "for": true, "reduce": true, "recur": true,
+	"in": true, "from": true, "else": true, "case": true, "let": true,
+}
+
+// IsValidFunctionName reports whether name has the shape of a function name.
+func IsValidFunctionName(name string) bool {
+	return functionNamePattern.MatchString(name)
+}
+
+// IsReservedName reports whether the language keeps name for itself.
+func IsReservedName(name string) bool {
+	return reservedNames[name]
 }
 
 func (r *Registry) Register(spec FunctionSpec) error {
@@ -133,10 +157,10 @@ func (r *Registry) Register(spec FunctionSpec) error {
 	}
 	params := make([]Type, len(spec.Params))
 	for i := range spec.Params {
-		params[i] = cloneType(spec.Params[i])
+		params[i] = CloneType(spec.Params[i])
 	}
 	spec.Params = params
-	spec.Result = cloneType(spec.Result)
+	spec.Result = CloneType(spec.Result)
 	spec.Display = cloneFunctionDisplay(spec.Display)
 	if spec.Eval == nil && spec.special == specialNone {
 		return fmt.Errorf("function %s has no evaluator", spec.Name)
@@ -153,7 +177,7 @@ func (r *Registry) Register(spec FunctionSpec) error {
 	if _, exists := r.byKey[key]; exists {
 		return fmt.Errorf("function signature already registered: %s", key)
 	}
-	registered := &registeredFunction{FunctionSpec: spec, key: key}
+	registered := &RegisteredFunction{FunctionSpec: spec, key: key}
 	r.byKey[key] = registered
 	r.byName[spec.Name] = append(r.byName[spec.Name], registered)
 	return nil
@@ -198,16 +222,19 @@ func validateTypePattern(t Type, vars map[string]bool) error {
 	}
 }
 
-func (r *Registry) functions(name string) []*registeredFunction {
+// Overloads returns every signature registered under a name. Inference walks
+// them to find the ones an argument list can satisfy.
+func (r *Registry) Overloads(name string) []*RegisteredFunction {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	functions := r.byName[name]
-	out := make([]*registeredFunction, len(functions))
+	out := make([]*RegisteredFunction, len(functions))
 	copy(out, functions)
 	return out
 }
 
-func (r *Registry) resolve(key string) (*registeredFunction, bool) {
+// Resolve looks up the exact signature a call is bound to.
+func (r *Registry) Resolve(key string) (*RegisteredFunction, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	function, ok := r.byKey[key]

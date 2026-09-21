@@ -1,98 +1,27 @@
 import "./funroute-designer.js";
-import { formatSource, tokenize } from "./funroute-source.js";
+import { contractComments, formatSource, tokenize } from "./funroute-source.js";
+import { ContractPanel, contractPayload } from "./funroute-contract.js";
+import { EXAMPLES } from "./funroute-examples.js";
 
 const designer = document.querySelector("#designer");
 const status = document.querySelector("#status");
 const source = document.querySelector("#source");
 const argsRoot = document.querySelector("#args");
+const contractRoot = document.querySelector("#contract");
 const resultRoot = document.querySelector("#result");
 const expression = document.querySelector("#expression");
 const highlight = document.querySelector("#expression-highlight");
 let compiled = null;
 let formNames = new Set();
+// The contract is the host's, so it lives beside the canvas rather than inside
+// it, and is sent as its own field. Nothing has to stay in sync with the text.
+const contract = new ContractPanel(contractRoot, () => { compile().catch(() => {}); });
 
-const routeTemplate = {
-  version: 2,
-  expr: {
-    node: "call", name: "if", args: [
-      { node: "call", name: "route.is_healthy@1", args: [{ node: "var", name: "health" }] },
-      { node: "string", string: "adyen_primary" },
-      { node: "string", string: "stripe_backup" },
-    ],
-  },
-};
 
-const switchTemplate = {
-  version: 2,
-  expr: {
-    node: "switch",
-    value: { node: "var", name: "country" },
-    cases: [
-      { match: [{ node: "string", string: "SG" }], result: { node: "string", string: "adyen_sg" } },
-      { match: [{ node: "string", string: "MY" }, { node: "string", string: "TH" }], result: { node: "string", string: "adyen_asia" } },
-    ],
-    default: { node: "string", string: "stripe_global" },
-  },
-};
 
-const forTemplate = {
-  version: 2,
-  expr: {
-    node: "for",
-    source: { node: "var", name: "channels" },
-    variable: "channel",
-    where: { node: "call", name: "route.is_healthy@1", args: [{ node: "var", name: "channel" }] },
-    yield: { node: "var", name: "channel" },
-  },
-};
 
-const reduceTemplate = {
-  version: 2,
-  expr: {
-    node: "reduce",
-    source: { node: "var", name: "prices" },
-    variable: "price",
-    accumulator: "total",
-    init: { node: "int", int: 0 },
-    body: { node: "call", name: "add", args: [{ node: "var", name: "total" }, { node: "var", name: "price" }] },
-  },
-};
 
-// recurTemplate uses recur, the Turing-complete form this demo registry enables.
-const recurTemplate = {
-  version: 2,
-  expr: {
-    node: "call", name: "if", args: [
-      { node: "call", name: "eq", args: [{ node: "var", name: "n" }, { node: "int", int: 0 }] },
-      { node: "var", name: "acc" },
-      {
-        node: "call", name: "recur", args: [
-          { node: "call", name: "sub", args: [{ node: "var", name: "n" }, { node: "int", int: 1 }] },
-          { node: "call", name: "add", args: [{ node: "var", name: "acc" }, { node: "var", name: "n" }] },
-        ],
-      },
-    ],
-  },
-};
 
-// A subjectless switch is the condition chain that replaces nested ifs.
-const condTemplate = {
-  version: 2,
-  expr: {
-    node: "switch",
-    cases: [
-      {
-        match: [{ node: "call", name: "gt", args: [{ node: "var", name: "amount" }, { node: "int", int: 10000 }] }],
-        result: { node: "string", string: "manual_review" },
-      },
-      {
-        match: [{ node: "call", name: "gt", args: [{ node: "var", name: "risk" }, { node: "float", float: "0.8" }] }],
-        result: { node: "string", string: "reject" },
-      },
-    ],
-    default: { node: "string", string: "auto" },
-  },
-};
 
 async function request(path, payload) {
   const response = await fetch(path, {
@@ -143,7 +72,10 @@ async function formatInput() {
 
 async function copyExpression() {
   try {
-    await navigator.clipboard.writeText(expression.value);
+    // Copying is for somewhere the console cannot follow — a ticket, an RFC —
+    // so the contract goes along as comments. They are not syntax: pasting the
+    // text back parses to the same program.
+    await navigator.clipboard.writeText(contractComments(contract.value, expression.value));
     setStatus("表达式已复制到剪贴板", "ok");
   } catch (error) {
     expression.focus();
@@ -187,9 +119,37 @@ async function applyExpression() {
   }
 }
 
-async function useTemplate(template) {
-  designer.value = template;
-  await compile().catch(() => {});
+// loadExample parses the example's source into canonical ExprJSON, so the page
+// exercises the same path an operator's own text takes.
+async function loadExample(example) {
+  setExpression(example.source);
+  setStatus(`正在载入「${example.label}」…`);
+  try {
+    const parsed = await request("/api/parse", { source: example.source });
+    // Two parts, loaded separately: the contract into its panel, the
+    // expression into the canvas.
+    contract.value = structuredClone(example.contract);
+    designer.value = parsed.expr_json;
+    await compile();
+  } catch (error) {
+    setStatus(`示例「${example.label}」无法载入：${error.message}`, "error");
+  }
+}
+
+// The example buttons are generated from EXAMPLES, so a new example needs no
+// markup and a removed one cannot leave a dead button behind.
+function renderExamples() {
+  const container = document.querySelector("#examples");
+  container.replaceChildren();
+  for (const example of EXAMPLES) {
+    const button = document.createElement("button");
+    button.className = "secondary";
+    button.type = "button";
+    button.textContent = example.label;
+    button.title = example.description;
+    button.addEventListener("click", () => { loadExample(example); });
+    container.append(button);
+  }
 }
 
 function typeName(type) {
@@ -228,6 +188,12 @@ function renderArgs(parameters) {
     const code = document.createElement("code");
     code.textContent = typeName(parameter.type);
     label.append(code);
+    if (parameter.doc) {
+      const doc = document.createElement("span");
+      doc.className = "hint";
+      doc.textContent = parameter.doc;
+      label.append(doc);
+    }
     const input = document.createElement("input");
     input.dataset.arg = parameter.name;
     input.dataset.type = JSON.stringify(parameter.type);
@@ -266,7 +232,10 @@ function collectArgs() {
 async function compile() {
   setStatus("正在编译…");
   try {
-    compiled = await request("/api/compile", { expr_json: designer.value });
+    compiled = await request("/api/compile", {
+      expr_json: designer.value,
+      contract: contractPayload(contract.value) ?? undefined,
+    });
     renderArgs(compiled.args);
     resultRoot.textContent = "—";
     setStatus(`编译成功 · ${compiled.instructions} 条指令 · ${compiled.digest.slice(0, 20)}…`, "ok");
@@ -283,6 +252,7 @@ async function run() {
     if (!compiled) await compile();
     const response = await request("/api/run", {
       expr_json: designer.value,
+      contract: contractPayload(contract.value) ?? undefined,
       args: collectArgs(),
       fuel: 10000,
     });
@@ -299,12 +269,6 @@ designer.addEventListener("funroute-change", () => {
   showSource();
   setStatus("表达式已修改，等待编译");
 });
-document.querySelector("#route-template").addEventListener("click", () => { useTemplate(routeTemplate); });
-document.querySelector("#switch-template").addEventListener("click", () => { useTemplate(switchTemplate); });
-document.querySelector("#for-template").addEventListener("click", () => { useTemplate(forTemplate); });
-document.querySelector("#reduce-template").addEventListener("click", () => { useTemplate(reduceTemplate); });
-document.querySelector("#cond-template").addEventListener("click", () => { useTemplate(condTemplate); });
-document.querySelector("#recur-template").addEventListener("click", () => { useTemplate(recurTemplate); });
 document.querySelector("#compile").addEventListener("click", () => { compile().catch(() => {}); });
 document.querySelector("#run").addEventListener("click", run);
 document.querySelector("#apply-expression").addEventListener("click", applyExpression);
@@ -321,7 +285,8 @@ expression.addEventListener("keydown", (event) => {
 });
 try {
   await loadCatalog();
-  designer.value = routeTemplate;
+  renderExamples();
+  await loadExample(EXAMPLES[0]);
   await compile();
 } catch (error) {
   setStatus(error.message, "error");

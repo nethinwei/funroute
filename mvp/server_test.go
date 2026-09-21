@@ -39,7 +39,7 @@ func TestCatalogAPIIncludesExtensionPresentation(t *testing.T) {
 	}
 	found := false
 	for _, function := range catalog.Functions {
-		if function.Name == "route.is_healthy@1" {
+		if function.Name == "route.is_healthy_v1" {
 			found = true
 			if function.Display.Label != "渠道是否健康" || function.Display.Description == "" {
 				t.Fatalf("display = %#v", function.Display)
@@ -53,7 +53,7 @@ func TestCatalogAPIIncludesExtensionPresentation(t *testing.T) {
 
 func TestCompileAndRunAPI(t *testing.T) {
 	server := testServer(t)
-	compileBody := []byte(`{"source":"if(route.is_healthy@1(health),\"adyen\",\"stripe\")"}`)
+	compileBody := []byte(`{"source":"if(route.is_healthy_v1(health),\"adyen\",\"stripe\")"}`)
 	compileRequest := httptest.NewRequest(http.MethodPost, "/api/compile", bytes.NewReader(compileBody))
 	compileRequest.Header.Set("Content-Type", "application/json")
 	compileRecorder := httptest.NewRecorder()
@@ -69,7 +69,7 @@ func TestCompileAndRunAPI(t *testing.T) {
 		t.Fatalf("compiled = %#v", compiled)
 	}
 
-	runBody := []byte(`{"source":"if(route.is_healthy@1(health),\"adyen\",\"stripe\")","args":{"health":"UP"}}`)
+	runBody := []byte(`{"source":"if(route.is_healthy_v1(health),\"adyen\",\"stripe\")","args":{"health":"UP"}}`)
 	runRequest := httptest.NewRequest(http.MethodPost, "/api/run", bytes.NewReader(runBody))
 	runRequest.Header.Set("Content-Type", "application/json")
 	runResponse := httptest.NewRecorder()
@@ -97,7 +97,7 @@ func TestRunAPISupportsFunctionalSwitchAndFor(t *testing.T) {
 			want: "adyen",
 		},
 		{
-			body: `{"source":"[channel for channel in channels if route.is_healthy@1(channel)]","args":{"channels":["UP","DOWN","UP"]}}`,
+			body: `{"source":"[channel for channel in channels if route.is_healthy_v1(channel)]","args":{"channels":["UP","DOWN","UP"]}}`,
 			want: []any{"UP", "UP"},
 		},
 	} {
@@ -148,13 +148,24 @@ func TestParseAPIReturnsCanonicalExprJSON(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &parsed); err != nil {
 		t.Fatal(err)
 	}
-	expr, err := lang.ImportExprJSON(parsed.ExprJSON)
-	if err != nil {
+	// The contract with the front end is the JSON, not a Go type: assert on the
+	// document a browser would receive.
+	var document struct {
+		Version int `json:"version"`
+		Expr    struct {
+			Node        string `json:"node"`
+			Variable    string `json:"variable"`
+			Accumulator string `json:"accumulator"`
+		} `json:"expr"`
+	}
+	if err := json.Unmarshal(parsed.ExprJSON, &document); err != nil {
 		t.Fatal(err)
 	}
-	reduce, ok := expr.(*lang.ReduceExpr)
-	if !ok || reduce.Variable != "price" || reduce.Accumulator != "total" {
-		t.Fatalf("expr = %#v", expr)
+	if document.Version != lang.ExprJSONVersion || document.Expr.Node != "reduce" {
+		t.Fatalf("document = %+v", document)
+	}
+	if document.Expr.Variable != "price" || document.Expr.Accumulator != "total" {
+		t.Fatalf("reduce = %+v", document.Expr)
 	}
 
 	// The parse endpoint does not type check; a malformed expression still fails.
@@ -164,7 +175,7 @@ func TestParseAPIReturnsCanonicalExprJSON(t *testing.T) {
 	}
 }
 
-func TestRunAPISupportsReduceAndRecur(t *testing.T) {
+func TestRunAPISupportsReduceAndComprehension(t *testing.T) {
 	server := testServer(t)
 	for _, test := range []struct {
 		name string
@@ -177,9 +188,9 @@ func TestRunAPISupportsReduceAndRecur(t *testing.T) {
 			want: int64(60),
 		},
 		{
-			name: "recur",
-			body: `{"source":"if(eq(n,0),acc,recur(sub(n,1),add(acc,n)))","args":{"n":100,"acc":0},"fuel":100000}`,
-			want: int64(5050),
+			name: "comprehension",
+			body: `{"source":"[add(x,1) for x in items if gt(x,1)]","args":{"items":[1,2,3]}}`,
+			want: []any{int64(3), int64(4)},
 		},
 	} {
 		response := postJSON(t, server, "/api/run", test.body)
@@ -197,7 +208,7 @@ func TestRunAPISupportsReduceAndRecur(t *testing.T) {
 }
 
 // A console is exactly its registry: a server built on a registry without
-// RecurForm rejects recur, and its catalog does not advertise it.
+// ReduceForm rejects reduce, and its catalog does not advertise it.
 func TestServerIsBoundedByItsRegistry(t *testing.T) {
 	registry := lang.CoreRegistry()
 	if err := registry.EnableForm(lang.SwitchForm); err != nil {
@@ -207,8 +218,8 @@ func TestServerIsBoundedByItsRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := postJSON(t, server, "/api/run", `{"source":"if(eq(n,0),n,recur(sub(n,1)))","args":{"n":1}}`)
-	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "recur is not enabled") {
+	response := postJSON(t, server, "/api/run", `{"source":"reduce(x in items, t from 0, add(t,x))","args":{"items":[1]}}`)
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "reduce is not enabled") {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 	request := httptest.NewRequest(http.MethodGet, "/api/catalog", nil)
@@ -218,12 +229,12 @@ func TestServerIsBoundedByItsRegistry(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &catalog); err != nil {
 		t.Fatal(err)
 	}
-	// switch is enabled, recur is not; the derived forms are always listed.
+	// switch is enabled, reduce is not; the derived forms are always listed.
 	listed := map[string]bool{}
 	for _, form := range catalog.SpecialForms {
 		listed[form.Name] = true
 	}
-	if !listed["switch"] || !listed["and"] || listed["recur"] || listed["for"] {
+	if !listed["switch"] || !listed["and"] || listed["reduce"] || listed["for"] {
 		t.Fatalf("special forms = %v", listed)
 	}
 }
@@ -240,7 +251,7 @@ func TestCatalogAPIListsTheEnabledForms(t *testing.T) {
 	for i, form := range catalog.SpecialForms {
 		names[i] = form.Name
 	}
-	want := []string{"switch", "for", "reduce", "recur", "and", "or", "not"}
+	want := []string{"switch", "for", "reduce", "let", "and", "or", "not"}
 	if fmt.Sprint(names) != fmt.Sprint(want) {
 		t.Fatalf("special forms = %v, want %v", names, want)
 	}

@@ -123,3 +123,64 @@ funroute-designer { display: block; }
   .expression-bar__row { flex-direction: column; }
   .editor { width: 100%; }
 }
+
+/* Example buttons are generated, so the group wraps rather than assuming a
+   fixed count. */
+.toolbar__examples {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* The contract panel sits beside the canvas: it is the host's data, not part
+   of the expression, so it gets its own block rather than a card on the
+   canvas. */
+.contract {
+  border: 1px solid #E2E8F0;
+  border-radius: 10px;
+  background: #FFF;
+  overflow: hidden;
+}
+
+.contract__bar,
+.fr-contract__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: #F8FAFC;
+  border-bottom: 1px solid #E2E8F0;
+}
+
+.fr-contract__bar strong { margin-right: 8px; }
+.fr-contract__actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.fr-contract__body { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+
+.fr-contract__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fr-contract__tag { color: #64748B; font-weight: 650; min-width: 2em; }
+.fr-contract__punct { color: #94A3B8; }
+
+.fr-contract__name,
+.fr-contract__type,
+.fr-contract__doc {
+  border: 1px solid #E2E8F0;
+  border-radius: 6px;
+  padding: 3px 6px;
+  font: inherit;
+  min-width: 0;
+}
+
+.fr-contract__name { width: 9em; font-family: ui-monospace, SFMono-Regular, monospace; }
+.fr-contract__type { width: 8em; font-family: ui-monospace, SFMono-Regular, monospace; }
+.fr-contract__doc { flex: 1 1 12em; }
+.fr-button--icon { padding: 2px 8px; }
+.fr-muted { color: #64748B; font-size: 13px; }
+.fr-hint { margin: 8px 12px; color: #64748B; font-size: 13px; }

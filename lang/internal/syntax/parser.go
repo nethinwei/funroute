@@ -1,9 +1,9 @@
-package lang
+package syntax
 
 import (
 	"fmt"
+	"funroute/lang/internal/machine"
 	"strconv"
-	"strings"
 )
 
 type parser struct {
@@ -12,17 +12,57 @@ type parser struct {
 	nextID int
 }
 
-// Parse reads source using the operator profile.
-// Parse reads source into an AST. Which special forms a program may actually
-// use is decided by the registry at compile time, not here.
+// tokenize turns source into the token slice the parser walks.
+func tokenize(source string) ([]token, error) {
+	lex := &lexer{source: source}
+	return lex.tokens()
+}
+
+// Infix operators are pure source sugar: they desugar into calls, so the AST,
+// ExprJSON and the canvas never see them. Every one is left associative.
+var precedences = map[tokenKind]int{
+	tokenOrOr:      1,
+	tokenAndAnd:    2,
+	tokenEqEq:      3,
+	tokenBangEq:    3,
+	tokenLess:      4,
+	tokenLessEq:    4,
+	tokenGreater:   4,
+	tokenGreaterEq: 4,
+	tokenPlus:      5,
+	tokenMinus:     5,
+	tokenStar:      6,
+	tokenSlash:     6,
+}
+
+// binaryFunctions maps an operator to the kernel function it becomes. The
+// operators missing here (&&, ||, !=) are derived forms that expand into `if`
+// instead; see desugarBinary.
+var binaryFunctions = map[tokenKind]string{
+	tokenEqEq:      "eq",
+	tokenLess:      "lt",
+	tokenLessEq:    "le",
+	tokenGreater:   "gt",
+	tokenGreaterEq: "ge",
+	tokenPlus:      "add",
+	tokenMinus:     "sub",
+	tokenStar:      "mul",
+	tokenSlash:     "div",
+}
+
+// Parse reads an expression. A program is only an expression: the contract it
+// runs under is the host's, and arrives through CompileOptions.
 func Parse(source string) (Expr, error) {
-	tokens, err := (&lexer{source: strings.TrimSpace(source)}).tokens()
+	tokens, err := tokenize(source)
 	if err != nil {
 		return nil, err
 	}
 	p := &parser{tokens: tokens, nextID: 1}
 	if p.peek().kind == tokenIdentifier && p.peek().text == "expr" && p.peekN(1).kind == tokenArrow {
 		return nil, p.errorf(p.peek(), "the expr-> prefix is not part of the syntax; write the expression directly")
+	}
+	if p.peek().kind == tokenAt {
+		return nil, p.errorf(p.peek(), "@arg/@let/@ret headers were removed; declare arguments through the host's contract and write bindings as let(name = value, body)")
 	}
 	expr, err := p.parseExpr()
 	if err != nil {
@@ -34,25 +74,19 @@ func Parse(source string) (Expr, error) {
 	return expr, nil
 }
 
-// Binary operators are sugar: a + b is add(a, b), a && b is if(a, b, false).
-// Nothing new reaches the AST, so ExprJSON and the drag-and-drop canvas are
-// unaffected.
-var precedences = map[tokenKind]int{
-	tokenOrOr: 1, tokenAndAnd: 2,
-	tokenEqEq: 3, tokenBangEq: 3,
-	tokenLess: 3, tokenLessEq: 3, tokenGreater: 3, tokenGreaterEq: 3,
-	tokenPlus: 4, tokenMinus: 4,
-	tokenStar: 5, tokenSlash: 5,
-}
-
-var binaryFunctions = map[tokenKind]string{
-	tokenPlus: "add", tokenMinus: "sub", tokenStar: "mul", tokenSlash: "div",
-	tokenEqEq: "eq", tokenLess: "lt", tokenLessEq: "le",
-	tokenGreater: "gt", tokenGreaterEq: "ge",
-}
-
 func (p *parser) parseExpr() (Expr, error) {
 	return p.parseBinary(1)
+}
+
+// node finishes a constructed node: the same normalisation and checks the
+// importer applies, so a rule is written once in ast.go. Errors are placed at
+// the node's opening token.
+func (p *parser) node(at token, expr Expr) (Expr, error) {
+	finished, err := finish(expr)
+	if err != nil {
+		return nil, p.errorf(at, "%v", err)
+	}
+	return finished, nil
 }
 
 // parseBinary is precedence climbing; every operator here is left associative.
@@ -118,7 +152,7 @@ func (p *parser) negate(operator token) (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	zero := &LiteralExpr{ID: p.id(), Pos: operator.pos, Value: Int(0)}
+	zero := &LiteralExpr{ID: p.id(), Pos: operator.pos, Value: machine.Int(0)}
 	return p.call(operator, "sub", zero, operand), nil
 }
 
@@ -132,13 +166,13 @@ func (p *parser) numberLiteral(tok token, negative bool) (Expr, error) {
 		if err != nil {
 			return nil, p.errorf(tok, "integer is outside int64 range")
 		}
-		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: Int(value)}, nil
+		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.Int(value)}, nil
 	}
 	value, err := strconv.ParseFloat(text, 64)
 	if err != nil {
 		return nil, p.errorf(tok, "invalid float")
 	}
-	checked, err := checkedFloat(value)
+	checked, err := machine.CheckedFloat(value)
 	if err != nil {
 		return nil, p.errorf(tok, "%v", err)
 	}
@@ -154,7 +188,7 @@ func (p *parser) pick(at token, condition, whenTrue, whenFalse Expr) Expr {
 }
 
 func (p *parser) boolean(at token, value bool) Expr {
-	return &LiteralExpr{ID: p.id(), Pos: at.pos, Value: Bool(value)}
+	return &LiteralExpr{ID: p.id(), Pos: at.pos, Value: machine.Bool(value)}
 }
 
 func (p *parser) keyword(word string) bool {
@@ -181,11 +215,16 @@ func (p *parser) parsePrimary() (Expr, error) {
 		if err != nil {
 			return nil, p.errorf(tok, "invalid string escape: %v", err)
 		}
-		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: String(value)}, nil
+		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.String(value)}, nil
 	case tokenIdentifier:
 		p.index++
 		if tok.text == "true" || tok.text == "false" {
-			return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: Bool(tok.text == "true")}, nil
+			return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.Bool(tok.text == "true")}, nil
+		}
+		if p.peek().kind == tokenAt {
+			// "@" used to be a decorative version suffix on function names. It
+			// carried no meaning, so it was freed up for annotations.
+			return nil, p.errorf(p.peek(), "'@' is an annotation marker, not a name suffix; write %s_v1 instead of %s@1", tok.text, tok.text)
 		}
 		if p.peek().kind == tokenLeftParen {
 			return p.parseCall(tok)
@@ -222,11 +261,59 @@ func (p *parser) parseCall(name token) (Expr, error) {
 	if name.text == "switch" {
 		return p.parseSwitchCall(name)
 	}
+	if name.text == "let" {
+		return p.parseLetCall(name)
+	}
 	args, err := p.parseList(tokenRightParen)
 	if err != nil {
 		return nil, err
 	}
 	return &CallExpr{ID: p.id(), Pos: name.pos, Name: name.text, Args: args}, nil
+}
+
+// parseLetCall reads let(x = e1, y = e2, body). Bindings are ordered: a later
+// value may use an earlier name, and the body sees all of them. The names are
+// locals, so they never show up in the program's arguments.
+func (p *parser) parseLetCall(name token) (Expr, error) {
+	bindings, err := p.letBindings(name)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expect(tokenRightParen, "')'"); err != nil {
+		return nil, err
+	}
+	return p.node(name, &LetExpr{ID: p.id(), Pos: name.pos, Bindings: bindings, Body: body})
+}
+
+func (p *parser) letBindings(name token) ([]LetBinding, error) {
+	var bindings []LetBinding
+	for p.startsBinding() {
+		local, err := p.localIdentifier()
+		if err != nil {
+			return nil, err
+		}
+		p.index++ // =
+		value, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, LetBinding{Name: local, Value: value})
+		if err := p.expect(tokenComma, "',' after a let binding"); err != nil {
+			return nil, err
+		}
+	}
+	if len(bindings) == 0 {
+		return nil, p.errorf(name, "let needs at least one binding, as in let(x = e, body)")
+	}
+	return bindings, nil
+}
+
+func (p *parser) startsBinding() bool {
+	return p.peek().kind == tokenIdentifier && p.peekN(1).kind == tokenAssign
 }
 
 // parseReduceCall accepts the keyword form
@@ -235,22 +322,35 @@ func (p *parser) parseCall(name token) (Expr, error) {
 //
 // and the positional form reduce(source, item, acc, init, body).
 func (p *parser) parseReduceCall(name token) (Expr, error) {
-	first, err := p.parseExpr()
-	if err != nil {
-		return nil, err
+	if p.startsKeywordReduce() {
+		key, value, err := p.loopVariables(name)
+		if err != nil {
+			return nil, err
+		}
+		p.index++ // in
+		return p.reduceKeywordForm(name, key, value)
 	}
-	if variable, ok := first.(*VariableExpr); ok && p.keyword("in") {
-		p.index++
-		return p.reduceKeywordForm(name, variable.Name)
-	}
-	args, err := p.parseRest(first, tokenRightParen)
+	args, err := p.parseList(tokenRightParen)
 	if err != nil {
 		return nil, err
 	}
 	return p.reduceExpr(name, args)
 }
 
-func (p *parser) reduceKeywordForm(name token, variable string) (Expr, error) {
+// startsKeywordReduce peeks for "v in" or "k, v in", which distinguishes the
+// keyword form from the positional one.
+func (p *parser) startsKeywordReduce() bool {
+	if p.peek().kind != tokenIdentifier {
+		return false
+	}
+	if p.peekN(1).kind == tokenIdentifier && p.peekN(1).text == "in" {
+		return true
+	}
+	return p.peekN(1).kind == tokenComma && p.peekN(2).kind == tokenIdentifier &&
+		p.peekN(3).kind == tokenIdentifier && p.peekN(3).text == "in"
+}
+
+func (p *parser) reduceKeywordForm(name token, key, variable string) (Expr, error) {
 	source, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -272,13 +372,10 @@ func (p *parser) reduceKeywordForm(name token, variable string) (Expr, error) {
 	if err := p.expect(tokenRightParen, "')'"); err != nil {
 		return nil, err
 	}
-	if variable == accumulator {
-		return nil, p.errorf(name, "reduce item and accumulator must have different names")
-	}
-	return &ReduceExpr{
-		ID: p.id(), Pos: name.pos, Source: source,
-		Variable: variable, Accumulator: accumulator, Init: init, Body: body,
-	}, nil
+	return p.node(name, &ReduceExpr{
+		ID: p.id(), Pos: name.pos, Source: source, Variable: variable,
+		KeyVariable: key, Accumulator: accumulator, Init: init, Body: body,
+	})
 }
 
 // parseAccumulator reads "total from 0".
@@ -411,13 +508,10 @@ func (p *parser) reduceExpr(name token, args []Expr) (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	if variable == accumulator {
-		return nil, p.errorf(name, "reduce item and accumulator must have different names")
-	}
-	return &ReduceExpr{
+	return p.node(name, &ReduceExpr{
 		ID: p.id(), Pos: name.pos, Source: args[0],
 		Variable: variable, Accumulator: accumulator, Init: args[3], Body: args[4],
-	}, nil
+	})
 }
 
 // localName validates a positional argument that names a locally bound
@@ -459,18 +553,11 @@ func (p *parser) parseArray() (Expr, error) {
 // to, so ExprJSON and the canvas are unchanged.
 func (p *parser) comprehension(start token, yield Expr) (Expr, error) {
 	p.index++ // for
-	named, err := p.parseExpr()
+	key, variable, err := p.loopVariables(start)
 	if err != nil {
 		return nil, err
 	}
-	variable, ok := named.(*VariableExpr)
-	if !ok {
-		return nil, p.errorf(start, "expected a local variable name after 'for'")
-	}
-	if !p.keyword("in") {
-		return nil, p.errorf(p.peek(), "expected 'in' after the comprehension variable")
-	}
-	p.index++
+	p.index++ // in
 	source, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -485,7 +572,45 @@ func (p *parser) comprehension(start token, yield Expr) (Expr, error) {
 	if err := p.expect(tokenRightBracket, "']'"); err != nil {
 		return nil, err
 	}
-	return &ForExpr{ID: p.id(), Pos: start.pos, Source: source, Variable: variable.Name, Where: where, Yield: yield}, nil
+	return p.node(start, &ForExpr{
+		ID: p.id(), Pos: start.pos, Source: source,
+		Variable: variable, KeyVariable: key, Where: where, Yield: yield,
+	})
+}
+
+// loopVariables reads "v" or "k, v" and leaves the parser on the in keyword.
+// Two variables mean a dictionary walk: the key comes first, like Python's
+// `for k, v in d.items()`.
+func (p *parser) loopVariables(at token) (key string, value string, err error) {
+	first, err := p.localIdentifier()
+	if err != nil {
+		return "", "", err
+	}
+	if p.peek().kind != tokenComma {
+		if !p.keyword("in") {
+			return "", "", p.errorf(p.peek(), "expected 'in' after the loop variable")
+		}
+		return "", first, nil
+	}
+	p.index++
+	second, err := p.localIdentifier()
+	if err != nil {
+		return "", "", err
+	}
+	if !p.keyword("in") {
+		return "", "", p.errorf(p.peek(), "expected 'in' after the loop variables")
+	}
+	return first, second, nil
+}
+
+// localIdentifier consumes one identifier and checks it can name a local.
+func (p *parser) localIdentifier() (string, error) {
+	tok := p.peek()
+	if tok.kind != tokenIdentifier || machine.IsReservedName(tok.text) {
+		return "", p.errorf(tok, "expected a local variable name")
+	}
+	p.index++
+	return tok.text, nil
 }
 
 func (p *parser) parseList(end tokenKind) ([]Expr, error) {
@@ -529,7 +654,6 @@ func (p *parser) parseDict() (Expr, error) {
 	start := p.peek()
 	p.index++
 	var entries []DictEntryExpr
-	seen := map[string]bool{}
 	if p.peek().kind == tokenRightBrace {
 		p.index++
 		return &DictExpr{ID: p.id(), Pos: start.pos}, nil
@@ -544,10 +668,6 @@ func (p *parser) parseDict() (Expr, error) {
 		if err != nil {
 			return nil, p.errorf(keyToken, "invalid dictionary key")
 		}
-		if seen[key] {
-			return nil, p.errorf(keyToken, "duplicate dictionary key %q", key)
-		}
-		seen[key] = true
 		if p.peek().kind != tokenColon {
 			return nil, p.errorf(p.peek(), "expected ':' after dictionary key")
 		}
@@ -559,7 +679,7 @@ func (p *parser) parseDict() (Expr, error) {
 		entries = append(entries, DictEntryExpr{Key: key, Value: value})
 		if p.peek().kind == tokenRightBrace {
 			p.index++
-			return &DictExpr{ID: p.id(), Pos: start.pos, Entries: entries}, nil
+			return p.node(start, &DictExpr{ID: p.id(), Pos: start.pos, Entries: entries})
 		}
 		if p.peek().kind != tokenComma {
 			return nil, p.errorf(p.peek(), "expected ',' or '}'")
@@ -567,7 +687,7 @@ func (p *parser) parseDict() (Expr, error) {
 		p.index++
 		if p.peek().kind == tokenRightBrace {
 			p.index++
-			return &DictExpr{ID: p.id(), Pos: start.pos, Entries: entries}, nil
+			return p.node(start, &DictExpr{ID: p.id(), Pos: start.pos, Entries: entries})
 		}
 	}
 }

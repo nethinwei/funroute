@@ -1,4 +1,4 @@
-package lang
+package machine
 
 import (
 	"fmt"
@@ -245,7 +245,7 @@ func registerFloatConversions(registry *Registry) {
 		if err != nil {
 			return Value{}, fmt.Errorf("cannot convert %q to float", args[0].s)
 		}
-		return checkedFloat(value)
+		return CheckedFloat(value)
 	})
 }
 
@@ -332,7 +332,7 @@ func arrayIsEmptySpec() FunctionSpec {
 	arrayT := ArrayOf(t)
 	return FunctionSpec{
 		Name: "array.is_empty", Params: []Type{arrayT}, Result: BoolType, Cost: 1,
-		Eval: func(args []Value) (Value, error) { return Bool(len(args[0].items) == 0), nil },
+		Eval: func(args []Value) (Value, error) { return Bool(args[0].length() == 0), nil },
 		Display: FunctionDisplay{
 			Label:       "数组是否为空",
 			Description: "判断同型数组是否没有元素；可与 head、tail、prepend 组合处理列表。",
@@ -352,10 +352,13 @@ func arrayPrependSpec() FunctionSpec {
 	return FunctionSpec{
 		Name: "array.prepend", Params: []Type{t, arrayT}, Result: arrayT, Cost: 2,
 		Eval: func(args []Value) (Value, error) {
-			items := make([]Value, 0, len(args[1].items)+1)
-			items = append(items, args[0])
-			items = append(items, args[1].items...)
-			return Value{kind: ArrayKind, items: items, elemType: args[1].elemType}, nil
+			array := args[1]
+			builder := newArrayBuilder(array.elemType(), array.length()+1)
+			builder.add(args[0])
+			for i := 0; i < array.length(); i++ {
+				builder.add(array.at(i))
+			}
+			return builder.finish(), nil
 		},
 		Display: FunctionDisplay{
 			Label:       "数组头部插入",
@@ -379,10 +382,10 @@ func arrayHeadSpec() FunctionSpec {
 	return FunctionSpec{
 		Name: "array.head", Params: []Type{arrayT}, Result: t, Cost: 1,
 		Eval: func(args []Value) (Value, error) {
-			if len(args[0].items) == 0 {
+			if args[0].length() == 0 {
 				return Value{}, fmt.Errorf("array.head requires a non-empty array")
 			}
-			return args[0].items[0], nil
+			return args[0].at(0), nil
 		},
 		Display: FunctionDisplay{
 			Label:       "数组首元素",
@@ -403,11 +406,10 @@ func arrayTailSpec() FunctionSpec {
 	return FunctionSpec{
 		Name: "array.tail", Params: []Type{arrayT}, Result: arrayT, Cost: 1,
 		Eval: func(args []Value) (Value, error) {
-			if len(args[0].items) == 0 {
+			if args[0].length() == 0 {
 				return Value{}, fmt.Errorf("array.tail requires a non-empty array")
 			}
-			// Sharing the suffix is safe because values never change in place.
-			return Value{kind: ArrayKind, items: args[0].items[1:], elemType: args[0].elemType}, nil
+			return args[0].tail(), nil
 		},
 		Display: FunctionDisplay{
 			Label:       "移除数组首元素",
