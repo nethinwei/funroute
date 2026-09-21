@@ -162,13 +162,11 @@ artifact, err := lang.CompileExpr(
 
 ### 为什么不放在语言里
 
-早期版本有 `@arg` / `@let` / `@ret` 头部，让一段文本自包含。删掉了，理由是：
+也可以让一段文本用头部声明自己的参数与返回类型，从而自包含。不这么做的理由是：
 
 - 一个支付控制台**本来就存**规则元数据 —— 规则 ID、版本号、生效窗口、灰度比例、审批记录、回滚指针。参数类型和说明是同类信息。放进语言就有了两份平行的元数据，迟早不一致。
-- `@arg legacy_flag: bool "调用方仍在传"` 这条信息的权威是**调用方契约**。表达式作者凭什么知道调用方还在传什么？宿主知道。
+- "调用方仍在传 `legacy_flag`，表达式已不用"这条信息的权威是**调用方契约**。表达式作者凭什么知道调用方还在传什么？宿主知道。
 - 语言里的头部要求源码文本与结构化面板**双向同步**；契约在宿主则两者各管一块，少一整类 bug。
-- 少 580 行生产代码、21 处对其他文件的侵入、224 行前端。
-
 代价是一段裸表达式不自包含 —— 这一条由导出视图补上（见下）。
 
 ### 规则
@@ -313,7 +311,7 @@ reduce is not enabled in this registry
 
 这条检查在 AST 上做，源码和 ExprJSON 走同一条路径，所以运营侧直接提交 ExprJSON 也绕不过去。
 
-**没有无界循环**：`recur`（v0.0.2 及以前的自递归原语）已移除，写它会得到明确提示。迭代一律用推导式与 `reduce`——它们的局部变量（`item`、累加器）是局部的，不会泄漏成参数契约，而且遍历次数由输入长度界定，所以程序必然终止。需要无界搜索的计算交给扩展函数，在 Go 侧设自己的上限与超时。
+**没有无界循环、没有递归**。迭代一律用推导式与 `reduce`——它们的局部变量（`item`、累加器）是局部的，不会泄漏成参数契约，而且遍历次数由输入长度界定，所以程序必然终止。需要无界搜索的计算交给扩展函数，在 Go 侧设自己的上限与超时。
 
 `Registry.Catalog()` 只列出该注册表启用的形式，因此拖拽面板看到的就是它实际能用的语言。
 
@@ -354,9 +352,53 @@ err := registry.Register(lang.FunctionSpec{
 
 `Display` 只用于控制台展示，不参与类型推导和执行。`Registry.Catalog()` 会输出全部可展示函数的标签、说明、分类、颜色、图标、参数说明、结果说明、示例、成本和类型签名。拖拽组件直接消费该目录，所以新增扩展函数不需要再维护一份前端清单。完整示例见 `extensions/paymentdemo/`。
 
-用 `Fn1/Fn2/Fn3` 按 Go 签名注册时，参数与结果的转换由 `ToValue`/`FromValue` 生成 —— 与宿主调用 `RunValues` 用的是同一对函数、同一份 Go 类型清单（`bool`、`int64`、`float64`、`string`、它们的切片与 string 键映射、`[][]float64`）。**容器不转换也不拷贝**：`func(xs []float64) (float64, error)` 收到的就是宿主传进来的那个切片；返回的切片原样成为 VM 里的值。代价是一条包无法强制的约定：交给 `Value` 的切片或映射，以及从 `Value` 取出的，从那一刻起只读。
+更常用的是按 Go 签名注册：`lang.Logic(registry, name, doc, fn)`。`fn` 可以是任意元数的函数，参数与返回值是 Go 的标量（`bool`、各宽度的整数、`float32/float64`、`string`）、任意深度嵌套的切片与 string 键映射、以及注册表 `DefineHandle` 过的类型，首参数可选 `context.Context`，返回 `(R, error)`。签名与两个方向的转换在注册时用反射解析一次，调用时走 `reflect.Call`，每次约 300 ns、几次分配；内核函数是手写 `FunctionSpec`，不走反射，对性能敏感的宿主函数也可以这样写。
+
+**容器不转换也不拷贝**：`func(xs []float64) (float64, error)` 收到的就是宿主传进来的那个切片；返回的切片原样成为 VM 里的值。其他形状（`[][]int32`、`map[string][]float64`）逐层构造，叶子仍是零拷贝。代价是一条包无法强制的约定：交给 `Value` 的切片或映射，以及从 `Value` 取出的，从那一刻起只读。
 
 Go 无法从语言层证明回调实现真的无副作用，因此生产扩展 SDK 仍需代码审查、静态检查和 capability 封装。VM 捕获 extension panic，但不会把数据库、网络、时钟等能力主动暴露给函数。
+
+### 句柄：引擎的数据穿过表达式
+
+FunRoute 不定义张量。模型引擎（ONNX Runtime、TensorRT、libtorch）的张量以**不透明句柄**流过表达式：语言只知道它的名字，不能索引、不能比较、只能传给下一个函数。
+
+```go
+registry := lang.CoreRegistry()
+lang.DefineHandle[*ort.Tensor](registry, "onnx.tensor")   // Go 类型 ↔ handle<onnx.tensor>
+
+lang.Logic(registry, "model.embed_v2", doc, func(ctx context.Context, features []float64) (*ort.Tensor, error) { … })
+lang.Logic(registry, "model.fraud_v3", doc, func(ctx context.Context, emb *ort.Tensor) (float64, error) { … })
+```
+
+```text
+let(emb = model.embed_v2(features),
+    switch(case model.fraud_v3(emb) > 0.9 => "reject", else "accept"))
+```
+
+`emb` 是引擎张量的指针，从一个模型到下一个模型没有一个字节进 Go 堆；`e == f` 在运行时报错"handles cannot be compared"；`handle<a>` 与 `handle<b>` 是不同类型，契约里可以写 `handle<onnx.tensor>` 声明参数。目录的 `value_types` 会列出注册表定义过的句柄类型。
+
+### 模型与批处理
+
+表达式不是一次路由决策的瓶颈，模型推理才是，而推理引擎要按批调用。`Model` 注册的函数同时带单条和批量两种实现（批量版的每个参数与结果都变成切片），`Batch` 把一个时间窗内的请求合成一批：
+
+```go
+lang.Model(registry, "model.fraud_v3", lang.Doc{Cost: 20, Timeout: 8 * time.Millisecond},
+    func(ctx context.Context, emb *ort.Tensor) (float64, error) { … },       // Run 用
+    func(ctx context.Context, embs []*ort.Tensor) ([]float64, error) { … })  // Batch 用：一次引擎调用
+
+batch := lang.NewBatch(runtime, lang.BatchOptions{MaxSize: 256, MaxWait: 2 * time.Millisecond})
+result, err := batch.Run(ctx, args)   // 任意 goroutine 调用，阻塞到本批完成
+```
+
+### 预算与超时
+
+一次路由决策有延迟预算，慢的只会是模型。预算以 `ctx` 随请求进来（`Run(ctx, …)`、`RunValues(ctx, …)`、`Batch.Run(ctx, …)`），每个扩展调用都看到它；VM 只在调用前检查，纯计算部分是纳秒级不值得打断。函数级 `Doc.Timeout` 是这个模型的延迟上限，实际交给引擎的 deadline 是 `min(请求剩余预算, Timeout)`，一个慢模型吃不掉后面分支的时间。合批时引擎调用取**批内最早**的 deadline，所以 `MaxWait` 必须远小于请求预算。
+
+默认信任函数遵守 `ctx`（Go 惯例，零开销）；确实无法取消的引擎绑定注册时标 `Doc.Detached: true`，VM 在独立 goroutine 里等它，到点即放弃，被放弃的调用继续运行到自己结束。
+
+错误是类型化的：`ErrDeadline`（预算耗尽）、`ErrExtension`（函数报错）、`ErrFuel`（程序超出成本上限）用 `errors.Is` 区分。规则层的降级形式 `fallback` 只接前两种，程序自己的问题不该被规则吞掉。
+
+`Batch` 只提升字节码能证明**提前算不改变任何可观察行为**的调用（`PrefetchSites`）：参数直接来自请求参数或常量、不在循环里、没有条件跳转能跳过它。`if`/`switch` 分支里的模型调用仍按需逐条执行，惰性语义不变。被提升的调用在程序里仍扣 fuel，所以预算与运行方式无关；引擎报错记在每个请求上，只在程序真的走到那次调用时抛出。
 
 ## 包边界
 
@@ -401,14 +443,14 @@ artifact, _ := lang.CompileJSON(document, registry, lang.CompileOptions{
 runtime, _ := lang.Instantiate(artifact, registry)
 
 // 按名字传（控制台填表单）
-result, _ := runtime.Run(map[string]any{"a": false, "b": 9}, lang.RunOptions{Fuel: 10_000})
+result, _ := runtime.Run(ctx, map[string]any{"a": false, "b": 9}, lang.RunOptions{Fuel: 10_000})
 
 // 按 ABI 顺序传（服务热路径，省掉名字查找与转换）
-result, _ = runtime.RunValues([]lang.Value{lang.Bool(false), lang.Int(9)}, lang.RunOptions{Fuel: 10_000})
+result, _ = runtime.RunValues(ctx, []lang.Value{lang.Bool(false), lang.Int(9)}, lang.RunOptions{Fuel: 10_000})
 
 // 容器零拷贝：特征向量包一层就进 VM，扩展函数拿到的是同一个切片
 features, _ := lang.ToValue([]float64{0.2, 0.7, 0.1})
-score, _ := runtime.RunValues([]lang.Value{features}, lang.RunOptions{Fuel: 10_000})
+score, _ := runtime.RunValues(ctx, []lang.Value{features}, lang.RunOptions{Fuel: 10_000})
 value, _ := lang.FromValue[float64](score)
 ```
 
@@ -432,13 +474,13 @@ Run(map) / RunValues(slice) → Value
 
 ## ExprJSON
 
-ExprJSON 当前是 **v2**：v1 的 `switch` 节点把 `match` 存成单个节点且要求 `value` 必须存在，v2 改成列表与可选主体，旧文档会被明确拒绝而不是猜测解读。
+`version` 随文档形状变化，版本不符的文档被明确拒绝而不是猜测解读。
 
 文档只有表达式 —— 契约不在里面，它是宿主记录的一部分：
 
 ```json
 {
-  "version": 2,
+  "version": 1,
   "expr": { "node": "call", "name": "mul", "args": [] }
 }
 ```
@@ -544,10 +586,12 @@ VM 是确定性栈式字节码解释器，**程序执行本身不分配内存**�
 | 500 元素推导式映射 | 36 µs | 5 次 / 8 KB |
 | 简单表达式一次求值 `Run(map)` | 165 ns | 0 次 |
 | 简单表达式一次求值 `RunValues` | 139 ns | 0 次 |
-| 向量透传 `model.score(features)`，n = 16 / 1 024 / 65 536 | 90 / 91 / 94 ns | 0 次 |
+| 向量透传 `model.score(features)`，n = 16 / 1 024 / 65 536，`Logic` 反射注册 | 256 / 270 / 257 ns | 4 次 |
+| 反射注册的两参数函数调用 `Logic` vs 内核 `add` | 300 ns vs 166 ns | 6 次 vs 0 次 |
 | 编译（含类型推导与常量折叠） | 35 µs | — |
+| 模型调用，模拟 20 µs 引擎开销：单条 vs 64 条一批 | 28.6 µs vs 1.35 µs / 请求 | — |
 
-向量透传的耗时不随长度变化，是零拷贝的直接证据：宿主的 `[]float64` 进 VM、进扩展函数、出来，始终是同一个底层数组。
+向量透传的耗时不随长度变化，是零拷贝的直接证据：宿主的 `[]float64` 进 VM、进扩展函数、出来，始终是同一个底层数组。那约 130 ns 的差价是 `reflect.Call` 与参数装箱，是"任意签名"的代价；不肯付的宿主函数写成 `FunctionSpec` 即可回到内核函数的成本。
 
 支撑这些数字的实现要点：
 

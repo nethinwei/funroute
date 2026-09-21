@@ -12,6 +12,7 @@ type typeTerm struct {
 	kind machine.Kind
 	id   int
 	elem *typeTerm
+	name string // a handle's host name; empty otherwise
 }
 
 type inferState struct {
@@ -95,7 +96,7 @@ func (s *inferState) unify(left, right typeTerm) error {
 	if right.kind == machine.VarKind {
 		return s.unify(right, left)
 	}
-	if left.kind != right.kind {
+	if left.kind != right.kind || left.name != right.name {
 		return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
 	}
 	if left.kind == machine.ArrayKind || left.kind == machine.DictKind {
@@ -134,7 +135,7 @@ func (s *inferState) instantiate(t machine.Type, vars map[string]typeTerm) typeT
 		elem := s.instantiate(*t.Elem, vars)
 		return containerTerm(t.Kind, elem)
 	default:
-		return scalarTerm(t.Kind)
+		return concreteTerm(t)
 	}
 }
 
@@ -143,7 +144,7 @@ func concreteTerm(t machine.Type) typeTerm {
 		elem := concreteTerm(*t.Elem)
 		return containerTerm(t.Kind, elem)
 	}
-	return scalarTerm(t.Kind)
+	return typeTerm{kind: t.Kind, name: t.Name}
 }
 
 func (s *inferState) publicType(term typeTerm) (machine.Type, bool) {
@@ -164,7 +165,7 @@ func (s *inferState) publicType(term typeTerm) (machine.Type, bool) {
 		}
 		return machine.DictOf(elem), true
 	default:
-		return machine.Type{Kind: term.kind}, true
+		return machine.Type{Kind: term.kind, Name: term.name}, true
 	}
 }
 
@@ -210,11 +211,11 @@ type programCandidate struct {
 // inferProgram infers the argument and result types.
 //
 // order, when non-nil, replaces the appearance order of the free variables as
-// the argument order: that is how `@arg` declarations pin the ABI down, and it
+// the argument order: that is how the host's contract pins the ABI down, and it
 // is also what lets a declared-but-unused argument stay in the signature.
 //
 // ret, when non-nil, is unified with the result rather than compared to it
-// afterwards, so `@ret float` settles `1 + 2` as float arithmetic instead of
+// afterwards, so a declared float result settles `1 + 2` as float arithmetic instead of
 // rejecting it.
 func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string]machine.Type, order []string, ret *machine.Type) (*inference, error) {
 	names := syntax.FreeVariables(expr)
@@ -426,6 +427,8 @@ func implicitTypeScore(typ machine.Type) int {
 		return 10
 	case machine.StringKind:
 		return 20
+	case machine.HandleKind:
+		return 30
 	case machine.ArrayKind, machine.DictKind:
 		if typ.Elem == nil {
 			return 100

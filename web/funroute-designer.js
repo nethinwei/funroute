@@ -2,9 +2,8 @@ import { VALUE_TEMPLATES, blankFields, blankNode, clone, cleanNode, formatSource
 
 const MIME = "application/x-funroute-node";
 
-// Bumped with the Go side when switch cases became lists and the subject
-// optional.
-const EXPR_JSON_VERSION = 2;
+// Must match ExprJSONVersion on the Go side.
+const EXPR_JSON_VERSION = 1;
 
 // The derived forms are if nodes with a fixed branch; the palette offers them as
 // their own cards and the canvas renders only the real operand slots.
@@ -484,7 +483,7 @@ export class FunRouteDesigner extends HTMLElement {
       input.type = field.kind === "int" ? "number" : "text";
       if (field.kind === "int") input.step = "1";
       if (field.kind === "float") input.inputMode = "decimal";
-      if (field.kind === "name") input.pattern = "[A-Za-z_][A-Za-z0-9_.]*";
+      if (field.kind === "name") input.pattern = NAME_PATTERN;
       input.placeholder = field.kind === "name" ? "参数名" : field.kind;
       input.value = String(node[field.name] ?? field.default ?? "");
       input.addEventListener("change", () => {

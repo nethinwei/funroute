@@ -341,10 +341,6 @@ func inferArgs(args []syntax.Expr, state *inferState, context inferContext) ([]p
 func inferCall(node *syntax.CallExpr, state *inferState, context inferContext) ([]inferResult, error) {
 	functions := context.registry.Overloads(node.Name)
 	if len(functions) == 0 {
-		if node.Name == "recur" {
-			return nil, fmt.Errorf("recur was removed at byte %d: the language only iterates finite inputs, "+
-				"so use a comprehension or reduce (unbounded iteration belongs in an extension function)", node.Pos)
-		}
 		return nil, fmt.Errorf("unknown function %q at byte %d", node.Name, node.Pos)
 	}
 	partials, err := inferArgs(node.Args, state, context)

@@ -22,7 +22,6 @@ const (
 	tokenRightBrace
 	tokenComma
 	tokenColon
-	tokenArrow
 	tokenPlus
 	tokenMinus
 	tokenStar
@@ -38,19 +37,17 @@ const (
 	tokenBang
 	tokenFatArrow
 	tokenAssign
-	tokenAt
 )
 
-// operatorTokens is scanned longest-first, so "<=" wins over "<" and "->" over
-// "-".
+// operatorTokens is scanned longest-first, so "<=" wins over "<" and "=>" over
+// "=".
 var operatorTokens = []struct {
 	text string
 	kind tokenKind
 }{
 	{"<=", tokenLessEq}, {">=", tokenGreaterEq}, {"==", tokenEqEq}, {"!=", tokenBangEq},
-	{"&&", tokenAndAnd}, {"||", tokenOrOr}, {"->", tokenArrow}, {"=>", tokenFatArrow},
+	{"&&", tokenAndAnd}, {"||", tokenOrOr}, {"=>", tokenFatArrow},
 	{"+", tokenPlus}, {"-", tokenMinus}, {"*", tokenStar}, {"/", tokenSlash}, {"=", tokenAssign},
-	{"@", tokenAt},
 	{"<", tokenLess}, {">", tokenGreater}, {"!", tokenBang},
 }
 

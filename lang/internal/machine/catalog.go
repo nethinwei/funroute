@@ -143,8 +143,19 @@ func (r *Registry) Catalog() LanguageCatalog {
 		Version:      CatalogVersion,
 		Functions:    functions,
 		SpecialForms: r.specialForms(),
-		ValueTypes:   coreValueTypes(),
+		ValueTypes:   append(coreValueTypes(), r.handleValueTypes()...),
 	}
+}
+
+// handleValueTypes lists the host's opaque types, so a console can show what
+// its model functions pass between them.
+func (r *Registry) handleValueTypes() []ValueTypeDescriptor {
+	handles := r.Handles()
+	out := make([]ValueTypeDescriptor, len(handles))
+	for i, handle := range handles {
+		out[i] = ValueTypeDescriptor{Type: handle, Label: handle.String(), Description: "宿主的不透明值，只能在函数之间传递", Color: "#7C3AED"}
+	}
+	return out
 }
 
 func (r *Registry) visibleFunctions() []FunctionDescriptor {

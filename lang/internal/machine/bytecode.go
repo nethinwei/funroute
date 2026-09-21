@@ -8,9 +8,9 @@ import (
 	"strconv"
 )
 
-// ArtifactVersion is 3: the canonical ExprJSON that the digest covers now writes
-// a let node's bindings before its body, in struct order.
-const ArtifactVersion = 3
+// ArtifactVersion changes whenever anything the digest covers changes shape;
+// an artifact with any other version is refused rather than reinterpreted.
+const ArtifactVersion = 1
 
 // OpCode is a dense enum so the interpreter dispatches through a jump table.
 // The JSON form keeps the original mnemonics, so artifact digests do not move.
@@ -36,9 +36,9 @@ const (
 type Parameter struct {
 	Name string `json:"name"`
 	Type Type   `json:"type"`
-	// Doc is the prose from a `param` declaration. It is presentation only and
-	// is cleared before the digest is computed, so rewording it does not
-	// invalidate an artifact that is already deployed.
+	// Doc is the host's prose for the argument (ArgSpec.Doc). It is
+	// presentation only and is cleared before the digest is computed, so
+	// rewording it does not invalidate an artifact that is already deployed.
 	Doc string `json:"doc,omitempty"`
 }
 
@@ -135,9 +135,7 @@ type Artifact struct {
 	Locals    int             `json:"locals,omitempty"`
 	// MaxStack is the deepest the operand stack gets, computed while
 	// compiling. The frame reserves it once, so pushing never has to check.
-	// Zero means "unknown" — an artifact compiled before this field existed —
-	// and then the frame falls back to checking each push.
-	MaxStack     int           `json:"max_stack,omitempty"`
+	MaxStack     int           `json:"max_stack"`
 	Instructions []Instruction `json:"instructions"`
 }
 

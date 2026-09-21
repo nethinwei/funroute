@@ -110,6 +110,15 @@ export const EXAMPLES = [
     },
   },
   {
+    label: "模型评分",
+    description: "引擎张量以句柄穿过表达式：向量化 → 评分，语言不看内容",
+    source: "let(e = model.embed_v1(features), if(model.fraud_v1(e) > 0.8, \"review\", \"accept\"))",
+    contract: {
+      args: [{ name: "features", type: "array<float>", doc: "特征向量，交给模型引擎" }],
+      result: { type: "string", doc: "处置" },
+    },
+  },
+  {
     label: "稳定 ABI",
     description: "契约声明了但表达式不用：调用方不必改",
     source: "amount * 2",

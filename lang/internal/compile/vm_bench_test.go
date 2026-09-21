@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -33,7 +34,7 @@ func BenchmarkRunPaths(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			if _, err := runtime.Run(args, machine.RunOptions{Fuel: 1000}); err != nil {
+			if _, err := runtime.Run(context.Background(), args, machine.RunOptions{Fuel: 1000}); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -44,7 +45,7 @@ func BenchmarkRunPaths(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			if _, err := runtime.RunValues(args, machine.RunOptions{Fuel: 1000}); err != nil {
+			if _, err := runtime.RunValues(context.Background(), args, machine.RunOptions{Fuel: 1000}); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -67,7 +68,7 @@ func benchVector(b *testing.B, size int) {
 		features[i] = float64(i) / float64(size)
 	}
 	registry := benchRegistry(b)
-	err := machine.Fn1(registry, "model.score_v1", machine.Doc{Cost: 10}, func(xs []float64) (float64, error) {
+	err := machine.Logic(registry, "model.score_v1", machine.Doc{Cost: 10}, func(xs []float64) (float64, error) {
 		return xs[0] + xs[len(xs)-1], nil
 	})
 	if err != nil {
@@ -91,7 +92,7 @@ func benchVector(b *testing.B, size int) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := runtime.RunValues(args, machine.RunOptions{Fuel: 1000}); err != nil {
+		if _, err := runtime.RunValues(context.Background(), args, machine.RunOptions{Fuel: 1000}); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -143,7 +144,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := runtime.Run(rawArgs, lang.RunOptions{Fuel: *fuel})
+	result, err := runtime.Run(context.Background(), rawArgs, lang.RunOptions{Fuel: *fuel})
 	if err != nil {
 		return err
 	}

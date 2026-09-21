@@ -25,9 +25,10 @@ type Value struct {
 	b    bool
 	i    int64
 	f    float64
-	s    string
+	s    string // a string's text, or a handle's type name
 	// box is the container backing: []bool, []int64, []float64, []string,
-	// *nestedArray, or the map[string] counterparts and *nestedDict.
+	// *nestedArray, or the map[string] counterparts and *nestedDict. For a
+	// handle it is the host's payload, untouched.
 	box any
 }
 
@@ -47,6 +48,16 @@ func Bool(v bool) Value     { return Value{kind: BoolKind, b: v} }
 func Int(v int64) Value     { return Value{kind: IntKind, i: v} }
 func Float(v float64) Value { return Value{kind: FloatKind, f: v} }
 func String(v string) Value { return Value{kind: StringKind, s: v} }
+
+// NewHandle wraps a host value the language will only pass along — an
+// inference engine's tensor, typically. The payload is not inspected, copied
+// or compared; FromValue hands it back as it is.
+func NewHandle(name string, payload any) Value {
+	return Value{kind: HandleKind, s: name, box: payload}
+}
+
+// Payload returns a handle's host value.
+func (v Value) Payload() (any, bool) { return v.box, v.kind == HandleKind }
 
 // Array builds an array from values, checking each against elem and packing
 // them into the canonical backing. A host that already holds a []float64
@@ -107,6 +118,9 @@ func (v Value) hasType(t Type) bool {
 	if v.kind != t.Kind {
 		return false
 	}
+	if v.kind == HandleKind {
+		return v.s == t.Name
+	}
 	if v.kind != ArrayKind && v.kind != DictKind {
 		return true
 	}
@@ -127,6 +141,8 @@ func (v Value) Type() Type {
 		return ArrayOf(CloneType(v.elemType()))
 	case DictKind:
 		return DictOf(CloneType(v.elemType()))
+	case HandleKind:
+		return HandleOf(v.s)
 	default:
 		return Type{Kind: InvalidKind}
 	}
@@ -183,6 +199,9 @@ func (v Value) Any() any {
 		return v.s
 	case ArrayKind, DictKind:
 		return v.containerAny()
+	case HandleKind:
+		// A handle has no JSON form; naming its type is all a log can show.
+		return v.Type().String()
 	default:
 		return nil
 	}
@@ -211,6 +230,9 @@ func (v Value) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.Any())
 }
 
+// Equal compares two values of one type. Handles are never equal: the
+// language cannot see into them, and the VM refuses to compare them at all
+// (see compareEqual), so this answer is only a safe default.
 func (v Value) Equal(other Value) bool {
 	if !v.hasType(other.Type()) {
 		return false
@@ -257,6 +279,18 @@ func (v Value) equalDict(other Value) bool {
 		}
 	}
 	return true
+}
+
+// compareEqual is the VM's equality: eq and switch both use it. Handles are
+// opaque, so comparing them is an error rather than a guess.
+func compareEqual(left, right Value) (Value, error) {
+	if left.kind == HandleKind || right.kind == HandleKind {
+		return Value{}, fmt.Errorf("handles cannot be compared")
+	}
+	if !left.hasType(right.Type()) {
+		return Value{}, fmt.Errorf("equality requires one type, got %s and %s", left.Type(), right.Type())
+	}
+	return Bool(left.Equal(right)), nil
 }
 
 // CheckedFloat builds a float value, refusing the non-finite ones: a routing

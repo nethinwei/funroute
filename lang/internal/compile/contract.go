@@ -89,8 +89,8 @@ func (o CompileOptions) validate(used []string) error {
 	}
 	declared := make(map[string]bool, len(o.Args))
 	for _, arg := range o.Args {
-		if arg.Name == "" {
-			return fmt.Errorf("an argument was declared without a name")
+		if !machine.IsValidVariableName(arg.Name) || machine.IsReservedName(arg.Name) {
+			return fmt.Errorf("invalid argument name %q", arg.Name)
 		}
 		if declared[arg.Name] {
 			return fmt.Errorf("argument %q is declared twice", arg.Name)

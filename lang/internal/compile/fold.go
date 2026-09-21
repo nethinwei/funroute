@@ -129,6 +129,7 @@ func (c *bytecodeCompiler) artifact(result machine.Type) *machine.Artifact {
 		Constants:    c.constants,
 		Calls:        c.calls,
 		Locals:       c.nextLocal,
+		MaxStack:     maxStackDepth(c.instructions),
 		Instructions: c.instructions,
 	}
 }

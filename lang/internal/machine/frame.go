@@ -1,12 +1,11 @@
 package machine
 
-import "fmt"
+import (
+	"context"
+	"errors"
+	"fmt"
+)
 
-// loopFrame tracks one active `for` iteration: the input items, the local slot
-// holding the current item, and the array being built.
-// NoAccumulator marks a mapping loop (for): it collects into output instead of
-// folding into an accumulator slot. NoKey marks a loop over an array rather
-// than a dictionary.
 // NoAccumulator marks a loop instruction as a mapping rather than a fold, and
 // NoKey marks it as walking an array rather than a dictionary. The compiler
 // emits them; the frame reads them.
@@ -15,6 +14,8 @@ const (
 	NoKey         = -1
 )
 
+// loopFrame tracks one active loop: its source, the slots it binds and, for a
+// mapping, the array being built.
 type loopFrame struct {
 	source   Value
 	keys     []string // non-nil for a dictionary walk, sorted
@@ -54,6 +55,9 @@ type frame struct {
 	reserved   int
 	overflow   int // how far past the reservation this activation pushed
 	argsUsed   int
+	ctx        context.Context    // the request's budget; extension calls see it
+	deadline   bool               // whether ctx can expire at all; Background cannot
+	prefetched map[int]Prefetched // a Batch's answers for hoisted calls, by pc
 	stackArray [16]Value
 	argsArray  [8]Value
 }
@@ -68,8 +72,8 @@ func (f *frame) reset(runtime *Runtime, args []Value, fuel *uint64, maxStack int
 	f.stack = f.stackArray[:0]
 	f.loops = f.loops[:0]
 	// The compiler knows how deep the stack gets. Reserving it here is what
-	// lets push skip its bounds check; an artifact without the figure keeps
-	// the per-push check.
+	// lets push skip its bounds check; a run whose limit is below the figure
+	// keeps the per-push check instead.
 	f.reserved = runtime.artifact.MaxStack
 	if f.reserved > maxStack {
 		f.reserved = 0
@@ -114,6 +118,8 @@ func (f *frame) release() {
 	f.runtime = nil
 	f.args = nil
 	f.fuel = nil
+	f.ctx = nil
+	f.prefetched = nil
 	clearValues(f.stackArray[:f.stackUsed()])
 	clearValues(f.argsArray[:min(f.argsUsed, len(f.argsArray))])
 	clearValues(f.locals)
@@ -156,7 +162,7 @@ func (f *frame) run() (Value, error) {
 	for pc := 0; pc < len(code); {
 		if f.fuelLeft == 0 {
 			*f.fuel = 0
-			return Value{}, fmt.Errorf("execution fuel exhausted at instruction %d", pc)
+			return Value{}, fmt.Errorf("%w at instruction %d", ErrFuel, pc)
 		}
 		f.fuelLeft--
 		next, err := f.step(pc, code[pc])
@@ -188,7 +194,7 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 	case OpEqual:
 		return pc + 1, f.equal()
 	case OpCall:
-		return pc + 1, f.call(instruction)
+		return pc + 1, f.call(pc, instruction)
 	case OpLoopInit:
 		return f.loopInit(pc, instruction)
 	case OpLoopCollect:
@@ -337,30 +343,118 @@ func (f *frame) equal() error {
 	if err != nil {
 		return err
 	}
-	if !values[0].hasType(values[1].Type()) {
-		return fmt.Errorf("equality requires one type, got %s and %s", values[0].Type(), values[1].Type())
+	result, err := compareEqual(values[0], values[1])
+	if err != nil {
+		return err
 	}
-	return f.push(Bool(values[0].Equal(values[1])))
+	return f.push(result)
 }
 
-func (f *frame) call(instruction Instruction) error {
+func (f *frame) call(pc int, instruction Instruction) error {
 	function := f.runtime.functions[instruction.A]
 	if f.fuelLeft < function.Cost {
-		return fmt.Errorf("execution fuel exhausted before %s", function.Name)
+		return fmt.Errorf("%w before %s", ErrFuel, function.Name)
 	}
 	f.fuelLeft -= function.Cost
 	callArgs, err := f.popN(instruction.B)
 	if err != nil {
 		return err
 	}
-	value, err := function.Eval(callArgs)
+	// Three ways to get the value, cheapest first: a Batch already computed
+	// it; the plain call every kernel function takes; or the bounded call of
+	// a function with a Timeout or Detached. A hoisted call still costs its
+	// fuel so a program's budget does not depend on how it ran.
+	var value Value
+	if ready, ok := f.prefetchedAt(pc); ok {
+		value, err = ready.Value, ready.Err
+	} else if function.Timeout == 0 && !function.Detached {
+		if f.deadline && f.ctx.Err() != nil {
+			return fmt.Errorf("%s: %w: %v", function.Name, ErrDeadline, f.ctx.Err())
+		}
+		value, err = function.Eval(f.ctx, callArgs)
+	} else {
+		value, err = f.invokeBounded(function, callArgs)
+	}
 	if err != nil {
-		return fmt.Errorf("%s: %w", function.Name, err)
+		return fmt.Errorf("%s: %w", function.Name, f.classify(err))
 	}
 	if !value.hasType(*instruction.Type) {
 		return fmt.Errorf("%s returned %s, contract requires %s", function.Name, value.Type(), *instruction.Type)
 	}
 	return f.push(value)
+}
+
+// prefetchedAt is small enough to inline, so the common case — no batch — is
+// one nil check on the call path.
+func (f *frame) prefetchedAt(pc int) (Prefetched, bool) {
+	if f.prefetched == nil {
+		return Prefetched{}, false
+	}
+	ready, ok := f.prefetched[pc]
+	return ready, ok
+}
+
+// invokeBounded caps one call by the function's Timeout and, for a Detached
+// function, stops waiting when it passes. The deadline check before the call
+// is what makes a program stop promptly once its time is up.
+func (f *frame) invokeBounded(function *RegisteredFunction, args []Value) (Value, error) {
+	if f.deadline && f.ctx.Err() != nil {
+		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, f.ctx.Err())
+	}
+	ctx := f.ctx
+	if function.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, function.Timeout)
+		defer cancel()
+	}
+	var value Value
+	var err error
+	if function.Detached {
+		value, err = callDetached(ctx, function, args)
+	} else {
+		value, err = function.Eval(ctx, args)
+	}
+	if err != nil && ctx.Err() != nil {
+		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, err)
+	}
+	return value, err
+}
+
+// classify wraps an extension's failure as ErrDeadline when the request's
+// budget ran out and ErrExtension otherwise, so fallback and monitoring can
+// tell the two apart. An error a Batch or invokeBounded already classified is
+// left as it is.
+func (f *frame) classify(err error) error {
+	if errors.Is(err, ErrDeadline) || errors.Is(err, ErrExtension) {
+		return err
+	}
+	if f.ctx.Err() != nil {
+		return fmt.Errorf("%w: %v", ErrDeadline, err)
+	}
+	return fmt.Errorf("%w: %v", ErrExtension, err)
+}
+
+// callDetached runs the function on its own goroutine and stops waiting at the
+// deadline. The arguments are copied first: the stack window they live in is
+// reused once this returns, and the abandoned call may still be reading them.
+func callDetached(ctx context.Context, function *RegisteredFunction, args []Value) (Value, error) {
+	type outcome struct {
+		value Value
+		err   error
+	}
+	owned := make([]Value, len(args))
+	copy(owned, args)
+	done := make(chan outcome, 1)
+	go func() {
+		value, err := function.Eval(ctx, owned)
+		done <- outcome{value, err}
+	}()
+	select {
+	case result := <-done:
+		return result.value, result.err
+	case <-ctx.Done():
+		return Value{}, ctx.Err()
+	}
 }
 
 func (f *frame) loopInit(pc int, instruction Instruction) (int, error) {

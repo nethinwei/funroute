@@ -64,8 +64,19 @@ var (
 	StringType = machine.StringType
 	ArrayOf    = machine.ArrayOf
 	DictOf     = machine.DictOf
+	HandleOf   = machine.HandleOf
 	ParseType  = machine.ParseType
 )
+
+// Handles are how an inference engine's data crosses the expression without
+// the language knowing anything about it: DefineHandle names a Go type as
+// handle<name>, NewHandle wraps a value by hand, and FromValue unwraps one.
+// A handle can only be passed along — never compared, indexed or inspected.
+var NewHandle = machine.NewHandle
+
+func DefineHandle[T any](registry *Registry, name string) error {
+	return machine.DefineHandle[T](registry, name)
+}
 
 // The registry is the single authority on what exists and what it means.
 type (
@@ -94,19 +105,21 @@ const (
 	ReduceForm = machine.ReduceForm
 )
 
-// Registering a Go function needs no reflection: Fn1/Fn2/Fn3 derive the
-// signature from the function's own types.
-func Fn1[A, R any](registry *Registry, name string, doc Doc, fn func(A) (R, error)) error {
-	return machine.Fn1(registry, name, doc, fn)
-}
+// A host function is registered by its Go signature, read once by reflection:
+// Logic for business logic, Model for a model that also has a batch
+// implementation. Both accept any arity, an optional leading context.Context,
+// and Go containers nested to any depth.
+var (
+	Logic = machine.Logic
+	Model = machine.Model
+)
 
-func Fn2[A, B, R any](registry *Registry, name string, doc Doc, fn func(A, B) (R, error)) error {
-	return machine.Fn2(registry, name, doc, fn)
-}
-
-func Fn3[A, B, C, R any](registry *Registry, name string, doc Doc, fn func(A, B, C) (R, error)) error {
-	return machine.Fn3(registry, name, doc, fn)
-}
+// The errors a host tells apart with errors.Is.
+var (
+	ErrFuel      = machine.ErrFuel
+	ErrDeadline  = machine.ErrDeadline
+	ErrExtension = machine.ErrExtension
+)
 
 // The contract — which arguments, in which order, with which types and prose,
 // and what comes back — belongs to the host, not to the expression text. A
@@ -161,6 +174,17 @@ type (
 )
 
 var Instantiate = machine.Instantiate
+
+// A Batch runs one artifact for many requests and calls each model once per
+// batch: the calls the bytecode proves hoistable (arguments straight from the
+// request, not in a loop, not behind a condition) go through the function's
+// batch implementation before the programs run.
+type (
+	Batch        = machine.Batch
+	BatchOptions = machine.BatchOptions
+)
+
+var NewBatch = machine.NewBatch
 
 // The catalog is what a front end renders: every function and form a registry
 // offers with its presentation metadata, and the shape of every ExprJSON node

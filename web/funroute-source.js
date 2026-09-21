@@ -94,6 +94,7 @@ function blankField(field) {
 function typeName(type) {
   if (!type) return "动态";
   if (type.kind === "array" || type.kind === "dict") return `${type.kind}<${typeName(type.elem)}>`;
+  if (type.kind === "handle") return `handle<${type.name}>`;
   return type.name || type.kind || "动态";
 }
 

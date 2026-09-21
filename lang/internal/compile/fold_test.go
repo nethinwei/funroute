@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"context"
 	"funroute/lang/internal/machine"
 	"testing"
 )
@@ -47,7 +48,7 @@ func TestClosedExpressionsAreFoldedAway(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Fuel of 1 proves the work is gone: the calls would have cost more.
-		result, err := runtime.Run(map[string]any{}, machine.RunOptions{Fuel: 1})
+		result, err := runtime.Run(context.Background(), map[string]any{}, machine.RunOptions{Fuel: 1})
 		if err != nil {
 			t.Fatalf("%s: %v", test.source, err)
 		}
@@ -79,7 +80,7 @@ func TestConstantBindingsUseNoLocalSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(map[string]any{"amount": 100000}, machine.RunOptions{Fuel: 100})
+	result, err := runtime.Run(context.Background(), map[string]any{"amount": 100000}, machine.RunOptions{Fuel: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ func TestFoldingRespectsLaziness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(map[string]any{"use_bad": false}, machine.RunOptions{Fuel: 100})
+	result, err := runtime.Run(context.Background(), map[string]any{"use_bad": false}, machine.RunOptions{Fuel: 100})
 	if err != nil {
 		t.Fatalf("a failing branch that is not taken broke the program: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestFoldingRespectsLaziness(t *testing.T) {
 		t.Fatalf("result = %d", value)
 	}
 	// Taking the branch is still a run-time error, exactly as before folding.
-	if _, err := runtime.Run(map[string]any{"use_bad": true}, machine.RunOptions{Fuel: 100}); err == nil {
+	if _, err := runtime.Run(context.Background(), map[string]any{"use_bad": true}, machine.RunOptions{Fuel: 100}); err == nil {
 		t.Fatal("division by zero was silently folded away")
 	}
 }
@@ -133,7 +134,7 @@ func TestContainersFallBackToBeingBuilt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(map[string]any{}, machine.RunOptions{Fuel: 100})
+	result, err := runtime.Run(context.Background(), map[string]any{}, machine.RunOptions{Fuel: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +170,7 @@ func TestFoldingPreservesResults(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := runtime.Run(test.args, machine.RunOptions{Fuel: 1000})
+		result, err := runtime.Run(context.Background(), test.args, machine.RunOptions{Fuel: 1000})
 		if err != nil {
 			t.Fatalf("%s: %v", test.source, err)
 		}

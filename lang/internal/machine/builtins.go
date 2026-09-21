@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -38,7 +39,7 @@ func registerComparisons(registry *Registry) {
 }
 
 func registerComparison(registry *Registry, name, label, icon string, accept func(int) bool) {
-	eval := func(args []Value) (Value, error) {
+	eval := func(_ context.Context, args []Value) (Value, error) {
 		order, err := compareValues(args[0], args[1])
 		if err != nil {
 			return Value{}, err
@@ -122,7 +123,7 @@ func registerControl(registry *Registry) {
 	})
 	mustRegister(registry, FunctionSpec{
 		Name: "eq", Params: []Type{t, t}, Result: BoolType, Cost: 2,
-		Eval: func(args []Value) (Value, error) { return Bool(args[0].Equal(args[1])), nil },
+		Eval: func(_ context.Context, args []Value) (Value, error) { return compareEqual(args[0], args[1]) },
 		Display: FunctionDisplay{
 			Label:       "相等判断",
 			Description: "比较两个同类型值是否完全相等。",
@@ -142,7 +143,7 @@ func registerControl(registry *Registry) {
 func registerArithmetic(registry *Registry) {
 	registerBinary(registry, "add", IntType, "加法 / 拼接", "数值相加或字符串拼接，具体类型由上下文自动推导。", "+", evalIntAdd)
 	registerBinary(registry, "add", FloatType, "加法 / 拼接", "数值相加或字符串拼接，具体类型由上下文自动推导。", "+", evalFloatAdd)
-	registerBinary(registry, "add", StringType, "加法 / 拼接", "数值相加或字符串拼接，具体类型由上下文自动推导。", "+", func(args []Value) (Value, error) {
+	registerBinary(registry, "add", StringType, "加法 / 拼接", "数值相加或字符串拼接，具体类型由上下文自动推导。", "+", func(_ context.Context, args []Value) (Value, error) {
 		return String(args[0].s + args[1].s), nil
 	})
 	registerBinary(registry, "sub", IntType, "减法", "两个同类型数值相减，具体类型由上下文自动推导。", "−", evalIntSub)
@@ -168,7 +169,7 @@ func registerMixedNumeric(registry *Registry, name, label, icon string, eval fun
 		left, right := params[0], params[1]
 		mustRegister(registry, FunctionSpec{
 			Name: name, Params: []Type{left, right}, Result: FloatType, Cost: 2,
-			Eval: func(args []Value) (Value, error) {
+			Eval: func(_ context.Context, args []Value) (Value, error) {
 				a, err := numericFloat(args[0])
 				if err != nil {
 					return Value{}, err
@@ -215,14 +216,14 @@ func registerConversions(registry *Registry) {
 }
 
 func registerIntConversions(registry *Registry) {
-	registerConversion(registry, "int", IntType, IntType, "转为整数", "保持整数不变。", func(args []Value) (Value, error) { return args[0], nil })
-	registerConversion(registry, "int", FloatType, IntType, "转为整数", "只接受没有小数部分的浮点数，避免静默丢失精度。", func(args []Value) (Value, error) {
+	registerConversion(registry, "int", IntType, IntType, "转为整数", "保持整数不变。", func(_ context.Context, args []Value) (Value, error) { return args[0], nil })
+	registerConversion(registry, "int", FloatType, IntType, "转为整数", "只接受没有小数部分的浮点数，避免静默丢失精度。", func(_ context.Context, args []Value) (Value, error) {
 		if args[0].f < math.MinInt64 || args[0].f > math.MaxInt64 || math.Trunc(args[0].f) != args[0].f {
 			return Value{}, fmt.Errorf("float %v cannot be converted to int without data loss", args[0].f)
 		}
 		return Int(int64(args[0].f)), nil
 	})
-	registerConversion(registry, "int", StringType, IntType, "转为整数", "解析十进制整数字符串。", func(args []Value) (Value, error) {
+	registerConversion(registry, "int", StringType, IntType, "转为整数", "解析十进制整数字符串。", func(_ context.Context, args []Value) (Value, error) {
 		value, err := strconv.ParseInt(strings.TrimSpace(args[0].s), 10, 64)
 		if err != nil {
 			return Value{}, fmt.Errorf("cannot convert %q to int", args[0].s)
@@ -232,15 +233,15 @@ func registerIntConversions(registry *Registry) {
 }
 
 func registerFloatConversions(registry *Registry) {
-	registerConversion(registry, "float", FloatType, FloatType, "转为浮点数", "保持浮点数不变。", func(args []Value) (Value, error) { return args[0], nil })
-	registerConversion(registry, "float", IntType, FloatType, "转为浮点数", "把可精确表示的整数转换为 float64。", func(args []Value) (Value, error) {
+	registerConversion(registry, "float", FloatType, FloatType, "转为浮点数", "保持浮点数不变。", func(_ context.Context, args []Value) (Value, error) { return args[0], nil })
+	registerConversion(registry, "float", IntType, FloatType, "转为浮点数", "把可精确表示的整数转换为 float64。", func(_ context.Context, args []Value) (Value, error) {
 		value, err := numericFloat(args[0])
 		if err != nil {
 			return Value{}, err
 		}
 		return Float(value), nil
 	})
-	registerConversion(registry, "float", StringType, FloatType, "转为浮点数", "解析有限浮点数字符串。", func(args []Value) (Value, error) {
+	registerConversion(registry, "float", StringType, FloatType, "转为浮点数", "解析有限浮点数字符串。", func(_ context.Context, args []Value) (Value, error) {
 		value, err := strconv.ParseFloat(strings.TrimSpace(args[0].s), 64)
 		if err != nil {
 			return Value{}, fmt.Errorf("cannot convert %q to float", args[0].s)
@@ -250,19 +251,21 @@ func registerFloatConversions(registry *Registry) {
 }
 
 func registerStringConversions(registry *Registry) {
-	registerConversion(registry, "string", StringType, StringType, "转为字符串", "保持字符串不变。", func(args []Value) (Value, error) { return args[0], nil })
-	registerConversion(registry, "string", IntType, StringType, "转为字符串", "把整数格式化为十进制字符串。", func(args []Value) (Value, error) { return String(strconv.FormatInt(args[0].i, 10)), nil })
-	registerConversion(registry, "string", FloatType, StringType, "转为字符串", "用稳定格式输出浮点数。", func(args []Value) (Value, error) {
+	registerConversion(registry, "string", StringType, StringType, "转为字符串", "保持字符串不变。", func(_ context.Context, args []Value) (Value, error) { return args[0], nil })
+	registerConversion(registry, "string", IntType, StringType, "转为字符串", "把整数格式化为十进制字符串。", func(_ context.Context, args []Value) (Value, error) {
+		return String(strconv.FormatInt(args[0].i, 10)), nil
+	})
+	registerConversion(registry, "string", FloatType, StringType, "转为字符串", "用稳定格式输出浮点数。", func(_ context.Context, args []Value) (Value, error) {
 		return String(strconv.FormatFloat(args[0].f, 'g', -1, 64)), nil
 	})
-	registerConversion(registry, "string", BoolType, StringType, "转为字符串", "把布尔值格式化为 true 或 false。", func(args []Value) (Value, error) {
+	registerConversion(registry, "string", BoolType, StringType, "转为字符串", "把布尔值格式化为 true 或 false。", func(_ context.Context, args []Value) (Value, error) {
 		return String(strconv.FormatBool(args[0].b)), nil
 	})
 }
 
 func registerBoolConversions(registry *Registry) {
-	registerConversion(registry, "bool", BoolType, BoolType, "转为布尔值", "保持布尔值不变。", func(args []Value) (Value, error) { return args[0], nil })
-	registerConversion(registry, "bool", StringType, BoolType, "转为布尔值", "解析 true 或 false，不接受模糊写法。", func(args []Value) (Value, error) {
+	registerConversion(registry, "bool", BoolType, BoolType, "转为布尔值", "保持布尔值不变。", func(_ context.Context, args []Value) (Value, error) { return args[0], nil })
+	registerConversion(registry, "bool", StringType, BoolType, "转为布尔值", "解析 true 或 false，不接受模糊写法。", func(_ context.Context, args []Value) (Value, error) {
 		switch strings.ToLower(strings.TrimSpace(args[0].s)) {
 		case "true":
 			return Bool(true), nil
@@ -315,9 +318,9 @@ func registerBinary(registry *Registry, name string, typ Type, label, descriptio
 	})
 }
 
-// RegisterArrayPrimitives adds is_empty/prepend/head/tail. Together with
-// RecurForm they are enough to write any list algorithm — and, as the Turing
-// machine encoding shows, any computation at all.
+// RegisterArrayPrimitives adds is_empty/prepend/head/tail: the list algebra
+// that reduce and the comprehensions build on. docs/termination.md shows what
+// adding an unbounded recursion form to them would make expressible.
 func RegisterArrayPrimitives(registry *Registry) error {
 	for _, spec := range []FunctionSpec{arrayIsEmptySpec(), arrayPrependSpec(), arrayHeadSpec(), arrayTailSpec()} {
 		if err := registry.Register(spec); err != nil {
@@ -332,7 +335,7 @@ func arrayIsEmptySpec() FunctionSpec {
 	arrayT := ArrayOf(t)
 	return FunctionSpec{
 		Name: "array.is_empty", Params: []Type{arrayT}, Result: BoolType, Cost: 1,
-		Eval: func(args []Value) (Value, error) { return Bool(args[0].length() == 0), nil },
+		Eval: func(_ context.Context, args []Value) (Value, error) { return Bool(args[0].length() == 0), nil },
 		Display: FunctionDisplay{
 			Label:       "数组是否为空",
 			Description: "判断同型数组是否没有元素；可与 head、tail、prepend 组合处理列表。",
@@ -351,7 +354,7 @@ func arrayPrependSpec() FunctionSpec {
 	arrayT := ArrayOf(t)
 	return FunctionSpec{
 		Name: "array.prepend", Params: []Type{t, arrayT}, Result: arrayT, Cost: 2,
-		Eval: func(args []Value) (Value, error) {
+		Eval: func(_ context.Context, args []Value) (Value, error) {
 			array := args[1]
 			builder := newArrayBuilder(array.elemType(), array.length()+1)
 			builder.add(args[0])
@@ -381,7 +384,7 @@ func arrayHeadSpec() FunctionSpec {
 	arrayT := ArrayOf(t)
 	return FunctionSpec{
 		Name: "array.head", Params: []Type{arrayT}, Result: t, Cost: 1,
-		Eval: func(args []Value) (Value, error) {
+		Eval: func(_ context.Context, args []Value) (Value, error) {
 			if args[0].length() == 0 {
 				return Value{}, fmt.Errorf("array.head requires a non-empty array")
 			}
@@ -405,7 +408,7 @@ func arrayTailSpec() FunctionSpec {
 	arrayT := ArrayOf(t)
 	return FunctionSpec{
 		Name: "array.tail", Params: []Type{arrayT}, Result: arrayT, Cost: 1,
-		Eval: func(args []Value) (Value, error) {
+		Eval: func(_ context.Context, args []Value) (Value, error) {
 			if args[0].length() == 0 {
 				return Value{}, fmt.Errorf("array.tail requires a non-empty array")
 			}
@@ -424,7 +427,7 @@ func arrayTailSpec() FunctionSpec {
 	}
 }
 
-func evalIntAdd(args []Value) (Value, error) {
+func evalIntAdd(_ context.Context, args []Value) (Value, error) {
 	a, b := args[0].i, args[1].i
 	if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
 		return Value{}, fmt.Errorf("integer overflow in add")
@@ -432,7 +435,7 @@ func evalIntAdd(args []Value) (Value, error) {
 	return Int(a + b), nil
 }
 
-func evalIntSub(args []Value) (Value, error) {
+func evalIntSub(_ context.Context, args []Value) (Value, error) {
 	a, b := args[0].i, args[1].i
 	if (b < 0 && a > math.MaxInt64+b) || (b > 0 && a < math.MinInt64+b) {
 		return Value{}, fmt.Errorf("integer overflow in sub")
@@ -440,7 +443,7 @@ func evalIntSub(args []Value) (Value, error) {
 	return Int(a - b), nil
 }
 
-func evalIntMul(args []Value) (Value, error) {
+func evalIntMul(_ context.Context, args []Value) (Value, error) {
 	a, b := args[0].i, args[1].i
 	if a == 0 || b == 0 {
 		return Int(0), nil
@@ -455,7 +458,7 @@ func evalIntMul(args []Value) (Value, error) {
 	return Int(result), nil
 }
 
-func evalIntDiv(args []Value) (Value, error) {
+func evalIntDiv(_ context.Context, args []Value) (Value, error) {
 	a, b := args[0].i, args[1].i
 	if b == 0 {
 		return Value{}, fmt.Errorf("division by zero")
@@ -466,11 +469,17 @@ func evalIntDiv(args []Value) (Value, error) {
 	return Int(a / b), nil
 }
 
-func evalFloatAdd(args []Value) (Value, error) { return finiteResult(args[0].f+args[1].f, "add") }
-func evalFloatSub(args []Value) (Value, error) { return finiteResult(args[0].f-args[1].f, "sub") }
-func evalFloatMul(args []Value) (Value, error) { return finiteResult(args[0].f*args[1].f, "mul") }
+func evalFloatAdd(_ context.Context, args []Value) (Value, error) {
+	return finiteResult(args[0].f+args[1].f, "add")
+}
+func evalFloatSub(_ context.Context, args []Value) (Value, error) {
+	return finiteResult(args[0].f-args[1].f, "sub")
+}
+func evalFloatMul(_ context.Context, args []Value) (Value, error) {
+	return finiteResult(args[0].f*args[1].f, "mul")
+}
 
-func evalFloatDiv(args []Value) (Value, error) {
+func evalFloatDiv(_ context.Context, args []Value) (Value, error) {
 	if args[1].f == 0 {
 		return Value{}, fmt.Errorf("division by zero")
 	}

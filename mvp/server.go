@@ -169,7 +169,7 @@ func (s *Server) run(response http.ResponseWriter, request *http.Request) {
 		writeAPIError(response, http.StatusInternalServerError, "INSTANTIATE_ERROR", err)
 		return
 	}
-	result, err := runtime.Run(payload.Args, lang.RunOptions{Fuel: payload.Fuel})
+	result, err := runtime.Run(request.Context(), payload.Args, lang.RunOptions{Fuel: payload.Fuel})
 	if err != nil {
 		writeAPIError(response, http.StatusUnprocessableEntity, "RUN_ERROR", err)
 		return

@@ -145,17 +145,6 @@ func assignRows(target *[][]float64, value Value) error {
 	return nil
 }
 
-// goType is the FunRoute type of a Go type, derived from what fromGo makes of
-// its zero value: a nil []float64 is an empty array<float>.
-func goType[T any]() (Type, error) {
-	var zero T
-	value, err := ToValue(zero)
-	if err != nil {
-		return Type{}, err
-	}
-	return value.Type(), nil
-}
-
 // coerce converts an argument Run received by name. A Go value of the exact
 // type is wrapped as it is; the lenient cases below exist for what a JSON
 // decoder produces — float64 for every number, []any for every array.

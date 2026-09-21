@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -17,6 +18,10 @@ type Runtime struct {
 type RunOptions struct {
 	Fuel     uint64
 	MaxStack int
+	// Prefetched holds results a Batch computed ahead of the program, keyed by
+	// the call instruction's program counter. The program takes them instead
+	// of calling. A plain Run leaves it nil.
+	Prefetched map[int]Prefetched
 }
 
 // Instantiate validates the artifact digest and binds its exact function
@@ -51,6 +56,7 @@ func Instantiate(artifact *Artifact, registry *Registry) (*Runtime, error) {
 // this artifact was built moments ago in this process and never left it. Its
 // bytecode is still validated.
 func EvaluateClosed(artifact *Artifact, registry *Registry, fuel uint64, maxStack int) (Value, error) {
+	ctx := context.Background()
 	if artifact == nil || registry == nil {
 		return Value{}, fmt.Errorf("artifact and registry are required")
 	}
@@ -68,7 +74,7 @@ func EvaluateClosed(artifact *Artifact, registry *Registry, fuel uint64, maxStac
 		return Value{}, err
 	}
 	runtime := &Runtime{artifact: artifact, registry: registry, constants: constants, functions: functions}
-	return runtime.execute(nil, &fuel, maxStack)
+	return runtime.execute(ctx, nil, &fuel, maxStack)
 }
 
 // snapshotArtifact round-trips the artifact through JSON so the runtime owns an
@@ -98,6 +104,9 @@ func validateArtifact(artifact *Artifact) error {
 	}
 	if !artifact.Result.IsConcrete() {
 		return fmt.Errorf("artifact result type is not concrete: %s", artifact.Result)
+	}
+	if artifact.MaxStack < 1 {
+		return fmt.Errorf("artifact is missing its stack depth")
 	}
 	for i, instruction := range artifact.Instructions {
 		if err := validateInstruction(i, instruction, artifact); err != nil {
@@ -233,20 +242,24 @@ func (r *Runtime) ResultType() Type { return CloneType(r.artifact.Result) }
 // A caller that already holds typed values in ABI order should use RunValues:
 // name lookup and conversion dominate the cost of a short routing decision,
 // and the host owns the contract, so it knows the order.
-func (r *Runtime) Run(rawArgs map[string]any, options RunOptions) (Value, error) {
+//
+// ctx is the request's budget: every extension call sees its deadline, and a
+// program stops at the next call once it has passed (ErrDeadline). The pure
+// part of a program is not interrupted; it is nanoseconds.
+func (r *Runtime) Run(ctx context.Context, rawArgs map[string]any, options RunOptions) (Value, error) {
 	f := r.acquireFrame()
 	args := f.argSpace(len(r.artifact.Args))
 	if err := r.bindArgs(args, rawArgs); err != nil {
 		r.releaseFrame(f)
 		return Value{}, err
 	}
-	return r.runFrame(f, args, options)
+	return r.runFrame(ctx, f, args, options)
 }
 
 // RunValues takes the arguments already typed, in the artifact's ABI order. It
 // checks each against its declared type — a wrong type is a host bug, not
 // something to trust — but does no name lookup and no conversion.
-func (r *Runtime) RunValues(args []Value, options RunOptions) (Value, error) {
+func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOptions) (Value, error) {
 	if len(args) != len(r.artifact.Args) {
 		return Value{}, fmt.Errorf("expected %d arguments, got %d", len(r.artifact.Args), len(args))
 	}
@@ -259,10 +272,13 @@ func (r *Runtime) RunValues(args []Value, options RunOptions) (Value, error) {
 		}
 		space[i] = args[i]
 	}
-	return r.runFrame(f, space, options)
+	return r.runFrame(ctx, f, space, options)
 }
 
-func (r *Runtime) runFrame(f *frame, args []Value, options RunOptions) (Value, error) {
+func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, options RunOptions) (Value, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	fuel := options.Fuel
 	if fuel == 0 {
 		fuel = 10_000
@@ -273,6 +289,9 @@ func (r *Runtime) runFrame(f *frame, args []Value, options RunOptions) (Value, e
 	}
 	f.fuelCell = fuel
 	f.reset(r, args, &f.fuelCell, maxStack)
+	f.ctx = ctx
+	f.deadline = ctx.Done() != nil
+	f.prefetched = options.Prefetched
 	value, err := f.guardedRun()
 	r.releaseFrame(f)
 	return value, err
@@ -310,9 +329,10 @@ func (r *Runtime) hasArg(name string) bool {
 	return false
 }
 
-func (r *Runtime) execute(args []Value, fuel *uint64, maxStack int) (Value, error) {
+func (r *Runtime) execute(ctx context.Context, args []Value, fuel *uint64, maxStack int) (Value, error) {
 	f := r.acquireFrame()
 	f.reset(r, args, fuel, maxStack)
+	f.ctx = ctx
 	value, err := f.guardedRun()
 	r.releaseFrame(f)
 	return value, err

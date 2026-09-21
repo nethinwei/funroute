@@ -18,10 +18,9 @@ import (
 // before they get here, so the same program always produces the same bytes —
 // which is what the artifact digest relies on.
 
-// ExprJSONVersion is 2 since switch cases carry a list of matches and the
-// subject became optional; version 1 documents are rejected rather than guessed
-// at.
-const ExprJSONVersion = 2
+// ExprJSONVersion changes whenever the document shape does; a document with
+// any other version is rejected rather than guessed at.
+const ExprJSONVersion = 1
 
 type exprJSONDocument struct {
 	Version int             `json:"version"`
@@ -337,11 +336,11 @@ func validName(name, role string) error {
 			return fmt.Errorf("invalid function name %q", name)
 		}
 	case "var":
-		if !machine.IsValidFunctionName(name) || name == "true" || name == "false" {
+		if !machine.IsValidVariableName(name) || name == "true" || name == "false" {
 			return fmt.Errorf("invalid variable name %q", name)
 		}
 	default:
-		if !machine.IsValidFunctionName(name) || machine.IsReservedName(name) {
+		if !machine.IsValidVariableName(name) || machine.IsReservedName(name) {
 			return fmt.Errorf("invalid local variable name %q", name)
 		}
 	}

@@ -1,17 +1,21 @@
 package machine
 
 import (
+	"context"
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 // EvalFunc receives immutable values in a slice that is only valid for the
 // duration of the call; an implementation that needs to keep an argument must
-// copy it out.
-type EvalFunc func(args []Value) (Value, error)
+// copy it out. The context carries the request's deadline, capped by the
+// function's own Timeout; the kernel's functions ignore it.
+type EvalFunc func(ctx context.Context, args []Value) (Value, error)
 
 type specialForm uint8
 
@@ -20,15 +24,27 @@ const (
 	specialIf
 )
 
+// BatchEvalFunc evaluates one function for many argument lists at once — one
+// engine call for a whole batch of requests. calls[i] is the i-th request's
+// arguments; the result has one value per request, in the same order.
+type BatchEvalFunc func(ctx context.Context, calls [][]Value) ([]Value, error)
+
 // FunctionSpec defines a pure host function. The evaluator receives the values
 // themselves — read-only, never copied — and no ambient runtime capabilities.
+// EvalBatch is optional: a Batch runs it for the calls it can hoist out of the
+// per-request programs, and falls back to Eval for the rest.
 type FunctionSpec struct {
-	Name    string
-	Params  []Type
-	Result  Type
-	Cost    uint64
-	Eval    EvalFunc
-	Display FunctionDisplay
+	Name      string
+	Params    []Type
+	Result    Type
+	Cost      uint64
+	Eval      EvalFunc
+	EvalBatch BatchEvalFunc
+	// Timeout caps one call; Detached stops waiting at the deadline for a
+	// function that cannot honour its context. See Doc.
+	Timeout  time.Duration
+	Detached bool
+	Display  FunctionDisplay
 
 	special specialForm
 }
@@ -60,18 +76,58 @@ func (f *RegisteredFunction) IsLazyIf() bool { return f.special == specialIf }
 // Registry is immutable from the point of view of a running VM. Registration
 // is synchronized so applications can build a registry during startup.
 type Registry struct {
-	mu     sync.RWMutex
-	byName map[string][]*RegisteredFunction
-	byKey  map[string]*RegisteredFunction
-	forms  map[Form]bool
+	mu      sync.RWMutex
+	byName  map[string][]*RegisteredFunction
+	byKey   map[string]*RegisteredFunction
+	forms   map[Form]bool
+	handles map[reflect.Type]string
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		byName: map[string][]*RegisteredFunction{},
-		byKey:  map[string]*RegisteredFunction{},
-		forms:  map[Form]bool{},
+		byName:  map[string][]*RegisteredFunction{},
+		byKey:   map[string]*RegisteredFunction{},
+		forms:   map[Form]bool{},
+		handles: map[reflect.Type]string{},
 	}
+}
+
+// DefineHandle declares that Go values of type T cross the boundary as
+// handle<name>: Fn1/Fn2/Fn3 and Model1/Model2 then accept and return T
+// directly, wrapping and unwrapping the payload without copying it. The name
+// has the shape of a function name so it can carry a namespace and a version.
+func DefineHandle[T any](registry *Registry, name string) error {
+	if !IsValidFunctionName(name) {
+		return fmt.Errorf("invalid handle name %q", name)
+	}
+	typ := reflect.TypeOf((*T)(nil)).Elem()
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if existing, ok := registry.handles[typ]; ok && existing != name {
+		return fmt.Errorf("Go type %s is already handle<%s>", typ, existing)
+	}
+	registry.handles[typ] = name
+	return nil
+}
+
+// handleName is the handle type a Go type was defined as, if any.
+func (r *Registry) handleName(typ reflect.Type) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	name, ok := r.handles[typ]
+	return name, ok
+}
+
+// Handles lists the defined handle types, sorted, for the catalog.
+func (r *Registry) Handles() []Type {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Type, 0, len(r.handles))
+	for _, name := range r.handles {
+		out = append(out, HandleOf(name))
+	}
+	slices.SortFunc(out, func(a, b Type) int { return strings.Compare(a.Name, b.Name) })
+	return out
 }
 
 // Form is a lazy special form. The parser always recognises the syntax, but a
@@ -125,19 +181,29 @@ func (r *Registry) EnabledForms() []Form {
 // one authority, used both here (a function may not claim a reserved name) and
 // by the parser and the JSON importer (a name in a document must be one a
 // function could have). Two copies would drift.
-var functionNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*$`)
+var (
+	// A function name may be dotted, to carry a namespace and a version:
+	// route.score_v1. A variable name may not: "." is kept for field access.
+	functionNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*$`)
+	variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
 
 // reservedNames are parsed as literals or special forms, so no function may
 // claim them.
 var reservedNames = map[string]bool{
-	"expr": true, "true": true, "false": true,
-	"switch": true, "for": true, "reduce": true, "recur": true,
+	"true": true, "false": true,
+	"switch": true, "for": true, "reduce": true,
 	"in": true, "from": true, "else": true, "case": true, "let": true,
 }
 
 // IsValidFunctionName reports whether name has the shape of a function name.
 func IsValidFunctionName(name string) bool {
 	return functionNamePattern.MatchString(name)
+}
+
+// IsValidVariableName reports whether name has the shape of a variable name.
+func IsValidVariableName(name string) bool {
+	return variableNamePattern.MatchString(name)
 }
 
 // IsReservedName reports whether the language keeps name for itself.
@@ -205,6 +271,11 @@ func validateSignature(spec FunctionSpec) error {
 func validateTypePattern(t Type, vars map[string]bool) error {
 	switch t.Kind {
 	case BoolKind, IntKind, FloatKind, StringKind:
+		return nil
+	case HandleKind:
+		if !IsValidFunctionName(t.Name) {
+			return fmt.Errorf("invalid handle name %q", t.Name)
+		}
 		return nil
 	case VarKind:
 		if t.Name == "" {

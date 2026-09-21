@@ -2,6 +2,7 @@ package compile
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"funroute/lang/internal/machine"
@@ -32,14 +33,14 @@ func TestSampleInfersArgumentsAndRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(map[string]any{"a": true, "b": 41}, machine.RunOptions{})
+	result, err := runtime.Run(context.Background(), map[string]any{"a": true, "b": 41}, machine.RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if value, ok := result.Int(); !ok || value != 41 {
 		t.Fatalf("true result = %#v", result.Any())
 	}
-	result, err = runtime.Run(map[string]any{"a": false, "b": 41}, machine.RunOptions{})
+	result, err = runtime.Run(context.Background(), map[string]any{"a": false, "b": 41}, machine.RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestStrongTypesAllowNumericWideningButRejectMixedContainers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(map[string]any{}, machine.RunOptions{})
+	result, err := runtime.Run(context.Background(), map[string]any{}, machine.RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestArrayDictionaryAndGenericFunctions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(map[string]any{
+	result, err := runtime.Run(context.Background(), map[string]any{
 		"weights":  map[string]any{"primary": 0.9},
 		"key":      "missing",
 		"fallback": 1,
@@ -125,7 +126,7 @@ func TestExtensionSignatureDrivesInference(t *testing.T) {
 		Cost:   25,
 		// An extension sees values the way a host does: through the public
 		// accessors, never the private fields.
-		Eval: func(args []machine.Value) (machine.Value, error) {
+		Eval: func(_ context.Context, args []machine.Value) (machine.Value, error) {
 			country, _ := args[0].String()
 			amount, _ := args[1].Int()
 			return machine.Bool(country == "US" && amount > 100), nil
@@ -149,7 +150,7 @@ func TestExtensionSignatureDrivesInference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(map[string]any{"country": "US", "amount": 200}, machine.RunOptions{})
+	result, err := runtime.Run(context.Background(), map[string]any{"country": "US", "amount": 200}, machine.RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,7 @@ func registerCollectionTestExtensions(t *testing.T, registry *machine.Registry) 
 	for _, spec := range []machine.FunctionSpec{
 		{
 			Name: "has", Params: []machine.Type{machine.DictOf(typeT), machine.StringType}, Result: machine.BoolType,
-			Eval: func(args []machine.Value) (machine.Value, error) {
+			Eval: func(_ context.Context, args []machine.Value) (machine.Value, error) {
 				entries, _ := args[0].Dict()
 				key, _ := args[1].String()
 				_, ok := entries[key]
@@ -173,7 +174,7 @@ func registerCollectionTestExtensions(t *testing.T, registry *machine.Registry) 
 		},
 		{
 			Name: "get", Params: []machine.Type{machine.DictOf(typeT), machine.StringType}, Result: typeT,
-			Eval: func(args []machine.Value) (machine.Value, error) {
+			Eval: func(_ context.Context, args []machine.Value) (machine.Value, error) {
 				entries, _ := args[0].Dict()
 				key, _ := args[1].String()
 				value, ok := entries[key]
@@ -185,7 +186,7 @@ func registerCollectionTestExtensions(t *testing.T, registry *machine.Registry) 
 		},
 		{
 			Name: "get", Params: []machine.Type{machine.ArrayOf(typeT), machine.IntType}, Result: typeT,
-			Eval: func(args []machine.Value) (machine.Value, error) {
+			Eval: func(_ context.Context, args []machine.Value) (machine.Value, error) {
 				items, _ := args[0].Array()
 				index, _ := args[1].Int()
 				if index < 0 || index >= int64(len(items)) {
@@ -251,14 +252,14 @@ func TestIfIsLazyAndFuelIsEnforced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(map[string]any{"flag": true}, machine.RunOptions{})
+	result, err := runtime.Run(context.Background(), map[string]any{"flag": true}, machine.RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if value, ok := result.Int(); !ok || value != 7 {
 		t.Fatalf("result = %#v", result.Any())
 	}
-	_, err = runtime.Run(map[string]any{"flag": true}, machine.RunOptions{Fuel: 1})
+	_, err = runtime.Run(context.Background(), map[string]any{"flag": true}, machine.RunOptions{Fuel: 1})
 	if err == nil || !strings.Contains(err.Error(), "fuel") {
 		t.Fatalf("fuel error = %v", err)
 	}
@@ -287,7 +288,7 @@ func TestFunctionalForBindsLocalFiltersAndMaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(map[string]any{
+	result, err := runtime.Run(context.Background(), map[string]any{
 		"channels": []any{"UP", "DOWN", "UP"},
 	}, machine.RunOptions{Fuel: 10_000})
 	if err != nil {
@@ -317,7 +318,7 @@ func TestFunctionalSwitchIsLazyAndTyped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(map[string]any{"country": "MY"}, machine.RunOptions{})
+	result, err := runtime.Run(context.Background(), map[string]any{"country": "MY"}, machine.RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,9 +352,6 @@ func TestImplicitNumericDefaultAndExplicitConversions(t *testing.T) {
 	if len(artifact.Args) != 1 || !artifact.Args[0].Type.Equal(machine.IntType) || !artifact.Result.Equal(machine.FloatType) {
 		t.Fatalf("conversion inference = %#v -> %s", artifact.Args, artifact.Result)
 	}
-	if _, err := CompileExpr(`recur(n)`, registry, CompileOptions{}); err == nil || !strings.Contains(err.Error(), "recur was removed") {
-		t.Fatalf("recur error = %v", err)
-	}
 }
 
 func TestArtifactJSONRoundTripAndTamperDetection(t *testing.T) {
@@ -380,7 +378,7 @@ func TestArtifactJSONRoundTripAndTamperDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 	artifact.Instructions[0].A = 999
-	result, err := runtime.Run(map[string]any{"n": 1}, machine.RunOptions{})
+	result, err := runtime.Run(context.Background(), map[string]any{"n": 1}, machine.RunOptions{})
 	if err != nil {
 		t.Fatalf("runtime retained mutable artifact: %v", err)
 	}
@@ -424,7 +422,7 @@ func TestCoreCatalogIsMinimalAndCarriesDisplayMetadata(t *testing.T) {
 	}
 	if err := registry.Register(machine.FunctionSpec{
 		Name: "bad.color_v1", Params: []machine.Type{machine.IntType}, Result: machine.IntType,
-		Eval:    func(args []machine.Value) (machine.Value, error) { return args[0], nil },
+		Eval:    func(_ context.Context, args []machine.Value) (machine.Value, error) { return args[0], nil },
 		Display: machine.FunctionDisplay{Color: "red"},
 	}); err == nil {
 		t.Fatal("invalid display color was accepted")
@@ -460,7 +458,7 @@ func compileAndRun(t *testing.T, source string, registry *machine.Registry, args
 	if err != nil {
 		t.Fatalf("instantiate %s: %v", source, err)
 	}
-	value, err := runtime.Run(args, options)
+	value, err := runtime.Run(context.Background(), args, options)
 	if err != nil {
 		t.Fatalf("run %s: %v", source, err)
 	}
@@ -561,7 +559,7 @@ func TestPanickingExtensionIsContained(t *testing.T) {
 	registry := machine.CoreRegistry()
 	if err := registry.Register(machine.FunctionSpec{
 		Name: "boom_v1", Params: []machine.Type{machine.IntType}, Result: machine.IntType, Cost: 1,
-		Eval:    func(args []machine.Value) (machine.Value, error) { panic("extension exploded") },
+		Eval:    func(_ context.Context, args []machine.Value) (machine.Value, error) { panic("extension exploded") },
 		Display: machine.FunctionDisplay{Label: "炸弹", Description: "总是 panic 的扩展", Category: "测试"},
 	}); err != nil {
 		t.Fatal(err)
@@ -574,12 +572,12 @@ func TestPanickingExtensionIsContained(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Run(map[string]any{"n": 1}, machine.RunOptions{Fuel: 100})
+	_, err = runtime.Run(context.Background(), map[string]any{"n": 1}, machine.RunOptions{Fuel: 100})
 	if err == nil || !strings.Contains(err.Error(), "extension panicked") {
 		t.Fatalf("panic was not contained: %v", err)
 	}
 	// The runtime stays usable afterwards.
-	if _, err := runtime.Run(map[string]any{"n": 2}, machine.RunOptions{Fuel: 100}); err == nil ||
+	if _, err := runtime.Run(context.Background(), map[string]any{"n": 2}, machine.RunOptions{Fuel: 100}); err == nil ||
 		!strings.Contains(err.Error(), "extension panicked") {
 		t.Fatalf("second run: %v", err)
 	}
@@ -595,10 +593,7 @@ func TestCatalogListsSwitchableAndDerivedForms(t *testing.T) {
 	if got := specialFormNames(consoleRegistry(t).Catalog()); got != "switch,for,reduce,let,and,or,not" {
 		t.Fatalf("operator special forms = %s", got)
 	}
-	// recur was removed, so it is no longer a form a registry can enable.
-	if err := machine.CoreRegistry().EnableForm("recur"); err == nil {
-		t.Fatal("the removed recur form was accepted")
-	}
+	// Only the known forms can be enabled.
 	if err := machine.CoreRegistry().EnableForm("lambda"); err == nil {
 		t.Fatal("unknown form was accepted")
 	}

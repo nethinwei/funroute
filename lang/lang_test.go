@@ -1,9 +1,13 @@
 package lang_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"funroute/lang"
 )
@@ -21,7 +25,7 @@ func hostRegistry(t *testing.T) *lang.Registry {
 	if err := registry.EnableForm(lang.SwitchForm); err != nil {
 		t.Fatal(err)
 	}
-	err := lang.Fn1(registry, "route.is_healthy_v1", lang.Doc{
+	err := lang.Logic(registry, "route.is_healthy_v1", lang.Doc{
 		Label:       "渠道是否健康",
 		Description: "UP 表示可用",
 		Category:    "路由",
@@ -74,7 +78,7 @@ func TestHostCanCompileAndShipAnArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(map[string]any{"health": "UP", "doubled": 500}, lang.RunOptions{Fuel: 1000})
+	result, err := runtime.Run(context.Background(), map[string]any{"health": "UP", "doubled": 500}, lang.RunOptions{Fuel: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +137,7 @@ func TestHostCanRenderTheCatalog(t *testing.T) {
 func TestHostVectorsReachExtensionsWithoutCopying(t *testing.T) {
 	registry := lang.CoreRegistry()
 	var received []float64
-	err := lang.Fn1(registry, "model.score_v1", lang.Doc{Cost: 10}, func(xs []float64) (float64, error) {
+	err := lang.Logic(registry, "model.score_v1", lang.Doc{Cost: 10}, func(xs []float64) (float64, error) {
 		received = xs
 		return xs[0], nil
 	})
@@ -155,7 +159,7 @@ func TestHostVectorsReachExtensionsWithoutCopying(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.RunValues([]lang.Value{value}, lang.RunOptions{Fuel: 100})
+	result, err := runtime.RunValues(context.Background(), []lang.Value{value}, lang.RunOptions{Fuel: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,10 +170,89 @@ func TestHostVectorsReachExtensionsWithoutCopying(t *testing.T) {
 		t.Fatal("the extension received a copy of the host's vector")
 	}
 	// Run's by-name path takes the same shortcut for a Go slice.
-	if _, err := runtime.Run(map[string]any{"features": features}, lang.RunOptions{Fuel: 100}); err != nil {
+	if _, err := runtime.Run(context.Background(), map[string]any{"features": features}, lang.RunOptions{Fuel: 100}); err != nil {
 		t.Fatal(err)
 	}
 	if &received[0] != &features[0] {
 		t.Fatal("Run copied the host's vector")
+	}
+}
+
+// A model's tensor crosses the expression as an opaque handle, and a batch of
+// requests calls the model once. This is the deep-learning integration a host
+// writes, end to end, with the public API only.
+// tensor stands in for an engine's tensor type.
+type tensor struct{ rows [][]float64 }
+
+// modelRegistry defines the engine's type as a handle and registers a model
+// with a batch implementation that counts how often it ran.
+func modelRegistry(t *testing.T, batches *int) *lang.Registry {
+	t.Helper()
+	registry := lang.CoreRegistry()
+	if err := lang.DefineHandle[*tensor](registry, "engine.tensor"); err != nil {
+		t.Fatal(err)
+	}
+	err := lang.Model(registry, "model.embed_v1", lang.Doc{Cost: 10},
+		func(features []float64) (*tensor, error) { return &tensor{rows: [][]float64{features}}, nil },
+		func(features [][]float64) ([]*tensor, error) {
+			*batches++
+			out := make([]*tensor, len(features))
+			for i, row := range features {
+				out[i] = &tensor{rows: [][]float64{row}}
+			}
+			return out, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = lang.Logic(registry, "model.score_v1", lang.Doc{Cost: 10}, func(t *tensor) (float64, error) { return t.rows[0][0], nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry
+}
+
+func TestHostBatchesModelCallsAcrossRequests(t *testing.T) {
+	var batches int
+	registry := modelRegistry(t, &batches)
+	artifact, err := lang.CompileExpr(`let(e = model.embed_v1(features), if(model.score_v1(e) > 0.5, "review", "accept"))`, registry,
+		lang.CompileOptions{Args: []lang.ArgSpec{{Name: "features", Type: lang.ArrayOf(lang.FloatType)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := lang.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := lang.NewBatch(runtime, lang.BatchOptions{MaxSize: 2, MaxWait: time.Second})
+	defer batch.Close()
+	results := make([]string, 2)
+	var wg sync.WaitGroup
+	for i, score := range []float64{0.9, 0.1} {
+		wg.Add(1)
+		go func(i int, score float64) {
+			defer wg.Done()
+			features, _ := lang.ToValue([]float64{score})
+			result, err := batch.Run(context.Background(), []lang.Value{features})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			results[i], _ = result.String()
+		}(i, score)
+	}
+	wg.Wait()
+	if results[0] != "review" || results[1] != "accept" || batches != 1 {
+		t.Fatalf("results = %v, batches = %d", results, batches)
+	}
+	// An expired budget is refused at the first model call, typed.
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	features, _ := lang.ToValue([]float64{0.9})
+	if _, err := runtime.RunValues(expired, []lang.Value{features}, lang.RunOptions{}); !errors.Is(err, lang.ErrDeadline) {
+		t.Fatalf("expired error = %v", err)
+	}
+	if catalog := lang.Catalog(registry); catalog.ValueTypes[len(catalog.ValueTypes)-1].Type.String() != "handle<engine.tensor>" {
+		t.Fatalf("value types = %+v", catalog.ValueTypes)
 	}
 }

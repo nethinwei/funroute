@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 	"funroute/lang/internal/machine"
 	"funroute/lang/internal/syntax"
@@ -8,9 +9,11 @@ import (
 	"testing"
 )
 
-func TestPrefixSyntaxIsRejected(t *testing.T) {
-	if _, err := syntax.Parse(`expr->add(1,2)`); err == nil || !strings.Contains(err.Error(), "expr-> prefix") {
-		t.Fatalf("expr-> prefix error = %v", err)
+func TestBareExpressionIsTheGrammar(t *testing.T) {
+	// A dotted name is a function's; a variable is plain, so "." stays free
+	// for field access.
+	if _, err := syntax.Parse(`a.b + 1`); err == nil || !strings.Contains(err.Error(), `invalid variable name "a.b"`) {
+		t.Fatalf("dotted variable error = %v", err)
 	}
 	// A bare expression is the whole grammar.
 	if _, err := syntax.Parse(`add(1,2)`); err != nil {
@@ -329,7 +332,7 @@ func TestDictionaryWalkNeedsTwoVariables(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		value, err := runtime.Run(test.args, machine.RunOptions{Fuel: 10_000})
+		value, err := runtime.Run(context.Background(), test.args, machine.RunOptions{Fuel: 10_000})
 		if err != nil {
 			t.Fatalf("%s: %v", test.source, err)
 		}
@@ -400,7 +403,7 @@ func TestLetBindsMultipleLocalsInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(map[string]any{"amount": 100}, machine.RunOptions{Fuel: 1_000})
+	value, err := runtime.Run(context.Background(), map[string]any{"amount": 100}, machine.RunOptions{Fuel: 1_000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +446,7 @@ func runWithFuel(t *testing.T, registry *machine.Registry, source string, fuel u
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Run(map[string]any{"amount": 100}, machine.RunOptions{Fuel: fuel})
+	_, err = runtime.Run(context.Background(), map[string]any{"amount": 100}, machine.RunOptions{Fuel: fuel})
 	return err
 }
 

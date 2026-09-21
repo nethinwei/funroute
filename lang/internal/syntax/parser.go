@@ -58,12 +58,6 @@ func Parse(source string) (Expr, error) {
 		return nil, err
 	}
 	p := &parser{tokens: tokens, nextID: 1}
-	if p.peek().kind == tokenIdentifier && p.peek().text == "expr" && p.peekN(1).kind == tokenArrow {
-		return nil, p.errorf(p.peek(), "the expr-> prefix is not part of the syntax; write the expression directly")
-	}
-	if p.peek().kind == tokenAt {
-		return nil, p.errorf(p.peek(), "@arg/@let/@ret headers were removed; declare arguments through the host's contract and write bindings as let(name = value, body)")
-	}
 	expr, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -221,13 +215,13 @@ func (p *parser) parsePrimary() (Expr, error) {
 		if tok.text == "true" || tok.text == "false" {
 			return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.Bool(tok.text == "true")}, nil
 		}
-		if p.peek().kind == tokenAt {
-			// "@" used to be a decorative version suffix on function names. It
-			// carried no meaning, so it was freed up for annotations.
-			return nil, p.errorf(p.peek(), "'@' is an annotation marker, not a name suffix; write %s_v1 instead of %s@1", tok.text, tok.text)
-		}
 		if p.peek().kind == tokenLeftParen {
 			return p.parseCall(tok)
+		}
+		// A dotted name is a function's: route.score_v1. Variables are plain,
+		// which keeps "." free for field access.
+		if err := validName(tok.text, "var"); err != nil {
+			return nil, p.errorf(tok, "%v", err)
 		}
 		return &VariableExpr{ID: p.id(), Pos: tok.pos, Name: tok.text}, nil
 	case tokenLeftParen:
@@ -521,8 +515,8 @@ func (p *parser) localName(name token, arg Expr, what string) (string, error) {
 	if !ok {
 		return "", p.errorf(name, "%s must be a local variable name", what)
 	}
-	if variable.Name == "true" || variable.Name == "false" || variable.Name == "recur" {
-		return "", p.errorf(name, "invalid local variable %q", variable.Name)
+	if err := validName(variable.Name, "local"); err != nil {
+		return "", p.errorf(name, "%v", err)
 	}
 	return variable.Name, nil
 }
@@ -549,8 +543,8 @@ func (p *parser) parseArray() (Expr, error) {
 }
 
 // comprehension reads [yield for item in source if condition], the same shape
-// Python and Haskell use. It produces the same node the positional form used
-// to, so ExprJSON and the canvas are unchanged.
+// Python and Haskell use. It is sugar for a ForExpr, so ExprJSON and the canvas
+// see one node either way.
 func (p *parser) comprehension(start token, yield Expr) (Expr, error) {
 	p.index++ // for
 	key, variable, err := p.loopVariables(start)
@@ -606,7 +600,7 @@ func (p *parser) loopVariables(at token) (key string, value string, err error) {
 // localIdentifier consumes one identifier and checks it can name a local.
 func (p *parser) localIdentifier() (string, error) {
 	tok := p.peek()
-	if tok.kind != tokenIdentifier || machine.IsReservedName(tok.text) {
+	if tok.kind != tokenIdentifier || validName(tok.text, "local") != nil {
 		return "", p.errorf(tok, "expected a local variable name")
 	}
 	p.index++

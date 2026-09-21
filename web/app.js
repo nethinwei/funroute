@@ -155,6 +155,7 @@ function renderExamples() {
 function typeName(type) {
   if (!type) return "unknown";
   if (type.kind === "array" || type.kind === "dict") return `${type.kind}<${typeName(type.elem)}>`;
+  if (type.kind === "handle") return `handle<${type.name}>`;
   return type.name || type.kind;
 }
 
@@ -165,6 +166,7 @@ function defaultValue(type, name) {
   if (name === "country") return "SG";
   if (name === "channels") return '["UP","DOWN","UP"]';
   if (name === "prices") return "[10,20,30]";
+  if (name === "features") return "[0.9,0.7,0.95]";
   if (name === "acc") return "0";
   if (name === "risk") return "0.3";
   switch (type.kind) {

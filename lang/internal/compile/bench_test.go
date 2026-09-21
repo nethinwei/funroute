@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"context"
 	"funroute/lang/internal/machine"
 	"testing"
 )
@@ -37,7 +38,7 @@ func run(b *testing.B, runtime *machine.Runtime, args map[string]any, fuel uint6
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := runtime.Run(args, machine.RunOptions{Fuel: fuel}); err != nil {
+		if _, err := runtime.Run(context.Background(), args, machine.RunOptions{Fuel: fuel}); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -121,7 +122,7 @@ func TestBenchSanity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(map[string]any{"items": []any{1, 2, 3, 4, 5}}, machine.RunOptions{Fuel: 1_000})
+	value, err := runtime.Run(context.Background(), map[string]any{"items": []any{1, 2, 3, 4, 5}}, machine.RunOptions{Fuel: 1_000})
 	if err != nil {
 		t.Fatal(err)
 	}
