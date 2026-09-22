@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 )
 
 // EvalFunc receives immutable values in a slice that is only valid for the
@@ -38,14 +37,13 @@ type FunctionSpec struct {
 	Name      string
 	Params    []Type
 	Result    Type
-	Cost      uint64
 	Eval      EvalFunc
 	EvalBatch BatchEvalFunc
-	// Timeout caps one call; Detached stops waiting at the deadline for a
-	// function that cannot honour its context. See Doc.
-	Timeout  time.Duration
-	Detached bool
-	Display  FunctionDisplay
+	// Doc is everything a host says about this function: what to call it, what
+	// it costs, how long one call may take. It is also what the catalog hands
+	// a front end, so there is one structure rather than an input shape and a
+	// parallel output shape that have to be kept in step.
+	Doc Doc
 
 	special specialForm
 	builtin bool
@@ -79,6 +77,10 @@ func (f *RegisteredFunction) IsLazyIf() bool { return f.special == specialIf }
 // candidate participates in type inference, but bytecode advances only when
 // the previous expression returns ErrExtension or ErrDeadline.
 func (f *RegisteredFunction) IsLazyFallback() bool { return f.special == specialFallback }
+
+// Cost is what one call charges the fuel budget. It lives in Doc because a
+// host states it once, beside what the function is for.
+func (f *RegisteredFunction) Cost() uint64 { return f.Doc.Cost }
 
 // IsBuiltin distinguishes trusted kernel functions from host extensions.
 // Their ordinary domain errors (division by zero, head of an empty array)
@@ -236,8 +238,8 @@ func (r *Registry) Register(spec FunctionSpec) error {
 	if reservedNames[spec.Name] {
 		return fmt.Errorf("function name %q is reserved", spec.Name)
 	}
-	if spec.Cost == 0 {
-		spec.Cost = 1
+	if spec.Doc.Cost == 0 {
+		spec.Doc.Cost = 1
 	}
 	params := make([]Type, len(spec.Params))
 	for i := range spec.Params {
@@ -245,14 +247,14 @@ func (r *Registry) Register(spec FunctionSpec) error {
 	}
 	spec.Params = params
 	spec.Result = CloneType(spec.Result)
-	spec.Display = cloneFunctionDisplay(spec.Display)
+	spec.Doc.Params = append([]string(nil), spec.Doc.Params...)
 	if spec.Eval == nil && spec.special == specialNone {
 		return fmt.Errorf("function %s has no evaluator", spec.Name)
 	}
 	if err := validateSignature(spec); err != nil {
 		return err
 	}
-	if err := normalizeFunctionDisplay(&spec); err != nil {
+	if err := normalizeDoc(&spec); err != nil {
 		return err
 	}
 	key := spec.Signature()

@@ -142,8 +142,8 @@ func bindFunctions(artifact *Artifact, registry *Registry) ([]*RegisteredFunctio
 		if !ok {
 			return nil, fmt.Errorf("required function is not registered: %s", call.Signature)
 		}
-		if function.Cost != call.Cost {
-			return nil, fmt.Errorf("function cost changed for %s: artifact=%d registry=%d", call.Signature, call.Cost, function.Cost)
+		if function.Doc.Cost != call.Cost {
+			return nil, fmt.Errorf("function cost changed for %s: artifact=%d registry=%d", call.Signature, call.Cost, function.Doc.Cost)
 		}
 		functions[i] = function
 	}

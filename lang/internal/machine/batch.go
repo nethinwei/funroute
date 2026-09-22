@@ -242,14 +242,14 @@ func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchR
 }
 
 func invokeBatch(ctx context.Context, function *RegisteredFunction, calls [][]Value) ([]Value, error) {
-	if function.Timeout > 0 {
+	if function.Doc.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, function.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, function.Doc.Timeout)
 		defer cancel()
 	}
 	var results []Value
 	var err error
-	if function.Detached {
+	if function.Doc.Detached {
 		results, err = callBatchDetached(ctx, function, calls)
 	} else {
 		results, err = callBatchSafely(ctx, function, calls)

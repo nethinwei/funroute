@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -25,6 +26,63 @@ func TestPhaseZeroPublicContract(t *testing.T) {
 	}
 	if got := lang.EnumOf("channel", "stripe", "adyen").String(); got != `enum<channel>{adyen,stripe}` {
 		t.Fatalf("enum type = %s", got)
+	}
+}
+
+// A host says only what a machine cannot work out. The signature comes from
+// the Go types, and the category falls out of the name's namespace.
+func TestDocOnlyCarriesWhatAHostMustSay(t *testing.T) {
+	registry := lang.CoreRegistry()
+	if err := lang.Logic(registry, "payout.settle_v1", lang.Doc{Label: "结算"},
+		func(amount int64) (int64, error) { return amount, nil }); err != nil {
+		t.Fatal(err)
+	}
+	var settle lang.FunctionDescriptor
+	for _, function := range lang.Catalog(registry).Functions {
+		if function.Name == "payout.settle_v1" {
+			settle = function
+		}
+	}
+	if settle.Doc.Category != "payout" {
+		t.Fatalf("category = %q, want the name's namespace", settle.Doc.Category)
+	}
+	if settle.Signature != "payout.settle_v1(int)->int" {
+		t.Fatalf("signature = %q", settle.Signature)
+	}
+	if rendered := fmt.Sprint(settle.Doc); strings.Contains(rendered, "#") {
+		t.Fatalf("display carries styling: %s", rendered)
+	}
+}
+
+// A host stores artifacts and loads them later; the loader is what checks they
+// were not edited in between. This also exercises HandleOf, the way a contract
+// declares an engine value.
+func TestHostChecksArtifactIdentity(t *testing.T) {
+	registry := lang.CoreRegistry()
+	type tensor struct{ Values []float64 }
+	if err := lang.DefineHandle[*tensor](registry, "demo.tensor"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lang.Logic(registry, "demo.size_v1", lang.Doc{Label: "尺寸", Cost: 2},
+		func(value *tensor) (int64, error) { return int64(len(value.Values)), nil }); err != nil {
+		t.Fatal(err)
+	}
+	result := lang.IntType
+	artifact, err := lang.CompileExpr("demo.size_v1(features)", registry, lang.CompileOptions{
+		Args:   []lang.ArgSpec{{Name: "features", Type: lang.HandleOf("demo.tensor")}},
+		Result: &result,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lang.Instantiate(artifact, registry); err != nil {
+		t.Fatal(err)
+	}
+	// The digest is the identity: an artifact edited after compilation no
+	// longer loads, which is what a host relies on when it stores them.
+	artifact.Args[0].Name = "other"
+	if _, err := lang.Instantiate(artifact, registry); err == nil {
+		t.Fatal("an edited artifact still instantiated")
 	}
 }
 

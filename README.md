@@ -61,13 +61,13 @@ switch(country,"SG","adyen_sg","MY","stripe_my","stripe_global")
 
 推导式是一个**表达式**，返回新数组——这也是它不叫 `for` 的原因：在 C/Java/Go/Python 里 `for` 都是不返回值的语句，而这里的对应物是 Python 的 `[e for x in xs if c]`、LINQ 的 `.Where().Select()`、SQL 的 `SELECT e FROM xs WHERE c`。
 
-聚合用 `reduce`，同样保持函数形态：
+聚合用 `reduce`（折叠，fold），同样保持函数形态。它不限于求和：每一步用当前元素和当前累加器算出下一个累加器，所以取最大、计数、拼接都由它表达：
 
 ```text
-reduce(prices,price,total,0,add(total,price))
+reduce(price in prices, total from 0, total + price)
 ```
 
-五个参数依次是输入数组、元素局部名、累加器局部名、累加器初值和累加表达式；`price` 与 `total` 都是局部变量，不进入外部 `args`，推导结果是 `(prices: array<int>) -> int`。`reduce` 只遍历有限数组，每次迭代按 fuel 计费，不引入递归。
+依次是元素局部名与输入、累加器局部名与初值、每步结果（用当前元素和累加器算出下一个累加器）；`price` 与 `total` 都是局部变量，不进入外部 `args`，推导结果是 `(prices: array<int>) -> int`。`reduce` 只遍历有限数组，每次迭代按 fuel 计费，不引入递归。
 
 ## 语法
 
@@ -113,8 +113,6 @@ switch(                                  // 无主体 = 条件链，替代嵌套
   case risk > 0.8      => "reject",
   else                    "auto")
 
-switch(country, "SG", "a", "MY", "b", "c")   // 位置形式，仍然接受
-
 switch(channel,                            // channel: enum<channel>{adyen,stripe}
   case @adyen => @stripe,
   case @stripe => @adyen)                 // 枚举已穷尽，可以省略 else
@@ -122,14 +120,14 @@ switch(channel,                            // channel: enum<channel>{adyen,strip
 
 两种形态是**同一个节点**：ExprJSON 的 `switch` 节点里 `value` 缺失即条件形态，`case.match` 是一个列表。所以拖拽面板上仍然是一张多分支卡片（主体槽留空即切到条件模式，每个分支的匹配值可增删），不会退化成一串嵌套 `if` 卡片。分支按书写顺序惰性求值，未选中的分支不会被计算。通常必须写 `else`；只有 subject 是契约声明的枚举且所有成员都由 `@成员` 覆盖时才能省略。编译器会报告缺失、重复或越界成员，因此契约新增成员时旧规则无法静默漏接。
 
-`reduce` 也接受关键字形式，让位置参数的含义写在语法里（与位置形式脱糖到同一个节点）：
+`reduce` 把每个位置的含义写在语法里，所以只有一种写法：
 
 ```text
 reduce(price in prices, total from 0, total + price)
-reduce(prices, price, total, 0, add(total, price))      // 位置形式，仍然接受
+reduce(name, weight in weights, sum from 0.0, sum + weight)   // 两个变量遍历字典
 ```
 
-`for`、`in`、`if`、`from`、`else`、`case` 在这些位置是关键字；`for`、`in`、`from`、`else`、`case` 同时是保留名，不能用作变量名或函数名。旧的 `for(...)` 函数写法已移除，写成它会得到明确的迁移提示。
+`for`、`in`、`if`、`from`、`else`、`case` 在这些位置是关键字；`for`、`in`、`from`、`else`、`case` 同时是保留名，不能用作变量名或函数名。`switch` 与 `reduce` 的位置参数写法（`switch(country,"SG","a",…)`、`reduce(prices,price,total,0,…)`）已移除：一件事只有一种写法，写成旧形式会得到指出正确形态的错误。
 
 `switch` 与 `reduce` 仍使用上面的函数调用外形；编译器把它们识别为惰性、多分支和局部变量结构，不引入语句式语法。
 
@@ -282,7 +280,7 @@ go run ./cmd/funroute inspect \
 
 `if` 与 `fallback` 是内核的惰性调用：前者只执行选中的分支；后者接受至少两个同类型候选，按顺序求值，仅在当前候选得到 `ErrExtension` 或 `ErrDeadline` 时继续下一项。布尔运算不在内核里——它们是**派生形式**，见下一节。
 
-其余一切都是宿主的选择：`lang.RegisterArrayPrimitives(registry)` 加上 `array.is_empty`/`array.prepend`/`array.head`/`array.tail` 四个列表原语，`registry.EnableForm(...)` 打开惰性形式。
+其余一切都是宿主的选择：`registry.EnableForm(...)` 打开惰性形式，领域函数由扩展包注册。
 
 ## 派生形式
 
@@ -300,7 +298,7 @@ go run ./cmd/funroute inspect \
 派生形式**不进注册表**，不增加节点类型、opcode 或推导规则，但仍是一等的命名构造：
 
 - `Registry.Catalog()` 把它们列在 `special_forms` 里（无需 `EnableForm`，因为 `if` 总在内核）；
-- 拖拽面板有独立的「逻辑与 / 逻辑或 / 逻辑非」卡片，只暴露真正的操作数槽，固定分支隐藏，所以卡片不会被编辑成别的东西；
+- `and`/`or`/`not` 在画布上不是卡片：它们展开为 `if`，读起来就是 `a && b`，直接写在表达式里；目录仍把它们列为派生形式，语法说明里能查到；
 - 打印器把这三种 `if` 模式还原成 `&&` / `||` / `!` / `!=`，源码与节点树双向一致。
 
 ## 形式开关与控制台
@@ -319,7 +317,7 @@ minimal.EnableForm(lang.SwitchForm)      // 只给多分支，不给遍历
 |---|---|---|
 | `switch(...)` | 值匹配或条件链，按顺序惰性选择一个结果 | 结构上总是终止 |
 | `[result for item in source if condition]` | 映射，可选筛选 | 只遍历输入数组 |
-| `reduce(source,item,acc,init,body)` | 折叠进累加器 | 只遍历输入数组 |
+| `reduce(item in source, acc from init, body)` | 逐项折叠进累加器：求和、取最大、计数都是它 | 只遍历输入数组或字典 |
 
 
 一个注册表就是一个控制台：想给多少语言就开多少。用未启用的形式会在编译期被拒绝：
@@ -347,29 +345,24 @@ err := registry.Register(lang.FunctionSpec{
     Name:   "risk.score_v1",
     Params: []lang.Type{lang.StringType, lang.IntType},
     Result: lang.FloatType,
-    Cost:   25,
     Eval: func(args []lang.Value) (lang.Value, error) {
         // 这里只应进行确定性的纯计算；动态数据应通过 args 传入。
         return lang.Float(0.9)
     },
-    Display: lang.FunctionDisplay{
+    Doc: lang.Doc{
         Label:       "风险评分",
         Description: "根据国家和金额计算风险分。",
         Category:    "风控",
-        Color:       "#DC2626",
-        Icon:        "!",
-        Parameters: []lang.ParameterDisplay{
-            {Name: "country", Label: "国家"},
-            {Name: "amount", Label: "金额"},
-        },
-        Result: lang.ResultDisplay{Label: "风险分"},
+        Cost:        25,
+        Params:      []string{"国家", "金额"},
+        Result:      "风险分",
     },
 })
 ```
 
 名称里的 `_v1` 只是命名约定，语言不解析它：函数身份是完整签名，版本表达在名字本身。Artifact 同时冻结完整签名和 fuel 成本；同名函数被改成不同类型或成本时，旧 Artifact 会拒绝实例化。
 
-`Display` 只用于控制台展示，不参与类型推导和执行。`Registry.Catalog()` 会输出全部可展示函数的标签、说明、分类、颜色、图标、参数说明、结果说明、示例、成本和类型签名。拖拽组件直接消费该目录，所以新增扩展函数不需要再维护一份前端清单。完整示例见 `extensions/paymentdemo/`。
+`Doc` 是宿主关于一个函数所说的**全部**：`FunctionSpec` 与 `Logic`/`Model` 用同一个结构，目录也原样输出它，所以没有"注册用一种形状、导出用另一种形状"的平行维护。它不参与类型推导和执行。目录输出的是**含义**：标签、说明、分类、参数与结果说明、成本和类型签名。凡是机器能算出来的都不手写 —— 签名来自 Go 类型，分类缺省取名字的命名空间（`route.score_v1` → `route`），顺序按名字，**颜色与图标是控制台的决定，不进目录**。参数标签是签名里唯一手写的部分（Go 丢掉了参数名），所以数量对不上会在注册时报错，而不是被默默补成“参数 2”。拖拽组件直接消费该目录，所以新增扩展函数不需要再维护一份前端清单。完整示例见 `extensions/paymentdemo/`。
 
 更常用的是按 Go 签名注册：`lang.Logic(registry, name, doc, fn)`。`fn` 可以是任意元数的函数，参数与返回值是 Go 的标量（`bool`、各宽度的整数、`float32/float64`、`string`）、任意深度嵌套的切片与 string 键映射、以及注册表 `DefineHandle` 过的类型，首参数可选 `context.Context`，返回 `(R, error)`。签名与两个方向的转换在注册时用反射解析一次，调用时走 `reflect.Call`，每次约 300 ns、几次分配；内核函数是手写 `FunctionSpec`，不走反射，对性能敏感的宿主函数也可以这样写。
 
@@ -540,7 +533,17 @@ Export(Import(Export(expr))) == Export(expr)
 
 ## 拖拽式 JS 库
 
-`web/funroute-core.js` 是公开的无 DOM SDK；`FunRouteLanguage` 消费 Go catalog，`FunRouteClient` 封装 HTTP，`FunRouteWorkspace` 管理文档、契约、编译和运行状态。任何团队都可以在这层之上重建 React/Vue/原生 UI。`web/funroute-designer.js` 只是随仓库提供的一套原生 Web Component 视图，`web/funroute-source.js` 保留为兼容 re-export。
+依赖是单向的：`funroute-core.js` 不 import 任何东西，其余模块朝它收敛，所以自定义 UI 只需要 core，其他文件可以整份丢掉。
+
+```text
+core ← display ← fields ← designer
+  ↑       ↑        ↑         ↑
+  └── dnd ┴ palette┘         │
+  └── contract               │
+      reference（只读目录数据，零 import）
+```
+
+`web/funroute-core.js` 是公开的无 DOM SDK；`FunRouteLanguage` 消费 Go catalog，`FunRouteClient` 封装 HTTP，`FunRouteWorkspace` 管理文档、契约、编译和运行状态。任何团队都可以在这层之上重建 React/Vue/原生 UI。随仓库的这套原生 Web Component 视图分成几个只做一件事的模块：`funroute-designer.js`（画布）、`funroute-palette.js`（控制块面板）、`funroute-dnd.js`（放置规则）、`funroute-fields.js`（输入控件）、`funroute-display.js`（类型文本与配色）、`funroute-reference.js`（语法说明）、`funroute-contract.js`（契约面板）。
 
 只使用逻辑层：
 
@@ -579,21 +582,25 @@ const result = await workspace.run({ amount: 1200, healthy: true });
 </script>
 ```
 
-组件支持：
+### 画布只有两种东西
 
-- 默认使用“策略大纲 + 单步编辑”的引导视图，只展开当前步骤；熟练用户可随时切换完整递归树；
-- 组件既可拖拽，也可先点击选中、再点击空槽放入，减少新用户学习成本；
-- 参数节点只能从已检查运行契约的入参或当前位置可见的本地变量中选择；`for`、`reduce`、`let` 的作用域来自 Go AST `binds` 元数据，JS 不另写一套语法规则；
-- 随附 MVP 在每次画布修改后自动编译，并在画布内提示参数作用域和返回类型是否符合运行契约；自定义 UI 可调用 `FunRouteLanguage.scopeAtPath()` 复用同一作用域逻辑；
-- 从函数目录拖入函数卡片；
-- 把变量、整数、浮点数、字符串、布尔值、数组和字典拖入参数槽；
-- 移动、删除和嵌套已有节点；
-- `switch`、列表推导、`reduce`、`let`、数组、字典的卡片由目录里的节点 schema 生成：表达式槽、局部名输入、可增删的分支/绑定/键值，下限与默认名来自 schema，只有文案（`FIELD_TEXT`）是前端自己的；另有逻辑与/或/非卡片；
-- 同名重载合并成一张卡，例如界面只显示一个 `add`，类型由编译器选择；
-- 函数分类、搜索、说明、签名和参数提示；
+画布的全部模型是一条规则：**控制块是卡片，其余一切是一行文本**。
+
+- **控制块** —— `switch`、列表推导、`reduce`、`let`、`if`、`fallback`。它们带分支、局部名或惰性，一行文本说不清楚，所以是卡片：可拖拽、可嵌套、槽位由目录的节点 schema 生成（可增删的分支/绑定/键值、局部名输入、下限与默认名都来自 schema，只有文案 `FIELD_TEXT` 是前端的）。
+- **表达式** —— 运算、比较、逻辑、函数调用、字面量、`@枚举成员`、容器。它们直接写在槽里：回车或失焦时交给 `/api/parse`（Go parser 仍是唯一语法权威），通过才替换子树，失败则原地报错且文档不动。
+- 哪些名字算控制块**不写在前端**：目录里"有自己 ExprJSON 节点的特殊形式"加"惰性调用"就是这个集合，所以注册表变了，面板、卡片判定、大纲、语法说明同时跟着变。
+
+其余能力：
+
+- 每个表达式位置都是放置目标，空的或已占用的都是。把块放到已有表达式上时，原表达式会被收进新块的第一个空槽（`if` 收进条件位、`let` 收进主体、`for` 收进输入集合），不会被丢弃；节点不能拖进自己的子树。
+- 左侧是「策略结构」大纲，只列真正的步骤（控制块），点击切换当前编辑的步骤。
+- 参数只能从已检查运行契约的入参或当前位置可见的本地变量中选择；`for`、`reduce`、`let` 的作用域来自 Go AST `binds` 元数据，JS 不另写一套语法规则。自定义 UI 可调用 `FunRouteLanguage.scopeAtPath()` 复用同一逻辑。
+- 枚举成员从契约的成员集里选，成员多时是可筛选输入；同名成员属于多个枚举时才出现"属于哪个枚举"的选择。
+- 「语法说明」由目录生成，分「控制结构 / 运算符 / 函数 / 写法」四组，所以新增扩展函数不需要维护第二份清单。
+- 随附 MVP 在每次画布修改后自动编译，并提示参数作用域和返回类型是否符合运行契约。
 - `value` 双向绑定规范化 ExprJSON，并触发 `funroute-change` 事件。
 
-组件有自己的滚动目录与画布，并在窄屏切成上下布局；宿主可通过外层尺寸控制可视区域。
+组件有自己的滚动面板与画布，并在窄屏切成上下布局；宿主可通过外层尺寸控制可视区域。
 
 不依赖 React/Vue、构建工具或第三方包，可以嵌入现有管理后台。
 
@@ -679,4 +686,4 @@ go test ./lang/internal/compile -bench . -benchtime 2000x   # VM 基准
 
 `make lint` 由 `tools/lint`（仅标准库）实现，强制风格预算：单个方法不超过 50 行、嵌套不超过 3 层、单个文件不超过 800 行。
 
-测试覆盖样例推导、数值提升与显式转换、同型容器拒绝、扩展函数推导、函数式 `switch/for/reduce`、形式开关边界（含 ExprJSON 路径）、递归深度与 fuel 拦截、局部变量、展示目录、ExprJSON 往返与导入校验、节点 schema 与定义一致、容器跨边界零拷贝（指针相等断言）、惰性分支、Artifact 防篡改和 MVP HTTP API。
+测试覆盖样例推导、数值提升与显式转换、同型容器拒绝、扩展函数推导、函数式 `switch/for/reduce`、形式开关边界（含 ExprJSON 路径）、递归深度与 fuel 拦截、局部变量、目录只承载含义（出现样式即失败）、参数标签数校验、枚举成员解析与 nominal 边界、大枚举只在消息里缩略、ExprJSON 往返与导入校验、节点 schema 与定义一致、容器跨边界零拷贝（指针相等断言）、惰性分支、Artifact 防篡改和 MVP HTTP API。前端测试覆盖控制块集合由目录推导、放置规则的包裹与替换、格式化的换行与幂等、文案键与目录字段一致；37 个示例由 Go 测试逐条实跑并守住目录全覆盖。

@@ -41,8 +41,8 @@ func TestCatalogAPIIncludesExtensionPresentation(t *testing.T) {
 	for _, function := range catalog.Functions {
 		if function.Name == "route.is_healthy_v1" {
 			found = true
-			if function.Display.Label != "渠道是否健康" || function.Display.Description == "" {
-				t.Fatalf("display = %#v", function.Display)
+			if function.Doc.Label != "渠道是否健康" || function.Doc.Description == "" {
+				t.Fatalf("display = %#v", function.Doc)
 			}
 		}
 	}
@@ -138,7 +138,7 @@ func TestRunAPISupportsFunctionalSwitchAndFor(t *testing.T) {
 		want any
 	}{
 		{
-			body: `{"source":"switch(country,\"SG\",\"adyen\",\"stripe\")","contract":{"args":[{"name":"country","type":"string"}],"result":{"type":"string"}},"args":{"country":"SG"}}`,
+			body: `{"source":"switch(country, case \"SG\" => \"adyen\", else \"stripe\")","contract":{"args":[{"name":"country","type":"string"}],"result":{"type":"string"}},"args":{"country":"SG"}}`,
 			want: "adyen",
 		},
 		{
@@ -185,11 +185,11 @@ func TestStaticMVPIsEmbedded(t *testing.T) {
 		!strings.Contains(response.Body.String(), "funroute-designer") {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	request = httptest.NewRequest(http.MethodGet, "/funroute-semantic.js", nil)
+	request = httptest.NewRequest(http.MethodGet, "/funroute-dnd.js", nil)
 	response = httptest.NewRecorder()
 	testServer(t).ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "renderSemanticTree") {
-		t.Fatalf("semantic renderer: status = %d, body = %s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "placeBlock") {
+		t.Fatalf("drop rules: status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 
@@ -204,7 +204,7 @@ func postJSON(t *testing.T, server *Server, path, body string) *httptest.Respons
 
 func TestParseAPIReturnsCanonicalExprJSON(t *testing.T) {
 	server := testServer(t)
-	response := postJSON(t, server, "/api/parse", `{"source":"reduce(prices,price,total,0,add(total,price))"}`)
+	response := postJSON(t, server, "/api/parse", `{"source":"reduce(price in prices, total from 0, add(total,price))"}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -250,7 +250,7 @@ func TestRunAPISupportsReduceAndComprehension(t *testing.T) {
 	}{
 		{
 			name: "reduce",
-			body: `{"source":"reduce(prices,price,total,0,add(total,price))","contract":{"args":[{"name":"prices","type":"array<int>"}],"result":{"type":"int"}},"args":{"prices":[10,20,30]}}`,
+			body: `{"source":"reduce(price in prices, total from 0, add(total,price))","contract":{"args":[{"name":"prices","type":"array<int>"}],"result":{"type":"int"}},"args":{"prices":[10,20,30]}}`,
 			want: int64(60),
 		},
 		{

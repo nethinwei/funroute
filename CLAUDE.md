@@ -43,6 +43,10 @@ AST 类型**故意不公开**：宿主通过 ExprJSON 交换程序。`lang/lang_
 
 前端拿到的目录（`lang.Catalog(registry)`，不是 `Registry.Catalog()`）带 `nodes`：`web/funroute-core.js` 的 `cleanNode`/`blankNode` 与 `web/funroute-designer.js` 的卡片布局都从它生成，JS 里没有节点字段清单，只有 `funroute-core.js` 的文案表 `FIELD_TEXT`。端到端验证：10 个例子经 `cleanNode` 得到的 JSON 与服务端 `/api/parse` 的规范 JSON 逐字节相同。
 
+### 画布只有控制块与表达式
+
+一条规则贯穿画布：**控制块是卡片，其余一切是一行文本**。控制块 = 有自己 ExprJSON 节点的特殊形式（`switch`/`for`/`reduce`/`let`）加惰性调用（`if`/`fallback`），这个集合由 `controlBlocksOf(catalog)` 从目录推导，前端不写死；`&&`/`||`/`!` 底层是 `if` 但按运算符处理，所以留在文本里。表达式槽就地编辑，提交时走 `/api/parse`，**通过才替换子树**，失败原地报错且文档不动。每个表达式位置都是放置目标：块放到已占位置时，原表达式收进新块的第一个空槽（`firstEmptySlot`），节点不能拖进自己的子树。语言层面任何位置都能放任何表达式（`switch` 主体放 `let`、`case` 匹配值放 `switch` 都合法），所以画布不设位置限制。
+
 ### 契约在宿主，不在语言里
 
 程序文本**只是表达式**。参数名、类型、顺序、说明、返回类型由宿主通过 `CompileOptions{Args []ArgSpec, Result *Type, ResultDoc}` 传入。理由：控制台本来就存规则元数据（版本、生效窗口、审批人、灰度），参数类型是同类信息，放语言里就是两份平行元数据。曾经有过 `@arg/@let/@ret` 头部，删掉了（见 README「契约」章节的权衡）。
@@ -60,7 +64,7 @@ Parse / ImportExprJSON → finish(check) → Expr AST → inferProgram → 常�
 syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile/fold.go  compile/compiler.go  machine/vm.go  machine/frame.go
 ```
 
-能力边界由**注册表**决定：`CoreRegistry()` 是极简内核（14 个函数名、零惰性形式），`registry.EnableForm(SwitchForm/ForForm/ReduceForm)` 逐个打开（`compile/forms.go` 校验），`RegisterArrayPrimitives` 加列表原语。一个注册表 = 一个控制台。
+能力边界由**注册表**决定：`CoreRegistry()` 是极简内核（15 个函数名，其中 `if`/`fallback` 惰性），`registry.EnableForm(SwitchForm/ForForm/ReduceForm)` 逐个打开（`compile/forms.go` 校验）。一个注册表 = 一个控制台。
 
 **语言刻意不图灵完备**：没有无界循环，所有形式只遍历有限输入，每个程序都终止 —— `Fuel` 是成本上限而非安全兜底。想加回无界循环前先读 `docs/termination.md` 的附录。
 
@@ -74,10 +78,10 @@ syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile
 - `Artifact.MaxStack` 由编译期栈效应累加得出，帧据此一次预留，`push` 在预留内跳过上限检查；算错只影响优化不影响正确性（`push` 的回退路径仍检查）。`release` 只清用过的部分，靠 `reserved` 与溢出水位。
 - 类型推导是多候选分叉 + `implicitTypeScore` 打分选最优，同分报歧义；混合数值签名额外吃 `mixedPenalty`，所以 `risk < 0.5` 会把 `risk` 推成 float。
 - 枚举是 nominal 且只从契约进入程序：`EnumExpr`（`@member` / `@enum.member`）的所属枚举由 `compile/enum.go` 的 `collectEnums`/`resolveEnumReference` 在**契约的枚举命名空间**里解析，不靠上下文类型；`enum` 与 `string` 不 unify，编译成字符串常量，运行时值仍是成员名。
-- `SwitchExpr.Value` 可为 nil（条件形态），`SwitchCaseExpr.Match` 是列表（多值分支）。改这里只动 `syntax/ast.go`（tag 决定 JSON、作用域、前端布局）加 `compile/infer_expr.go`、`compile/compiler.go` 的语义，以及 `web/funroute-source.js` 的打印。
-- ExprJSON 文档只有 `{version, expr}`。`web/funroute-designer.js` 的 `EXPR_JSON_VERSION` 必须与 `syntax/json_ast.go` 的 `ExprJSONVersion` 同步。
-- 中缀与关键字糖全部在 parser 层脱糖，**AST 不新增任何节点类型**：`a+b` 就是 `add(a,b)`，`a&&b` 就是 `if(a,b,false)`，`[e for x in xs if c]` 就是 `ForExpr`。新增糖必须同时更新 `web/funroute-source.js` 的 `INFIX`/`sugarFromIf`/`forHead` 反向打印。
-- `and`/`or`/`not`/`ne` 是**派生形式**——展开为 `if`，不进注册表。三个同步点：`machine/catalog.go` 的 `derivedForms`、`web/funroute-source.js` 的 `sugarFromIf`/`logicalForm`、`web/funroute-designer.js` 的 `DERIVED_TEMPLATES`。
+- `SwitchExpr.Value` 可为 nil（条件形态），`SwitchCaseExpr.Match` 是列表（多值分支）。改这里只动 `syntax/ast.go`（tag 决定 JSON、作用域、前端布局）加 `compile/infer_expr.go`、`compile/compiler.go` 的语义，以及 `web/funroute-core.js` 的打印。
+- ExprJSON 文档只有 `{version, expr}`。版本号前端不写死：`FunRouteLanguage` 从 `catalog.source.expr_json_version` 读，所以这里没有同步点。
+- 中缀与关键字糖全部在 parser 层脱糖，**AST 不新增任何节点类型**：`a+b` 就是 `add(a,b)`，`a&&b` 就是 `if(a,b,false)`，`[e for x in xs if c]` 就是 `ForExpr`。新增糖必须同时更新 `web/funroute-core.js` 的 `sugarFromIf`/`forHead` 反向打印（优先级与模板从目录来，JS 不另存一份 `INFIX`）。
+- `and`/`or`/`not`/`ne` 是**派生形式**——展开为 `if`，不进注册表。两个同步点：`machine/catalog.go` 的 `derivedForms`（目录描述）与 `web/funroute-core.js` 的 `sugarFromIf`/`logicalForm`（识别与打印）；卡片模板由 `createForm` 从目录的运算符模板实例化，前端不再存一份。
 - 扩展函数按不可信纯函数对待：`recover` 在激活层兜住 panic。**值不拷贝**——容器 backing 直接交出，安全性来自只读约定（见上），任何新增的包外取值入口都必须保持"交出 backing、文档写明只读"。
 - 出栈返回的是栈上视窗，不是副本：`EvalFunc` 收到的 `[]Value` 只在调用期间有效。
 - 没有递归就没有嵌套激活：每次 `Run` 只建一个帧（来自 `sync.Pool`）。新增任何能重入程序的构造都会推翻 `docs/termination.md` 的定理 A 与 B。
@@ -87,12 +91,12 @@ syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile
 
 - 新增 opcode → `machine/opcode.go` 表 + `machine/frame.go` 的 `step`。仅此两处，测试兜底。给 `Instruction` 加 `omitempty` 字段不改变既有 digest（零值不出现在 JSON），无需 bump。
 - 新增惰性形式 → `machine/registry.go` 的 `knownForms` + 节点的 `Form()` 方法（`compile/forms.go` 靠它和 `Children` 通用校验）+ `machine/catalog.go` 的 `formDescriptors`。
-- 新增函数 → 只注册带 `Display` 的 `FunctionSpec`，目录与拖拽面板自动生效；要 ABI 版本就写进名字（`route.score_v1`）。按 Go 签名注册用 `Logic`（反射读签名，任意元数与嵌套，首参数可选 `context.Context`），模型函数用 `Model` 同时给单条与批量实现；引擎类型先 `DefineHandle[T]`。
+- 新增函数 → 只注册带 `Display` 的 `FunctionSpec`，目录与拖拽面板自动生效；要 ABI 版本就写进名字（`route.score_v1`）。`Doc` 是**唯一**的函数元数据结构：`FunctionSpec.Doc`、`Logic`/`Model` 的入参、目录 JSON 的 `doc` 字段都是它，没有平行的 Display/Parameter/Result 结构。只写机器算不出来的（标签、说明、成本、参数标签）：签名来自反射，分类缺省取命名空间，顺序按名字，**颜色/图标只在 `web/funroute-display.js`**。按 Go 签名注册用 `Logic`（反射读签名，任意元数与嵌套，首参数可选 `context.Context`），模型函数用 `Model` 同时给单条与批量实现；引擎类型先 `DefineHandle[T]`。
 - `Kind` 加值 → `kindNames` 同步；若它有运行时表示，`Value.hasType`/`Type()`/`Any()`、`compile/infer.go` 的 `typeTerm`（含 `name`）、`implicitTypeScore`、`ParseType`、`validateTypePattern` 与前端 `typeName` 都要认识它（`HandleKind` 是现成范例）。
 - 新增 ExprJSON 节点 → 在 `syntax/ast.go` 定义带 tag 的 struct（含 `kind()`，需要时 `check()`/`Form()`）并加进 `nodeTypes`；导入、导出、作用域、schema、前端 `cleanNode`/空白模板/卡片全部自动生效。仍要手写的是语义：`compile/infer_expr.go`、`compile/compiler.go` 的 case，`web/funroute-core.js` 的 `expressionSource`/`_splitNode` 打印，以及可选的 `FIELD_TEXT` 文案。`walk_test.go` 的 schema 测试会要求列出新节点。
 - 新增公开 API → `lang/lang.go` 加别名或转发，并在 `lang/lang_test.go` 以宿主视角用一次；能不加就不加。
 - 新增前端例子 → 只改 `web/funroute-examples.js`（例子是**源码 + 契约**两部分，点按钮走 `/api/parse`，按钮由 `renderExamples` 生成）。别手写 ExprJSON 模板。
-- 新增前端文件 → 加进 `web/embed.go` 的 `//go:embed` 列表。前端分层：`funroute-source.js`（纯函数：schema 驱动的 `cleanNode`/`blankNode`、打印/格式化/词法，无 DOM）、`funroute-contract.js`（契约面板，宿主数据）、`funroute-designer.js`（表达式画布，Web Component，卡片由 `catalog.nodes` 布局）、`funroute-examples.js`（例子）、`app.js`（MVP 外壳，把两部分组合起来提交）。**契约面板与画布之间没有同步点**：前者是宿主数据，后者是表达式，各自提交。
+- 新增前端文件 → 加进 `web/embed.go` 的 `//go:embed` 列表（`make check-js` 按 `web/*.js` 通配，不用再列一遍）。前端依赖严格单向、`funroute-core.js` 零 import（`node --test` 就能跑它），分层每个文件只做一件事：`funroute-core.js`（无 DOM SDK：schema 驱动的 `cleanNode`/`blankNode`、打印/格式化/词法、`FunRouteLanguage`/`Client`/`Workspace`）、`funroute-display.js`（缩略类型文本与配色，**所有颜色图标只在这里**；`typeName`/`equalType` 是协议，留在 core）、`funroute-fields.js`（输入控件与“文本→值”解析：表达式行、枚举选择、值编辑、`parseInputValue`）、`funroute-dnd.js`（放置规则，注释里写明全部情形）、`funroute-palette.js`（控制块面板）、`funroute-reference.js`（语法说明，从目录生成）、`funroute-designer.js`（画布 Web Component）、`funroute-contract.js`（契约面板）、`funroute-examples.js`（例子加载）、`app.js`（MVP 外壳）。**契约面板与画布之间没有同步点**：前者是宿主数据，后者是表达式，各自提交。
 - 新增 API 字段 → 改 `mvp/server.go` 的 `expressionRequest`（`DisallowUnknownFields` 会拒绝未声明字段）；CSP 是 `script-src 'self'`，前端保持无框架无构建。
 
 ## 命令

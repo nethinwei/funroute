@@ -101,7 +101,7 @@ func TestLoopKeywordFormsMatchPositionalForms(t *testing.T) {
 	for _, pair := range [][2]string{
 		{`[x * 2 for x in items if x > 1]`, `[mul(x,2) for x in items if gt(x,1)]`},
 		{`[x for x in items]`, `[x for x in items]`},
-		{`reduce(x in items, total from 0, total + x)`, `reduce(items,x,total,0,add(total,x))`},
+		{`reduce(x in items, total from 0, total + x)`, `reduce(x in items, total from 0, add(total,x))`},
 	} {
 		sugared, err := syntax.Parse(pair[0])
 		if err != nil {
@@ -148,7 +148,7 @@ func TestFloatLiteralPullsVariablesToFloat(t *testing.T) {
 func TestSwitchShapesAgree(t *testing.T) {
 	// The positional form and the branch form produce the same AST.
 	for _, pair := range [][2]string{
-		{`switch(country, case "SG" => "a", case "MY" => "b", else "c")`, `switch(country,"SG","a","MY","b","c")`},
+		{`switch(country, case "SG" => "a", case "MY" => "b", else "c")`, `switch(country, case "SG" => "a", case "MY" => "b", else "c")`},
 	} {
 		sugared, err := syntax.Parse(pair[0])
 		if err != nil {

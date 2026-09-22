@@ -621,7 +621,7 @@
     {
       "label": "批次金额汇总",
       "category": "金融计算",
-      "description": "reduce 在有限交易批次上累加，累加体内用 switch 跳过起征点以下的碎单",
+      "description": "reduce 在有限交易批次上折叠求和，每步用 switch 跳过起征点以下的碎单",
       "source": "reduce(price in prices, total from 0,\n  switch(case price >= minimum => total + price, else total)\n)",
       "contract": {
         "args": [

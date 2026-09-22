@@ -395,10 +395,10 @@ func (f *frame) call(pc int, instruction Instruction) error {
 	if !function.IsBuiltin() && f.deadline && f.ctx.Err() != nil {
 		return fmt.Errorf("%s: %w: %v", function.Name, ErrDeadline, f.ctx.Err())
 	}
-	if f.fuelLeft < function.Cost {
+	if f.fuelLeft < function.Doc.Cost {
 		return fmt.Errorf("%w before %s", ErrFuel, function.Name)
 	}
-	f.fuelLeft -= function.Cost
+	f.fuelLeft -= function.Doc.Cost
 	callArgs, err := f.popN(instruction.B)
 	if err != nil {
 		return err
@@ -410,7 +410,7 @@ func (f *frame) call(pc int, instruction Instruction) error {
 	var value Value
 	if ready, ok := f.prefetchedAt(pc); ok {
 		value, err = ready.Value, ready.Err
-	} else if function.Timeout == 0 && !function.Detached {
+	} else if function.Doc.Timeout == 0 && !function.Doc.Detached {
 		if len(f.fallbacks) > 0 {
 			value, err = callSafely(f.ctx, function, callArgs)
 		} else {
@@ -450,14 +450,14 @@ func (f *frame) invokeBounded(function *RegisteredFunction, args []Value) (Value
 		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, f.ctx.Err())
 	}
 	ctx := f.ctx
-	if function.Timeout > 0 {
+	if function.Doc.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, function.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, function.Doc.Timeout)
 		defer cancel()
 	}
 	var value Value
 	var err error
-	if function.Detached {
+	if function.Doc.Detached {
 		value, err = callDetached(ctx, function, args)
 	} else if len(f.fallbacks) > 0 {
 		value, err = callSafely(ctx, function, args)

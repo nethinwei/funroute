@@ -1,16 +1,16 @@
 import "./funroute-designer.js";
-import {
-  FunRouteClient, FunRouteWorkspace, clone, contractComments,
-  parseInputValue, typeName, typeSummary,
-} from "./funroute-core.js";
-import { enumControl, enumOf } from "./funroute-fields.js";
+import { FunRouteClient, FunRouteWorkspace, clone, contractComments } from "./funroute-core.js";
+import { typeName, typeSummary } from "./funroute-display.js";
+import { enumControl, enumOf, parseInputValue } from "./funroute-fields.js";
 import { ContractPanel } from "./funroute-contract.js";
+import { renderReference } from "./funroute-reference.js";
 import { loadExamples } from "./funroute-examples.js";
 
 const elements = {
   designer: document.querySelector("#designer"),
   status: document.querySelector("#status"),
   source: document.querySelector("#source"),
+  syntax: document.querySelector("#syntax"),
   args: document.querySelector("#args"),
   result: document.querySelector("#result"),
   expression: document.querySelector("#expression"),
@@ -266,6 +266,19 @@ function argControl(parameter, value) {
   return input;
 }
 
+// parseFragment turns what an operator typed into a slot back into nodes. The
+// canvas holds the document; only a successful parse is allowed to change it.
+async function parseFragment(source) {
+  try {
+    const parsed = await workspace.client.parse(source);
+    return parsed.expr_json.expr;
+  } catch (error) {
+    // The slot shows this inline, where the API's own prefix only takes room
+    // away from the part that locates the mistake.
+    throw new Error(error.message.replace(/^expression compilation failed:\s*/, ""));
+  }
+}
+
 function renderArgsMessage(message) {
   elements.args.replaceChildren(hint(message));
 }
@@ -416,7 +429,12 @@ elements.expression.addEventListener("keydown", (event) => {
 });
 
 try {
+  elements.designer.parseExpression = parseFragment;
   const [catalog, loadedExamples] = await Promise.all([workspace.initialize(), loadExamples()]);
+  // The syntax guide is generated from the same catalog the canvas uses, so it
+  // cannot drift from what the language actually accepts.
+  elements.syntax.replaceChildren(renderReference(catalog, workspace.language.controlBlocks));
+  contract.valueTypes = catalog.value_types;
   examples = loadedExamples;
   elements.designer.catalog = catalog;
   elements.version.textContent = `Catalog v${catalog.version} · ExprJSON v${catalog.source.expr_json_version} · Artifact v${catalog.artifact_version}`;

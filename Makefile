@@ -16,12 +16,7 @@ test-js:
 	$(NODE) --test web/funroute-core.test.mjs
 
 check-js:
-	$(NODE) --check web/funroute-core.js
-	$(NODE) --check web/funroute-designer.js
-	$(NODE) --check web/funroute-semantic.js
-	$(NODE) --check web/funroute-contract.js
-	$(NODE) --check web/funroute-examples.js
-	$(NODE) --check web/app.js
+	@for file in web/*.js; do $(NODE) --check $$file || exit 1; done
 
 # lint enforces the style budget: <=50 lines per func, <=3 nesting levels,
 # <=800 lines per file. See tools/lint.

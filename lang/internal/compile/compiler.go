@@ -250,7 +250,7 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	if !ok {
 		callIndex = len(c.calls)
 		c.callIndex[key] = callIndex
-		c.calls = append(c.calls, machine.CallReference{Name: function.Name, Signature: key, Cost: function.Cost})
+		c.calls = append(c.calls, machine.CallReference{Name: function.Name, Signature: key, Cost: function.Cost()})
 	}
 	resultType := c.inferred.NodeTypes[node.ID]
 	c.emit(machine.Instruction{Op: machine.OpCall, A: callIndex, B: len(node.Args), Type: &resultType})

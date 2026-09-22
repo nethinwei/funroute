@@ -10,17 +10,31 @@ import { contractPayload, emptyContract, isEmptyContract } from "./funroute-core
 
 export { contractPayload, emptyContract, isEmptyContract };
 
-const TYPE_SUGGESTIONS = [
-  "bool", "int", "float", "string",
-  "array<int>", "array<float>", "array<string>", "array<bool>",
-  "dict<int>", "dict<float>", "dict<string>", "dict<bool>",
-  'enum<channel>{adyen, stripe}',
-];
-
 const TYPE_LIST_ID = "fr-type-suggestions";
 
+// The type suggestions are the catalog's value types, combined the way the type
+// parser combines them. Writing a list here would be a second, stale answer to
+// "what types are there" — the registry already decides that.
+function typeSuggestionsFrom(valueTypes) {
+  const scalars = [];
+  const containers = [];
+  for (const entry of valueTypes || []) {
+    const kind = entry.type?.kind;
+    if (kind === "array" || kind === "dict") containers.push(kind);
+    else if (kind === "handle") scalars.push(`handle<${entry.type.name}>`);
+    else if (kind) scalars.push(kind);
+  }
+  const out = [...scalars];
+  for (const container of containers) {
+    for (const scalar of scalars) out.push(`${container}<${scalar}>`);
+  }
+  out.push('enum<名字>{成员,成员}');
+  return out;
+}
+
 export class ContractPanel {
-  constructor(root, { onChange, onCheck } = {}) {
+  constructor(root, { onChange, onCheck, valueTypes } = {}) {
+    this._types = typeSuggestionsFrom(valueTypes);
     this._root = root;
     this._onChange = onChange;
     this._onCheck = onCheck;
@@ -29,6 +43,13 @@ export class ContractPanel {
   }
 
   get value() { return this._contract; }
+
+  // The catalog arrives after the panel is built, so the suggestions are set
+  // when it does rather than duplicated as a constant.
+  set valueTypes(types) {
+    this._types = typeSuggestionsFrom(types);
+    this.render();
+  }
 
   set value(contract) {
     this._contract = { ...emptyContract(), ...(contract || {}) };
@@ -54,7 +75,7 @@ export class ContractPanel {
     body.append(this._resultRow());
     const status = el("div", `fr-contract__status is-${this._status.phase}`);
     status.append(el("span", "fr-contract__status-dot"), el("span", "", this._status.message));
-    root.append(body, status, typeSuggestions());
+    root.append(body, status, typeSuggestions(this._types));
   }
 
   _bar() {
@@ -136,10 +157,10 @@ function button(text, onClick, extra = "") {
   return node;
 }
 
-function typeSuggestions() {
+function typeSuggestions(names) {
   const list = el("datalist");
   list.id = TYPE_LIST_ID;
-  for (const name of TYPE_SUGGESTIONS) {
+  for (const name of names) {
     const option = el("option");
     option.value = name;
     list.append(option);

@@ -1,51 +1,23 @@
 // FunRoute's headless browser SDK. This module has no DOM dependency: an app
 // may use it with React, Vue, a terminal UI, or no UI at all.
 
-export const VALUE_TEMPLATES = [
-  { id: "value:var", node: "var", label: "参数 / 变量", description: "只能选择运行契约入参或当前作用域的本地变量", icon: "𝑥", color: "#475569" },
-  { id: "value:int", node: "int", label: "整数", description: "int64 立即值", icon: "1", color: "#2563EB" },
-  { id: "value:float", node: "float", label: "浮点数", description: "有限 float64 立即值", icon: ".", color: "#0891B2" },
-  { id: "value:string", node: "string", label: "字符串", description: "UTF-8 立即值", icon: "”", color: "#059669" },
-  { id: "value:bool", node: "bool", label: "布尔值", description: "true / false", icon: "?", color: "#0EA5E9" },
-  { id: "value:enum", node: "enum", label: "枚举成员", description: "宿主契约声明的命名闭集的成员，写作 @成员", icon: "@", color: "#C2410C" },
-  { id: "value:array", node: "array", label: "数组", description: "元素必须同型", icon: "[ ]", color: "#D97706" },
-  { id: "value:dict", node: "dict", label: "字典", description: "string key、value 同型", icon: "{ }", color: "#EA580C" },
-];
 
-// FIELD_TEXT is the console's wording for the fields a node schema describes.
-// The field list itself always comes from the catalog, never from here.
-export const FIELD_TEXT = {
-  "enum.enum": ["枚举名", "同名成员属于多个枚举时才需要填"],
-  "enum.member": ["成员", "契约里声明的枚举成员"],
-  "array.items": ["元素", "元素必须同型"],
-  "dict.entries": ["键值", "value 同型"],
-  "dict.entries.key": ["键", "string"],
-  "dict.entries.value": ["值", "与其他值同型"],
-  "switch.value": ["待匹配值", "留空则每个分支是 bool 条件"],
-  "switch.cases": ["分支", "任一匹配即选中"],
-  "switch.cases.match": ["匹配值", "与待匹配值同类型；无待匹配值时为 bool"],
-  "switch.cases.result": ["返回结果", "所有结果同类型"],
-  "switch.default": ["默认结果（else）", "未匹配时返回"],
-  "for.source": ["输入", "array<T> 或 dict<T>"],
-  "for.variable": ["元素局部名", "仅本节点可见"],
-  "for.key_variable": ["键局部名", "填写即遍历字典"],
-  "for.where": ["筛选条件", "bool；留空表示全部"],
-  "for.yield": ["产出表达式", "每个保留元素产出一个值"],
-  "reduce.source": ["输入", "array<T> 或 dict<T>"],
-  "reduce.variable": ["元素局部名", "仅本节点可见"],
-  "reduce.key_variable": ["键局部名", "填写即遍历字典"],
-  "reduce.accumulator": ["累加器局部名", "仅本节点可见"],
-  "reduce.init": ["初始值", "累加器初值 R"],
-  "reduce.body": ["累加表达式", "必须返回 R"],
-  "let.bindings": ["绑定", "后续绑定与主体可引用"],
-  "let.bindings.name": ["名称", "仅本节点可见"],
-  "let.bindings.value": ["值", ""],
-  "let.body": ["主体", "整体结果"],
-};
 
-export function fieldText(key, field) {
-  const [label, hint] = FIELD_TEXT[key] || [field.name, ""];
-  return { label: field.optional ? `${label}（可空）` : label, hint };
+// typeName and equalType are protocol, not presentation: the text they produce
+// is what ParseType reads back, so it has to match the Go side exactly.
+export function typeName(type) {
+  if (!type) return "unknown";
+  if (type.kind === "array" || type.kind === "dict") return `${type.kind}<${typeName(type.elem)}>`;
+  if (type.kind === "handle") return `handle<${type.name}>`;
+  if (type.kind === "enum") return `enum<${type.name}>{${(type.values || []).join(",")}}`;
+  return type.name || type.kind || "unknown";
+}
+
+export function equalType(left, right) {
+  if (!left || !right || left.kind !== right.kind || left.name !== right.name) return false;
+  if (left.kind === "array" || left.kind === "dict") return equalType(left.elem, right.elem);
+  if (left.kind === "enum") return JSON.stringify(left.values || []) === JSON.stringify(right.values || []);
+  return true;
 }
 
 // contractEnums lists every enum the host contract declares, so a canvas can
@@ -59,8 +31,69 @@ export function contractEnums(contract) {
     if (type.kind === "enum" && type.name) found.set(type.name, type.values || []);
   };
   for (const arg of contract?.args || []) visit(arg.type);
-  visit(contract?.result?.type);
+  // A checked contract carries the result as the type itself; the panel's own
+  // draft wraps it in {type}. Both shapes reach this function.
+  visit(contract?.result?.type || contract?.result);
   return [...found].map(([name, values]) => ({ name, values }));
+}
+
+// A canvas knows two kinds of thing, and nothing else:
+//
+//   control blocks — branches, lazy choices and local names. They are the
+//     palette's components, they are drawn as cards, and they can nest without
+//     limit, because the language puts no expression in a special position.
+//   expressions    — everything else. They are written as one line of source.
+//
+// Which names are control blocks is not written here: the catalog already says
+// it. A special form that has an ExprJSON node of its own (switch, for, reduce,
+// let) is one; a lazy call (if, fallback) is one; and or not are special forms
+// without a node, because they expand to if — they are operators, not blocks.
+export function controlBlocksOf(catalog) {
+  const nodes = new Set((catalog?.nodes || []).map((schema) => schema.node));
+  const blocks = new Set();
+  for (const form of catalog?.special_forms || []) {
+    if (nodes.has(form.special || form.name)) blocks.add(form.name);
+  }
+  for (const item of catalog?.functions || []) {
+    if (item.special) blocks.add(item.name);
+  }
+  return blocks;
+}
+
+// isPlainExpression reports whether a subtree holds no control block at all,
+// and so can be read and edited as a single line of source.
+export function isPlainExpression(value, language) {
+  if (Array.isArray(value)) return value.every((item) => isPlainExpression(item, language));
+  if (!value || typeof value !== "object") return true;
+  if (language?.isControlBlock(value)) return false;
+  return Object.values(value).every((item) => isPlainExpression(item, language));
+}
+
+// firstEmptySlot finds where a block would take an expression: its first empty
+// expression field, or the first empty item of its first expression list. A
+// control block's first slot is the one that reads as "what it works on" —
+// if's condition, let's body, for's source — so dropping a block onto an
+// expression can wrap it there instead of throwing it away.
+export function firstEmptySlot(node, nodes) {
+  const schema = nodes.get(node?.node);
+  if (!schema) return null;
+  for (const field of schema.fields) {
+    if (field.kind === "expr" && !node[field.name]) return [field.name];
+    if (field.kind !== "exprs") continue;
+    const index = (node[field.name] || []).findIndex((item) => !item);
+    if (index >= 0) return [field.name, index];
+  }
+  return null;
+}
+
+// samePath and isPathPrefix compare canvas paths — arrays of field names and
+// indexes that locate a node inside the document.
+export function samePath(left, right) {
+  return left.length === right.length && left.every((part, index) => part === right[index]);
+}
+
+export function isPathPrefix(prefix, path) {
+  return prefix.length <= path.length && prefix.every((part, index) => path[index] === part);
 }
 
 export function clone(value) {
@@ -143,6 +176,7 @@ export class FunRouteLanguage {
     this.formNames = new Set((this.catalog.special_forms || []).map((form) => form.name));
     this.keywords = new Set(this.source.keywords || []);
     this._tokenPattern = tokenPattern(this.operators);
+    this.controlBlocks = controlBlocksOf(this.catalog);
   }
 
   document(expr) {
@@ -191,6 +225,15 @@ export class FunRouteLanguage {
     const choices = new Map(external.map((choice) => [choice.name, choice]));
     for (const name of localNames) choices.set(name, { name, type: null, doc: "", source: "local" });
     return [...choices.values()];
+  }
+
+  // A node is a control block when the catalog says its name is one — except
+  // for && || !, which are if underneath but read as operators.
+  isControlBlock(node) {
+    if (!node || typeof node !== "object") return false;
+    const name = node.node === "call" ? node.name : node.node;
+    if (!this.controlBlocks.has(name)) return false;
+    return node.node !== "call" || (!this.operatorForm(node) && !this.logicalForm(node));
   }
 
   expressionSource(node, parentPrecedence = 0) {
@@ -462,32 +505,6 @@ function switchParts(node) {
   return parts;
 }
 
-export function typeName(type) {
-  if (!type) return "unknown";
-  if (type.kind === "array" || type.kind === "dict") return `${type.kind}<${typeName(type.elem)}>`;
-  if (type.kind === "handle") return `handle<${type.name}>`;
-  if (type.kind === "enum") return `enum<${type.name}>{${(type.values || []).join(",")}}`;
-  return type.name || type.kind || "unknown";
-}
-
-// typeSummary is typeName for display: a large enum shows a few members and a
-// count instead of all of them. Never send this to the server — the contract
-// carries the full type text, which ParseType has to be able to read back.
-export function typeSummary(type, limit = 6) {
-  if (!type) return "unknown";
-  if (type.kind === "array" || type.kind === "dict") return `${type.kind}<${typeSummary(type.elem, limit)}>`;
-  const values = type.values || [];
-  if (type.kind !== "enum" || values.length <= limit) return typeName(type);
-  return `enum<${type.name}>{${values.slice(0, limit).join(",")}… 共 ${values.length} 个}`;
-}
-
-export function equalType(left, right) {
-  if (!left || !right || left.kind !== right.kind || left.name !== right.name) return false;
-  if (left.kind === "array" || left.kind === "dict") return equalType(left.elem, right.elem);
-  if (left.kind === "enum") return JSON.stringify(left.values || []) === JSON.stringify(right.values || []);
-  return true;
-}
-
 export function emptyContract() { return { args: [], result: null }; }
 
 export function isEmptyContract(contract) {
@@ -521,59 +538,7 @@ function commentLine(label, width, valueType, doc) {
   return doc ? `${head.padEnd(28)} ${doc}` : head;
 }
 
-export function parseInputValue(raw, type) {
-  if (!type) throw new Error("缺少参数类型");
-  if (type.kind === "string") return raw;
-  const text = raw.trim();
-  switch (type.kind) {
-    case "enum":
-      if (!(type.values || []).includes(raw)) throw new Error(`值必须是 ${typeSummary(type)} 的成员`);
-      return raw;
-    case "bool":
-      if (text !== "true" && text !== "false") throw new Error("布尔值必须是 true 或 false");
-      return text === "true";
-    case "int": {
-      if (!/^-?(0|[1-9]\d*)$/.test(text)) throw new Error(`“${raw}”不是整数`);
-      const value = Number(text);
-      if (!Number.isSafeInteger(value)) throw new Error("整数超出浏览器可安全表示范围");
-      return value;
-    }
-    case "float": {
-      if (!/^-?(?:\d+(?:\.\d+)?|\d+\.?\d*[eE][+\-]?\d+)$/.test(text)) throw new Error(`“${raw}”不是浮点数`);
-      const value = Number(text);
-      if (!Number.isFinite(value)) throw new Error("浮点数必须是有限值");
-      return value;
-    }
-    case "array":
-    case "dict": {
-      const value = JSON.parse(text);
-      validateTypedJSON(value, type, "$参数");
-      return value;
-    }
-    default: throw new Error(`无法从文本输入 ${typeName(type)}`);
-  }
-}
 
-function validateTypedJSON(value, type, path) {
-  switch (type.kind) {
-    case "bool": if (typeof value !== "boolean") throw new Error(`${path} 必须是 bool`); break;
-    case "int": if (!Number.isSafeInteger(value)) throw new Error(`${path} 必须是安全整数`); break;
-    case "float": if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${path} 必须是有限 float`); break;
-    case "string": if (typeof value !== "string") throw new Error(`${path} 必须是 string`); break;
-    case "enum":
-      if (typeof value !== "string" || !(type.values || []).includes(value)) throw new Error(`${path} 必须是 ${typeSummary(type)} 的成员`);
-      break;
-    case "array":
-      if (!Array.isArray(value)) throw new Error(`${path} 必须是数组`);
-      value.forEach((item, index) => validateTypedJSON(item, type.elem, `${path}[${index}]`));
-      break;
-    case "dict":
-      if (!value || Array.isArray(value) || typeof value !== "object") throw new Error(`${path} 必须是对象`);
-      Object.entries(value).forEach(([key, item]) => validateTypedJSON(item, type.elem, `${path}.${key}`));
-      break;
-    default: throw new Error(`${path} 的类型 ${typeName(type)} 不支持文本输入`);
-  }
-}
 
 export class FunRouteClient {
   constructor({ baseURL = "", fetch: fetchImpl = globalThis.fetch } = {}) {

@@ -2,62 +2,28 @@ package machine
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
 )
 
 const CatalogVersion = 4
 
-// FunctionDisplay contains presentation-only metadata. It never affects type
-// inference, artifact identity or runtime evaluation.
-type FunctionDisplay struct {
-	Label       string             `json:"label"`
-	Description string             `json:"description,omitempty"`
-	Category    string             `json:"category"`
-	Color       string             `json:"color,omitempty"`
-	Icon        string             `json:"icon,omitempty"`
-	DocsURL     string             `json:"docs_url,omitempty"`
-	Keywords    []string           `json:"keywords,omitempty"`
-	Parameters  []ParameterDisplay `json:"parameters,omitempty"`
-	Result      ResultDisplay      `json:"result,omitempty"`
-	Examples    []FunctionExample  `json:"examples,omitempty"`
-	Hidden      bool               `json:"hidden,omitempty"`
-	Order       int                `json:"order,omitempty"`
-}
-
-type ParameterDisplay struct {
-	Name        string `json:"name"`
-	Label       string `json:"label"`
-	Description string `json:"description,omitempty"`
-	Placeholder string `json:"placeholder,omitempty"`
-}
-
-type ResultDisplay struct {
-	Label       string `json:"label,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-type FunctionExample struct {
-	Title      string `json:"title"`
-	Expression string `json:"expression"`
-}
-
+// FunctionDescriptor is one entry of the catalog: the machine-readable half
+// (types, signature, laziness) beside the host-written half. Everything here
+// except Doc is derived from the registration, so nothing is written twice.
 type FunctionDescriptor struct {
-	Name      string          `json:"name"`
-	Signature string          `json:"signature"`
-	Params    []Type          `json:"params"`
-	Result    Type            `json:"result"`
-	Cost      uint64          `json:"cost"`
-	Special   string          `json:"special,omitempty"`
-	Variadic  bool            `json:"variadic,omitempty"`
-	Display   FunctionDisplay `json:"display"`
+	Name      string `json:"name"`
+	Signature string `json:"signature"`
+	Params    []Type `json:"params"`
+	Result    Type   `json:"result"`
+	Special   string `json:"special,omitempty"`
+	Variadic  bool   `json:"variadic,omitempty"`
+	Doc       Doc    `json:"doc"`
 }
 
 type ValueTypeDescriptor struct {
 	Type        Type   `json:"type"`
 	Label       string `json:"label"`
 	Description string `json:"description"`
-	Color       string `json:"color"`
 }
 
 type LanguageCatalog struct {
@@ -130,45 +96,32 @@ type FieldSchema struct {
 	Fields   []FieldSchema `json:"fields,omitempty"`
 }
 
-var displayColorPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
-
-func normalizeFunctionDisplay(spec *FunctionSpec) error {
-	display := &spec.Display
-	if display.Label == "" {
-		display.Label = spec.Name
+// normalizeDoc fills in what a host left out and refuses what it got wrong.
+// Parameter labels are the one thing reflection cannot recover — Go drops
+// parameter names — so a miscount is an error rather than a padded "参数 2".
+func normalizeDoc(spec *FunctionSpec) error {
+	doc := &spec.Doc
+	if doc.Label == "" {
+		doc.Label = spec.Name
 	}
-	if display.Category == "" {
-		display.Category = "其他"
+	if doc.Category == "" {
+		doc.Category = namespaceOf(spec.Name)
 	}
-	if display.Color == "" {
-		display.Color = "#64748B"
+	if len(doc.Params) != 0 && len(doc.Params) != len(spec.Params) {
+		return fmt.Errorf("function %s has %d parameter labels but %d typed parameters", spec.Name, len(doc.Params), len(spec.Params))
 	}
-	if !displayColorPattern.MatchString(display.Color) {
-		return fmt.Errorf("function %s display color must be #RRGGBB", spec.Name)
-	}
-	if len(display.Parameters) > len(spec.Params) {
-		return fmt.Errorf("function %s has %d display parameters but only %d typed parameters", spec.Name, len(display.Parameters), len(spec.Params))
-	}
-	parameters := make([]ParameterDisplay, len(spec.Params))
-	copy(parameters, display.Parameters)
-	for i := range parameters {
-		if parameters[i].Name == "" {
-			parameters[i].Name = fmt.Sprintf("arg%d", i+1)
-		}
-		if parameters[i].Label == "" {
-			parameters[i].Label = parameters[i].Name
+	labels := make([]string, len(spec.Params))
+	copy(labels, doc.Params)
+	for i := range labels {
+		if labels[i] == "" {
+			labels[i] = fmt.Sprintf("参数 %d", i+1)
 		}
 	}
-	display.Parameters = parameters
+	doc.Params = labels
+	if doc.Result == "" {
+		doc.Result = "结果"
+	}
 	return nil
-}
-
-func cloneFunctionDisplay(in FunctionDisplay) FunctionDisplay {
-	out := in
-	out.Keywords = append([]string(nil), in.Keywords...)
-	out.Parameters = append([]ParameterDisplay(nil), in.Parameters...)
-	out.Examples = append([]FunctionExample(nil), in.Examples...)
-	return out
 }
 
 // Catalog describes exactly what this registry allows: its visible functions
@@ -191,7 +144,7 @@ func (r *Registry) handleValueTypes() []ValueTypeDescriptor {
 	handles := r.Handles()
 	out := make([]ValueTypeDescriptor, len(handles))
 	for i, handle := range handles {
-		out[i] = ValueTypeDescriptor{Type: handle, Label: handle.String(), Description: "宿主的不透明值，只能在函数之间传递", Color: "#7C3AED"}
+		out[i] = ValueTypeDescriptor{Type: handle, Label: handle.String(), Description: "宿主的不透明值，只能在函数之间传递"}
 	}
 	return out
 }
@@ -201,9 +154,6 @@ func (r *Registry) visibleFunctions() []FunctionDescriptor {
 	defer r.mu.RUnlock()
 	functions := make([]FunctionDescriptor, 0, len(r.byKey))
 	for _, function := range r.byKey {
-		if function.Display.Hidden {
-			continue
-		}
 		functions = append(functions, describeFunction(function))
 	}
 	return functions
@@ -225,26 +175,24 @@ func describeFunction(function *RegisteredFunction) FunctionDescriptor {
 		signature = "fallback(T,T,...)->T"
 		variadic = true
 	}
+	doc := function.Doc
+	doc.Params = append([]string(nil), function.Doc.Params...)
 	return FunctionDescriptor{
 		Name:      function.Name,
 		Signature: signature,
 		Params:    params,
 		Result:    CloneType(function.Result),
-		Cost:      function.Cost,
 		Special:   special,
 		Variadic:  variadic,
-		Display:   cloneFunctionDisplay(function.Display),
+		Doc:       doc,
 	}
 }
 
 func sortFunctionDescriptors(functions []FunctionDescriptor) {
 	sort.Slice(functions, func(i, j int) bool {
-		left, right := functions[i].Display, functions[j].Display
+		left, right := functions[i].Doc, functions[j].Doc
 		if left.Category != right.Category {
 			return left.Category < right.Category
-		}
-		if left.Order != right.Order {
-			return left.Order < right.Order
 		}
 		if left.Label != right.Label {
 			return left.Label < right.Label
@@ -255,12 +203,12 @@ func sortFunctionDescriptors(functions []FunctionDescriptor) {
 
 func coreValueTypes() []ValueTypeDescriptor {
 	return []ValueTypeDescriptor{
-		{Type: BoolType, Label: "布尔值", Description: "true 或 false", Color: "#0EA5E9"},
-		{Type: IntType, Label: "整数", Description: "有符号 64 位整数", Color: "#2563EB"},
-		{Type: FloatType, Label: "浮点数", Description: "有限 float64", Color: "#0891B2"},
-		{Type: StringType, Label: "字符串", Description: "UTF-8 字符串", Color: "#059669"},
-		{Type: ArrayOf(TypeVar("T")), Label: "数组", Description: "元素必须同型", Color: "#D97706"},
-		{Type: DictOf(TypeVar("T")), Label: "字典", Description: "string key、value 必须同型", Color: "#EA580C"},
+		{Type: BoolType, Label: "布尔值", Description: "true 或 false"},
+		{Type: IntType, Label: "整数", Description: "有符号 64 位整数"},
+		{Type: FloatType, Label: "浮点数", Description: "有限 float64"},
+		{Type: StringType, Label: "字符串", Description: "UTF-8 字符串"},
+		{Type: ArrayOf(TypeVar("T")), Label: "数组", Description: "元素必须同型"},
+		{Type: DictOf(TypeVar("T")), Label: "字典", Description: "string key、value 必须同型"},
 	}
 }
 
@@ -293,18 +241,11 @@ func letSpecialForm() FunctionDescriptor {
 		Name:      "let",
 		Signature: "let(name = value, ..., body)",
 		Special:   "let",
-		Display: FunctionDisplay{
+		Doc: Doc{
 			Label:       "局部绑定",
 			Description: "按顺序给名字绑定值，后面的绑定与主体可以引用前面的名字；名字不会成为程序参数。",
 			Category:    "控制",
-			Color:       "#7C3AED",
-			Icon:        "≔",
-			Parameters: []ParameterDisplay{
-				{Name: "bindings", Label: "绑定", Description: "name = value，可多个"},
-				{Name: "body", Label: "主体", Description: "整体结果"},
-			},
-			Result: ResultDisplay{Label: "主体的值"},
-			Order:  15,
+			Result:      "主体的值",
 		},
 	}
 }
@@ -315,29 +256,29 @@ func letSpecialForm() FunctionDescriptor {
 // that documentation and the drag-and-drop catalog can show.
 func andDerivedForm() FunctionDescriptor {
 	return derivedForm(
-		"and", "and(bool,bool)->bool", "逻辑与", "∧", 2,
+		"and", "and(bool,bool)->bool", "逻辑与",
 		"两个条件同时成立。展开为 if(a,b,false)，因此右侧只在左侧成立时才求值。",
-		[]ParameterDisplay{{Name: "left", Label: "左条件", Description: "bool"}, {Name: "right", Label: "右条件", Description: "bool"}},
+		[]string{"左条件", "右条件"},
 	)
 }
 
 func orDerivedForm() FunctionDescriptor {
 	return derivedForm(
-		"or", "or(bool,bool)->bool", "逻辑或", "∨", 3,
+		"or", "or(bool,bool)->bool", "逻辑或",
 		"任一条件成立。展开为 if(a,true,b)，因此右侧只在左侧不成立时才求值。",
-		[]ParameterDisplay{{Name: "left", Label: "左条件", Description: "bool"}, {Name: "right", Label: "右条件", Description: "bool"}},
+		[]string{"左条件", "右条件"},
 	)
 }
 
 func notDerivedForm() FunctionDescriptor {
 	return derivedForm(
-		"not", "not(bool)->bool", "逻辑非", "¬", 4,
+		"not", "not(bool)->bool", "逻辑非",
 		"条件取反。展开为 if(a,false,true)。",
-		[]ParameterDisplay{{Name: "condition", Label: "条件", Description: "bool"}},
+		[]string{"条件"},
 	)
 }
 
-func derivedForm(name, signature, label, icon string, order int, description string, params []ParameterDisplay) FunctionDescriptor {
+func derivedForm(name, signature, label, description string, params []string) FunctionDescriptor {
 	types := make([]Type, len(params))
 	for i := range types {
 		types[i] = BoolType
@@ -348,16 +289,12 @@ func derivedForm(name, signature, label, icon string, order int, description str
 		Params:    types,
 		Result:    BoolType,
 		Special:   name,
-		Cost:      1,
-		Display: FunctionDisplay{
+		Doc: Doc{
+			Cost:        1,
 			Label:       label,
 			Description: description,
 			Category:    "逻辑",
-			Color:       "#4338CA",
-			Icon:        icon,
-			Parameters:  params,
-			Result:      ResultDisplay{Label: "判断结果", Description: "bool"},
-			Order:       order,
+			Result:      "判断结果",
 		},
 	}
 }
@@ -371,23 +308,14 @@ func reduceSpecialForm() FunctionDescriptor {
 		Params:    []Type{ArrayOf(t), t, r, r, r},
 		Result:    r,
 		Special:   "reduce",
-		Cost:      1,
-		Display: FunctionDisplay{
-			Label:       "遍历累加",
-			Description: "把数组元素逐个折叠进累加器；item 和 acc 都是局部名称，不会成为外部参数。遍历次数有限，不引入递归。",
-			Category:    "控制",
-			Color:       "#7C3AED",
-			Icon:        "Σ",
-			Parameters: []ParameterDisplay{
-				{Name: "source", Label: "输入数组"},
-				{Name: "item", Label: "元素局部名", Placeholder: "item"},
-				{Name: "acc", Label: "累加器局部名", Placeholder: "acc"},
-				{Name: "init", Label: "初始值"},
-				{Name: "body", Label: "累加表达式", Description: "必须返回累加器类型"},
-			},
-			Result:   ResultDisplay{Label: "累加结果", Description: "R"},
-			Examples: []FunctionExample{{Title: "金额求和", Expression: `reduce(prices,price,total,0,add(total,price))`}},
-			Order:    50,
+		Doc: Doc{
+			Cost:  1,
+			Label: "逐项折叠",
+			Description: "按顺序把每个元素并进累加器：每一步用当前元素和当前累加器算出下一个累加器，" +
+				"所以它不止能求和 —— 取最大、计数、拼接都是它。item 和 acc 是局部名称，不会成为外部参数。" +
+				"遍历次数有限，不引入递归。",
+			Category: "控制",
+			Result:   "折叠结果",
 		},
 	}
 }
@@ -402,22 +330,12 @@ func switchSpecialForm() FunctionDescriptor {
 		Result:    r,
 		Variadic:  true,
 		Special:   "switch",
-		Cost:      1,
-		Display: FunctionDisplay{
+		Doc: Doc{
+			Cost:        1,
 			Label:       "多分支选择",
 			Description: "按顺序匹配值并返回第一个结果；通常需要默认结果，枚举成员全部覆盖时可省略。所有结果必须同类型。",
 			Category:    "控制",
-			Color:       "#7C3AED",
-			Icon:        "≡",
-			Parameters: []ParameterDisplay{
-				{Name: "value", Label: "待匹配值"},
-				{Name: "match", Label: "匹配值"},
-				{Name: "result", Label: "匹配结果"},
-				{Name: "default", Label: "默认结果", Description: "枚举已穷尽时可省略"},
-			},
-			Result:   ResultDisplay{Label: "所选结果", Description: "R"},
-			Examples: []FunctionExample{{Title: "按国家路由", Expression: `switch(country,"SG","adyen","MY","stripe","fallback")`}},
-			Order:    30,
+			Result:      "所选结果",
 		},
 	}
 }
@@ -431,22 +349,12 @@ func forSpecialForm() FunctionDescriptor {
 		Params:    []Type{ArrayOf(t), t, BoolType, r},
 		Result:    ArrayOf(r),
 		Special:   "for",
-		Cost:      1,
-		Display: FunctionDisplay{
+		Doc: Doc{
+			Cost:        1,
 			Label:       "列表推导",
 			Description: "遍历数组，按可选条件筛选并产出新数组；item 是局部名称，不会成为外部参数。写法是 [产出 for item in 输入 if 条件]。",
 			Category:    "控制",
-			Color:       "#7C3AED",
-			Icon:        "∀",
-			Parameters: []ParameterDisplay{
-				{Name: "result", Label: "产出表达式"},
-				{Name: "item", Label: "局部名称", Placeholder: "item"},
-				{Name: "source", Label: "输入数组"},
-				{Name: "condition", Label: "筛选条件", Description: "可省略"},
-			},
-			Result:   ResultDisplay{Label: "结果数组", Description: "array<R>"},
-			Examples: []FunctionExample{{Title: "筛选健康渠道", Expression: `[channel for channel in channels if route.is_healthy_v1(channel)]`}},
-			Order:    40,
+			Result:      "结果数组",
 		},
 	}
 }

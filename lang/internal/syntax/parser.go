@@ -295,38 +295,20 @@ func (p *parser) startsBinding() bool {
 	return p.peek().kind == tokenIdentifier && p.peekN(1).kind == tokenAssign
 }
 
-// parseReduceCall accepts the keyword form
+// parseReduceCall reads the one form there is:
 //
 //	reduce(item in source, acc from init, body)
+//	reduce(key, item in source, acc from init, body)
 //
-// and the positional form reduce(source, item, acc, init, body).
+// The local names are part of the syntax, so they cannot be mistaken for
+// expressions, and there is nothing to disambiguate.
 func (p *parser) parseReduceCall(name token) (Expr, error) {
-	if p.startsKeywordReduce() {
-		key, value, err := p.loopVariables(name)
-		if err != nil {
-			return nil, err
-		}
-		p.index++ // in
-		return p.reduceKeywordForm(name, key, value)
-	}
-	args, err := p.parseList(tokenRightParen)
+	key, value, err := p.loopVariables(name)
 	if err != nil {
-		return nil, err
+		return nil, p.errorf(name, "reduce starts with its element name: reduce(item in source, acc from init, body)")
 	}
-	return p.reduceExpr(name, args)
-}
-
-// startsKeywordReduce peeks for "v in" or "k, v in", which distinguishes the
-// keyword form from the positional one.
-func (p *parser) startsKeywordReduce() bool {
-	if p.peek().kind != tokenIdentifier {
-		return false
-	}
-	if p.peekN(1).kind == tokenIdentifier && p.peekN(1).text == "in" {
-		return true
-	}
-	return p.peekN(1).kind == tokenComma && p.peekN(2).kind == tokenIdentifier &&
-		p.peekN(3).kind == tokenIdentifier && p.peekN(3).text == "in"
+	p.index++ // loopVariables has already checked the "in"
+	return p.reduceKeywordForm(name, key, value)
 }
 
 func (p *parser) reduceKeywordForm(name token, key, variable string) (Expr, error) {
@@ -384,7 +366,6 @@ func (p *parser) parseAccumulator() (string, Expr, error) {
 //
 //	switch(subject, case "SG" => "a", case "MY", "TH" => "b", else "c")
 //	switch(case amount > 100 => "a", case risk > 0.8 => "b", else "c")
-//	switch(subject, "SG", "a", "MY", "b", "c")               positional
 func (p *parser) parseSwitchCall(name token) (Expr, error) {
 	if p.keyword("case") {
 		return p.switchBranches(name, nil)
@@ -399,15 +380,7 @@ func (p *parser) parseSwitchCall(name token) (Expr, error) {
 	if p.keyword("case") {
 		return p.switchBranches(name, subject)
 	}
-	second, err := p.parseExpr()
-	if err != nil {
-		return nil, err
-	}
-	rest, err := p.parseRest(second, tokenRightParen)
-	if err != nil {
-		return nil, err
-	}
-	return p.positionalSwitch(name, append([]Expr{subject}, rest...))
+	return nil, p.errorf(name, "switch branches start with \"case\": switch(subject, case m => r, else d)")
 }
 
 // switchBranches reads "case m1, m2 => r" groups and an optional final
@@ -470,48 +443,6 @@ func (p *parser) caseMatches() ([]Expr, error) {
 			return nil, err
 		}
 	}
-}
-
-func (p *parser) positionalSwitch(name token, args []Expr) (Expr, error) {
-	if len(args) < 4 || len(args)%2 != 0 {
-		return nil, p.errorf(name, "switch expects value, one or more match/result pairs, and a default result")
-	}
-	cases := make([]SwitchCaseExpr, 0, (len(args)-2)/2)
-	for i := 1; i < len(args)-1; i += 2 {
-		cases = append(cases, SwitchCaseExpr{Match: []Expr{args[i]}, Result: args[i+1]})
-	}
-	return &SwitchExpr{ID: p.id(), Pos: name.pos, Value: args[0], Cases: cases, Default: args[len(args)-1]}, nil
-}
-
-func (p *parser) reduceExpr(name token, args []Expr) (Expr, error) {
-	if len(args) != 5 {
-		return nil, p.errorf(name, "reduce expects source, item variable, accumulator variable, initial value, and body")
-	}
-	variable, err := p.localName(name, args[1], "reduce item")
-	if err != nil {
-		return nil, err
-	}
-	accumulator, err := p.localName(name, args[2], "reduce accumulator")
-	if err != nil {
-		return nil, err
-	}
-	return p.node(name, &ReduceExpr{
-		ID: p.id(), Pos: name.pos, Source: args[0],
-		Variable: variable, Accumulator: accumulator, Init: args[3], Body: args[4],
-	})
-}
-
-// localName validates a positional argument that names a locally bound
-// variable rather than an expression.
-func (p *parser) localName(name token, arg Expr, what string) (string, error) {
-	variable, ok := arg.(*VariableExpr)
-	if !ok {
-		return "", p.errorf(name, "%s must be a local variable name", what)
-	}
-	if err := validName(variable.Name, "local"); err != nil {
-		return "", p.errorf(name, "%v", err)
-	}
-	return variable.Name, nil
 }
 
 func (p *parser) parseArray() (Expr, error) {

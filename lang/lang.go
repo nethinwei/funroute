@@ -84,21 +84,16 @@ func DefineHandle[T any](registry *Registry, name string) error {
 
 // The registry is the single authority on what exists and what it means.
 type (
-	Registry         = machine.Registry
-	FunctionSpec     = machine.FunctionSpec
-	FunctionDisplay  = machine.FunctionDisplay
-	ParameterDisplay = machine.ParameterDisplay
-	ResultDisplay    = machine.ResultDisplay
-	FunctionExample  = machine.FunctionExample
-	EvalFunc         = machine.EvalFunc
-	Doc              = machine.Doc
-	Form             = machine.Form
+	Registry     = machine.Registry
+	FunctionSpec = machine.FunctionSpec
+	EvalFunc     = machine.EvalFunc
+	Doc          = machine.Doc
+	Form         = machine.Form
 )
 
 var (
-	NewRegistry             = machine.NewRegistry
-	CoreRegistry            = machine.CoreRegistry
-	RegisterArrayPrimitives = machine.RegisterArrayPrimitives
+	NewRegistry  = machine.NewRegistry
+	CoreRegistry = machine.CoreRegistry
 )
 
 // The lazy forms a registry can enable. A registry is a console: what it

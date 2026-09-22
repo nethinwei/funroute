@@ -55,9 +55,7 @@ func registerModel(registry *lang.Registry) error {
 		return err
 	}
 	err := lang.Model(registry, "model.embed_v1", lang.Doc{
-		Label: "特征向量化", Description: "演示模型：把特征数组交给引擎，得到一个不透明的向量句柄。", Category: "模型",
-		Color: "#7C3AED", Icon: "⊙", Cost: 20, Params: []string{"特征"}, Result: "向量句柄",
-		Examples: []lang.FunctionExample{{Title: "向量化", Expression: `model.embed_v1(features)`}}, Order: 10,
+		Label: "特征向量化", Description: "演示模型：把特征数组交给引擎，得到一个不透明的向量句柄。", Category: "模型", Cost: 20, Params: []string{"特征"}, Result: "向量句柄",
 	}, func(features []float64) (*Embedding, error) {
 		return &Embedding{Features: features}, nil
 	}, func(features [][]float64) ([]*Embedding, error) {
@@ -71,9 +69,7 @@ func registerModel(registry *lang.Registry) error {
 		return err
 	}
 	return lang.Model(registry, "model.fraud_v1", lang.Doc{
-		Label: "欺诈评分", Description: "演示模型：对向量句柄打分，返回 0 到 1 的欺诈概率（这里取特征均值）。", Category: "模型",
-		Color: "#7C3AED", Icon: "⚠", Cost: 20, Params: []string{"向量句柄"}, Result: "欺诈概率",
-		Examples: []lang.FunctionExample{{Title: "评分", Expression: `model.fraud_v1(model.embed_v1(features)) > 0.8`}}, Order: 20,
+		Label: "欺诈评分", Description: "演示模型：对向量句柄打分，返回 0 到 1 的欺诈概率（这里取特征均值）。", Category: "模型", Cost: 20, Params: []string{"向量句柄"}, Result: "欺诈概率",
 	}, fraudScore, func(embeddings []*Embedding) ([]float64, error) {
 		out := make([]float64, len(embeddings))
 		for i, embedding := range embeddings {
@@ -99,14 +95,9 @@ func registerHealth(registry *lang.Registry) error {
 		Label:       "渠道是否健康",
 		Description: "把渠道健康快照中的 UP 映射为 true。示例函数只做纯计算，真实健康度应作为参数传入。",
 		Category:    "支付路由",
-		Color:       "#059669",
-		Icon:        "♥",
 		Cost:        3,
 		Params:      []string{"健康状态"},
 		Result:      "是否可用",
-		Keywords:    []string{"health", "channel", "路由"},
-		Examples:    []lang.FunctionExample{{Title: "健康判断", Expression: `route.is_healthy_v1(health)`}},
-		Order:       10,
 	}, func(status string) (bool, error) {
 		return strings.EqualFold(status, "UP"), nil
 	})
@@ -117,14 +108,9 @@ func registerScore(registry *lang.Registry) error {
 		Label:       "渠道评分",
 		Description: "演示评分：成功率 × 100 − 成本。生产公式应由业务扩展包自行实现和版本化。",
 		Category:    "支付路由",
-		Color:       "#059669",
-		Icon:        "★",
 		Cost:        5,
 		Params:      []string{"成功率", "成本"},
 		Result:      "评分",
-		Keywords:    []string{"score", "cost", "auth rate"},
-		Examples:    []lang.FunctionExample{{Title: "渠道打分", Expression: `route.score_v1(auth_rate, cost)`}},
-		Order:       20,
 	}, func(authRate, cost float64) (float64, error) {
 		return authRate*100 - cost, nil
 	})
@@ -135,17 +121,9 @@ func registerFeeQuote(registry *lang.Registry) error {
 		Label:       "获取渠道费率",
 		Description: "演示一个可能失败的渠道调用：健康状态不是 UP 时返回扩展错误，可由 fallback 切到备用报价。",
 		Category:    "支付路由",
-		Color:       "#059669",
-		Icon:        "%",
 		Cost:        5,
 		Params:      []string{"健康状态", "渠道报价"},
 		Result:      "有效费率",
-		Keywords:    []string{"fee", "quote", "fallback", "费率", "降级"},
-		Examples: []lang.FunctionExample{{
-			Title:      "报价降级",
-			Expression: `fallback(route.fee_quote_v1(primary_status, primary_fee), backup_fee)`,
-		}},
-		Order: 30,
 	}, func(status string, fee float64) (float64, error) {
 		if !strings.EqualFold(status, "UP") {
 			return 0, fmt.Errorf("fee quote provider is %s", status)

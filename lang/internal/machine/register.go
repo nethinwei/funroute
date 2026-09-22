@@ -4,32 +4,31 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 )
 
-// Doc is the presentation metadata of a registered function, plus the two
-// operational settings a host sets per function. Every field has a usable
-// default, so a host fills in only what it cares about.
+// Doc is what only a host can say about a function: what to call it in this
+// console's language, what it means, what it costs. Everything a machine can
+// work out is worked out — the signature comes from the Go types, the category
+// defaults to the name's namespace, the order is the name's, and colour and
+// icon are the console's decision. Hand-written metadata is metadata that can
+// be wrong, so there is as little of it here as possible.
 type Doc struct {
-	Label       string
-	Description string
-	Category    string
-	Color       string
-	Icon        string
-	Cost        uint64
-	Params      []string // parameter labels, in order
-	Result      string   // result label
-	Keywords    []string
-	Examples    []FunctionExample
-	Order       int
-	Hidden      bool
+	Label       string   `json:"label"`
+	Description string   `json:"description,omitempty"`
+	Category    string   `json:"category"`
+	Cost        uint64   `json:"cost"`
+	Params      []string `json:"params,omitempty"` // parameter labels, in order
+	Result      string   `json:"result,omitempty"` // result label
+	// Timeout and Detached are operational, so neither reaches a front end.
 	// Timeout caps one call of this function: the deadline it receives is the
 	// earlier of the request's and now+Timeout. Zero means the request's alone.
-	Timeout time.Duration
+	Timeout time.Duration `json:"-"`
 	// Detached runs the call on its own goroutine and stops waiting at the
 	// deadline, for a binding that cannot honour a context. The abandoned call
 	// keeps running until it returns on its own.
-	Detached bool
+	Detached bool `json:"-"`
 }
 
 // Logic registers a host function by its Go signature. fn is any func whose
@@ -63,9 +62,8 @@ func Model(registry *Registry, name string, doc Doc, fn, batch any) error {
 	}
 	spec := FunctionSpec{
 		Name: name, Params: single.params, Result: single.result,
-		Cost: doc.Cost, Timeout: doc.Timeout, Detached: doc.Detached,
-		Eval:    single.call,
-		Display: displayFor(name, doc, single),
+		Eval: single.call,
+		Doc:  doc,
 	}
 	if batch != nil {
 		batched, err := reflectBatch(registry, batch, single)
@@ -208,29 +206,14 @@ func (r *reflected) callBatch(ctx context.Context, calls [][]Value) ([]Value, er
 	return out, nil
 }
 
-// displayFor fills in the presentation defaults.
-func displayFor(name string, doc Doc, sig *reflected) FunctionDisplay {
-	labels := make([]ParameterDisplay, len(sig.params))
-	for i := range sig.params {
-		label := fmt.Sprintf("参数 %d", i+1)
-		if i < len(doc.Params) && doc.Params[i] != "" {
-			label = doc.Params[i]
-		}
-		labels[i] = ParameterDisplay{Name: label, Label: label, Description: sig.params[i].String()}
+// namespaceOf reads the category off a versioned name: route.score_v1 belongs
+// with route. A name without a namespace has none to read.
+func namespaceOf(name string) string {
+	namespace, _, ok := strings.Cut(name, ".")
+	if !ok {
+		return "扩展"
 	}
-	return FunctionDisplay{
-		Label:       orDefault(doc.Label, name),
-		Description: orDefault(doc.Description, "宿主注册的扩展函数 "+name),
-		Category:    orDefault(doc.Category, "扩展"),
-		Color:       orDefault(doc.Color, "#475569"),
-		Icon:        orDefault(doc.Icon, "ƒ"),
-		Keywords:    doc.Keywords,
-		Parameters:  labels,
-		Result:      ResultDisplay{Label: orDefault(doc.Result, "结果"), Description: sig.result.String()},
-		Examples:    doc.Examples,
-		Order:       doc.Order,
-		Hidden:      doc.Hidden,
-	}
+	return namespace
 }
 
 func orDefault(value, fallback string) string {

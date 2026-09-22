@@ -10,9 +10,6 @@ import (
 func benchRegistry(b *testing.B) *machine.Registry {
 	b.Helper()
 	registry := machine.CoreRegistry()
-	if err := machine.RegisterArrayPrimitives(registry); err != nil {
-		b.Fatal(err)
-	}
 	if err := registry.EnableForm(machine.SwitchForm, machine.ForForm, machine.ReduceForm); err != nil {
 		b.Fatal(err)
 	}
@@ -73,7 +70,7 @@ func BenchmarkReduce(b *testing.B) {
 	for i := range items {
 		items[i] = i
 	}
-	runtime := benchRuntime(b, `reduce(items,item,total,0,add(total,item))`,
+	runtime := benchRuntime(b, `reduce(item in items, total from 0, add(total,item))`,
 		[]ArgSpec{{Name: "items", Type: machine.ArrayOf(machine.IntType)}})
 	run(b, runtime, map[string]any{"items": items}, 10_000_000)
 }
@@ -97,7 +94,7 @@ func BenchmarkCall(b *testing.B) {
 
 func BenchmarkCompile(b *testing.B) {
 	registry := benchRegistry(b)
-	source := `switch(country,"SG",reduce(prices,p,t,0,add(t,p)),"MY",reduce(prices,p,t,1,mul(t,p)),0)`
+	source := `switch(country,"SG",reduce(p in prices, t from 0, add(t,p)),"MY",reduce(p in prices, t from 1, mul(t,p)),0)`
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

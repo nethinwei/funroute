@@ -92,7 +92,7 @@ e ::= c                          字面量
 *证明.* 对 P 的结构归纳，同时对“求值 e 产生的值的规模”和“求值 e 的步数”建立多项式界。
 
 - 字面量、变量：规模与步数均为 O(1) 或 O(n)。
-- (APP)：步数是各子表达式步数之和加上 ⟦f⟧ 的代价。内核函数的代价是 O(1) 或与参数规模成线性（如 `array.prepend`），故仍是多项式；结果规模不超过参数规模之和加常数。
+- (APP)：步数是各子表达式步数之和加上 ⟦f⟧ 的代价。内核函数的代价是 O(1) 或与参数规模成线性（如列表拼接），故仍是多项式；结果规模不超过参数规模之和加常数。
 - (IF)、switch、fallback：步数不超过主表达式与最大分支的步数之和。
 - 循环形式：设 source 求值所得数组长度为 m。由归纳假设 m ≤ q(n)（某多项式 q）。循环的步数 = m × (body 步数) + O(m)，而 body 的步数由归纳假设也是多项式，故乘积仍是多项式；结果数组长度 ≤ m。
 
@@ -132,16 +132,18 @@ registry.Register(lang.FunctionSpec{
 
 只需加一个无界循环构造。FunRoute 曾经有过（一个叫 `recur` 的自递归原语，v0.0.2 及以前），下面是当时的构造性证明，保留下来是为了说明表达力不是瓶颈——移除它是取舍，不是能力缺失。
 
+下面的 `is_empty`/`head`/`tail`/`prepend` 是这段论证假设存在的列表原语——注册表里没有它们，写出来只是为了让构造可读。
+
 **构造**：把任意单带图灵机 M = (Q, Γ, δ, q₀, q_h) 编译成一个表达式。磁带用两个 `array<int>` 表示：r 是磁头及其右侧（磁头在首位），l 是左侧（逆序）。配置 (q, l, r) 编码为参数元组，δ 的每条规则展开成一次带新实参的重入：
 
 ```text
-CUR    ≜ if(array.is_empty(right), 0, array.head(right))
-TAIL_R ≜ if(array.is_empty(right), right, array.tail(right))
-HEAD_L ≜ if(array.is_empty(left),  0, array.head(left))
-TAIL_L ≜ if(array.is_empty(left),  left, array.tail(left))
+CUR    ≜ if(is_empty(right), 0, head(right))
+TAIL_R ≜ if(is_empty(right), right, tail(right))
+HEAD_L ≜ if(is_empty(left),  0, head(left))
+TAIL_L ≜ if(is_empty(left),  left, tail(left))
 
-STEP(w, R, q′) ≜ recur(⌈q′⌉, TAIL_R, array.prepend(w, left), add(steps, 1))
-STEP(w, L, q′) ≜ recur(⌈q′⌉, array.prepend(HEAD_L, array.prepend(w, TAIL_R)), TAIL_L, add(steps, 1))
+STEP(w, R, q′) ≜ recur(⌈q′⌉, TAIL_R, prepend(w, left), add(steps, 1))
+STEP(w, L, q′) ≜ recur(⌈q′⌉, prepend(HEAD_L, prepend(w, TAIL_R)), TAIL_L, add(steps, 1))
 
 DISP(q) ≜ if(eq(CUR, 0), STEP(δ(q,0)), STEP(δ(q,1)))
 ⟦M⟧    ≜ if(eq(state, h), steps, if(eq(state, ⌈q₀⌉), DISP(q₀), … DISP(q_{k-1}) … ))

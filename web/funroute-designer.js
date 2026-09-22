@@ -1,8 +1,11 @@
-import { FunRouteLanguage, VALUE_TEMPLATES, blankFields, blankNode, clone, contractEnums, fieldText, parseInputValue, typeName } from "./funroute-core.js";
-import { enumControl } from "./funroute-fields.js";
-import { renderSemanticTree } from "./funroute-semantic.js";
+import { FunRouteLanguage, blankFields, blankNode, clone, contractEnums, isPathPrefix, isPlainExpression, samePath } from "./funroute-core.js";
+import { lookFor, typeName } from "./funroute-display.js";
+import { enumMemberField, expandedSlot, expressionRow, fieldText, parseInputValue, valueEditor } from "./funroute-fields.js";
+import { DND_MIME, dropTarget, placeBlock } from "./funroute-dnd.js";
+import { renderPalette } from "./funroute-palette.js";
 
-const MIME = "application/x-funroute-node";
+
+
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -29,9 +32,13 @@ export class FunRouteDesigner extends HTMLElement {
     this._functionDescriptors = new Map();
     this._search = "";
     this._paletteScroll = 0;
-    this._mode = "tree";
     this._focusPath = [];
     this._selectedTemplateId = null;
+    this._expanded = new Set();
+    this._activeInput = null;
+    // parseExpression is injected by the host: the canvas never talks to a
+    // server, and the Go parser stays the only grammar authority.
+    this.parseExpression = null;
     this._runtimeContract = null;
     this._validation = { phase: "unchecked", message: "请先检查运行契约" };
   }
@@ -68,6 +75,7 @@ export class FunRouteDesigner extends HTMLElement {
   set value(documentValue) {
     const expression = documentValue?.expr || documentValue || null;
     this._root = expression ? clone(expression) : null;
+    this._expanded.clear();
     this._focusPath = [];
     this.render();
   }
@@ -104,7 +112,7 @@ export class FunRouteDesigner extends HTMLElement {
         return sameType(values) ? values[0] : null;
       });
       const results = overloads.map((item) => item.result || null);
-      const display = clone(first.display || {});
+      const display = clone(first.doc || {});
       if (overloads.length > 1 && display.category === "类型转换") {
         display.description = `${display.label}；编译器会根据输入自动选择匹配的转换签名。`;
       }
@@ -114,73 +122,48 @@ export class FunRouteDesigner extends HTMLElement {
         params,
         result: sameType(results) ? results[0] : null,
         signature: overloads.length === 1 ? first.signature : `${name}(${overloads.length} 个类型签名)`,
-        display,
+        doc: display,
         overloads,
       };
       this._functionDescriptors.set(name, descriptor);
-      this._templates.set(`fn:${index}`, { kind: "function", descriptor });
+      if (this._language.controlBlocks.has(name)) this._templates.set(`fn:${index}`, { kind: "function", descriptor });
       index += 1;
     }
     for (const [index, descriptor] of (this._catalog.special_forms || []).entries()) {
-      this._templates.set(`special:${index}`, { kind: "function", descriptor });
-    }
-    for (const descriptor of VALUE_TEMPLATES) {
-      this._templates.set(descriptor.id, { kind: "value", descriptor });
+      if (this._language.controlBlocks.has(descriptor.name)) this._templates.set(`special:${index}`, { kind: "function", descriptor });
     }
   }
 
   render() {
     if (!this.isConnected) return;
-    this.classList.toggle("is-guide", this._mode === "guide");
     const shell = element("div", "fr-shell");
-    const palette = element("aside", "fr-palette");
-    const paletteHeader = element("div", "fr-palette__header");
-    paletteHeader.append(element("strong", "", "添加组件"));
-    const search = element("input", "fr-search");
-    search.type = "search";
-    search.placeholder = "搜索；点击选择后放入空槽";
-    search.value = this._search;
-    paletteHeader.append(search);
-    const list = element("div", "fr-palette__list");
-    search.addEventListener("input", () => {
-      this._search = search.value.toLowerCase().trim();
-      this._renderPaletteList(list);
+    const { palette, list } = renderPalette({
+      templates: this._templates,
+      search: this._search,
+      selectedId: this._selectedTemplateId,
+      onSearch: (text) => { this._search = text; this.render(); },
+      onSelect: (templateId) => this._selectTemplate(templateId),
     });
-    palette.append(paletteHeader, list);
-    this._renderPaletteList(list);
-    list.addEventListener("scroll", () => {
-      this._paletteScroll = list.scrollTop;
-    }, { passive: true });
+    list.addEventListener("scroll", () => { this._paletteScroll = list.scrollTop; }, { passive: true });
 
     const work = element("section", "fr-workspace");
     const workHeader = element("div", "fr-workspace__header");
     const title = element("div");
-    title.append(element("strong", "", this._mode === "guide" ? "策略步骤" : "完整表达式树"));
-    title.append(element("span", "fr-muted", this._mode === "guide"
-      ? "一次只编辑一个步骤，点击结构导航切换"
-      : "按真实语法阅读整体；点击表达式进入对应步骤编辑"));
+    title.append(element("strong", "", "策略步骤"));
+    title.append(element("span", "fr-muted", "一次只编辑一个步骤，点击左侧结构导航切换"));
     const actions = element("div", "fr-workspace__actions");
-    actions.append(this._modeButton("引导视图", "guide"), this._modeButton("完整树", "tree"));
     const clearButton = element("button", "fr-button fr-button--ghost", "清空");
     clearButton.type = "button";
     clearButton.addEventListener("click", () => this.clear());
     actions.append(clearButton);
     workHeader.append(title, actions);
     const canvas = element("div", "fr-canvas");
-    if (this._root && this._mode === "guide") canvas.append(this._renderGuide());
-    else if (this._root) canvas.append(this._renderNode(this._root, []));
-    else canvas.append(this._dropZone([], "把函数、变量或立即值拖到这里"));
+    if (this._root) canvas.append(this._renderGuide());
+    else canvas.append(this._slotEditor([], null, true));
     work.append(workHeader, this._renderContractGuard(), canvas);
     shell.append(palette, work);
     this.replaceChildren(shell);
     list.scrollTop = this._paletteScroll;
-  }
-
-  _modeButton(label, mode) {
-    const control = element("button", `fr-view-button${this._mode === mode ? " is-active" : ""}`, label);
-    control.type = "button";
-    control.addEventListener("click", () => { this._mode = mode; this.render(); });
-    return control;
   }
 
   _renderContractGuard() {
@@ -202,7 +185,7 @@ export class FunRouteDesigner extends HTMLElement {
     const focused = this._getAtPath(this._focusPath);
     if (!focused?.node) this._focusPath = [];
     const current = this._getAtPath(this._focusPath) || this._root;
-    const guide = element("div", "fr-guide");
+    const guide = element("div", `fr-guide${entries.length > 1 ? "" : " fr-guide--single"}`);
     const outline = element("nav", "fr-outline");
     const outlineHead = element("div", "fr-outline__header");
     outlineHead.append(element("strong", "", "策略结构"), element("span", "", `${entries.length} 个步骤`));
@@ -211,18 +194,22 @@ export class FunRouteDesigner extends HTMLElement {
     outline.append(outlineHead, list);
     const focus = element("section", "fr-focus");
     const breadcrumbs = element("div", "fr-breadcrumbs");
-    const ancestors = entries.filter((entry) => this._isPrefix(entry.path, this._focusPath));
+    const ancestors = entries.filter((entry) => isPathPrefix(entry.path, this._focusPath));
     ancestors.forEach((entry, index) => {
       if (index) breadcrumbs.append(element("span", "", "›"));
       const look = this._presentation(entry.node, this._language.logicalForm(entry.node));
-      const crumb = button(look.title, true, () => { this._focusPath = entry.path; this.render(); });
+      const crumb = button(look.title, true, () => { this._focusPath = entry.path; this._expanded.clear(); this.render(); });
       breadcrumbs.append(crumb);
     });
     focus.append(breadcrumbs, this._renderNode(current, this._focusPath, true));
-    guide.append(outline, focus);
+    if (entries.length > 1) guide.append(outline);
+    guide.append(focus);
     return guide;
   }
 
+  // The outline lists steps, not nodes: the root plus every structure that
+  // carries control flow. A plain expression is edited in place as text, so
+  // listing its leaves here would just repeat the card beside it.
   _outlineEntries() {
     const entries = [];
     const walkObject = (object, path, depth) => {
@@ -236,8 +223,9 @@ export class FunRouteDesigner extends HTMLElement {
       }
     };
     const walk = (node, path, depth) => {
-      entries.push({ node, path, depth });
-      walkObject(node, path, depth + 1);
+      const step = path.length === 0 || !this._plain(node);
+      if (step) entries.push({ node, path, depth });
+      if (!this._plain(node)) walkObject(node, path, depth + (step ? 1 : 0));
     };
     walk(this._root, [], 0);
     return entries;
@@ -246,7 +234,7 @@ export class FunRouteDesigner extends HTMLElement {
   _outlineItem(entry) {
     const logical = this._language.logicalForm(entry.node);
     const look = this._presentation(entry.node, logical);
-    const active = this._samePath(entry.path, this._focusPath);
+    const active = samePath(entry.path, this._focusPath);
     const control = element("button", `fr-outline__item${active ? " is-active" : ""}`);
     control.type = "button";
     control.style.setProperty("--fr-indent", `${Math.min(entry.depth, 5) * 8}px`);
@@ -254,73 +242,26 @@ export class FunRouteDesigner extends HTMLElement {
     control.append(element("span", "fr-outline__icon", look.icon), element("strong", "", look.title));
     const source = this._language.expressionSource(entry.node);
     control.append(element("code", "", source.length > 52 ? `${source.slice(0, 49)}…` : source));
-    control.addEventListener("click", () => { this._focusPath = entry.path; this.render(); });
+    control.addEventListener("click", () => { this._focusPath = entry.path; this._expanded.clear(); this.render(); });
     return control;
   }
 
-  _samePath(left, right) {
-    return left.length === right.length && left.every((part, index) => part === right[index]);
-  }
-
-  _renderPaletteList(container) {
-    container.replaceChildren();
-    const groups = new Map();
-    const add = (category, id, descriptor) => {
-      const haystack = `${descriptor.label || ""} ${descriptor.description || ""} ${(descriptor.keywords || []).join(" ")} ${descriptor.signature || ""}`.toLowerCase();
-      if (this._search && !haystack.includes(this._search)) return;
-      if (!groups.has(category)) groups.set(category, []);
-      groups.get(category).push({ id, descriptor });
-    };
-    for (const [id, template] of this._templates) {
-      if (template.kind === "value") add("值", id, template.descriptor);
-      else add(template.descriptor.display?.category || "其他", id, {
-        ...template.descriptor.display,
-        signature: template.descriptor.signature,
-      });
-    }
-    for (const [category, entries] of groups) {
-      const section = element("section", "fr-palette-group");
-      section.append(element("h3", "", category));
-      for (const entry of entries) section.append(this._paletteCard(entry.id, entry.descriptor));
-      container.append(section);
-    }
-    if (!container.childElementCount) container.append(element("p", "fr-empty", "没有匹配的组件"));
-  }
-
-  _paletteCard(templateId, descriptor) {
-    const card = element("div", "fr-palette-card");
-    if (this._selectedTemplateId === templateId) card.classList.add("is-selected");
-    card.draggable = true;
-    card.style.setProperty("--fr-accent", descriptor.color || "#64748B");
-    const icon = element("span", "fr-palette-card__icon", descriptor.icon || "ƒ");
-    const body = element("span", "fr-palette-card__body");
-    body.append(element("strong", "", descriptor.label || templateId));
-    if (descriptor.description) body.append(element("small", "", descriptor.description));
-    card.append(icon, body);
-    card.title = descriptor.signature || descriptor.description || "";
-    card.addEventListener("dragstart", (event) => {
-      event.dataTransfer.effectAllowed = "copy";
-      event.dataTransfer.setData(MIME, JSON.stringify({ origin: "palette", templateId }));
-    });
-    card.addEventListener("click", () => {
-      if (!this._root) {
-        const created = this._createTemplate(templateId, []);
-        if (!created) {
-          this._validation = { phase: "error", message: "运行契约没有可用入参；请先声明并检查入参，或在局部作用域内使用参数节点。" };
-          this.render();
-          return;
-        }
-        this._root = created;
-        this._focusPath = [];
-        this._selectedTemplateId = null;
-        this.render();
-        this._emitChange();
-        return;
-      }
+  _selectTemplate(templateId) {
+    if (this._root) {
       this._selectedTemplateId = this._selectedTemplateId === templateId ? null : templateId;
       this.render();
-    });
-    return card;
+      return;
+    }
+    const created = this._createTemplate(templateId, []);
+    if (!created) {
+      this._validation = { phase: "error", message: "运行契约没有可用入参；请先声明并检查入参。" };
+      this.render();
+      return;
+    }
+    this._root = created;
+    this._focusPath = [];
+    this._selectedTemplateId = null;
+    this._changed();
   }
 
   _createTemplate(templateId, path = []) {
@@ -350,6 +291,8 @@ export class FunRouteDesigner extends HTMLElement {
     return created;
   }
 
+  _plain(node) { return isPlainExpression(node, this._language); }
+
   _schema(node) {
     const schema = this._nodes.get(node);
     if (!schema) throw new Error(`目录没有描述节点 ${node}`);
@@ -368,39 +311,25 @@ export class FunRouteDesigner extends HTMLElement {
     return (this._catalog.special_forms || []).find((item) => item.special === special) || null;
   }
 
+  // The catalog says what a node means; funroute-display says how it looks.
   _presentation(node, logical) {
+    const name = logical ? logical.kind : (node.node === "call" ? node.name : node.node);
+    const look = lookFor(name);
     if (node.node === "call") {
       const descriptor = logical ? this._specialDescriptor(logical.kind) : this._descriptor(node);
-      const display = descriptor?.display || {};
-      return { descriptor, color: display.color, title: display.label || node.name, icon: display.icon || "ƒ",
+      const display = descriptor?.doc || {};
+      return { descriptor, ...look, title: display.label || node.name,
         description: display.description || descriptor?.signature || "" };
     }
-    const special = this._specialDescriptor(node.node);
-    if (special) {
-      const display = special.display || {};
-      return { color: display.color || "#7C3AED", title: display.label || node.node, icon: display.icon || "ƒ", description: display.description || "" };
-    }
-    const value = VALUE_TEMPLATES.find((item) => item.node === node.node);
-    return value ? { color: value.color, title: value.label, icon: value.icon, description: value.description }
-      : { title: node.node, icon: "•", description: "" };
+    const display = this._specialDescriptor(node.node)?.doc;
+    return { ...look, title: display?.label || look.label || node.node, description: display?.description || look.description || "" };
   }
 
-  _editSemanticNode(path) {
-    this._mode = "guide";
-    this._focusPath = path;
-    this.render();
-  }
-
+  // One renderer for both views: a card per control block, a line of text per
+  // expression. The guide shows the block being edited and reaches the rest
+  // through links; the full tree renders every block in place. Nothing is
+  // read-only, so a block can be dropped anywhere in either view.
   _renderNode(node, path, compactChildren = false) {
-    if (!compactChildren) {
-      return renderSemanticTree({
-        language: this._language,
-        presentation: (target) => this._presentation(target, this._language.logicalForm(target)),
-        descriptor: (target) => this._descriptor(target),
-        edit: (targetPath) => this._editSemanticNode(targetPath),
-        dropZone: (targetPath, label) => this._dropZone(targetPath, label),
-      }, node, path);
-    }
     const card = element("div", `fr-node fr-node--${node.node}${compactChildren ? " fr-node--focused" : ""}`);
     const logical = this._language.logicalForm(node);
     const look = this._presentation(node, logical);
@@ -412,7 +341,7 @@ export class FunRouteDesigner extends HTMLElement {
     drag.addEventListener("dragstart", (event) => {
       event.stopPropagation();
       event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData(MIME, JSON.stringify({ origin: "node", path }));
+      event.dataTransfer.setData(DND_MIME, JSON.stringify({ origin: "node", path }));
     });
     const heading = element("span", "fr-node__heading");
     heading.append(element("strong", "", look.title));
@@ -440,9 +369,9 @@ export class FunRouteDesigner extends HTMLElement {
 
   _renderLogical(node, path, form, descriptor, compactChildren) {
     const body = element("div", "fr-node__body");
-    const labels = descriptor?.display?.parameters || [];
+    const labels = descriptor?.doc?.params || [];
     form.paths.forEach((relativePath, slot) => {
-      const label = labels[slot]?.label || `条件 ${slot + 1}`;
+      const label = labels[slot] || `条件 ${slot + 1}`;
       const value = form.operands[slot];
       body.append(this._labeledSlot(label, "bool", [...path, ...relativePath], value, compactChildren));
     });
@@ -452,19 +381,17 @@ export class FunRouteDesigner extends HTMLElement {
   _renderCall(node, path, descriptor, compactChildren) {
     const body = element("div", "fr-node__body");
     const params = descriptor.params || [];
-    const labels = descriptor.display?.parameters || [];
+    const labels = descriptor.doc?.params || [];
     (node.args || []).forEach((arg, index) => {
       const item = descriptor.variadic ? Math.min(index, params.length - 1) : index;
       const parameter = params[item];
-      const display = labels[item];
-      const parameterLabel = descriptor.variadic && index > 0 ? `候选 ${index + 1}` : display?.label;
+      const parameterLabel = descriptor.variadic && index > 0 ? `候选 ${index + 1}` : labels[item];
       const row = element("div", "fr-argument");
       const label = element("div", "fr-argument__label");
       label.append(element("span", "", parameterLabel || `参数 ${index + 1}`));
       label.append(element("code", "", typeName(parameter)));
-      if (display?.description) label.title = display.description;
       const argPath = [...path, "args", index];
-      row.append(label, arg ? this._childEditor(arg, argPath, compactChildren) : this._dropZone(argPath, display?.placeholder || "拖入参数"));
+      row.append(label, this._slotEditor(argPath, arg, compactChildren));
       body.append(row);
     });
     if (descriptor.variadic) body.append(this._listControls(node.args, params.length, () => null, "候选"));
@@ -486,9 +413,7 @@ export class FunRouteDesigner extends HTMLElement {
           this._renderList(body, target, field, fieldPath, `${key}.${field.name}`, text, compactChildren);
           break;
         default:
-          body.append(target.node === "enum" && field.name === "member"
-            ? this._memberRow(text, target)
-            : this._nameRow(text, target, field));
+          body.append(this._nameRow(text, target, field));
       }
     }
   }
@@ -528,31 +453,15 @@ export class FunRouteDesigner extends HTMLElement {
     return controls;
   }
 
-  // A member is picked from the contract, never typed. The control follows the
-  // member set's size: a dropdown while it is readable, a filtering input over
-  // one shared list when the contract declares hundreds of them.
-  _memberRow(text, target) {
-    const row = element("label", "fr-local-name");
-    row.append(element("span", "", text.label));
-    const enums = contractEnums(this._runtimeContract);
-    const owner = enums.find((item) => item.name === target.enum)
-      || enums.find((item) => item.values.includes(target.member)) || enums[0];
-    row.append(enumControl({
-      values: owner?.values || [],
-      value: target.member,
-      placeholder: enums.length ? "输入成员名" : "契约没有声明枚举",
-      listHost: this.shadowRoot,
-      listId: `fr-enum-${owner?.name || "none"}`,
-      onChange: (member) => {
-        target.member = member;
-        const owners = enums.filter((item) => item.values.includes(member));
-        if (owners.length > 1) target.enum = owner?.name || owners[0].name;
-        else delete target.enum;
-        this._changed();
-      },
-    }));
-    if (text.hint) row.title = text.hint;
-    return row;
+  // A member is picked from the contract, never typed: the member set is the
+  // host's data, so it is offered rather than spelled out.
+  _memberField(node) {
+    return enumMemberField({
+      enums: contractEnums(this._runtimeContract),
+      node,
+      listHost: this.ownerDocument,
+      onChange: () => this._changed(),
+    });
   }
 
   _nameRow(text, target, field) {
@@ -584,8 +493,57 @@ export class FunRouteDesigner extends HTMLElement {
     const row = element("div", "fr-argument");
     const label = element("div", "fr-argument__label");
     label.append(element("span", "", labelText), element("code", "", typeText));
-    row.append(label, value ? this._childEditor(value, path, compactChildren) : this._dropZone(path, "拖入表达式"));
+    row.append(label, this._slotEditor(path, value, compactChildren));
     return row;
+  }
+
+  // A slot holding nothing but an expression is edited as text: typing
+  // "amount > limit" beats dragging one card per leaf. Control flow stays a
+  // card, and "展开" turns any expression into cards when dragging is wanted.
+  _slotEditor(path, value, compactChildren) {
+    const slot = element("div", "fr-slot");
+    slot.append(this._slotBody(path, value, compactChildren));
+    // Every expression position accepts a block, so every one of them shows
+    // where it would land. The strip is quiet until a block is picked up.
+    slot.append(this._dropZone(path, "拖入控制块", true));
+    return slot;
+  }
+
+  _slotBody(path, value, compactChildren) {
+    const key = path.join("\u0000");
+    if (!this.parseExpression || !this._plain(value)) {
+      if (!value) return this._dropZone(path, "写表达式或拖入控制块");
+      return dropTarget(this._childEditor(value, path, compactChildren), (payload) => this._applyDrop(payload, path));
+    }
+    // Expanding shows the cards here, in place: jumping the focus elsewhere
+    // would leave this slot rendered by another view, with no way back.
+    if (this._expanded.has(key)) {
+      return dropTarget(expandedSlot(this._renderNode(value, path),
+        () => { this._expanded.delete(key); this.render(); }), (payload) => this._applyDrop(payload, path));
+    }
+    const row = expressionRow({
+      source: value ? this._language.expressionSource(value) : "",
+      placeholder: value ? "" : "写一段表达式，例如 amount > limit，回车校验",
+      onCommit: (text) => this._commitExpression(path, text),
+      onExpand: value ? () => { this._expanded.add(key); this.render(); } : null,
+      onFocus: (input) => { this._activeInput = input; },
+    });
+    return dropTarget(row, (payload) => this._applyDrop(payload, path));
+  }
+
+  async _commitExpression(path, text) {
+    if (!text) {
+      this._setAtPath(path, null, false);
+      this._changed();
+      return "";
+    }
+    try {
+      this._setAtPath(path, await this.parseExpression(text), false);
+      this._changed();
+      return "";
+    } catch (error) {
+      return error.message;
+    }
   }
 
   _childEditor(node, path, compact) {
@@ -608,44 +566,15 @@ export class FunRouteDesigner extends HTMLElement {
   }
 
   _renderValueEditor(node, schema, path) {
+    if (node.node === "var") return this._renderVariableEditor(node, path);
     const body = element("div", "fr-node__body fr-value-editor");
-    const field = schema.fields[0];
-    let input;
-    if (node.node === "var") {
-      return this._renderVariableEditor(node, path);
-    } else if (field.kind === "bool") {
-      input = element("select", "fr-input");
-      for (const [label, value] of [["false", "false"], ["true", "true"]]) {
-        const option = element("option", "", label);
-        option.value = value;
-        option.selected = node.bool === (value === "true");
-        input.append(option);
-      }
-      input.addEventListener("change", () => { node.bool = input.value === "true"; this._changed(); });
-    } else {
-      input = element("input", "fr-input");
-      input.type = field.kind === "int" ? "number" : "text";
-      if (field.kind === "int") input.step = "1";
-      if (field.kind === "float") input.inputMode = "decimal";
-      if (field.kind === "name") input.pattern = this._language.namePattern;
-      input.placeholder = field.kind === "name" ? "参数名" : field.kind;
-      input.value = String(node[field.name] ?? field.default ?? "");
-      input.addEventListener("change", () => {
-        if (field.kind === "int" || field.kind === "float") {
-          try {
-            const value = parseInputValue(input.value || "0", { kind: field.kind });
-            input.setCustomValidity("");
-            node[field.name] = field.kind === "int" ? value : input.value;
-          } catch (error) {
-            input.setCustomValidity(error.message);
-            input.reportValidity();
-            return;
-          }
-        } else node[field.name] = input.value || field.default || "";
-        this._changed();
-      });
-    }
-    body.append(input);
+    body.append(node.node === "enum" ? this._memberField(node) : valueEditor({
+      node,
+      field: schema.fields[0],
+      namePattern: this._language.namePattern,
+      parse: parseInputValue,
+      onChange: () => this._changed(),
+    }));
     return body;
   }
 
@@ -698,58 +627,53 @@ export class FunRouteDesigner extends HTMLElement {
     return this._language?.scopeAtPath(this._root, path, this._runtimeContract?.args || []) || [];
   }
 
-  _dropZone(path, label) {
+  // Every expression position is a drop target, occupied or not, which is what
+  // lets one control block go inside another. What lands there is decided by
+  // placeBlock: the block takes the old expression into its own first slot.
+  _dropZone(path, label, thin = false) {
     const selected = this._templates.get(this._selectedTemplateId);
-    const selectedLabel = selected?.descriptor?.label || selected?.descriptor?.display?.label;
-    const zone = element("div", `fr-drop-zone${selected ? " is-ready" : ""}`,
+    const selectedLabel = selected?.descriptor?.doc?.label || selected?.descriptor?.label;
+    const zone = element("div", `fr-drop-zone${thin ? " fr-drop-zone--thin" : ""}${selected ? " is-ready" : ""}`,
       selected ? `点击放入「${selectedLabel || "已选组件"}」` : label);
-    zone.addEventListener("click", () => {
-      if (!this._selectedTemplateId) return;
-      const created = this._createTemplate(this._selectedTemplateId, path);
+    zone.addEventListener("click", () => this._placeSelected(path));
+    return dropTarget(zone, (payload) => this._applyDrop(payload, path));
+  }
+
+  _placeSelected(path) {
+    if (!this._selectedTemplateId) return;
+    const created = this._createTemplate(this._selectedTemplateId, path);
+    if (!created) {
+      this._validation = { phase: "error", message: "这个位置没有可用的契约参数或本地变量。" };
+      this.render();
+      return;
+    }
+    this._setAtPath(path, placeBlock(created, this._getAtPath(path), this._nodes), false);
+    this._selectedTemplateId = null;
+    this._changed();
+  }
+
+  _applyDrop(payload, path) {
+    if (payload.origin === "palette") {
+      const created = this._createTemplate(payload.templateId, path);
       if (!created) {
         this._validation = { phase: "error", message: "这个位置没有可用的契约参数或本地变量。" };
         this.render();
         return;
       }
-      this._setAtPath(path, created, false);
-      this._selectedTemplateId = null;
-      if (this._mode === "guide") this._focusPath = path;
-      this._changed();
-    });
-    zone.addEventListener("dragover", (event) => {
-      if (!event.dataTransfer.types.includes(MIME)) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "copy";
-      zone.classList.add("is-over");
-    });
-    zone.addEventListener("dragleave", () => zone.classList.remove("is-over"));
-    zone.addEventListener("drop", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      zone.classList.remove("is-over");
-      let payload;
-      try { payload = JSON.parse(event.dataTransfer.getData(MIME)); }
-      catch { return; }
-      if (payload.origin === "palette") {
-        const created = this._createTemplate(payload.templateId, path);
-        if (!created) {
-          this._validation = { phase: "error", message: "这个位置没有可用的契约参数或本地变量。" };
-          this.render();
-          return;
-        }
-        this._setAtPath(path, created, false);
-      } else if (payload.origin === "node") {
-        const sourcePath = payload.path || [];
-        if (this._isPrefix(sourcePath, path)) return;
-        const moving = clone(this._getAtPath(sourcePath));
-        this._setAtPath(sourcePath, null, false);
-        this._setAtPath(path, moving, false);
-      }
-      this._selectedTemplateId = null;
-      if (this._mode === "guide") this._focusPath = path;
-      this._changed();
-    });
-    return zone;
+      this._setAtPath(path, placeBlock(created, this._getAtPath(path), this._nodes), false);
+    } else if (payload.origin === "node") {
+      const sourcePath = payload.path || [];
+      // A node cannot be dropped into itself, and moving it must not leave a
+      // copy behind: it is lifted out first, then placed.
+      if (isPathPrefix(sourcePath, path)) return;
+      const moving = clone(this._getAtPath(sourcePath));
+      const existing = clone(this._getAtPath(path));
+      this._setAtPath(sourcePath, null, false);
+      this._setAtPath(path, placeBlock(moving, existing, this._nodes), false);
+    }
+    this._selectedTemplateId = null;
+    this._expanded.clear();
+    this._changed();
   }
 
   _getAtPath(path) {
@@ -778,10 +702,6 @@ export class FunRouteDesigner extends HTMLElement {
     const candidate = [...path];
     while (candidate.length && !this._getAtPath(candidate)?.node) candidate.pop();
     return this._getAtPath(candidate)?.node ? candidate : [];
-  }
-
-  _isPrefix(prefix, path) {
-    return prefix.length <= path.length && prefix.every((part, index) => path[index] === part);
   }
 
   _emitChange() {

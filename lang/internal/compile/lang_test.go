@@ -124,7 +124,6 @@ func TestExtensionSignatureDrivesInference(t *testing.T) {
 		Name:   "risk.approved_v1",
 		Params: []machine.Type{machine.StringType, machine.IntType},
 		Result: machine.BoolType,
-		Cost:   25,
 		// An extension sees values the way a host does: through the public
 		// accessors, never the private fields.
 		Eval: func(_ context.Context, args []machine.Value) (machine.Value, error) {
@@ -132,7 +131,7 @@ func TestExtensionSignatureDrivesInference(t *testing.T) {
 			amount, _ := args[1].Int()
 			return machine.Bool(country == "US" && amount > 100), nil
 		},
-		Display: machine.FunctionDisplay{Label: "风险通过", Description: "演示扩展函数", Category: "风控", Color: "#DC2626"},
+		Doc: machine.Doc{Label: "风险通过", Description: "演示扩展函数", Category: "风控", Cost: 25},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -311,7 +310,7 @@ func TestFunctionalForBindsLocalFiltersAndMaps(t *testing.T) {
 
 func TestFunctionalSwitchIsLazyAndTyped(t *testing.T) {
 	registry := consoleRegistry(t)
-	artifact, err := CompileExpr(`switch(country,"SG",1,"MY",2,div(1,0))`, registry, CompileOptions{})
+	artifact, err := CompileExpr(`switch(country, case "SG" => 1, case "MY" => 2, else div(1,0))`, registry, CompileOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,10 +401,10 @@ func TestCoreCatalogIsMinimalAndCarriesDisplayMetadata(t *testing.T) {
 		if function.Name == "fallback" {
 			fallback = function
 		}
-		if function.Display.Label == "" || function.Display.Description == "" || function.Display.Category == "" {
+		if function.Doc.Label == "" || function.Doc.Description == "" || function.Doc.Category == "" {
 			t.Fatalf("missing display metadata: %#v", function)
 		}
-		if len(function.Display.Parameters) != len(function.Params) {
+		if len(function.Doc.Params) != len(function.Params) {
 			t.Fatalf("parameter display mismatch: %#v", function)
 		}
 	}
@@ -423,17 +422,43 @@ func TestCoreCatalogIsMinimalAndCarriesDisplayMetadata(t *testing.T) {
 	if !fallback.Variadic || fallback.Signature != "fallback(T,T,...)->T" || len(fallback.Params) != 2 {
 		t.Fatalf("fallback catalog = %#v", fallback)
 	}
-	for _, hidden := range []string{"array.is_empty", "array.prepend", "array.head", "array.tail"} {
-		if names[hidden] {
-			t.Fatalf("low-level function %q leaked into operator catalog", hidden)
+	assertDisplayCarriesNoStyling(t, catalog)
+	assertSignaturesNameTheirForm(t, catalog)
+	assertLabelCountIsChecked(t, registry)
+}
+
+// A special form's signature is the one hand-written string in the catalog:
+// it is a syntax shape, not a type signature, so it cannot be generated. It
+// can at least be checked for naming the form it describes.
+func assertSignaturesNameTheirForm(t *testing.T, catalog machine.LanguageCatalog) {
+	t.Helper()
+	for _, form := range append(append([]machine.FunctionDescriptor(nil), catalog.SpecialForms...), catalog.Functions...) {
+		if !strings.HasPrefix(form.Signature, form.Name+"(") && !strings.Contains(form.Signature, form.Name) {
+			t.Fatalf("signature %q does not name %q", form.Signature, form.Name)
 		}
 	}
-	if err := registry.Register(machine.FunctionSpec{
-		Name: "bad.color_v1", Params: []machine.Type{machine.IntType}, Result: machine.IntType,
-		Eval:    func(_ context.Context, args []machine.Value) (machine.Value, error) { return args[0], nil },
-		Display: machine.FunctionDisplay{Color: "red"},
-	}); err == nil {
-		t.Fatal("invalid display color was accepted")
+}
+
+func assertDisplayCarriesNoStyling(t *testing.T, catalog machine.LanguageCatalog) {
+	t.Helper()
+	for _, function := range catalog.Functions {
+		if strings.Contains(fmt.Sprint(function.Doc), "#") {
+			t.Fatalf("function %s display carries styling: %+v", function.Name, function.Doc)
+		}
+	}
+}
+
+// Labels are the only hand-written part of a signature, so a miscount is
+// refused instead of being padded with a generated "参数 2".
+func assertLabelCountIsChecked(t *testing.T, registry *machine.Registry) {
+	t.Helper()
+	err := registry.Register(machine.FunctionSpec{
+		Name: "bad.labels_v1", Params: []machine.Type{machine.IntType, machine.IntType}, Result: machine.IntType,
+		Eval: func(_ context.Context, args []machine.Value) (machine.Value, error) { return args[0], nil },
+		Doc:  machine.Doc{Label: "标签数不符", Params: []string{"只有一个"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "parameter labels") {
+		t.Fatalf("mismatched label count error = %v", err)
 	}
 }
 
@@ -475,7 +500,7 @@ func compileAndRun(t *testing.T, source string, registry *machine.Registry, args
 
 func TestReduceFoldsArrayWithLocalAccumulator(t *testing.T) {
 	value, runtime := compileAndRun(t,
-		`reduce(prices,price,total,0,add(total,price))`,
+		`reduce(price in prices, total from 0, add(total,price))`,
 		consoleRegistry(t), map[string]any{"prices": []any{10, 20, 30}}, machine.RunOptions{})
 	params := runtime.Args()
 	if len(params) != 1 || params[0].Name != "prices" || !params[0].Type.Equal(machine.ArrayOf(machine.IntType)) {
@@ -490,7 +515,7 @@ func TestReduceFoldsArrayWithLocalAccumulator(t *testing.T) {
 
 	// An empty source yields the initial accumulator without running the body.
 	empty, _ := compileAndRun(t,
-		`reduce(prices,price,total,7,add(total,price))`,
+		`reduce(price in prices, total from 7, add(total,price))`,
 		consoleRegistry(t), map[string]any{"prices": []any{}}, machine.RunOptions{})
 	if got, _ := empty.Int(); got != 7 {
 		t.Fatalf("empty reduce = %v", empty.Any())
@@ -499,18 +524,18 @@ func TestReduceFoldsArrayWithLocalAccumulator(t *testing.T) {
 
 func TestReduceRejectsBodyThatChangesAccumulatorType(t *testing.T) {
 	registry := consoleRegistry(t)
-	_, err := CompileExpr(`reduce(prices,price,total,0,string(total))`, registry, CompileOptions{})
+	_, err := CompileExpr(`reduce(price in prices, total from 0, string(total))`, registry, CompileOptions{})
 	if err == nil || !strings.Contains(err.Error(), "accumulator") {
 		t.Fatalf("error = %v", err)
 	}
-	if _, err := CompileExpr(`reduce(prices,price,price,0,price)`, registry, CompileOptions{}); err == nil {
+	if _, err := CompileExpr(`reduce(price in prices, price from 0, price)`, registry, CompileOptions{}); err == nil {
 		t.Fatal("reduce accepted the same name for item and accumulator")
 	}
 }
 
 func TestReduceAndComprehensionSurviveExprJSONRoundTrip(t *testing.T) {
 	for _, source := range []string{
-		`reduce(prices,price,total,0,add(total,price))`,
+		`reduce(price in prices, total from 0, add(total,price))`,
 		`[channel for channel in channels if eq(channel,"UP")]`,
 		`[add(x,1) for x in [mul(y,2) for y in items]]`,
 	} {
@@ -566,9 +591,9 @@ func TestDisabledFormsAreRejectedWhenTheyArriveAsExprJSON(t *testing.T) {
 func TestPanickingExtensionIsContained(t *testing.T) {
 	registry := machine.CoreRegistry()
 	if err := registry.Register(machine.FunctionSpec{
-		Name: "boom_v1", Params: []machine.Type{machine.IntType}, Result: machine.IntType, Cost: 1,
-		Eval:    func(_ context.Context, args []machine.Value) (machine.Value, error) { panic("extension exploded") },
-		Display: machine.FunctionDisplay{Label: "炸弹", Description: "总是 panic 的扩展", Category: "测试"},
+		Name: "boom_v1", Params: []machine.Type{machine.IntType}, Result: machine.IntType,
+		Eval: func(_ context.Context, args []machine.Value) (machine.Value, error) { panic("extension exploded") },
+		Doc:  machine.Doc{Label: "炸弹", Description: "总是 panic 的扩展", Category: "测试", Cost: 1},
 	}); err != nil {
 		t.Fatal(err)
 	}

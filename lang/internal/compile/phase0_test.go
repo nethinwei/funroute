@@ -200,7 +200,7 @@ func assertEnumCompileErrors(t *testing.T, registry *machine.Registry, options C
 		{`switch(channel, case @adyen => "adyen", case @stripe => "stripe")`, "returns string"},
 		{`fallback(channel, candidate)`, "no overload"},
 		{`candidate`, "returns string"},
-		{`reduce(channels,item,acc,channel,candidate)`, "accumulator type"},
+		{`reduce(item in channels, acc from channel, candidate)`, "accumulator type"},
 	} {
 		testOptions := options
 		if strings.Contains(test.source, "candidate") {

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FunRouteLanguage, FunRouteWorkspace, contractPayload, parseInputValue, typeName, typeSummary } from "./funroute-core.js";
+import { FunRouteLanguage, FunRouteWorkspace, contractPayload, firstEmptySlot, isPlainExpression } from "./funroute-core.js";
+import { FIELD_TEXT, parseInputValue } from "./funroute-fields.js";
+import { typeName, typeSummary } from "./funroute-display.js";
+import { placeBlock } from "./funroute-dnd.js";
+import { indexNodes } from "./funroute-core.js";
 import { loadExamples } from "./funroute-examples.js";
 
 const placeholder = (name) => ({ $: name });
@@ -26,9 +30,17 @@ function catalog() {
         },
       ],
     },
-    special_forms: [{ name: "and" }, { name: "not" }],
+    // Control blocks are read off the catalog: a special form with a node of
+    // its own, or a lazy call. and / not have no node — they expand to if.
+    special_forms: [
+      { name: "switch", special: "switch" }, { name: "for", special: "for" },
+      { name: "reduce", special: "reduce" }, { name: "let", special: "let" },
+      { name: "and" }, { name: "not" },
+    ],
+    functions: [{ name: "if", special: "if" }, { name: "fallback", special: "fallback" }],
     nodes: [
       { node: "var", fields: [{ name: "name", kind: "name", default: "value" }] },
+      { node: "switch", fields: [{ name: "value", kind: "expr", optional: true }, { name: "cases", kind: "list", min: 1, fields: [] }] },
       { node: "call", fields: [{ name: "name", kind: "name" }, { name: "args", kind: "exprs", optional: true }] },
       { node: "bool", fields: [{ name: "bool", kind: "bool" }] },
       { node: "for", fields: [
@@ -184,6 +196,58 @@ test("typed input parsing never silently truncates or coerces", () => {
   assert.equal(parseInputValue("adyen", channel), "adyen");
   assert.throws(() => parseInputValue("other", channel), /成员/);
   assert.equal(typeName(channel), "enum<channel>{adyen,stripe}");
+});
+
+test("control blocks come from the catalog, not from a list in the front end", () => {
+  const language = new FunRouteLanguage(catalog());
+  const variable = (name) => ({ node: "var", name });
+  assert.deepEqual([...language.controlBlocks].sort(),
+    ["fallback", "for", "if", "let", "reduce", "switch"]);
+  assert.equal(isPlainExpression(call("gt", variable("score"), variable("ceiling")), language), true);
+  assert.equal(isPlainExpression({ node: "enum", member: "adyen" }, language), true);
+  assert.equal(isPlainExpression({ node: "array", items: [variable("a"), call("add", variable("b"), variable("c"))] }, language), true);
+  assert.equal(isPlainExpression({ node: "switch", cases: [], default: variable("a") }, language), false);
+  assert.equal(isPlainExpression(call("if", variable("ok"), { node: "let", bindings: [], body: variable("a") }, variable("b")), language), false);
+  // && is if underneath, but it reads as an operator, so it stays text.
+  assert.equal(isPlainExpression(call("if", variable("ready"), variable("ok"), bool(false)), language), true);
+  assert.equal(isPlainExpression(null, language), true);
+});
+
+// FIELD_TEXT is the console's wording for fields the catalog describes. A key
+// that no longer matches a field would silently fall back to the raw field
+// name, so the two are checked against each other rather than by eye.
+test("every wording key names a field the catalog actually has", async () => {
+  const response = await fetch("http://127.0.0.1:8080/api/catalog").catch(() => null);
+  if (!response?.ok) return; // the check needs a running console
+  const catalog = await response.json();
+  const fields = new Set();
+  const walk = (node, list, prefix) => {
+    for (const field of list || []) {
+      fields.add(`${prefix}.${field.name}`);
+      walk(node, field.fields, `${prefix}.${field.name}`);
+    }
+  };
+  for (const schema of catalog.nodes) walk(schema.node, schema.fields, schema.node);
+  for (const key of Object.keys(FIELD_TEXT)) {
+    assert.ok(fields.has(key), `wording for ${key} names no field in the catalog`);
+  }
+});
+
+test("a block dropped onto an expression takes it into its first slot", () => {
+  const nodes = indexNodes(catalog().nodes);
+  const condition = call("lt", { node: "var", name: "risk" }, { node: "var", name: "ceiling" });
+  const block = { node: "call", name: "if", args: [null, null, null] };
+  assert.deepEqual(firstEmptySlot(block, nodes), ["args", 0]);
+  assert.deepEqual(placeBlock(block, condition, nodes).args[0], condition);
+
+  const loop = { node: "for", source: null, variable: "item", yield: null };
+  assert.deepEqual(firstEmptySlot(loop, nodes), ["source"]);
+  assert.equal(placeBlock({ ...loop }, condition, nodes).source, condition);
+
+  // Nothing to take it: the block stands in place of what was there.
+  const full = { node: "var", name: "x" };
+  assert.equal(placeBlock(full, condition, nodes), full);
+  assert.equal(placeBlock(full, null, nodes), full);
 });
 
 test("a large enum is summarized for display but never for the wire", () => {
