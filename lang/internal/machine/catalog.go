@@ -5,7 +5,7 @@ import (
 	"sort"
 )
 
-const CatalogVersion = 4
+const CatalogVersion = 1
 
 // FunctionDescriptor is one entry of the catalog: the machine-readable half
 // (types, signature, laziness) beside the host-written half. Everything here
@@ -304,16 +304,16 @@ func reduceSpecialForm() FunctionDescriptor {
 	r := TypeVar("R")
 	return FunctionDescriptor{
 		Name:      "reduce",
-		Signature: "reduce(array<T>,item,acc,R,R)->R",
-		Params:    []Type{ArrayOf(t), t, r, r, r},
+		Signature: "reduce(item in array<T> if condition, acc = R, R) -> R",
+		Params:    []Type{ArrayOf(t), t, BoolType, r, r},
 		Result:    r,
 		Special:   "reduce",
 		Doc: Doc{
 			Cost:  1,
 			Label: "逐项折叠",
 			Description: "按顺序把每个元素并进累加器：每一步用当前元素和当前累加器算出下一个累加器，" +
-				"所以它不止能求和 —— 取最大、计数、拼接都是它。item 和 acc 是局部名称，不会成为外部参数。" +
-				"遍历次数有限，不引入递归。",
+				"所以它不止能求和 —— 取最大、计数、拼接都是它。可选的 if 条件先筛掉元素，被跳过的元素不改变累加器。" +
+				"item 和 acc 是局部名称，不会成为外部参数。遍历次数有限，不引入递归。",
 			Category: "控制",
 			Result:   "折叠结果",
 		},

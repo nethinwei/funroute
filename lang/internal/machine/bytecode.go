@@ -8,9 +8,11 @@ import (
 	"strconv"
 )
 
-// ArtifactVersion changes whenever anything the digest covers changes shape;
-// an artifact with any other version is refused rather than reinterpreted.
-const ArtifactVersion = 2
+// ArtifactVersion names the shape of everything the digest covers; an artifact
+// with any other version is refused rather than reinterpreted. Nothing is
+// deployed against this language yet, so a shape change edits the shape rather
+// than adding a version to migrate from.
+const ArtifactVersion = 1
 
 // OpCode is a dense enum so the interpreter dispatches through a jump table.
 // The JSON form keeps the original mnemonics, so artifact digests do not move.

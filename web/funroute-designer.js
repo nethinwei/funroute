@@ -30,7 +30,6 @@ export class FunRouteDesigner extends HTMLElement {
     this._root = null;
     this._templates = new Map();
     this._functionDescriptors = new Map();
-    this._search = "";
     this._paletteScroll = 0;
     this._focusPath = [];
     this._selectedTemplateId = null;
@@ -139,9 +138,7 @@ export class FunRouteDesigner extends HTMLElement {
     const shell = element("div", "fr-shell");
     const { palette, list } = renderPalette({
       templates: this._templates,
-      search: this._search,
       selectedId: this._selectedTemplateId,
-      onSearch: (text) => { this._search = text; this.render(); },
       onSelect: (templateId) => this._selectTemplate(templateId),
     });
     list.addEventListener("scroll", () => { this._paletteScroll = list.scrollTop; }, { passive: true });

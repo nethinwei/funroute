@@ -21,7 +21,44 @@ const elements = {
   expectedType: document.querySelector("#expected-result-type"),
   resultCheck: document.querySelector("#result-check"),
   run: document.querySelector("#run"),
+  theme: document.querySelector("#theme-toggle"),
 };
+
+// The theme follows the system until someone picks one: the stylesheet reads
+// color-scheme, so all this has to do is set (or clear) data-theme. The choice
+// belongs to this browser, so it lives in localStorage and never reaches the
+// server; a browser that refuses storage simply forgets it.
+const THEME_KEY = "funroute:theme";
+const THEMES = ["system", "light", "dark"];
+const THEME_LABELS = { system: "跟随系统", light: "浅色", dark: "深色" };
+let theme = storedTheme();
+
+function storedTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    return THEMES.includes(saved) ? saved : "system";
+  } catch {
+    return "system";
+  }
+}
+
+function applyTheme(next) {
+  theme = next;
+  if (next === "system") delete window.document.documentElement.dataset.theme;
+  else window.document.documentElement.dataset.theme = next;
+  elements.theme.setAttribute("aria-label", `主题：${THEME_LABELS[next]}（点击切换）`);
+  elements.theme.title = `主题：${THEME_LABELS[next]}`;
+}
+
+function cycleTheme() {
+  const next = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    // A browser that blocks storage still switches; it just will not remember.
+  }
+  applyTheme(next);
+}
 
 const workspace = new FunRouteWorkspace(new FunRouteClient());
 const contract = new ContractPanel(document.querySelector("#contract"), {
@@ -416,6 +453,8 @@ function fail(error) {
 }
 
 elements.designer.addEventListener("funroute-change", (event) => syncDocument(event.detail.value));
+applyTheme(theme);
+elements.theme.addEventListener("click", cycleTheme);
 elements.run.addEventListener("click", run);
 document.querySelector("#format-expression").addEventListener("click", formatInput);
 document.querySelector("#copy-expression").addEventListener("click", copyExpression);
@@ -437,7 +476,7 @@ try {
   contract.valueTypes = catalog.value_types;
   examples = loadedExamples;
   elements.designer.catalog = catalog;
-  elements.version.textContent = `Catalog v${catalog.version} · ExprJSON v${catalog.source.expr_json_version} · Artifact v${catalog.artifact_version}`;
+  elements.version.textContent = `Catalog ${catalog.version} · ExprJSON ${catalog.source.expr_json_version} · Artifact ${catalog.artifact_version}`;
   renderExamples();
   await loadExample(examples[0]);
 } catch (error) { fail(error); }

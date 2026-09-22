@@ -231,9 +231,6 @@ func (p *parser) parsePrimary() (Expr, error) {
 
 func (p *parser) parseCall(name token) (Expr, error) {
 	p.index++ // (
-	if name.text == "for" {
-		return nil, p.errorf(name, "for(...) is not part of the syntax; write a comprehension: [result for item in source if condition]")
-	}
 	if name.text == "reduce" {
 		return p.parseReduceCall(name)
 	}
@@ -297,15 +294,15 @@ func (p *parser) startsBinding() bool {
 
 // parseReduceCall reads the one form there is:
 //
-//	reduce(item in source, acc from init, body)
-//	reduce(key, item in source, acc from init, body)
+//	reduce(item in source, acc = init, body)
+//	reduce(key, item in source if condition, acc = init, body)
 //
 // The local names are part of the syntax, so they cannot be mistaken for
 // expressions, and there is nothing to disambiguate.
 func (p *parser) parseReduceCall(name token) (Expr, error) {
 	key, value, err := p.loopVariables(name)
 	if err != nil {
-		return nil, p.errorf(name, "reduce starts with its element name: reduce(item in source, acc from init, body)")
+		return nil, p.errorf(name, "reduce starts with its element name: reduce(item in source, acc = init, body)")
 	}
 	p.index++ // loopVariables has already checked the "in"
 	return p.reduceKeywordForm(name, key, value)
@@ -313,6 +310,10 @@ func (p *parser) parseReduceCall(name token) (Expr, error) {
 
 func (p *parser) reduceKeywordForm(name token, key, variable string) (Expr, error) {
 	source, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	where, err := p.loopFilter()
 	if err != nil {
 		return nil, err
 	}
@@ -335,29 +336,25 @@ func (p *parser) reduceKeywordForm(name token, key, variable string) (Expr, erro
 	}
 	return p.node(name, &ReduceExpr{
 		ID: p.id(), Pos: name.pos, Source: source, Variable: variable,
-		KeyVariable: key, Accumulator: accumulator, Init: init, Body: body,
+		KeyVariable: key, Where: where, Accumulator: accumulator, Init: init, Body: body,
 	})
 }
 
-// parseAccumulator reads "total from 0".
+// parseAccumulator reads "total = 0", the shape a let binding already has.
 func (p *parser) parseAccumulator() (string, Expr, error) {
-	named, err := p.parseExpr()
+	if !p.startsBinding() {
+		return "", nil, p.errorf(p.peek(), "reduce needs an accumulator and its initial value: acc = init")
+	}
+	accumulator, err := p.localIdentifier()
 	if err != nil {
 		return "", nil, err
 	}
-	variable, ok := named.(*VariableExpr)
-	if !ok {
-		return "", nil, p.errorf(p.peek(), "reduce accumulator must be a local variable name")
-	}
-	if !p.keyword("from") {
-		return "", nil, p.errorf(p.peek(), "expected 'from' after the accumulator name")
-	}
-	p.index++
+	p.index++ // =
 	init, err := p.parseExpr()
 	if err != nil {
 		return "", nil, err
 	}
-	return variable.Name, init, nil
+	return accumulator, init, nil
 }
 
 // parseSwitchCall accepts all three shapes. The case keyword marks where the
@@ -480,12 +477,9 @@ func (p *parser) comprehension(start token, yield Expr) (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	var where Expr
-	if p.keyword("if") {
-		p.index++
-		if where, err = p.parseExpr(); err != nil {
-			return nil, err
-		}
+	where, err := p.loopFilter()
+	if err != nil {
+		return nil, err
 	}
 	if err := p.expect(tokenRightBracket, "']'"); err != nil {
 		return nil, err
@@ -494,6 +488,16 @@ func (p *parser) comprehension(start token, yield Expr) (Expr, error) {
 		ID: p.id(), Pos: start.pos, Source: source,
 		Variable: variable, KeyVariable: key, Where: where, Yield: yield,
 	})
+}
+
+// loopFilter reads the optional "if condition" that both loop forms share:
+// items the condition rejects are neither yielded nor folded.
+func (p *parser) loopFilter() (Expr, error) {
+	if !p.keyword("if") {
+		return nil, nil
+	}
+	p.index++
+	return p.parseExpr()
 }
 
 // loopVariables reads "v" or "k, v" and leaves the parser on the in keyword.

@@ -70,7 +70,7 @@ func BenchmarkReduce(b *testing.B) {
 	for i := range items {
 		items[i] = i
 	}
-	runtime := benchRuntime(b, `reduce(item in items, total from 0, add(total,item))`,
+	runtime := benchRuntime(b, `reduce(item in items, total = 0, add(total,item))`,
 		[]ArgSpec{{Name: "items", Type: machine.ArrayOf(machine.IntType)}})
 	run(b, runtime, map[string]any{"items": items}, 10_000_000)
 }
@@ -94,7 +94,7 @@ func BenchmarkCall(b *testing.B) {
 
 func BenchmarkCompile(b *testing.B) {
 	registry := benchRegistry(b)
-	source := `switch(country,"SG",reduce(p in prices, t from 0, add(t,p)),"MY",reduce(p in prices, t from 1, mul(t,p)),0)`
+	source := `switch(country,"SG",reduce(p in prices, t = 0, add(t,p)),"MY",reduce(p in prices, t = 1, mul(t,p)),0)`
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -111,7 +111,7 @@ func TestBenchSanity(t *testing.T) {
 	if err := registry.EnableForm(machine.ReduceForm); err != nil {
 		t.Fatal(err)
 	}
-	artifact, err := CompileExpr(`reduce(x in items, total from 0, add(total,x))`, registry, CompileOptions{})
+	artifact, err := CompileExpr(`reduce(x in items, total = 0, add(total,x))`, registry, CompileOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

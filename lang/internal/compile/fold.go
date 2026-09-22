@@ -88,6 +88,16 @@ func (c *bytecodeCompiler) foldable(expr syntax.Expr) bool {
 	case *syntax.LiteralExpr, *syntax.VariableExpr:
 		return false
 	}
+	return c.constantExpr(expr)
+}
+
+// constantExpr reports whether expr's value is fixed at compile time: it reads
+// no argument and no loop variable, so every free name it has resolves to a
+// binding that folded to a constant itself.
+func (c *bytecodeCompiler) constantExpr(expr syntax.Expr) bool {
+	if _, literal := expr.(*syntax.LiteralExpr); literal {
+		return true
+	}
 	for _, name := range syntax.FreeVariables(expr) {
 		if len(c.constIndex[name]) == 0 {
 			return false

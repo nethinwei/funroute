@@ -204,7 +204,7 @@ func postJSON(t *testing.T, server *Server, path, body string) *httptest.Respons
 
 func TestParseAPIReturnsCanonicalExprJSON(t *testing.T) {
 	server := testServer(t)
-	response := postJSON(t, server, "/api/parse", `{"source":"reduce(price in prices, total from 0, add(total,price))"}`)
+	response := postJSON(t, server, "/api/parse", `{"source":"reduce(price in prices, total = 0, add(total,price))"}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -250,7 +250,7 @@ func TestRunAPISupportsReduceAndComprehension(t *testing.T) {
 	}{
 		{
 			name: "reduce",
-			body: `{"source":"reduce(price in prices, total from 0, add(total,price))","contract":{"args":[{"name":"prices","type":"array<int>"}],"result":{"type":"int"}},"args":{"prices":[10,20,30]}}`,
+			body: `{"source":"reduce(price in prices, total = 0, add(total,price))","contract":{"args":[{"name":"prices","type":"array<int>"}],"result":{"type":"int"}},"args":{"prices":[10,20,30]}}`,
 			want: int64(60),
 		},
 		{
@@ -284,7 +284,7 @@ func TestServerIsBoundedByItsRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := postJSON(t, server, "/api/run", `{"source":"reduce(x in items, t from 0, add(t,x))","contract":{"args":[{"name":"items","type":"array<int>"}],"result":{"type":"int"}},"args":{"items":[1]}}`)
+	response := postJSON(t, server, "/api/run", `{"source":"reduce(x in items, t = 0, add(t,x))","contract":{"args":[{"name":"items","type":"array<int>"}],"result":{"type":"int"}},"args":{"items":[1]}}`)
 	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "reduce is not enabled") {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}

@@ -3,20 +3,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b1020">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d1017" media="(prefers-color-scheme: dark)">
   <title>FunRoute Policy Studio</title>
   <link rel="stylesheet" href="/funroute-designer.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="app-header">
-    <a class="brand" href="/" aria-label="FunRoute 首页">
-      <span class="brand__mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span><strong>FunRoute</strong><small>Policy Studio</small></span>
-    </a>
-    <div class="header-meta">
-      <span class="live-dot">Local runtime</span>
-      <span id="version-badge" class="version-badge">正在读取版本…</span>
+    <div class="app-header__inner">
+      <a class="brand" href="/" aria-label="FunRoute Policy Studio 首页">
+        <span class="brand__mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="brand__name">FunRoute</span>
+        <span class="brand__divider" aria-hidden="true"></span>
+        <span class="brand__tag">Policy Studio</span>
+      </a>
+      <div class="header-meta">
+        <span class="chip chip--live">Local runtime</span>
+        <span id="version-badge" class="chip chip--version" title="语言目录、ExprJSON 文档与 Artifact 的形状版本">正在读取版本…</span>
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="主题：跟随系统（点击切换）">
+          <svg class="theme-toggle__auto" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <circle cx="8" cy="8" r="5.3"/><path d="M8 2.7a5.3 5.3 0 0 1 0 10.6z" fill="currentColor" stroke="none"/>
+          </svg>
+          <svg class="theme-toggle__light" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+            <circle cx="8" cy="8" r="3.1"/><path d="M8 1.4v1.5M8 13.1v1.5M1.4 8h1.5M13.1 8h1.5M3.5 3.5l1 1M11.5 11.5l1 1M12.5 3.5l-1 1M4.5 11.5l-1 1"/>
+          </svg>
+          <svg class="theme-toggle__dark" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+            <path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/>
+          </svg>
+        </button>
+      </div>
     </div>
   </header>
 

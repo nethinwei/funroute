@@ -88,7 +88,7 @@ func TestSugarSemantics(t *testing.T) {
 		{"// 选主渠道\n a + 1 // 加一", map[string]any{"a": 1}, int64(2)},
 		{`1_000_000 + 1`, map[string]any{}, int64(1000001)},
 		{`[x * 2 for x in items if x > 1]`, map[string]any{"items": []any{1, 2, 3}}, []any{int64(4), int64(6)}},
-		{`reduce(x in items, total from 0, total + x)`, map[string]any{"items": []any{1, 2, 3}}, int64(6)},
+		{`reduce(x in items, total = 0, total + x)`, map[string]any{"items": []any{1, 2, 3}}, int64(6)},
 	} {
 		value, _ := compileAndRun(t, test.source, registry, test.args, machine.RunOptions{Fuel: 100_000})
 		if fmt.Sprint(value.Any()) != fmt.Sprint(test.want) {
@@ -97,11 +97,11 @@ func TestSugarSemantics(t *testing.T) {
 	}
 }
 
-func TestLoopKeywordFormsMatchPositionalForms(t *testing.T) {
+func TestLoopSugarAndCallsShareOneTree(t *testing.T) {
 	for _, pair := range [][2]string{
 		{`[x * 2 for x in items if x > 1]`, `[mul(x,2) for x in items if gt(x,1)]`},
 		{`[x for x in items]`, `[x for x in items]`},
-		{`reduce(x in items, total from 0, total + x)`, `reduce(x in items, total from 0, add(total,x))`},
+		{`reduce(x in items, total = 0, total + x)`, `reduce(x in items, total = 0, add(total,x))`},
 	} {
 		sugared, err := syntax.Parse(pair[0])
 		if err != nil {
@@ -321,7 +321,7 @@ func TestDictionaryWalkNeedsTwoVariables(t *testing.T) {
 	}{
 		{`[k for k, v in weights if v > 0.0]`, dictContract, map[string]any{"weights": map[string]any{"b": 1.0, "a": 2.0}}, "[a b]"},
 		{`[v for k, v in weights if v > 0.0]`, dictContract, map[string]any{"weights": map[string]any{"b": 1.0, "a": 2.0}}, "[2 1]"},
-		{`reduce(k, v in weights, t from 0.0, t + v)`, dictContract, map[string]any{"weights": map[string]any{"a": 1.5, "b": 2.5}}, "4"},
+		{`reduce(k, v in weights, t = 0.0, t + v)`, dictContract, map[string]any{"weights": map[string]any{"a": 1.5, "b": 2.5}}, "4"},
 		{`[x for x in items if x > 0]`, nil, map[string]any{"items": []any{1, 2}}, "[1 2]"},
 	} {
 		artifact, err := CompileExpr(test.source, registry, CompileOptions{Args: test.contract})
@@ -361,7 +361,7 @@ func TestDictionaryWalkNeedsTwoVariables(t *testing.T) {
 func TestDictionaryWalkSurvivesExprJSONRoundTrip(t *testing.T) {
 	for _, source := range []string{
 		`[add(k, string(v)) for k, v in weights if v > 1.0]`,
-		`reduce(k, v in weights, total from 0.0, total + v)`,
+		`reduce(k, v in weights, total = 0.0, total + v)`,
 	} {
 		expr, err := syntax.Parse(source)
 		if err != nil {

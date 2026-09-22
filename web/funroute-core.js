@@ -13,7 +13,7 @@ export function typeName(type) {
   return type.name || type.kind || "unknown";
 }
 
-export function equalType(left, right) {
+function equalType(left, right) {
   if (!left || !right || left.kind !== right.kind || left.name !== right.name) return false;
   if (left.kind === "array" || left.kind === "dict") return equalType(left.elem, right.elem);
   if (left.kind === "enum") return JSON.stringify(left.values || []) === JSON.stringify(right.values || []);
@@ -48,7 +48,7 @@ export function contractEnums(contract) {
 // it. A special form that has an ExprJSON node of its own (switch, for, reduce,
 // let) is one; a lazy call (if, fallback) is one; and or not are special forms
 // without a node, because they expand to if — they are operators, not blocks.
-export function controlBlocksOf(catalog) {
+function controlBlocksOf(catalog) {
   const nodes = new Set((catalog?.nodes || []).map((schema) => schema.node));
   const blocks = new Set();
   for (const form of catalog?.special_forms || []) {
@@ -104,7 +104,7 @@ export function indexNodes(list) {
   return new Map((list || []).map((schema) => [schema.node, schema]));
 }
 
-export function cleanNode(node, nodes) {
+function cleanNode(node, nodes) {
   if (!node) return null;
   const schema = nodes.get(node.node);
   if (!schema) throw new Error(`不支持的节点 ${node.node}`);
@@ -320,8 +320,12 @@ export class FunRouteLanguage {
     return clauses;
   }
 
-  _forHead(node) { return `${loopVariables(node)} in ${this.expressionSource(node.source)}`; }
-  _accumulatorHead(node) { return `${node.accumulator || "acc"} from ${this.expressionSource(node.init)}`; }
+  _forHead(node) {
+    const head = `${loopVariables(node)} in ${this.expressionSource(node.source)}`;
+    return node.where ? `${head} if ${this.expressionSource(node.where)}` : head;
+  }
+
+  _accumulatorHead(node) { return `${node.accumulator || "acc"} = ${this.expressionSource(node.init)}`; }
   _letBindings(node) { return (node.bindings || []).map((item) => `${item.name} = ${this.expressionSource(item.value)}`); }
 
   _splitNode(node) {

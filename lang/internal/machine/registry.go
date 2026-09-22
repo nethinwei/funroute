@@ -44,6 +44,12 @@ type FunctionSpec struct {
 	// a front end, so there is one structure rather than an input shape and a
 	// parallel output shape that have to be kept in step.
 	Doc Doc
+	// ConstantArgs requires every argument of a call to be fixed at compile
+	// time. It is for a function whose result size follows from its arguments
+	// — range is the one — because a run-time length would let a single scalar
+	// stand for an arbitrarily long array and break the polynomial bound in
+	// docs/termination.md.
+	ConstantArgs bool
 
 	special specialForm
 	builtin bool
@@ -68,6 +74,10 @@ type RegisteredFunction struct {
 // Key is the signature key an artifact records, so a registry that drifts
 // fails to bind rather than binding the wrong function.
 func (f *RegisteredFunction) Key() string { return f.key }
+
+// NeedsConstantArgs reports whether the compiler must refuse a call whose
+// arguments are not fixed at compile time.
+func (f *RegisteredFunction) NeedsConstantArgs() bool { return f.ConstantArgs }
 
 // IsLazyIf reports whether this is the kernel's `if`, which the compiler emits
 // as jumps instead of a call so the untaken branch is never evaluated.
@@ -213,7 +223,7 @@ var (
 var reservedNames = map[string]bool{
 	"true": true, "false": true,
 	"switch": true, "for": true, "reduce": true,
-	"in": true, "from": true, "else": true, "case": true, "let": true,
+	"in": true, "else": true, "case": true, "let": true,
 }
 
 // IsValidFunctionName reports whether name has the shape of a function name.

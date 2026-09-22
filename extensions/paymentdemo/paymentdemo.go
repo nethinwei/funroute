@@ -6,15 +6,19 @@ import (
 	"fmt"
 	"strings"
 
+	"funroute/extensions/std"
 	"funroute/lang"
 )
 
-// NewRegistry is the demo console: the minimal kernel, every lazy form, and the
-// payment extensions. Every form iterates a finite input, so any program this
-// registry accepts terminates.
+// NewRegistry is the demo console: the minimal kernel, every lazy form, the
+// aggregation pack and the payment extensions. Every form iterates a finite
+// input, so any program this registry accepts terminates.
 func NewRegistry() (*lang.Registry, error) {
 	registry := lang.CoreRegistry()
 	if err := registry.EnableForm(lang.SwitchForm, lang.ForForm, lang.ReduceForm); err != nil {
+		return nil, err
+	}
+	if err := std.Register(registry); err != nil {
 		return nil, err
 	}
 	if err := Register(registry); err != nil {

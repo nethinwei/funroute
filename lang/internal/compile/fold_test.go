@@ -34,7 +34,7 @@ func TestClosedExpressionsAreFoldedAway(t *testing.T) {
 	}{
 		{"1000 * 60 * 60 * 24", 86400000},
 		{"(10 + 5) * 2 - 6 / 3", 28},
-		{"reduce(x in [1,2,3,4], total from 0, total + x)", 10},
+		{"reduce(x in [1,2,3,4], total = 0, total + x)", 10},
 	} {
 		artifact := compileFolded(t, registry, test.source)
 		if len(artifact.Instructions) != 1 || artifact.Instructions[0].Op != machine.OpConstant {
@@ -155,7 +155,7 @@ func TestFoldingPreservesResults(t *testing.T) {
 		{"n * (2 + 3)", []ArgSpec{{Name: "n", Type: machine.IntType}}, map[string]any{"n": 7}, int64(35)},
 		{"n > 10 * 10", []ArgSpec{{Name: "n", Type: machine.IntType}}, map[string]any{"n": 99}, false},
 		{
-			"reduce(x in xs, t from 100 - 1, t + x)",
+			"reduce(x in xs, t = 100 - 1, t + x)",
 			[]ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}},
 			map[string]any{"xs": []any{1, 2}}, int64(102),
 		},

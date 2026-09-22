@@ -9,7 +9,7 @@ FunRoute 是面向支付路由的强类型、纯表达式函数语言。仓库�
 - 不依赖参数的子表达式在**编译期**算掉，包括头部的常量绑定；
 - 只做安全、可解释的数值提升，跨领域转换必须显式写 `int(...)`、`float(...)`、`string(...)` 或 `bool(...)`；
 - 编译产物只引用精确的函数签名，运行时注册表漂移会拒绝装载；
-- 内核只有 15 个函数名，其中 `if(...)` 与 `fallback(...)` 惰性求值；`switch(...)`、列表推导 `[...]`、`reduce(...)` 由宿主按需启用；
+- 内核只有 15 个函数名，其中 `if(...)` 与 `fallback(...)` 惰性求值；`switch(...)`、列表推导 `[...]`、`reduce(...)` 由宿主按需启用；求和计数这类聚合是可选的扩展包 `extensions/std`，不进内核；
 - **所有程序保证终止**：迭代只遍历有限输入，语言刻意不图灵完备，fuel 是成本上限而非安全兜底；
 - 源表达式可无损往返规范化 `ExprJSON`。
 
@@ -64,10 +64,22 @@ switch(country,"SG","adyen_sg","MY","stripe_my","stripe_global")
 聚合用 `reduce`（折叠，fold），同样保持函数形态。它不限于求和：每一步用当前元素和当前累加器算出下一个累加器，所以取最大、计数、拼接都由它表达：
 
 ```text
-reduce(price in prices, total from 0, total + price)
+reduce(price in prices, total = 0, total + price)
 ```
 
 依次是元素局部名与输入、累加器局部名与初值、每步结果（用当前元素和累加器算出下一个累加器）；`price` 与 `total` 都是局部变量，不进入外部 `args`，推导结果是 `(prices: array<int>) -> int`。`reduce` 只遍历有限数组，每次迭代按 fuel 计费，不引入递归。
+
+累加器的初值写成 `total = 0`，和 `let` 的绑定同形。和推导式一样，循环头可以带一个 `if`，被它筛掉的元素不进累加器：
+
+```text
+reduce(price in prices if price >= minimum, total = 0, total + price)
+```
+
+日常的求和、计数、取最值不必手写折叠 —— `extensions/std` 把它们注册成函数（`sum`、`count`、`min`、`max`、`any`、`all`、`range`），`reduce` 留给真正需要自定义折叠的规则：
+
+```text
+sum([price for price in prices if price >= minimum])
+```
 
 ## 语法
 
@@ -123,11 +135,12 @@ switch(channel,                            // channel: enum<channel>{adyen,strip
 `reduce` 把每个位置的含义写在语法里，所以只有一种写法：
 
 ```text
-reduce(price in prices, total from 0, total + price)
-reduce(name, weight in weights, sum from 0.0, sum + weight)   // 两个变量遍历字典
+reduce(price in prices, total = 0, total + price)
+reduce(price in prices if price >= minimum, total = 0, total + price)   // 可选筛选
+reduce(name, weight in weights, sum = 0.0, sum + weight)                // 两个变量遍历字典
 ```
 
-`for`、`in`、`if`、`from`、`else`、`case` 在这些位置是关键字；`for`、`in`、`from`、`else`、`case` 同时是保留名，不能用作变量名或函数名。`switch` 与 `reduce` 的位置参数写法（`switch(country,"SG","a",…)`、`reduce(prices,price,total,0,…)`）已移除：一件事只有一种写法，写成旧形式会得到指出正确形态的错误。
+`for`、`in`、`if`、`else`、`case` 在这些位置是关键字；`for`、`in`、`else`、`case` 同时是保留名，不能用作变量名或函数名。累加器的 `=` 与 `let` 的绑定是同一个写法，所以语言里没有第二种"初始化"记号。一件事只有一种写法：写错形状会得到指出正确形态的错误，而不是被将就接受。
 
 `switch` 与 `reduce` 仍使用上面的函数调用外形；编译器把它们识别为惰性、多分支和局部变量结构，不引入语句式语法。
 
@@ -317,7 +330,7 @@ minimal.EnableForm(lang.SwitchForm)      // 只给多分支，不给遍历
 |---|---|---|
 | `switch(...)` | 值匹配或条件链，按顺序惰性选择一个结果 | 结构上总是终止 |
 | `[result for item in source if condition]` | 映射，可选筛选 | 只遍历输入数组 |
-| `reduce(item in source, acc from init, body)` | 逐项折叠进累加器：求和、取最大、计数都是它 | 只遍历输入数组或字典 |
+| `reduce(item in source if condition, acc = init, body)` | 逐项折叠进累加器；筛掉的元素不改变累加器 | 只遍历输入数组或字典 |
 
 
 一个注册表就是一个控制台：想给多少语言就开多少。用未启用的形式会在编译期被拒绝：
@@ -332,7 +345,15 @@ reduce is not enabled in this registry
 
 `Registry.Catalog()` 只列出该注册表启用的形式，因此拖拽面板看到的就是它实际能用的语言。
 
-随机访问、排序、聚合、支付渠道能力、成本模型等不进入通用内核，由使用者注册扩展函数。
+随机访问、排序、支付渠道能力、成本模型等不进入通用内核，由使用者注册扩展函数。聚合有一个现成的包：
+
+```go
+registry := lang.CoreRegistry()
+registry.EnableForm(lang.SwitchForm, lang.ForForm, lang.ReduceForm)
+std.Register(registry)      // sum count min max any all range
+```
+
+`range` 是其中唯一凭空造出数组的函数，所以它的参数**必须在编译期已知**（`FunctionSpec.ConstantArgs`）：否则一个标量参数就能代表任意长的数组，`docs/termination.md` 的多项式上界不再成立。`range(3)`、`range(1, 10, 2)` 以及绑定到常量的名字都可以，`range(n)` 里的参数 `n` 不行。
 
 ## 扩展函数
 
@@ -498,7 +519,7 @@ Run(map) / RunValues(slice) → Value
 
 ```json
 {
-  "version": 2,
+  "version": 1,
   "expr": { "node": "call", "name": "mul", "args": [] }
 }
 ```
@@ -648,6 +669,8 @@ VM 是确定性栈式字节码解释器，**程序执行本身不分配内存**�
 
 向量透传的耗时不随长度变化，是零拷贝的直接证据：宿主的 `[]float64` 进 VM、进扩展函数、出来，始终是同一个底层数组。那约 130 ns 的差价是 `reflect.Call` 与参数装箱，是"任意签名"的代价；不肯付的宿主函数写成 `FunctionSpec` 即可回到内核函数的成本。
 
+和通用求值器比呢？同机对照 `expr` v1.17.8：一次算术求值我们 168 ns / **0 次分配**，它 48 ns / 3 次分配；64 元素的 filter+sum 我们 5.8 µs / 7 次分配，它 3.1 µs / **174 次分配**。单次延迟它快 2–6 倍，垃圾全归它。profile 指出原因不在架构而在调用协议——它把 `a * b` 编译成一条 VM 内联指令，我们编译成一次通用函数调用，真正在算的 `evalIntMul` 只占 3% 的时间。基线数字、归因与提速方案（指令特化、管道融合、免反射调用）记在 [`docs/roadmap.md`](docs/roadmap.md) 的阶段 5；不现在做，是因为阶段 1 会改变指令集形状。
+
 支撑这些数字的实现要点：
 
 - **容器就是原生 Go 值**：`array<float>` 的 backing 是 `[]float64`，`dict<int>` 是 `map[string]int64`，只有容器的容器才用 `[]Value`；宿主传入、扩展函数取出、返回值包装都是同一个 backing。元素占 8 字节而不是一个 `Value`，500 元素推导式的内存从 172 KB 降到 12 KB。
@@ -686,4 +709,4 @@ go test ./lang/internal/compile -bench . -benchtime 2000x   # VM 基准
 
 `make lint` 由 `tools/lint`（仅标准库）实现，强制风格预算：单个方法不超过 50 行、嵌套不超过 3 层、单个文件不超过 800 行。
 
-测试覆盖样例推导、数值提升与显式转换、同型容器拒绝、扩展函数推导、函数式 `switch/for/reduce`、形式开关边界（含 ExprJSON 路径）、递归深度与 fuel 拦截、局部变量、目录只承载含义（出现样式即失败）、参数标签数校验、枚举成员解析与 nominal 边界、大枚举只在消息里缩略、ExprJSON 往返与导入校验、节点 schema 与定义一致、容器跨边界零拷贝（指针相等断言）、惰性分支、Artifact 防篡改和 MVP HTTP API。前端测试覆盖控制块集合由目录推导、放置规则的包裹与替换、格式化的换行与幂等、文案键与目录字段一致；37 个示例由 Go 测试逐条实跑并守住目录全覆盖。
+测试覆盖样例推导、数值提升与显式转换、同型容器拒绝、扩展函数推导、函数式 `switch/for/reduce`、形式开关边界（含 ExprJSON 路径）、递归深度与 fuel 拦截、局部变量、目录只承载含义（出现样式即失败）、参数标签数校验、枚举成员解析与 nominal 边界、大枚举只在消息里缩略、ExprJSON 往返与导入校验、节点 schema 与定义一致、容器跨边界零拷贝（指针相等断言）、惰性分支、Artifact 防篡改和 MVP HTTP API。前端测试覆盖控制块集合由目录推导、放置规则的包裹与替换、格式化的换行与幂等、文案键与目录字段一致；39 个示例由 Go 测试逐条实跑并守住目录全覆盖。

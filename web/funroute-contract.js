@@ -36,6 +36,9 @@ export class ContractPanel {
   constructor(root, { onChange, onCheck, valueTypes } = {}) {
     this._types = typeSuggestionsFrom(valueTypes);
     this._root = root;
+    // The panel names its own scope, so its stylesheet can size the classes it
+    // shares with the canvas without reaching outside itself.
+    this._root.classList.add("fr-contract");
     this._onChange = onChange;
     this._onCheck = onCheck;
     this._contract = emptyContract();

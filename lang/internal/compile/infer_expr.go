@@ -553,7 +553,7 @@ func inferReduce(node *syntax.ReduceExpr, state *inferState, context inferContex
 		out = append(out, folded...)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("type error at byte %d: %s and the body must return the accumulator type", node.Pos, loopSourceHint(node.KeyVariable))
+		return nil, fmt.Errorf("type error at byte %d: %s, the condition must be bool and the body must return the accumulator type", node.Pos, loopSourceHint(node.KeyVariable))
 	}
 	return record(node, out), nil
 }
@@ -564,7 +564,26 @@ func inferReduceSource(node *syntax.ReduceExpr, source inferResult, context infe
 	if err := candidate.unify(source.typ, containerTerm(loopKind(node.KeyVariable), elem)); err != nil {
 		return nil, nil
 	}
-	inits, err := inferExpr(node.Init, candidate, context)
+	local := withLoopLocals(context, node.KeyVariable, node.Variable, elem)
+	states, err := filterCondition(node.Where, []*inferState{candidate}, local)
+	if err != nil {
+		return nil, err
+	}
+	var out []inferResult
+	for _, state := range states {
+		folded, err := inferReduceInit(node, state, elem, context)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, folded...)
+	}
+	return out, nil
+}
+
+// inferReduceInit types the initial value outside the loop: the accumulator
+// starts from something the loop variables cannot see.
+func inferReduceInit(node *syntax.ReduceExpr, state *inferState, elem typeTerm, context inferContext) ([]inferResult, error) {
+	inits, err := inferExpr(node.Init, state, context)
 	if err != nil {
 		return nil, err
 	}

@@ -10,6 +10,7 @@ FunRoute：面向支付路由的强类型纯表达式语言。module `funroute`�
 
 ```text
 lang/lang.go              唯一的公开接口：类型别名与转发，约 40 个标识符
+extensions/std/           可选聚合包（sum count min max any all range），只用公开 API
 lang/internal/machine/    值、类型、字节码、VM、帧、注册表、目录     ← 不依赖任何上层
 lang/internal/syntax/     词法、语法、AST、ExprJSON                 ← 只依赖 machine
 lang/internal/compile/    推导、编译、常量折叠、契约、导出视图        ← 依赖 syntax + machine
@@ -49,7 +50,7 @@ AST 类型**故意不公开**：宿主通过 ExprJSON 交换程序。`lang/lang_
 
 ### 契约在宿主，不在语言里
 
-程序文本**只是表达式**。参数名、类型、顺序、说明、返回类型由宿主通过 `CompileOptions{Args []ArgSpec, Result *Type, ResultDoc}` 传入。理由：控制台本来就存规则元数据（版本、生效窗口、审批人、灰度），参数类型是同类信息，放语言里就是两份平行元数据。曾经有过 `@arg/@let/@ret` 头部，删掉了（见 README「契约」章节的权衡）。
+程序文本**只是表达式**。参数名、类型、顺序、说明、返回类型由宿主通过 `CompileOptions{Args []ArgSpec, Result *Type, ResultDoc}` 传入。理由：控制台本来就存规则元数据（版本、生效窗口、审批人、灰度），参数类型是同类信息，放语言里就是两份平行元数据（权衡见 README「契约」章节）。
 
 - `Args` 非空时，**顺序即 ABI**；为空则按自由变量首次出现顺序推导。
 - 声明了可以不用（调用方 ABI 稳定），用了必须声明（`CompileOptions.validate`）。
@@ -66,13 +67,15 @@ syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile
 
 能力边界由**注册表**决定：`CoreRegistry()` 是极简内核（15 个函数名，其中 `if`/`fallback` 惰性），`registry.EnableForm(SwitchForm/ForForm/ReduceForm)` 逐个打开（`compile/forms.go` 校验）。一个注册表 = 一个控制台。
 
+**聚合不在语言里**：`sum`/`count`/`min`/`max`/`any`/`all` 是 `extensions/std` 注册的普通函数，`reduce` 留给自定义折叠。日常写法是"推导式映射 + 聚合函数"；`reduce` 的 `if` 子句负责折叠前的筛选，累加器写作 `acc = init`（与 `let` 同形）。
+
 **语言刻意不图灵完备**：没有无界循环，所有形式只遍历有限输入，每个程序都终止 —— `Fuel` 是成本上限而非安全兜底。想加回无界循环前先读 `docs/termination.md` 的附录。
 
 ### 必须守住的不变量
 
 - `machine/registry.go` 的 Registry 是唯一类型权威；函数身份是**完整签名** `name(参数)->结果`，同名不同签名即重载。名字的形状与保留字只有一个权威（`IsValidFunctionName`/`IsValidVariableName`/`IsReservedName`），parser、导入器与 registry 都调它。
 - Artifact 冻结签名与 fuel 成本；`Instantiate` 校验版本、digest、签名存在性、cost 未变与每条指令。装载时**不再重新解析 ExprJSON** —— 执行只依赖字节码，digest 已经保护了 ExprJSON。
-- digest = 清空 `Digest`、`Args[i].Doc`、`ResultDoc` 后 JSON 序列化再 sha256 ⇒ 改动既有字段、字段顺序或 JSON tag 都会让旧 Artifact 失效，必须 bump `ArtifactVersion`。ExprJSON 的字段顺序就是节点 struct 的字段顺序，所以**给节点 struct 重排字段也算改 digest**。
+- digest = 清空 `Digest`、`Args[i].Doc`、`ResultDoc` 后 JSON 序列化再 sha256 ⇒ 改动既有字段、字段顺序或 JSON tag 都会让旧 Artifact 失效。ExprJSON 的字段顺序就是节点 struct 的字段顺序，所以**给节点 struct 重排字段也算改 digest**。`ArtifactVersion`/`ExprJSONVersion`/`CatalogVersion` 只标识**当前**形状，不是历史计数：还没有对外承诺兼容，形状要改就直接改，不必为迁移留台阶；等到有已部署的 artifact 时再让它们递增。
 - **opcode 的一切在一张表里**（`machine/opcode.go`）：名字、栈效应、校验规则，按 opcode 索引所以顺序不可能错位。加 opcode = 表里加一行 + `frame.step` 加一个 case，`TestEveryOpcodeIsExecutableAndNamed` 会抓住漏掉的那一半。
 - **常量折叠**（`compile/fold.go`）：不读参数也不读循环变量的子表达式在编译期用真 VM 跑掉（`EvaluateClosed`），折叠失败就原样发指令 —— 所以语义绝不变，这正是它能安全穿过惰性 `if` 的原因。折叠是传递的（`let(a = 250, a * 4)` 整个折掉），折成常量的绑定**不占局部槽**。常量池只存标量，容器自然回退。
 - `Artifact.MaxStack` 由编译期栈效应累加得出，帧据此一次预留，`push` 在预留内跳过上限检查；算错只影响优化不影响正确性（`push` 的回退路径仍检查）。`release` 只清用过的部分，靠 `reserved` 与溢出水位。
@@ -89,13 +92,15 @@ syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile
 
 ### 改动同步点
 
-- 新增 opcode → `machine/opcode.go` 表 + `machine/frame.go` 的 `step`。仅此两处，测试兜底。给 `Instruction` 加 `omitempty` 字段不改变既有 digest（零值不出现在 JSON），无需 bump。
+- 新增 opcode → `machine/opcode.go` 表 + `machine/frame.go` 的 `step`。仅此两处，测试兜底。给 `Instruction` 加 `omitempty` 字段不改变既有 digest（零值不出现在 JSON）。
 - 新增惰性形式 → `machine/registry.go` 的 `knownForms` + 节点的 `Form()` 方法（`compile/forms.go` 靠它和 `Children` 通用校验）+ `machine/catalog.go` 的 `formDescriptors`。
+- 新增**要求常量参数**的函数 → `FunctionSpec.ConstantArgs = true`，编译器的 `requireConstantArgs` 在编译调用时拒绝只在运行时才知道的实参。只给"结果规模由参数决定"的函数用（`range` 是唯一一个），理由写在 `docs/termination.md` 定理 B 之后。
 - 新增函数 → 只注册带 `Display` 的 `FunctionSpec`，目录与拖拽面板自动生效；要 ABI 版本就写进名字（`route.score_v1`）。`Doc` 是**唯一**的函数元数据结构：`FunctionSpec.Doc`、`Logic`/`Model` 的入参、目录 JSON 的 `doc` 字段都是它，没有平行的 Display/Parameter/Result 结构。只写机器算不出来的（标签、说明、成本、参数标签）：签名来自反射，分类缺省取命名空间，顺序按名字，**颜色/图标只在 `web/funroute-display.js`**。按 Go 签名注册用 `Logic`（反射读签名，任意元数与嵌套，首参数可选 `context.Context`），模型函数用 `Model` 同时给单条与批量实现；引擎类型先 `DefineHandle[T]`。
 - `Kind` 加值 → `kindNames` 同步；若它有运行时表示，`Value.hasType`/`Type()`/`Any()`、`compile/infer.go` 的 `typeTerm`（含 `name`）、`implicitTypeScore`、`ParseType`、`validateTypePattern` 与前端 `typeName` 都要认识它（`HandleKind` 是现成范例）。
 - 新增 ExprJSON 节点 → 在 `syntax/ast.go` 定义带 tag 的 struct（含 `kind()`，需要时 `check()`/`Form()`）并加进 `nodeTypes`；导入、导出、作用域、schema、前端 `cleanNode`/空白模板/卡片全部自动生效。仍要手写的是语义：`compile/infer_expr.go`、`compile/compiler.go` 的 case，`web/funroute-core.js` 的 `expressionSource`/`_splitNode` 打印，以及可选的 `FIELD_TEXT` 文案。`walk_test.go` 的 schema 测试会要求列出新节点。
 - 新增公开 API → `lang/lang.go` 加别名或转发，并在 `lang/lang_test.go` 以宿主视角用一次；能不加就不加。
 - 新增前端例子 → 只改 `web/funroute-examples.js`（例子是**源码 + 契约**两部分，点按钮走 `/api/parse`，按钮由 `renderExamples` 生成）。别手写 ExprJSON 模板。
+- 新增颜色 → 不要写字面量。`web/styles.css` 的 `:root` 是**唯一**的调色板，每个 token 用 `light-dark(浅, 深)` 同时给出两套值，主题切换只改 `color-scheme`（`data-theme` 缺省即跟随系统）。`funroute-designer.css` 只消费这些 token，自己不定义颜色；彩底上的文字用 `--on-accent`，ink 填充按钮上的文字用 `--on-ink`，两者不会随主题翻转成不可读。
 - 新增前端文件 → 加进 `web/embed.go` 的 `//go:embed` 列表（`make check-js` 按 `web/*.js` 通配，不用再列一遍）。前端依赖严格单向、`funroute-core.js` 零 import（`node --test` 就能跑它），分层每个文件只做一件事：`funroute-core.js`（无 DOM SDK：schema 驱动的 `cleanNode`/`blankNode`、打印/格式化/词法、`FunRouteLanguage`/`Client`/`Workspace`）、`funroute-display.js`（缩略类型文本与配色，**所有颜色图标只在这里**；`typeName`/`equalType` 是协议，留在 core）、`funroute-fields.js`（输入控件与“文本→值”解析：表达式行、枚举选择、值编辑、`parseInputValue`）、`funroute-dnd.js`（放置规则，注释里写明全部情形）、`funroute-palette.js`（控制块面板）、`funroute-reference.js`（语法说明，从目录生成）、`funroute-designer.js`（画布 Web Component）、`funroute-contract.js`（契约面板）、`funroute-examples.js`（例子加载）、`app.js`（MVP 外壳）。**契约面板与画布之间没有同步点**：前者是宿主数据，后者是表达式，各自提交。
 - 新增 API 字段 → 改 `mvp/server.go` 的 `expressionRequest`（`DisallowUnknownFields` 会拒绝未声明字段）；CSP 是 `script-src 'self'`，前端保持无框架无构建。
 
@@ -111,7 +116,7 @@ go test ./lang/internal/compile -bench Vector -benchtime 1s                # 向
 go test ./lang/internal/compile -bench BatchVersus -benchtime 2000x        # 批处理对比：合批摊薄引擎开销
 go list -deps ./lang/internal/machine | grep funroute                     # 验证依赖方向
 go run ./cmd/funroute inspect -expr 'if(a,b,add(1,1))'
-go run ./cmd/funroute run -expr 'reduce(x in items, total from 0, total + x)' -args '{"items":[1,2,3]}'
+go run ./cmd/funroute run -expr 'reduce(x in items, total = 0, total + x)' -args '{"items":[1,2,3]}'
 go run ./cmd/funroute run -expr 'let(bps = 250, amount * bps / 10000)' \
   -types 'amount=int' -args '{"amount":100000}'          # 契约由 -types 给出
 ```

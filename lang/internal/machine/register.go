@@ -215,10 +215,3 @@ func namespaceOf(name string) string {
 	}
 	return namespace
 }
-
-func orDefault(value, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
-}

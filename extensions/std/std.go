@@ -1,0 +1,257 @@
+// Package std is the aggregation pack: the folds a payment rule actually
+// writes, as ordinary functions.
+//
+// The language itself has no fold construct. A comprehension maps over a
+// finite input; these functions collapse the result to one value. Which
+// aggregations a console offers is therefore a registration decision, like
+// every other capability — a registry without this pack can map and filter
+// but cannot add anything up.
+package std
+
+import (
+	"context"
+	"fmt"
+	"math"
+
+	"funroute/lang"
+)
+
+// maxRangeLength caps one range call. The compiler already requires constant
+// arguments (FunctionSpec.ConstantArgs), so this only stops a rule from
+// writing an absurd literal; it is not what bounds the language.
+const maxRangeLength = 10_000
+
+// Register adds the pack to a registry.
+func Register(registry *lang.Registry) error {
+	if registry == nil {
+		return fmt.Errorf("registry is required")
+	}
+	for _, register := range []func(*lang.Registry) error{
+		registerSum, registerExtremes, registerCount, registerQuantifiers, registerRange,
+	} {
+		if err := register(registry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func registerSum(registry *lang.Registry) error {
+	doc := lang.Doc{
+		Label:       "求和",
+		Description: "把数组里的元素依次加起来；空数组是 0。要加的东西先用推导式算出来，再交给它。",
+		Category:    "聚合",
+		Cost:        4,
+		Params:      []string{"数组"},
+		Result:      "总和",
+	}
+	if err := lang.Logic(registry, "sum", doc, sumInts); err != nil {
+		return err
+	}
+	return lang.Logic(registry, "sum", doc, sumFloats)
+}
+
+func registerExtremes(registry *lang.Registry) error {
+	for _, extreme := range []struct {
+		name, label, result string
+		ints                func([]int64) (int64, error)
+		floats              func([]float64) (float64, error)
+	}{
+		{"min", "最小值", "最小的元素", minOf[int64], minOf[float64]},
+		{"max", "最大值", "最大的元素", maxOf[int64], maxOf[float64]},
+	} {
+		doc := lang.Doc{
+			Label:       extreme.label,
+			Description: "取数组里" + extreme.label + "；空数组报错，因为没有可取的元素。",
+			Category:    "聚合",
+			Cost:        4,
+			Params:      []string{"数组"},
+			Result:      extreme.result,
+		}
+		if err := lang.Logic(registry, extreme.name, doc, extreme.ints); err != nil {
+			return err
+		}
+		if err := lang.Logic(registry, extreme.name, doc, extreme.floats); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// registerCount is the one function here with a generic signature, so it is
+// written as a FunctionSpec: it counts items and never looks at them.
+func registerCount(registry *lang.Registry) error {
+	return registry.Register(lang.FunctionSpec{
+		Name:   "count",
+		Params: []lang.Type{lang.ArrayOf(lang.TypeVar("T"))},
+		Result: lang.IntType,
+		Eval: func(_ context.Context, args []lang.Value) (lang.Value, error) {
+			length, ok := args[0].Length()
+			if !ok {
+				return lang.Value{}, fmt.Errorf("count needs an array")
+			}
+			return lang.Int(int64(length)), nil
+		},
+		Doc: lang.Doc{
+			Label:       "计数",
+			Description: "数数组里有多少个元素。条件计数写成推导式加筛选：count([x for x in xs if 条件])。",
+			Category:    "聚合",
+			Cost:        2,
+			Params:      []string{"数组"},
+			Result:      "个数",
+		},
+	})
+}
+
+func registerQuantifiers(registry *lang.Registry) error {
+	any := lang.Doc{
+		Label:       "任一为真",
+		Description: "数组里只要有一个 true 就是 true；空数组是 false。",
+		Category:    "聚合",
+		Cost:        3,
+		Params:      []string{"布尔数组"},
+		Result:      "是否存在",
+	}
+	all := lang.Doc{
+		Label:       "全部为真",
+		Description: "数组里每一个都是 true 才是 true；空数组是 true。",
+		Category:    "聚合",
+		Cost:        3,
+		Params:      []string{"布尔数组"},
+		Result:      "是否全部满足",
+	}
+	if err := lang.Logic(registry, "any", any, anyTrue); err != nil {
+		return err
+	}
+	return lang.Logic(registry, "all", all, allTrue)
+}
+
+// registerRange is the only source of a sequence that does not come from the
+// host. Its arguments must be constant, so the length of what it produces is
+// known when the rule is compiled and the bounds in docs/termination.md hold
+// unchanged.
+func registerRange(registry *lang.Registry) error {
+	for _, form := range []struct {
+		labels []string
+		bounds func([]lang.Value) (int64, int64, int64)
+	}{
+		{[]string{"个数"}, func(args []lang.Value) (int64, int64, int64) { return 0, argInt(args, 0), 1 }},
+		{[]string{"起点", "终点"}, func(args []lang.Value) (int64, int64, int64) {
+			return argInt(args, 0), argInt(args, 1), 1
+		}},
+		{[]string{"起点", "终点", "步长"}, func(args []lang.Value) (int64, int64, int64) {
+			return argInt(args, 0), argInt(args, 1), argInt(args, 2)
+		}},
+	} {
+		params := make([]lang.Type, len(form.labels))
+		for i := range params {
+			params[i] = lang.IntType
+		}
+		if err := registry.Register(rangeSpec(params, form.labels, form.bounds)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rangeSpec(params []lang.Type, labels []string, bounds func([]lang.Value) (int64, int64, int64)) lang.FunctionSpec {
+	return lang.FunctionSpec{
+		Name:         "range",
+		Params:       params,
+		Result:       lang.ArrayOf(lang.IntType),
+		ConstantArgs: true,
+		Eval: func(_ context.Context, args []lang.Value) (lang.Value, error) {
+			start, stop, step := bounds(args)
+			return sequence(start, stop, step)
+		},
+		Doc: lang.Doc{
+			Label:       "整数序列",
+			Description: "生成一段整数：range(3) 是 [0,1,2]，range(1,4) 是 [1,2,3]，第三个参数是步长。参数必须在编译期已知，所以序列长度是写死的。",
+			Category:    "聚合",
+			Cost:        8,
+			Params:      labels,
+			Result:      "整数数组",
+		},
+	}
+}
+
+func argInt(args []lang.Value, index int) int64 {
+	value, _ := args[index].Int()
+	return value
+}
+
+func sequence(start, stop, step int64) (lang.Value, error) {
+	if step == 0 {
+		return lang.Value{}, fmt.Errorf("range step must not be zero")
+	}
+	items := []int64{}
+	for value := start; step > 0 && value < stop || step < 0 && value > stop; value += step {
+		if len(items) == maxRangeLength {
+			return lang.Value{}, fmt.Errorf("range is longer than %d items", maxRangeLength)
+		}
+		items = append(items, value)
+	}
+	return lang.ToValue(items)
+}
+
+func sumInts(items []int64) (int64, error) {
+	total := int64(0)
+	for _, item := range items {
+		if item > 0 && total > math.MaxInt64-item || item < 0 && total < math.MinInt64-item {
+			return 0, fmt.Errorf("integer overflow in sum")
+		}
+		total += item
+	}
+	return total, nil
+}
+
+func sumFloats(items []float64) (float64, error) {
+	total := 0.0
+	for _, item := range items {
+		total += item
+	}
+	if math.IsNaN(total) || math.IsInf(total, 0) {
+		return 0, fmt.Errorf("non-finite float result in sum")
+	}
+	return total, nil
+}
+
+func minOf[T int64 | float64](items []T) (T, error) {
+	return extremeOf(items, "min", func(candidate, best T) bool { return candidate < best })
+}
+
+func maxOf[T int64 | float64](items []T) (T, error) {
+	return extremeOf(items, "max", func(candidate, best T) bool { return candidate > best })
+}
+
+func extremeOf[T int64 | float64](items []T, name string, better func(T, T) bool) (T, error) {
+	var best T
+	if len(items) == 0 {
+		return best, fmt.Errorf("%s of an empty array", name)
+	}
+	best = items[0]
+	for _, item := range items[1:] {
+		if better(item, best) {
+			best = item
+		}
+	}
+	return best, nil
+}
+
+func anyTrue(items []bool) (bool, error) {
+	for _, item := range items {
+		if item {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func allTrue(items []bool) (bool, error) {
+	for _, item := range items {
+		if !item {
+			return false, nil
+		}
+	}
+	return true, nil
+}

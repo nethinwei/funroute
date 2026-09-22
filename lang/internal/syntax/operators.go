@@ -95,7 +95,7 @@ func SourceSyntax() machine.SourceSyntax {
 	}
 	return machine.SourceSyntax{
 		ExprJSONVersion: ExprJSONVersion, VariableNamePattern: `[A-Za-z_][A-Za-z0-9_]*`,
-		Keywords: []string{"case", "else", "in", "from", "for"}, Operators: operators,
+		Keywords: []string{"case", "else", "in", "for"}, Operators: operators,
 	}
 }
 

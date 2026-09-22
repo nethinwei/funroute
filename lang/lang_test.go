@@ -344,3 +344,115 @@ func TestHostBatchesModelCallsAcrossRequests(t *testing.T) {
 		t.Fatalf("value types = %+v", catalog.ValueTypes)
 	}
 }
+
+// The SDK's job is to let a host write these types down. Code that only ever
+// uses := never notices a missing alias, so the three tests below name every
+// public type explicitly: drop one from lang.go and this file stops compiling.
+func TestHostNamesTheValueTypes(t *testing.T) {
+	var flag lang.Value = lang.Bool(true)
+	var text lang.Value = lang.String("SGD")
+	var kind lang.Kind = flag.Kind()
+	var boolType lang.Type = lang.BoolType
+	numbers, err := lang.Array(lang.IntType, []lang.Value{lang.Int(1), lang.Int(2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	weights, err := lang.Dict(lang.FloatType, map[string]lang.Value{"adyen": mustFloat(t, 0.6)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dictType lang.Type = lang.DictOf(lang.FloatType)
+	if kind.String() != "bool" || !flag.Type().Equal(boolType) {
+		t.Fatalf("kind = %s", kind)
+	}
+	if got, _ := text.String(); got != "SGD" {
+		t.Fatalf("string value = %q", got)
+	}
+	if length, _ := numbers.Length(); length != 2 {
+		t.Fatalf("array length = %d", length)
+	}
+	if !weights.Type().Equal(dictType) {
+		t.Fatalf("dict type = %s", weights.Type())
+	}
+}
+
+func TestHostNamesTheRegistryAndArtifactTypes(t *testing.T) {
+	registry := lang.NewRegistry()
+	var double lang.EvalFunc = func(_ context.Context, args []lang.Value) (lang.Value, error) {
+		value, _ := args[0].Int()
+		return lang.Int(value * 2), nil
+	}
+	if err := registry.Register(lang.FunctionSpec{
+		Name: "demo.double", Params: []lang.Type{lang.IntType}, Result: lang.IntType, Eval: double,
+		Doc: lang.Doc{Label: "翻倍", Category: "演示", Cost: 2, Params: []string{"值"}, Result: "两倍"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var form lang.Form = lang.SwitchForm
+	if err := registry.EnableForm(form); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := lang.CompileExpr(`demo.double(21)`, registry, lang.CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var constant lang.Constant = artifact.Constants[0]
+	var instruction lang.Instruction = artifact.Instructions[0]
+	// The call reads no argument, so folding ran it at compile time and the
+	// pool holds the answer rather than the input.
+	if constant.Int == nil || *constant.Int != 42 {
+		t.Fatalf("the folded result should be in the constant pool: %+v", constant)
+	}
+	var op lang.OpCode = instruction.Op
+	var runtime *lang.Runtime = mustInstantiate(t, artifact, registry)
+	var batch *lang.Batch = lang.NewBatch(runtime, lang.BatchOptions{MaxSize: 1})
+	defer batch.Close()
+	if op.String() == "" {
+		t.Fatal("an opcode must name itself")
+	}
+	value, err := batch.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := value.Int(); got != 42 {
+		t.Fatalf("value = %v", value.Any())
+	}
+}
+
+func TestHostNamesTheCatalogTypes(t *testing.T) {
+	registry := lang.CoreRegistry()
+	catalog := lang.Catalog(registry)
+	var source lang.SourceSyntax = catalog.Source
+	var operator lang.SourceOperator = source.Operators[0]
+	var template lang.ExpressionTemplate = operator.Template
+	var valueType lang.ValueTypeDescriptor = catalog.ValueTypes[0]
+	var node lang.NodeSchema = catalog.Nodes[0]
+	var field lang.FieldSchema = node.Fields[0]
+	if source.ExprJSONVersion != lang.ExprJSONVersion {
+		t.Fatalf("catalog reports ExprJSON v%d, the package says v%d", source.ExprJSONVersion, lang.ExprJSONVersion)
+	}
+	if operator.Token == "" || template.Node == "" && template.Placeholder == "" {
+		t.Fatalf("operator %q has no expansion", operator.Token)
+	}
+	if valueType.Label == "" || node.Node == "" || field.Name == "" {
+		t.Fatalf("catalog entry is unlabelled: %+v %+v", valueType, node)
+	}
+}
+
+func mustFloat(t *testing.T, value float64) lang.Value {
+	t.Helper()
+	out, err := lang.Float(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func mustInstantiate(t *testing.T, artifact *lang.Artifact, registry *lang.Registry) *lang.Runtime {
+	t.Helper()
+	runtime, err := lang.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime
+}

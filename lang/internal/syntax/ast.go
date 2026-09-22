@@ -199,15 +199,18 @@ func (*ForExpr) Form() machine.Form { return machine.ForForm }
 
 func (e *ForExpr) check() error { return distinctNames(e.KeyVariable, e.Variable) }
 
-// ReduceExpr is reduce(variable in source, accumulator from init, body): body
-// folds every item of source into the accumulator. All three names are locally
-// bound and never become program arguments.
+// ReduceExpr is reduce(variable in source if where, accumulator = init, body):
+// body folds every item the filter keeps into the accumulator. All three names
+// are locally bound and never become program arguments. Where is optional and
+// sees the loop variables but not the accumulator, because an item is filtered
+// before it is folded.
 type ReduceExpr struct {
 	ID          int    `json:"-"`
 	Pos         int    `json:"-"`
 	Source      Expr   `json:"source"`
-	Variable    string `json:"variable" role:"local" binds:"body" default:"item"`
-	KeyVariable string `json:"key_variable,omitempty" role:"local" binds:"body"`
+	Variable    string `json:"variable" role:"local" binds:"where,body" default:"item"`
+	KeyVariable string `json:"key_variable,omitempty" role:"local" binds:"where,body"`
+	Where       Expr   `json:"where,omitempty"`
 	Accumulator string `json:"accumulator" role:"local" binds:"body" default:"acc"`
 	Init        Expr   `json:"init"`
 	Body        Expr   `json:"body"`

@@ -163,6 +163,15 @@ func (v Value) Int() (int64, bool)     { return v.i, v.kind == IntKind }
 func (v Value) Float() (float64, bool) { return v.f, v.kind == FloatKind }
 func (v Value) String() (string, bool) { return v.s, v.kind == StringKind }
 
+// Length is how many items a container holds, without building any of them:
+// count needs the number, not the values.
+func (v Value) Length() (int, bool) {
+	if v.kind != ArrayKind && v.kind != DictKind {
+		return 0, false
+	}
+	return v.length(), true
+}
+
 // Array returns the items as values. For a nested array this is the backing
 // itself, read-only; for a native one it is built, so a host that wants the
 // []float64 should ask FromValue for it and get the backing with no pass.

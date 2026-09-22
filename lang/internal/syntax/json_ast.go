@@ -18,9 +18,9 @@ import (
 // before they get here, so the same program always produces the same bytes —
 // which is what the artifact digest relies on.
 
-// ExprJSONVersion changes whenever the document shape does; a document with
-// any other version is rejected rather than guessed at.
-const ExprJSONVersion = 2
+// ExprJSONVersion names the shape of the document; one with any other version
+// is rejected rather than guessed at.
+const ExprJSONVersion = 1
 
 type exprJSONDocument struct {
 	Version int             `json:"version"`

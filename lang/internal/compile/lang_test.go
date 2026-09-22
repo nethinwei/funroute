@@ -500,7 +500,7 @@ func compileAndRun(t *testing.T, source string, registry *machine.Registry, args
 
 func TestReduceFoldsArrayWithLocalAccumulator(t *testing.T) {
 	value, runtime := compileAndRun(t,
-		`reduce(price in prices, total from 0, add(total,price))`,
+		`reduce(price in prices, total = 0, add(total,price))`,
 		consoleRegistry(t), map[string]any{"prices": []any{10, 20, 30}}, machine.RunOptions{})
 	params := runtime.Args()
 	if len(params) != 1 || params[0].Name != "prices" || !params[0].Type.Equal(machine.ArrayOf(machine.IntType)) {
@@ -515,27 +515,58 @@ func TestReduceFoldsArrayWithLocalAccumulator(t *testing.T) {
 
 	// An empty source yields the initial accumulator without running the body.
 	empty, _ := compileAndRun(t,
-		`reduce(price in prices, total from 7, add(total,price))`,
+		`reduce(price in prices, total = 7, add(total,price))`,
 		consoleRegistry(t), map[string]any{"prices": []any{}}, machine.RunOptions{})
 	if got, _ := empty.Int(); got != 7 {
 		t.Fatalf("empty reduce = %v", empty.Any())
 	}
 }
 
+// TestReduceSkipsFilteredItems is the "if" clause the fold shares with the
+// comprehension: a rejected item is not folded, so the accumulator keeps the
+// value the previous step left.
+func TestReduceSkipsFilteredItems(t *testing.T) {
+	value, _ := compileAndRun(t,
+		`reduce(price in prices if price >= 1000, total = 0, total + price)`,
+		consoleRegistry(t), map[string]any{"prices": []any{100, 2500, 900, 4000}},
+		machine.RunOptions{})
+	if got, _ := value.Int(); got != 6500 {
+		t.Fatalf("filtered fold = %v, want 6500", value.Any())
+	}
+
+	// The condition sees the loop variables but not the accumulator, which is
+	// what makes filtering happen before folding rather than inside it.
+	contract := CompileOptions{Args: []ArgSpec{{Name: "prices", Type: machine.ArrayOf(machine.IntType)}}}
+	_, err := CompileExpr(`reduce(price in prices if total > 0, total = 0, total + price)`, consoleRegistry(t), contract)
+	if err == nil || !strings.Contains(err.Error(), "total") {
+		t.Fatalf("the filter must not see the accumulator: %v", err)
+	}
+
+	// A dictionary walk filters on either loop variable.
+	dictValue, _ := compileAndRun(t,
+		`reduce(name, weight in weights if weight > 0.1, total = 0.0, total + weight)`,
+		consoleRegistry(t), map[string]any{"weights": map[string]any{"a": 0.5, "b": 0.05, "c": 0.2}},
+		machine.RunOptions{})
+	if got, _ := dictValue.Float(); got < 0.69 || got > 0.71 {
+		t.Fatalf("filtered dictionary fold = %v, want 0.7", dictValue.Any())
+	}
+}
+
 func TestReduceRejectsBodyThatChangesAccumulatorType(t *testing.T) {
 	registry := consoleRegistry(t)
-	_, err := CompileExpr(`reduce(price in prices, total from 0, string(total))`, registry, CompileOptions{})
+	_, err := CompileExpr(`reduce(price in prices, total = 0, string(total))`, registry, CompileOptions{})
 	if err == nil || !strings.Contains(err.Error(), "accumulator") {
 		t.Fatalf("error = %v", err)
 	}
-	if _, err := CompileExpr(`reduce(price in prices, price from 0, price)`, registry, CompileOptions{}); err == nil {
+	if _, err := CompileExpr(`reduce(price in prices, price = 0, price)`, registry, CompileOptions{}); err == nil {
 		t.Fatal("reduce accepted the same name for item and accumulator")
 	}
 }
 
 func TestReduceAndComprehensionSurviveExprJSONRoundTrip(t *testing.T) {
 	for _, source := range []string{
-		`reduce(price in prices, total from 0, add(total,price))`,
+		`reduce(price in prices, total = 0, add(total,price))`,
+		`reduce(price in prices if gt(price,minimum), total = 0, add(total,price))`,
 		`[channel for channel in channels if eq(channel,"UP")]`,
 		`[add(x,1) for x in [mul(y,2) for y in items]]`,
 	} {
@@ -562,7 +593,7 @@ func TestReduceAndComprehensionSurviveExprJSONRoundTrip(t *testing.T) {
 }
 
 func TestDisabledFormsAreRejectedWhenTheyArriveAsExprJSON(t *testing.T) {
-	expr, err := syntax.Parse(`[reduce(p in row, t from 0, add(t,p)) for row in rows]`)
+	expr, err := syntax.Parse(`[reduce(p in row, t = 0, add(t,p)) for row in rows]`)
 	if err != nil {
 		t.Fatal(err)
 	}

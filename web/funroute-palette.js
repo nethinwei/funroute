@@ -6,27 +6,20 @@
 import { DND_MIME } from "./funroute-dnd.js";
 import { lookFor } from "./funroute-display.js";
 
-export function renderPalette({ templates, search, selectedId, onSearch, onSelect }) {
+export function renderPalette({ templates, selectedId, onSelect }) {
   const palette = el("aside", "fr-palette");
   const header = el("div", "fr-palette__header");
-  header.append(el("strong", "", "添加组件"));
-  const field = document.createElement("input");
-  field.className = "fr-search";
-  field.type = "search";
-  field.placeholder = "搜索控制块";
-  field.value = search;
-  field.addEventListener("input", () => onSearch(field.value.toLowerCase().trim()));
-  header.append(field);
+  header.append(el("strong", "", "添加组件"), el("small", "fr-muted", "拖到任意表达式位置"));
   const list = el("div", "fr-palette__list");
-  paletteBlocks(list, templates, search, selectedId, onSelect);
-  if (!list.childElementCount) list.append(el("p", "fr-empty", "没有匹配的控制块"));
+  paletteBlocks(list, templates, selectedId, onSelect);
   palette.append(header, list);
   return { palette, list };
 }
 
-function paletteBlocks(list, templates, search, selectedId, onSelect) {
-  const entries = [...templates].filter(([, template]) => matches(search,
-    `${template.descriptor.label || ""} ${template.descriptor.doc?.label || ""} ${template.descriptor.doc?.description || ""}`));
+// The palette holds the control blocks the registry enables — six of them at
+// most — so they are all on screen at once and there is nothing to search.
+function paletteBlocks(list, templates, selectedId, onSelect) {
+  const entries = [...templates];
   if (!entries.length) return;
   const section = el("section", "fr-palette-group");
   section.append(el("h3", "", "控制块"));
@@ -53,10 +46,6 @@ function blockCard(templateId, descriptor, selectedId, onSelect) {
   });
   card.addEventListener("click", () => onSelect(templateId));
   return card;
-}
-
-function matches(search, haystack) {
-  return !search || haystack.toLowerCase().includes(search);
 }
 
 function el(tag, className, text) {

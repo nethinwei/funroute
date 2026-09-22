@@ -243,6 +243,11 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	if function.IsLazyFallback() {
 		return c.compileFallback(node)
 	}
+	if function.NeedsConstantArgs() {
+		if err := c.requireConstantArgs(node); err != nil {
+			return err
+		}
+	}
 	if err := c.compileAll(node.Args); err != nil {
 		return err
 	}
@@ -286,6 +291,19 @@ func (c *bytecodeCompiler) compileSwitch(node *syntax.SwitchExpr) error {
 		}
 	}
 	c.patch(endJumps, len(c.instructions))
+	return nil
+}
+
+// requireConstantArgs holds a ConstantArgs function to its promise: what it
+// produces is sized by its arguments, so those arguments must be known when
+// the rule is compiled rather than when it runs.
+func (c *bytecodeCompiler) requireConstantArgs(node *syntax.CallExpr) error {
+	for i, arg := range node.Args {
+		if c.constantExpr(arg) {
+			continue
+		}
+		return fmt.Errorf("%s needs arguments fixed at compile time: argument %d is only known at run time", node.Name, i+1)
+	}
 	return nil
 }
 
@@ -412,9 +430,10 @@ func (c *bytecodeCompiler) unbindLocal(name string) {
 	c.localIndex[name] = slots[:len(slots)-1]
 }
 
-// compileReduce lays out: source, init, loop_init, body, loop_collect,
-// loop_next. It shares the loop opcodes with for; the accumulator slot in C is
-// what makes it a fold instead of a mapping.
+// compileReduce lays out: source, init, loop_init, condition, body,
+// loop_collect, loop_next. It shares the loop opcodes with for; the
+// accumulator slot in C is what makes it a fold instead of a mapping, and a
+// filtered item jumps straight to loop_next, leaving the accumulator alone.
 func (c *bytecodeCompiler) compileReduce(node *syntax.ReduceExpr) error {
 	resultType, ok := c.inferred.NodeTypes[node.ID]
 	if !ok || !resultType.IsConcrete() {
@@ -435,11 +454,21 @@ func (c *bytecodeCompiler) compileReduce(node *syntax.ReduceExpr) error {
 
 	init := c.emit(machine.Instruction{Op: machine.OpLoopInit, B: itemSlot, C: accSlot, D: keySlot, Type: &resultType})
 	loopStart := len(c.instructions)
+	jumpFiltered := -1
+	if node.Where != nil {
+		if err := c.compile(node.Where); err != nil {
+			return err
+		}
+		jumpFiltered = c.emit(machine.Instruction{Op: machine.OpJumpIfFalse})
+	}
 	if err := c.compile(node.Body); err != nil {
 		return err
 	}
 	c.emit(machine.Instruction{Op: machine.OpLoopCollect, Type: &resultType})
-	c.emit(machine.Instruction{Op: machine.OpLoopNext, A: loopStart, Type: &resultType})
+	next := c.emit(machine.Instruction{Op: machine.OpLoopNext, A: loopStart, Type: &resultType})
+	if jumpFiltered >= 0 {
+		c.instructions[jumpFiltered].A = next
+	}
 	c.instructions[init].A = len(c.instructions)
 	return nil
 }

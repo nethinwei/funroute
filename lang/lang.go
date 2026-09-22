@@ -65,6 +65,7 @@ var (
 	IntType    = machine.IntType
 	FloatType  = machine.FloatType
 	StringType = machine.StringType
+	TypeVar    = machine.TypeVar
 	ArrayOf    = machine.ArrayOf
 	DictOf     = machine.DictOf
 	HandleOf   = machine.HandleOf

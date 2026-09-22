@@ -31,6 +31,7 @@ export const FIELD_TEXT = {
   "reduce.source": ["输入", "array<T> 或 dict<T>"],
   "reduce.variable": ["元素局部名", "仅本节点可见"],
   "reduce.key_variable": ["键局部名", "填写即遍历字典"],
+  "reduce.where": ["筛选条件", "bool；留空表示全部；跳过的元素不进累加器"],
   "reduce.accumulator": ["累加器局部名", "仅本节点可见；它是每一步带下去的那个值"],
   "reduce.init": ["初始值", "第一步之前累加器是什么，类型 R"],
   "reduce.body": ["每步结果", "用当前元素和累加器算出下一个累加器；必须返回 R"],
