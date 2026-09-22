@@ -285,3 +285,47 @@ func consoleRegistry(t *testing.T) *lang.Registry {
 	}
 	return registry
 }
+
+// A declared type is spelling, nothing more: naming one produces the same
+// artifact — digest included — as writing the record out at every argument.
+// That is what lets a console declare `Order` once without changing the ABI.
+func TestDeclaredTypesAreSpellingOnly(t *testing.T) {
+	registry := decisionRegistry(t)
+	written := "record{amount: int, currency_code: string, tags: array<string>}"
+	aliases := map[string]lang.Type{"Order": mustParseType(t, written)}
+
+	digests := map[string]string{}
+	for label, text := range map[string]string{"named": "Order", "written": written} {
+		typ, err := lang.ParseTypeWith(text, aliases)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		artifact, err := lang.CompileExpr(`route.decide_v1(order).channel`, registry,
+			lang.CompileOptions{Args: []lang.ArgSpec{{Name: "order", Type: typ}}})
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		digests[label] = artifact.Digest
+	}
+	if digests["named"] != digests["written"] {
+		t.Fatalf("an alias changed the artifact: %s vs %s", digests["named"], digests["written"])
+	}
+
+	// A name nobody declared is still a name nobody declared.
+	if _, err := lang.ParseTypeWith("Missing", aliases); err == nil {
+		t.Fatal("an undeclared type name compiled")
+	}
+	// Aliases do not nest, so a declaration cannot name another one.
+	if _, err := lang.ParseType("array<Order>"); err == nil {
+		t.Fatal("ParseType resolved an alias it was never given")
+	}
+}
+
+func mustParseType(t *testing.T, text string) lang.Type {
+	t.Helper()
+	typ, err := lang.ParseType(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return typ
+}

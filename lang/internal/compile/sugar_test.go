@@ -478,3 +478,73 @@ func TestLetSurvivesExprJSONRoundTrip(t *testing.T) {
 		t.Fatalf("%s is not canonical:\n%s\n%s", source, first, second)
 	}
 }
+
+// Several for clauses in one comprehension are the cartesian product: each
+// loops inside the one before it, and every clause but the innermost splices
+// what it yields, so the result is one flat array. The nesting lives in the
+// AST — no new node type, one flag on the loop that splices.
+func TestNestedComprehensionIsACartesianProduct(t *testing.T) {
+	registry := consoleRegistry(t)
+	result, _ := compileAndRun(t,
+		`[a * 10 + b for a in xs if a > 1 for b in ys if b < 9]`,
+		registry,
+		map[string]any{"xs": []any{1, 2, 3}, "ys": []any{7, 8, 9}},
+		machine.RunOptions{Fuel: 10_000})
+	items, ok := result.Array()
+	if !ok {
+		t.Fatalf("result = %#v", result.Any())
+	}
+	want := []int64{27, 28, 37, 38}
+	if len(items) != len(want) {
+		t.Fatalf("result = %#v, want %v", result.Any(), want)
+	}
+	for i, value := range items {
+		if got, _ := value.Int(); got != want[i] {
+			t.Fatalf("item %d = %v, want %d", i, value.Any(), want[i])
+		}
+	}
+}
+
+// The flag is what the printer and the compiler both read, so it has to
+// survive ExprJSON — and it has to stay out of a single-clause comprehension,
+// because a field that appeared there would move every existing digest.
+func TestSplicingSurvivesExprJSONAndLeavesOneClauseAlone(t *testing.T) {
+	registry := consoleRegistry(t)
+	nested, err := CompileExpr(`[a + b for a in xs for b in ys]`, registry, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := nested.ExprJSON
+	if !strings.Contains(string(encoded), `"flatten":true`) {
+		t.Fatalf("the outer clause did not record the splice: %s", encoded)
+	}
+	reloaded, err := CompileJSON(encoded, registry, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Digest != nested.Digest {
+		t.Fatalf("round trip changed the digest: %s vs %s", reloaded.Digest, nested.Digest)
+	}
+
+	plain, err := CompileExpr(`[a + 1 for a in xs]`, registry, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain.ExprJSON), "flatten") {
+		t.Fatalf("a one-clause comprehension gained a field: %s", plain.ExprJSON)
+	}
+}
+
+// A dictionary comprehension takes one clause: splicing dictionaries would
+// have to answer what a repeated key means, and nesting a list comprehension
+// inside the value says the same thing without that question.
+func TestDictionaryComprehensionTakesOneClause(t *testing.T) {
+	registry := consoleRegistry(t)
+	_, err := CompileExpr(`{k: v for k, v in rates for x in xs}`, registry, CompileOptions{})
+	if err == nil {
+		t.Fatal("a dictionary comprehension accepted two for clauses")
+	}
+	if !strings.Contains(err.Error(), "one 'for' clause") {
+		t.Fatalf("error = %v", err)
+	}
+}

@@ -384,3 +384,48 @@ func TestEnumMembersInsideContainersAreChecked(t *testing.T) {
 		t.Fatalf("native enum array input = %v", err)
 	}
 }
+
+// An enum reaches the contract's namespace from wherever it sits in a type,
+// not just from the top of an argument. A host that passes the whole order in
+// declares its channel enum as a field of that record — which is the shape a
+// routing rule actually gets — and `order.channel == @adyen` has to resolve
+// the member from it. Following Type.Elem alone used to miss every one of
+// these, so the namespace saw an enum in array<enum> but not in
+// record{channel: enum}.
+func TestEnumsAreCollectedFromAnyDepthOfTheContract(t *testing.T) {
+	channel, registry := enumFixture(t)
+	nested := machine.RecordOf(machine.Field{
+		Name: "inner",
+		Type: machine.RecordOf(machine.Field{Name: "channel", Type: channel}),
+	})
+	for _, shape := range []struct {
+		name   string
+		typ    machine.Type
+		source string
+	}{
+		{"字段", machine.RecordOf(machine.Field{Name: "channel", Type: channel}), `order.channel == @adyen`},
+		{"字段的字段", nested, `order.inner.channel == @adyen`},
+		{"record 数组的字段", machine.ArrayOf(machine.RecordOf(machine.Field{Name: "channel", Type: channel})), `order[0].channel == @adyen`},
+		{"record 里的枚举数组", machine.RecordOf(machine.Field{Name: "channels", Type: machine.ArrayOf(channel)}), `@adyen in order.channels`},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			if _, err := CompileExpr(shape.source, registry, CompileOptions{
+				Args: []ArgSpec{{Name: "order", Type: shape.typ}},
+			}); err != nil {
+				t.Fatalf("%s: %v", shape.source, err)
+			}
+		})
+	}
+
+	// The exhaustiveness check reaches it too: a switch on a record's enum
+	// field must still name every member.
+	order := machine.RecordOf(machine.Field{Name: "channel", Type: channel})
+	args := []ArgSpec{{Name: "order", Type: order}}
+	if _, err := CompileExpr(`switch(order.channel, case @adyen => 1, case @stripe => 2)`, registry, CompileOptions{Args: args}); err != nil {
+		t.Fatalf("exhaustive switch on a field: %v", err)
+	}
+	_, err := CompileExpr(`switch(order.channel, case @adyen => 1)`, registry, CompileOptions{Args: args})
+	if err == nil || !strings.Contains(err.Error(), "missing stripe") {
+		t.Fatalf("a switch missing a member compiled: %v", err)
+	}
+}

@@ -9,13 +9,13 @@ import (
 	"strings"
 	"testing"
 
-	"funroute/extensions/paymentdemo"
+	"funroute/examples/payment"
 	"funroute/lang"
 )
 
 func testServer(t *testing.T) *Server {
 	t.Helper()
-	registry, err := paymentdemo.NewRegistry()
+	registry, err := payment.NewRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,5 +347,40 @@ func TestCatalogAPIListsTheEnabledForms(t *testing.T) {
 	want := []string{"switch", "for", "reduce", "let", "and", "or", "not"}
 	if fmt.Sprint(names) != fmt.Sprint(want) {
 		t.Fatalf("special forms = %v, want %v", names, want)
+	}
+}
+
+// The API takes the same declaration: a record written once under "types" and
+// named by every argument that has its shape.
+func TestContractDeclaresARecordTypeOnce(t *testing.T) {
+	server := testServer(t)
+	body := []byte(`{"source":"if(a.amount > b.amount, a, b).currency",` +
+		`"contract":{"types":{"Order":"record{amount: int, currency: string}"},` +
+		`"args":[{"name":"a","type":"Order"},{"name":"b","type":"Order"}],"result":{"type":"string"}},` +
+		`"args":{"a":{"amount":100,"currency":"USD"},"b":{"amount":300,"currency":"EUR"}}}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/run", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("run status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var result map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["value"] != "EUR" {
+		t.Fatalf("result = %#v", result)
+	}
+
+	// An argument naming a type nobody declared is a contract error, not a
+	// silently inferred type.
+	undeclared := []byte(`{"source":"a.amount","contract":{"args":[{"name":"a","type":"Order"}],"result":{"type":"int"}}}`)
+	failing := httptest.NewRequest(http.MethodPost, "/api/compile", bytes.NewReader(undeclared))
+	failing.Header.Set("Content-Type", "application/json")
+	failed := httptest.NewRecorder()
+	server.ServeHTTP(failed, failing)
+	if failed.Code == http.StatusOK {
+		t.Fatalf("an undeclared type compiled: %s", failed.Body.String())
 	}
 }

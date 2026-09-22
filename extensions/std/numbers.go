@@ -1,0 +1,263 @@
+package std
+
+import (
+	"fmt"
+	"math"
+	"sort"
+
+	"funroute/lang"
+)
+
+// The numeric helpers a fee calculation reaches for. round is here and rounds
+// half away from zero, the way math.Round does and the way most people read
+// "四舍五入"; it takes a float to a whole float. Money's rounding is a
+// different question — how to split an amount across the smallest unit
+// without losing a cent — and money will answer it on its own terms.
+func registerNumbers(registry *lang.Registry) error {
+	absolute := lang.Doc{
+		Constexpr: true, Label: "绝对值", Category: "数值", Cost: 2,
+		Description: "取绝对值；整数的最小值没有相反数，所以那一个报错而不是绕回去。",
+		Params:      []string{"数值"}, Result: "绝对值",
+	}
+	if err := eachType(registry, "abs", absolute, absInt, func(value float64) (float64, error) {
+		return math.Abs(value), nil
+	}); err != nil {
+		return err
+	}
+	for _, fn := range []struct {
+		name, label, description string
+		apply                    func(float64) float64
+	}{
+		{"ceil", "向上取整", "取不小于它的最小整数。结果是 int —— 取整就是为了得到整数，要当 float 用写 float(ceil(x))。", math.Ceil},
+		{"floor", "向下取整", "取不大于它的最大整数。结果是 int。", math.Floor},
+		{"round", "四舍五入", "四舍五入到整数，半数远离零（0.5 进 1，-0.5 进 -1）。结果是 int。要按小数位舍入金额，那是 money 的事。", math.Round},
+	} {
+		doc := lang.Doc{
+			Constexpr: true, Label: fn.label, Category: "数值", Cost: 3,
+			Description: fn.description, Params: []string{"数值"}, Result: "整数",
+		}
+		if err := lang.Logic(registry, fn.name, doc, roundingTo(fn.name, fn.apply)); err != nil {
+			return err
+		}
+	}
+	if err := registerPower(registry); err != nil {
+		return err
+	}
+	return lang.Logic(registry, "mod", lang.Doc{
+		Constexpr: true, Label: "取余", Category: "数值", Cost: 3,
+		Description: "浮点取余，符号跟随被除数；除数不能为零。写作 a % b。",
+		Params:      []string{"被除数", "除数"}, Result: "余数",
+	}, modFloat)
+}
+
+// registerStatistics is the "what does this list look like" family. Both
+// answers are floats: the average of whole numbers rarely is one, and the
+// median of an even count is the midpoint of the middle two.
+// roundingTo makes a rounding function return an int. A float64 reaches beyond
+// int64 long before it runs out of exponent, so the conversion is checked: an
+// amount that cannot be an integer is an error, not a wrapped-around one.
+//
+// The comparison is written against the exact powers of two that bound int64,
+// because float64(math.MaxInt64) rounds up to 2^63 and would let that value
+// through.
+func roundingTo(name string, apply func(float64) float64) func(float64) (int64, error) {
+	return func(value float64) (int64, error) {
+		rounded := apply(value)
+		if rounded < -9223372036854775808.0 || rounded >= 9223372036854775808.0 {
+			return 0, fmt.Errorf("%s(%g) is outside the range of an int", name, value)
+		}
+		return int64(rounded), nil
+	}
+}
+
+func registerStatistics(registry *lang.Registry) error {
+	average := lang.Doc{
+		Constexpr: true, Label: "平均值", Category: "聚合", Cost: 5,
+		Description: "算术平均；空数组报错，因为没有可平均的东西。",
+		Params:      []string{"数组"}, Result: "平均值",
+	}
+	if err := eachType(registry, "avg", average, averageOf[int64], averageOf[float64]); err != nil {
+		return err
+	}
+	middle := lang.Doc{
+		Constexpr: true, Label: "中位数", Category: "聚合", Cost: 8,
+		Description: "排序后的中间值；个数为偶时取中间两个的平均。空数组报错。",
+		Params:      []string{"数组"}, Result: "中位数",
+	}
+	if err := eachType(registry, "median", middle, medianOf[int64], medianOf[float64]); err != nil {
+		return err
+	}
+	spread := lang.Doc{
+		Constexpr: true, Label: "标准差", Category: "聚合", Cost: 9,
+		Description: "总体标准差（除以个数，不是个数减一）：数据就是全部时用它，衡量成功率或费率的抖动。空数组报错。",
+		Params:      []string{"数组"}, Result: "标准差",
+	}
+	if err := eachType(registry, "stddev", spread, deviationOf[int64], deviationOf[float64]); err != nil {
+		return err
+	}
+	quantile := lang.Doc{
+		Constexpr: true, Label: "分位数", Category: "聚合", Cost: 9,
+		Description: "升序排列后的分位值，比例写 0 到 1（p95 就是 0.95），落在两个样本之间时线性插值。空数组报错。",
+		Params:      []string{"数组", "比例"}, Result: "分位值",
+	}
+	if err := eachType(registry, "percentile", quantile, percentileOf[int64], percentileOf[float64]); err != nil {
+		return err
+	}
+	return registerPairwise(registry)
+}
+
+func deviationOf[T int64 | float64](items []T) (float64, error) {
+	mean, err := averageOf(items)
+	if err != nil {
+		return 0, fmt.Errorf("stddev of an empty array")
+	}
+	total := 0.0
+	for _, item := range items {
+		diff := float64(item) - mean
+		total += diff * diff
+	}
+	return math.Sqrt(total / float64(len(items))), nil
+}
+
+func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) {
+	if len(items) == 0 {
+		return 0, fmt.Errorf("percentile of an empty array")
+	}
+	if ratio < 0 || ratio > 1 {
+		return 0, fmt.Errorf("a percentile is a ratio between 0 and 1, got %v", ratio)
+	}
+	sorted := append([]T(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	position := ratio * float64(len(sorted)-1)
+	lower := int(math.Floor(position))
+	upper := int(math.Ceil(position))
+	if lower == upper {
+		return float64(sorted[lower]), nil
+	}
+	weight := position - float64(lower)
+	return float64(sorted[lower])*(1-weight) + float64(sorted[upper])*weight, nil
+}
+
+// registerPairwise is min and max on two values rather than on a list: a fee
+// cap reads min(fee, cap), and making someone build an array for that is the
+// kind of friction a rule writer notices every day.
+func registerPairwise(registry *lang.Registry) error {
+	for _, extreme := range []struct {
+		name, label string
+		smallest    bool
+	}{
+		{"min", "两者取小", true},
+		{"max", "两者取大", false},
+	} {
+		doc := lang.Doc{
+			Constexpr: true, Label: extreme.label, Category: "数值", Cost: 2,
+			Description: "两个同型数值或字符串里" + extreme.label[2:] + "的那个。封顶写 min(fee, cap)。",
+			Params:      []string{"左值", "右值"}, Result: "结果",
+		}
+		smallest := extreme.smallest
+		if err := lang.Logic(registry, extreme.name, doc, pairwise[int64](smallest)); err != nil {
+			return err
+		}
+		if err := lang.Logic(registry, extreme.name, doc, pairwise[float64](smallest)); err != nil {
+			return err
+		}
+		if err := lang.Logic(registry, extreme.name, doc, pairwise[string](smallest)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func averageOf[T int64 | float64](items []T) (float64, error) {
+	if len(items) == 0 {
+		return 0, fmt.Errorf("avg of an empty array")
+	}
+	total := 0.0
+	for _, item := range items {
+		total += float64(item)
+	}
+	return total / float64(len(items)), nil
+}
+
+func medianOf[T int64 | float64](items []T) (float64, error) {
+	if len(items) == 0 {
+		return 0, fmt.Errorf("median of an empty array")
+	}
+	sorted := append([]T(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	middle := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return float64(sorted[middle]), nil
+	}
+	return (float64(sorted[middle-1]) + float64(sorted[middle])) / 2, nil
+}
+
+func pairwise[T int64 | float64 | string](smallest bool) func(T, T) (T, error) {
+	return func(left, right T) (T, error) {
+		if (smallest && right < left) || (!smallest && right > left) {
+			return right, nil
+		}
+		return left, nil
+	}
+}
+
+// registerPower is what an exponential backoff is written with:
+// base * pow(2, attempt). There is no ** operator — one spelling is enough,
+// and the operator table stays the size it is.
+func registerPower(registry *lang.Registry) error {
+	doc := lang.Doc{
+		Constexpr: true, Label: "幂", Category: "数值", Cost: 4,
+		Description: "底数的指数次方。整数版的指数不能为负（那不是整数），结果溢出会报错；浮点版按 IEEE 754 计算。退避间隔写 base * pow(2, attempt)。",
+		Params:      []string{"底数", "指数"}, Result: "幂",
+	}
+	return eachType(registry, "pow", doc, powInt, func(base, exponent float64) (float64, error) {
+		result := math.Pow(base, exponent)
+		if math.IsNaN(result) || math.IsInf(result, 0) {
+			return 0, fmt.Errorf("pow(%v, %v) is not a finite number", base, exponent)
+		}
+		return result, nil
+	})
+}
+
+func powInt(base, exponent int64) (int64, error) {
+	if exponent < 0 {
+		return 0, fmt.Errorf("a negative exponent has no integer result; use floats for that")
+	}
+	result := int64(1)
+	for i := int64(0); i < exponent; i++ {
+		product, err := multiplyInts(result, base)
+		if err != nil {
+			return 0, err
+		}
+		result = product
+	}
+	return result, nil
+}
+
+func multiplyInts(left, right int64) (int64, error) {
+	if left == 0 || right == 0 {
+		return 0, nil
+	}
+	product := left * right
+	if product/right != left {
+		return 0, fmt.Errorf("integer overflow in pow")
+	}
+	return product, nil
+}
+
+func absInt(value int64) (int64, error) {
+	if value == math.MinInt64 {
+		return 0, errNoAbsolute
+	}
+	if value < 0 {
+		return -value, nil
+	}
+	return value, nil
+}
+
+func modFloat(dividend, divisor float64) (float64, error) {
+	if divisor == 0 {
+		return 0, errDivideByZero
+	}
+	return math.Mod(dividend, divisor), nil
+}

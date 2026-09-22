@@ -42,28 +42,78 @@ func (p *parser) parseBrace() (Expr, error) {
 }
 
 // dictComprehension reads the tail of {key: value for item in source if cond}.
+// One clause only: splicing dictionaries would have to answer what a repeated
+// key means, and a nested list comprehension inside the value says it better.
 func (p *parser) dictComprehension(start token, key, value Expr) (Expr, error) {
-	p.index++ // for
-	loopKey, variable, err := p.loopVariables(start)
+	clauses, err := p.loopClauses(start)
 	if err != nil {
 		return nil, err
 	}
-	p.index++ // in
-	source, err := p.parseExpr()
-	if err != nil {
-		return nil, err
-	}
-	where, err := p.loopFilter()
-	if err != nil {
-		return nil, err
+	if len(clauses) > 1 {
+		return nil, p.errorf(start, "a dictionary comprehension takes one 'for' clause")
 	}
 	if err := p.expect(tokenRightBrace, "'}'"); err != nil {
 		return nil, err
 	}
-	return p.node(start, &ForExpr{
-		ID: p.id(), Pos: start.pos, Source: source, Variable: variable,
-		KeyVariable: loopKey, Where: where, YieldKey: key, Yield: value,
-	})
+	return p.nestClauses(start, clauses, key, value)
+}
+
+// loopClause is one "for x in xs if c" of a comprehension.
+type loopClause struct {
+	key, variable string
+	source, where Expr
+}
+
+// loopClauses reads the clauses back to back, starting on a "for". Python
+// spells a cartesian product this way and so does this language, because the
+// alternative — flatten([[...] for ...]) — is a puzzle, not a rule.
+func (p *parser) loopClauses(start token) ([]loopClause, error) {
+	var clauses []loopClause
+	for {
+		p.index++ // for
+		key, variable, err := p.loopVariables(start)
+		if err != nil {
+			return nil, err
+		}
+		p.index++ // in
+		source, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		where, err := p.loopFilter()
+		if err != nil {
+			return nil, err
+		}
+		clauses = append(clauses, loopClause{key: key, variable: variable, source: source, where: where})
+		if !p.keyword("for") {
+			return clauses, nil
+		}
+	}
+}
+
+// nestClauses builds the ForExpr chain from the inside out. The innermost
+// clause yields the element and carries the dictionary key if there is one;
+// every clause outside it splices what the one inside yielded.
+func (p *parser) nestClauses(start token, clauses []loopClause, yieldKey, yield Expr) (Expr, error) {
+	node := yield
+	for i := len(clauses) - 1; i >= 0; i-- {
+		clause := clauses[i]
+		innermost := i == len(clauses)-1
+		var key Expr
+		if innermost {
+			key = yieldKey
+		}
+		expr, err := p.node(start, &ForExpr{
+			ID: p.id(), Pos: start.pos, Source: clause.source, Variable: clause.variable,
+			KeyVariable: clause.key, Where: clause.where, YieldKey: key, Yield: node,
+			Flatten: !innermost,
+		})
+		if err != nil {
+			return nil, err
+		}
+		node = expr
+	}
+	return node, nil
 }
 
 // parseBraceLiteral finishes a dictionary or a record, decided by the first
@@ -156,27 +206,14 @@ func (p *parser) endOfBrace() (bool, error) {
 // Python and Haskell use. It is sugar for a ForExpr, so ExprJSON and the canvas
 // see one node either way.
 func (p *parser) comprehension(start token, yield Expr) (Expr, error) {
-	p.index++ // for
-	key, variable, err := p.loopVariables(start)
-	if err != nil {
-		return nil, err
-	}
-	p.index++ // in
-	source, err := p.parseExpr()
-	if err != nil {
-		return nil, err
-	}
-	where, err := p.loopFilter()
+	clauses, err := p.loopClauses(start)
 	if err != nil {
 		return nil, err
 	}
 	if err := p.expect(tokenRightBracket, "']'"); err != nil {
 		return nil, err
 	}
-	return p.node(start, &ForExpr{
-		ID: p.id(), Pos: start.pos, Source: source,
-		Variable: variable, KeyVariable: key, Where: where, Yield: yield,
-	})
+	return p.nestClauses(start, clauses, nil, yield)
 }
 
 // loopFilter reads the optional "if condition" that both loop forms share:

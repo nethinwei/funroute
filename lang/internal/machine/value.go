@@ -172,7 +172,8 @@ func (v Value) hasType(t Type) bool {
 		return v.s == t.Name
 	}
 	if v.kind == RecordKind {
-		return v.Type().Equal(t)
+		record, ok := v.box.(*recordValue)
+		return ok && record.typ.Equal(t)
 	}
 	if v.kind != ArrayKind && v.kind != DictKind {
 		return true
@@ -219,6 +220,16 @@ func (v Value) At(i int) (Value, bool) {
 		return Value{}, false
 	}
 	return v.at(i), true
+}
+
+// Lookup is At's counterpart for dictionaries: one entry, without building the
+// map that Dict() would. A pack like extensions/std needs it to answer "this
+// key, or the default" in constant time and no allocations.
+func (v Value) Lookup(key string) (Value, bool) {
+	if v.kind != DictKind {
+		return Value{}, false
+	}
+	return v.lookup(key)
 }
 
 // Length is how many items a container holds, without building any of them:
@@ -330,10 +341,7 @@ func (v Value) MarshalJSON() ([]byte, error) {
 }
 
 func holdsRecord(typ Type) bool {
-	if typ.Kind == RecordKind {
-		return true
-	}
-	return typ.Elem != nil && holdsRecord(*typ.Elem)
+	return TypeContains(typ, RecordKind)
 }
 
 func (v Value) marshalContainer() ([]byte, error) {

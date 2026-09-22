@@ -69,9 +69,9 @@ type RegisteredFunction struct {
 // fails to bind rather than binding the wrong function.
 func (f *RegisteredFunction) Key() string { return f.key }
 
-// NeedsConstantArgs reports whether the compiler must refuse a call whose
-// arguments are not fixed at compile time.
-func (f *RegisteredFunction) NeedsConstantArgs() bool { return f.Doc.ConstantArgs }
+// NeedsBoundedArgs reports whether the compiler must refuse a call whose
+// arguments could be any size at run time.
+func (f *RegisteredFunction) NeedsBoundedArgs() bool { return f.Doc.BoundedArgs }
 
 // IsConstexpr reports whether folding may call this function. Everything the
 // kernel registers is; a host function says so for itself.

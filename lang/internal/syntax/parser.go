@@ -499,6 +499,11 @@ func (p *parser) switchBranches(name token, subject Expr) (Expr, error) {
 	}
 	if p.keyword("else") {
 		p.index++
+		// A branch reads "case m => r", so "else => r" is what a hand writes
+		// next; both spellings mean the same thing and the printer picks one.
+		if p.peek().kind == tokenFatArrow {
+			p.index++
+		}
 		fallback, err := p.parseExpr()
 		if err != nil {
 			return nil, err

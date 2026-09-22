@@ -1,9 +1,11 @@
 package machine
 
-// The container backing is chosen by element type, and this file is the only
-// place that knows the choice. Everything else — the loop opcodes, the array
-// primitives, equality, the host boundary — goes through the few operations
-// here, so the mapping from FunRoute type to Go type is stated once.
+// How a container is represented: the backing is chosen by element type, and
+// this file is the only place that knows the choice. Everything else — the
+// loop opcodes, the array primitives, equality, the host boundary — goes
+// through the few operations here, so the mapping from FunRoute type to Go
+// type is stated once. What a program can ask a container (at, in, len) is a
+// different question, and lives in builtins_container.go.
 
 // length is the item count of an array or the entry count of a dictionary.
 func (v Value) length() int {
@@ -156,6 +158,15 @@ func (b *arrayBuilder) add(value Value) {
 		b.strings = append(b.strings, value.s)
 	default:
 		b.values = append(b.values, value)
+	}
+}
+
+// addAll splices an array the caller has already type checked: what a nested
+// comprehension yields is one array per outer item, and the elements are what
+// the output collects.
+func (b *arrayBuilder) addAll(value Value) {
+	for i := 0; i < value.length(); i++ {
+		b.add(value.at(i))
 	}
 }
 

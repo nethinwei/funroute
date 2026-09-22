@@ -100,6 +100,8 @@ func isAbsent(value reflect.Value) bool {
 		return value.IsNil()
 	case reflect.String, reflect.Slice:
 		return value.Len() == 0
+	case reflect.Bool:
+		return !value.Bool()
 	default:
 		return false
 	}
@@ -111,6 +113,10 @@ func exportField(buf *bytes.Buffer, value reflect.Value, field fieldPlan) error 
 		return exportNode(buf, value.Interface().(Expr))
 	case fieldName:
 		encoded, _ := json.Marshal(value.String())
+		buf.Write(encoded)
+		return nil
+	case fieldFlag:
+		encoded, _ := json.Marshal(value.Bool())
 		buf.Write(encoded)
 		return nil
 	default:
@@ -306,9 +312,22 @@ func (m *importer) setField(target reflect.Value, raw json.RawMessage, field fie
 		return nil
 	case fieldName:
 		return setName(target, raw, field)
+	case fieldFlag:
+		return setFlag(target, raw, field)
 	default:
 		return m.setList(target, raw, field)
 	}
+}
+
+// setFlag reads a node's boolean mode. It has no children and binds nothing,
+// so this is the whole of what the walk does with it.
+func setFlag(target reflect.Value, raw json.RawMessage, field fieldPlan) error {
+	var flag bool
+	if err := json.Unmarshal(raw, &flag); err != nil {
+		return fmt.Errorf("field %q must be a boolean", field.name)
+	}
+	target.SetBool(flag)
+	return nil
 }
 
 func setName(target reflect.Value, raw json.RawMessage, field fieldPlan) error {

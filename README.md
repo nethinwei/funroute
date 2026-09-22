@@ -59,6 +59,14 @@ switch(country,"SG","adyen_sg","MY","stripe_my","stripe_global")
 
 读作“产出什么 ← 从哪来 ← 什么条件”。`if` 子句可省略（纯映射）。`channel` 是局部变量，不会出现在外部 `args` 中，结果类型自动推导为 `array<string>`。
 
+`for` 子句可以连写，这就是笛卡尔积 —— 后一个在前一个里循环，外层把内层产出的数组**拼接**起来，所以结果是一个扁平数组而不是数组的数组：
+
+```text
+[{channel: c, currency: k} for c in channels for k in currencies]
+```
+
+每个子句有自己的 `if`（`for c in channels if healthy(c) for k in currencies`）。这在 AST 里不是新节点：parser 把它脱糖成嵌套的 `for` 节点，除最内层外每个都带 `flatten` 标志，VM 用 `loop_spread` 代替 `loop_collect` 收集。所以终止性没变（有限 × 有限仍是有限），前端也把整条链打印回一行。字典推导只接一个子句 —— 拼接字典就得回答"键重复算谁的"，而把列表推导嵌在值里说得更清楚。
+
 推导式是一个**表达式**，返回新数组——这也是它不叫 `for` 的原因：在 C/Java/Go/Python 里 `for` 都是不返回值的语句，而这里的对应物是 Python 的 `[e for x in xs if c]`、LINQ 的 `.Where().Select()`、SQL 的 `SELECT e FROM xs WHERE c`。
 
 聚合用 `reduce`（折叠，fold），同样保持函数形态。它不限于求和：每一步用当前元素和当前累加器算出下一个累加器，所以取最大、计数、拼接都由它表达：
@@ -93,10 +101,14 @@ primary    = integer | float | string | "true" | "false"
            | identifier { "." identifier }          // 变量，以及读它的字段
            | identifier "(" [ expression { "," expression } [ "," ] ] ")"
            | "[" [ expression { "," expression } [ "," ] ] "]"
-           | "[" expression "for" identifier "in" expression [ "if" expression ] "]"
+           | "[" expression loop "]"                             // 列表推导
            | "{" [ string ":" expression { "," string ":" expression } [ "," ] ] "}"
            | "{" identifier ":" expression { "," identifier ":" expression } [ "," ] "}"
+           | "{" expression ":" expression loop "}"              // 字典推导
            | "(" expression ")"
+           | primary "[" expression "]"             // 索引，见运算符表
+           | primary "." identifier                 // 读字段
+loop       = "for" identifier [ "," identifier ] "in" expression [ "if" expression ]
 ```
 
 运算符是**源码层的糖**，脱糖后 AST 里只有函数调用，因此 ExprJSON 与拖拽画布完全不变；反向打印会还原成中缀，源码与节点树可以来回转换：
@@ -109,7 +121,7 @@ primary    = integer | float | string | "true" | "false"
 | 4 | `<` `<=` `>` `>=` | `lt` / `le` / `gt` / `ge` |
 | 5 | `+` `-` | `add` / `sub` |
 | 6 | `*` `/` | `mul` / `div` |
-| 6 | `%` | `mod` |
+| 6 | `%` | `mod`（整数与浮点各一套） |
 | 4 | `in` | `member`（`x in xs` 查数组元素，`"k" in d` 查字典的键） |
 | 8 | `xs[i]` `d["k"]` | `at`（后缀，比算术结合得更紧） |
 | 7 | `!` `-`（一元） | `if(a,false,true)` / `sub(0,a)` |
@@ -117,6 +129,8 @@ primary    = integer | float | string | "true" | "false"
 二元运算符都是左结合，`(...)` 可覆盖优先级。另外：`//` 行注释、`1_000_000` 数字分隔符、列表尾随逗号——这三项是纯词法糖，不进 AST，所以不会在 ExprJSON 往返中保留。
 
 `switch` 有三种形态，前两种用 `case` 标出分支起点（这也是消除歧义的关键：否则 `switch(A, B => C)` 既可读作“主体 A”又可读作“条件 A 或 B”）：
+
+`else` 后面写不写 `=>` 都可以 —— 分支读作 `case m => r`，顺手把箭头带到 `else` 上是很自然的事，两种写法是同一棵树。
 
 ```text
 switch(country,                          // 值匹配
@@ -199,6 +213,8 @@ decision, _ := lang.FromValue[Decision](result)             // 也直接取回�
 
 空数组/字典必须从所在函数签名或编译参数提示中获得元素类型。金额不应使用 `float`；生产版应注册独立的 `money`/`decimal` 类型和函数族。
 
+取整（`ceil`/`floor`/`round`）返回 **int**：取整就是为了得到整数，让每个调用点再写一层 `int(...)` 是白收的税。要当 float 用就显式写 `float(floor(x))`。超出 int64 范围的浮点数取整是错误，不是回绕。
+
 ## 契约
 
 程序文本**只是表达式**。谁传进来、叫什么、什么类型、返回什么，是**宿主的数据**，编译时传入：
@@ -237,6 +253,33 @@ artifact, err := lang.CompileExpr(
 | 用了不声明 | 错误：`the expression reads "x" but the contract does not declare it` |
 | `Result` | 参与 unify 而非事后比对，所以能定死 `[]` 的元素类型、能在重载里选签名 |
 | `Doc` / `ResultDoc` | 唯一不进 digest 的东西 —— 改文案不会让已部署的 artifact 失效 |
+
+### 类型声明
+
+一个 record 常常出现在多个参数上（两笔订单、一个订单加一个数组）。**类型声明**让它只写一次：
+
+```bash
+go run ./cmd/funroute run \
+  -alias 'Order=record{amount: int, currency: string}' \
+  -types 'a=Order,b=Order' \
+  -expr 'if(a.amount > b.amount, a, b).currency' \
+  -args '{"a":{"amount":100,"currency":"USD"},"b":{"amount":300,"currency":"EUR"}}'
+```
+
+API 契约写在 `types` 里，工作台的契约面板上是一行 `类型 名字 = 类型`（record 在那里展开成多行，一眼能看到全部字段；参数与返回处只写名字）：
+
+```json
+{"types": {"Order": "record{amount: int, currency: string}"},
+ "args": [{"name": "a", "type": "Order"}, {"name": "b", "type": "array<Order>"}],
+ "result": {"type": "Order"}}
+```
+
+声明**只是拼写**：名字在解析类型文本时就地展开，编译器、artifact、digest 都看不见它 —— 写全字段与用别名编译出的是同一个 artifact（`TestDeclaredTypesAreSpellingOnly` 比对 digest）。三条约束跟着这一点来：
+
+- 别名**不嵌套**：一个声明不能引用另一个声明，所以没有解析顺序、没有环，也不需要拓扑排序。
+- 别名只对文本契约有意义。Go 宿主本来就复用 `lang.Type` 变量，`ParseTypeWith` 是给文本入口（CLI、HTTP、工作台）用的。
+- 没声明的名字仍然是错误（`unknown type "Order"`），不会退化成推导。
+- 因为展开在编译之前，artifact 与运行结果里只有完整的 record。控制台要显示写下的那个名字，就用 `/api/contract/check` 回传的 `types`（已解析的类型）反查 —— 工作台的 `aliasOf` 就是这么做的，所以试运行面板上写的是 `Health` 而不是它的四个字段。
 
 枚举也只存在于宿主契约。成员是标识符并规范排序，Go 侧可用 `lang.EnumOf("channel", "adyen", "stripe")`，文本契约写 `enum<channel>{adyen,stripe}`。枚举入参在运行边界拒绝集合外的字符串；枚举出参要求编译器能证明每条返回路径都落在成员集合内，扩展函数返回值还会在运行边界复查。
 
@@ -342,10 +385,12 @@ go run ./cmd/funroute inspect \
 - 控制：`if`、`fallback`、`eq`
 - 比较：`lt`、`le`、`gt`、`ge`（各有 int/float/string 与混合数值签名）
 - 算术：`add`、`sub`、`mul`、`div`、`mod`
-- 容器：`at`、`member`、`len`（数组与字典各一套签名，`len` 还接字符串）
+- 容器：`at`、`member`、`len`（数组、字典与字符串各一套签名）
 - 转换：`int`、`float`、`string`、`bool`
 
-容器三个函数都有对应的写法：`xs[i]` / `d["k"]` 是 `at`，`x in xs` 是 `member`，`len` 直接写。**没有缺失值这回事**：越界的下标和不存在的键是错误，和除零一样——语言里没有 null 可以交回去，编造一个就是把静默的错答案放在应该停下的地方。
+容器三个函数都有对应的写法：`xs[i]` / `d["k"]` / `s[i]` 是 `at`，`x in xs` / `"k" in d` / `"b" in text` 是 `member`，`len` 直接写。**字符串是完整的容器**：三个函数都收它，一律按 UTF-8 码点计数而不是字节，`s[i]` 给出的仍是字符串（语言没有字符类型），`"b" in text` 问的是子串（与 Python 一致，参数顺序相反的写法是 `contains(text, "b")`）。取一段仍写 `slice(card, 0, 6)`。
+
+**没有缺失值这回事**：越界的下标和不存在的键是错误，和除零一样——语言里没有 null 可以交回去，编造一个就是把静默的错答案放在应该停下的地方。缺键要兜底就写出来：`get(d, "k", 0)`（标准包），两层配置叠加写 `merge(defaults, overrides)`，键相同时取后者。
 
 `if` 与 `fallback` 是内核的惰性调用：前者只执行选中的分支；后者接受至少两个同类型候选，按顺序求值，仅在当前候选得到 `ErrExtension` 或 `ErrDeadline` 时继续下一项。布尔运算不在内核里——它们是**派生形式**，见下一节。
 
@@ -409,7 +454,7 @@ registry.EnableForm(lang.SwitchForm, lang.ForForm, lang.ReduceForm)
 std.Register(registry)      // sum count min max any all range
 ```
 
-`range` 是其中唯一凭空造出数组的函数，所以它的参数**必须在编译期已知**（`FunctionSpec.ConstantArgs`）：否则一个标量参数就能代表任意长的数组，`docs/termination.md` 的多项式上界不再成立。`range(3)`、`range(1, 10, 2)` 以及绑定到常量的名字都可以，`range(n)` 里的参数 `n` 不行。
+`range` 是其中唯一凭空造出数组的函数，所以它的参数**规模必须已被输入界定**（`Doc.BoundedArgs`）：字面量、`len(容器)`、或两者的算术组合。`range(3)`、`range(len(fees))`、`range(len(a) + len(b))` 都可以；`range(n)` 里 `n` 是入参就不行 —— 那一个标量就能代表任意长的数组，`docs/termination.md` 的多项式上界会失效。（`indices(xs)` 是 `range(len(xs))` 的名字，按下标配对两个数组时写它更顺。）
 
 ## 扩展函数
 
@@ -439,7 +484,7 @@ err := registry.Register(lang.FunctionSpec{
 
 名称里的 `_v1` 只是命名约定，语言不解析它：函数身份是完整签名，版本表达在名字本身。Artifact 同时冻结完整签名和 fuel 成本；同名函数被改成不同类型或成本时，旧 Artifact 会拒绝实例化。
 
-`Doc` 是宿主关于一个函数所说的**全部**：`FunctionSpec` 与 `Logic`/`Model` 用同一个结构，目录也原样输出它，所以没有"注册用一种形状、导出用另一种形状"的平行维护。它不参与类型推导和执行。目录输出的是**含义**：标签、说明、分类、参数与结果说明、成本和类型签名。凡是机器能算出来的都不手写 —— 签名来自 Go 类型，分类缺省取名字的命名空间（`route.score_v1` → `route`），顺序按名字，**颜色与图标是控制台的决定，不进目录**。参数标签是签名里唯一手写的部分（Go 丢掉了参数名），所以数量对不上会在注册时报错，而不是被默默补成“参数 2”。拖拽组件直接消费该目录，所以新增扩展函数不需要再维护一份前端清单。完整示例见 `extensions/paymentdemo/`。
+`Doc` 是宿主关于一个函数所说的**全部**：`FunctionSpec` 与 `Logic`/`Model` 用同一个结构，目录也原样输出它，所以没有"注册用一种形状、导出用另一种形状"的平行维护。它不参与类型推导和执行。目录输出的是**含义**：标签、说明、分类、参数与结果说明、成本和类型签名。凡是机器能算出来的都不手写 —— 签名来自 Go 类型，分类缺省取名字的命名空间（`route.score_v1` → `route`），顺序按名字，**颜色与图标是控制台的决定，不进目录**。参数标签是签名里唯一手写的部分（Go 丢掉了参数名），所以数量对不上会在注册时报错，而不是被默默补成“参数 2”。拖拽组件直接消费该目录，所以新增扩展函数不需要再维护一份前端清单。完整示例见 `examples/payment/`。
 
 更常用的是按 Go 签名注册：`lang.Logic(registry, name, doc, fn)`。`fn` 可以是任意元数的函数，参数与返回值是 Go 的标量（`bool`、各宽度的整数、`float32/float64`、`string`）、任意深度嵌套的切片与 string 键映射、以及注册表 `DefineHandle` 过的类型，首参数可选 `context.Context`，返回 `(R, error)`。签名与两个方向的转换在注册时用反射解析一次，调用时走 `reflect.Call`，每次约 300 ns、几次分配；内核函数是手写 `FunctionSpec`，不走反射，对性能敏感的宿主函数也可以这样写。
 

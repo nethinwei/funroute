@@ -76,6 +76,9 @@ var (
 	HandleOf   = machine.HandleOf
 	EnumOf     = machine.EnumOf
 	ParseType  = machine.ParseType
+	// ParseTypeWith reads a type that may name one of the given aliases, so a
+	// text contract can declare record{…} once and refer to it by name.
+	ParseTypeWith = machine.ParseTypeWith
 )
 
 // Handles are how an inference engine's data crosses the expression without

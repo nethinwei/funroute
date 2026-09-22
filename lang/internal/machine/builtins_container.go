@@ -3,13 +3,20 @@ package machine
 import (
 	"context"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
+// The container half of the kernel's functions — the rest of CoreRegistry is in
+// builtins.go, and both use its mustRegister. Not to be confused with
+// container.go, which is how a container is *represented* (the native Go
+// backing behind a Value); this file is what a program can *ask* one.
+//
 // registerContainers adds the three questions a container answers: what is at
-// this position, is this item in there, and how many are there. An array and a
-// dictionary share each name because it is the same question — only the key
-// differs, and the compiler already knows which one it is holding.
+// this position, is this item in there, and how many are there. An array, a
+// dictionary and a string share each name because it is the same question —
+// only the key differs, and the compiler already knows which one it is
+// holding.
 //
 // There is no missing-value result. `xs[9]` on a three-item array and `d["x"]`
 // on a dictionary without that key are errors, the way division by zero is:
@@ -41,6 +48,14 @@ func registerAt(registry *Registry, t Type) {
 			Params:      []string{"字典", "键"}, Result: "值",
 		},
 	})
+	mustRegister(registry, FunctionSpec{
+		Name: "at", Params: []Type{StringType, IntType}, Result: StringType, Eval: evalStringAt,
+		Doc: Doc{
+			Cost: 3, Label: "取字符", Category: "容器",
+			Description: "按位置取一个字符，从 0 开始，按 UTF-8 码点数而不是字节；越界是错误。结果仍是字符串，语言里没有单字符类型。写作 s[i]。",
+			Params:      []string{"文本", "位置"}, Result: "那个字符",
+		},
+	})
 }
 
 func registerMember(registry *Registry, t Type) {
@@ -58,6 +73,14 @@ func registerMember(registry *Registry, t Type) {
 			Cost: 2, Label: "是否有这个键", Category: "容器",
 			Description: `字典里有没有这个键（不看值）。写作 "key" in d。`,
 			Params:      []string{"键", "字典"}, Result: "是否存在",
+		},
+	})
+	mustRegister(registry, FunctionSpec{
+		Name: "member", Params: []Type{StringType, StringType}, Result: BoolType, Eval: evalStringMember,
+		Doc: Doc{
+			Cost: 3, Label: "是否含子串", Category: "容器",
+			Description: `文本里有没有这段子串，和 Python 的 in 一样。写作 "b" in text；参数顺序相反的写法是 contains(text, "b")。`,
+			Params:      []string{"子串", "文本"}, Result: "是否命中",
 		},
 	})
 }
@@ -87,6 +110,27 @@ func evalDictAt(_ context.Context, args []Value) (Value, error) {
 		return Value{}, fmt.Errorf("the dictionary has no key %q", args[1].s)
 	}
 	return value, nil
+}
+
+// evalStringAt counts in code points, the same unit len(string) reports, and
+// walks to the index instead of building a []rune: taking one character out of
+// a card number should not copy the card number.
+func evalStringAt(_ context.Context, args []Value) (Value, error) {
+	text, index := args[0].s, args[1].i
+	rest := text
+	for i := int64(0); i < index && rest != ""; i++ {
+		_, size := utf8.DecodeRuneInString(rest)
+		rest = rest[size:]
+	}
+	character, size := utf8.DecodeRuneInString(rest)
+	if index < 0 || size == 0 {
+		return Value{}, fmt.Errorf("index %d is outside a string of %d characters", index, utf8.RuneCountInString(text))
+	}
+	return String(string(character)), nil
+}
+
+func evalStringMember(_ context.Context, args []Value) (Value, error) {
+	return Bool(strings.Contains(args[1].s, args[0].s)), nil
 }
 
 func evalArrayMember(_ context.Context, args []Value) (Value, error) {

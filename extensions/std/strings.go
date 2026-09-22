@@ -3,6 +3,7 @@ package std
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"funroute/lang"
 )
@@ -35,7 +36,10 @@ func registerStrings(registry *lang.Registry) error {
 	if err := registerStringTests(registry); err != nil {
 		return err
 	}
-	return registerStringParts(registry)
+	if err := registerStringParts(registry); err != nil {
+		return err
+	}
+	return registerPadding(registry)
 }
 
 func registerStringTests(registry *lang.Registry) error {
@@ -96,6 +100,49 @@ func registerStringParts(registry *lang.Registry) error {
 	}, func(text, old, replacement string) (string, error) {
 		return strings.ReplaceAll(text, old, replacement), nil
 	})
+}
+
+// registerPadding is for the places a payment file or an order number has a
+// fixed width: 00001234, a 20-character reconciliation column.
+func registerPadding(registry *lang.Registry) error {
+	for _, side := range []struct {
+		name, label string
+		left        bool
+	}{
+		{"pad_left", "左侧补齐", true},
+		{"pad_right", "右侧补齐", false},
+	} {
+		doc := lang.Doc{
+			Constexpr: true, Label: side.label, Category: "字符串", Cost: 4,
+			Description: "把文本补到指定的字符数，" + side.label[:2] + "补；填充串必须是一个字符。已经够长就原样返回 —— 截断会悄悄丢掉数据。",
+			Params:      []string{"文本", "宽度", "填充"}, Result: "补齐后的文本",
+		}
+		left := side.left
+		if err := lang.Logic(registry, side.name, doc, func(text string, width int64, fill string) (string, error) {
+			return padTo(text, width, fill, left)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func padTo(text string, width int64, fill string, left bool) (string, error) {
+	if utf8.RuneCountInString(fill) != 1 {
+		return "", fmt.Errorf("the padding must be exactly one character, got %q", fill)
+	}
+	if width < 0 {
+		return "", fmt.Errorf("a width cannot be negative, got %d", width)
+	}
+	missing := int(width) - utf8.RuneCountInString(text)
+	if missing <= 0 {
+		return text, nil
+	}
+	padding := strings.Repeat(fill, missing)
+	if left {
+		return padding + text, nil
+	}
+	return text + padding, nil
 }
 
 func sliceString(text string, start, end int64) (string, error) {

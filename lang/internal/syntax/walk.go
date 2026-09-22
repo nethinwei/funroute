@@ -24,6 +24,7 @@ const (
 	fieldExprs                  // []Expr
 	fieldName                   // string
 	fieldList                   // []struct with its own plan
+	fieldFlag                   // bool: a mode of the node, never a child
 )
 
 // fieldPlan is one tagged struct field.
@@ -104,6 +105,8 @@ func planField(index int, name string, field reflect.StructField) fieldPlan {
 		plan.kind = fieldExprs
 	case field.Type.Kind() == reflect.String:
 		plan.kind = fieldName
+	case field.Type.Kind() == reflect.Bool:
+		plan.kind = fieldFlag
 	case field.Type.Kind() == reflect.Slice:
 		plan.kind = fieldList
 		plan.item = planStruct(field.Type.Elem())
@@ -353,7 +356,9 @@ func fieldSchemas(plan *structPlan) []machine.FieldSchema {
 	return out
 }
 
-var fieldKindNames = [...]string{fieldExpr: "expr", fieldExprs: "exprs", fieldName: "name", fieldList: "list"}
+var fieldKindNames = [...]string{
+	fieldExpr: "expr", fieldExprs: "exprs", fieldName: "name", fieldList: "list", fieldFlag: "bool",
+}
 
 // FormOf reports the lazy form a node belongs to, for nodes a registry can
 // switch off.

@@ -285,8 +285,8 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	if function.IsLazyFallback() {
 		return c.compileFallback(node)
 	}
-	if function.NeedsConstantArgs() {
-		if err := c.requireConstantArgs(node); err != nil {
+	if function.NeedsBoundedArgs() {
+		if err := c.requireBoundedArgs(node); err != nil {
 			return err
 		}
 	}
@@ -336,17 +336,62 @@ func (c *bytecodeCompiler) compileSwitch(node *syntax.SwitchExpr) error {
 	return nil
 }
 
-// requireConstantArgs holds a ConstantArgs function to its promise: what it
-// produces is sized by its arguments, so those arguments must be known when
-// the rule is compiled rather than when it runs.
-func (c *bytecodeCompiler) requireConstantArgs(node *syntax.CallExpr) error {
+// requireBoundedArgs holds a BoundedArgs function to its promise: what it
+// produces is sized by its arguments, so those arguments must have a size the
+// inputs already bound. Three things do: a literal, the length of a container
+// (that length *is* part of the input size), and the two combined by
+// arithmetic. An argument that could be any scalar at run time does not, and
+// that is the one docs/termination.md rules out.
+func (c *bytecodeCompiler) requireBoundedArgs(node *syntax.CallExpr) error {
 	for i, arg := range node.Args {
-		if c.constantExpr(arg) {
+		if c.boundedExpr(arg) {
 			continue
 		}
-		return fmt.Errorf("%s needs arguments fixed at compile time: argument %d is only known at run time", node.Name, i+1)
+		return fmt.Errorf(
+			"%s needs arguments whose size the inputs already bound: a literal, len(...) of a container, or those combined by arithmetic — argument %d is neither",
+			node.Name, i+1)
 	}
 	return nil
+}
+
+func (c *bytecodeCompiler) boundedExpr(expr syntax.Expr) bool {
+	switch node := expr.(type) {
+	case *syntax.LiteralExpr:
+		return true
+	case *syntax.VariableExpr:
+		// A binding that folded to a constant is as good as a literal.
+		return len(c.constIndex[node.Name]) > 0
+	case *syntax.CallExpr:
+		return c.boundedCall(node)
+	}
+	return false
+}
+
+// boundedCall knows two things about the kernel: len hands back a size the
+// input already bound, and arithmetic on bounded sizes stays bounded (the
+// polynomial in docs/termination.md is a polynomial for exactly this reason).
+// Only the kernel's own functions count — a host may register another len.
+func (c *bytecodeCompiler) boundedCall(node *syntax.CallExpr) bool {
+	key, ok := c.inferred.Selections[node.ID]
+	if !ok {
+		return false
+	}
+	function, ok := c.registry.Resolve(key)
+	if !ok || !function.IsBuiltin() {
+		return false
+	}
+	switch function.Name {
+	case "len":
+		return true
+	case "add", "sub", "mul", "div", "mod":
+		for _, arg := range node.Args {
+			if !c.boundedExpr(arg) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (c *bytecodeCompiler) compileFallback(node *syntax.CallExpr) error {
@@ -431,6 +476,22 @@ func (c *bytecodeCompiler) compileFor(node *syntax.ForExpr) error {
 		}
 		jumpFiltered = c.emit(machine.Instruction{Op: machine.OpJumpIfFalse})
 	}
+	if err := c.compileYield(node, resultType); err != nil {
+		return err
+	}
+	next := c.emit(machine.Instruction{Op: machine.OpLoopNext, A: loopStart, Type: &resultType})
+	if jumpFiltered >= 0 {
+		c.instructions[jumpFiltered].A = next
+	}
+	c.instructions[init].A = len(c.instructions)
+	return nil
+}
+
+// compileYield emits the loop body and the instruction that takes its value.
+// An outer clause of a nested comprehension spreads: what it yields is the
+// inner loop's whole array, so the instruction checks it against the loop's own
+// type and splices the elements.
+func (c *bytecodeCompiler) compileYield(node *syntax.ForExpr, resultType machine.Type) error {
 	// A dictionary comprehension pushes the key first, so loop_collect finds
 	// the value on top and the key under it.
 	pairs := 0
@@ -443,13 +504,13 @@ func (c *bytecodeCompiler) compileFor(node *syntax.ForExpr) error {
 	if err := c.compile(node.Yield); err != nil {
 		return err
 	}
+	if node.Flatten {
+		spliced := machine.CloneType(resultType)
+		c.emit(machine.Instruction{Op: machine.OpLoopSpread, Type: &spliced})
+		return nil
+	}
 	yieldType := machine.CloneType(*resultType.Elem)
 	c.emit(machine.Instruction{Op: machine.OpLoopCollect, A: pairs, Type: &yieldType})
-	next := c.emit(machine.Instruction{Op: machine.OpLoopNext, A: loopStart, Type: &resultType})
-	if jumpFiltered >= 0 {
-		c.instructions[jumpFiltered].A = next
-	}
-	c.instructions[init].A = len(c.instructions)
 	return nil
 }
 

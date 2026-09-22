@@ -193,6 +193,38 @@ func (t Type) Summary() string {
 	return fmt.Sprintf("enum<%s>{%s… 共 %d 个}", t.Name, strings.Join(t.Values[:enumSummaryLimit], ","), len(t.Values))
 }
 
+// WalkTypes visits t and every type inside it: a container's element and a
+// record's fields. It exists because "is there an X anywhere in this type" was
+// answered by four hand-written recursions, and the two that predated records
+// only followed Elem — so an enum inside a record field was invisible to the
+// contract. A question about a type's contents asks this, not its own switch.
+func WalkTypes(t Type, visit func(Type) error) error {
+	if err := visit(t); err != nil {
+		return err
+	}
+	if t.Elem != nil {
+		if err := WalkTypes(*t.Elem, visit); err != nil {
+			return err
+		}
+	}
+	for _, field := range t.Fields {
+		if err := WalkTypes(field.Type, visit); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TypeContains reports whether kind appears anywhere in t, fields included.
+func TypeContains(t Type, kind Kind) bool {
+	found := false
+	_ = WalkTypes(t, func(inner Type) error {
+		found = found || inner.Kind == kind
+		return nil
+	})
+	return found
+}
+
 func (t Type) IsConcrete() bool {
 	if t.Kind == VarKind || t.Kind == InvalidKind {
 		return false
@@ -268,7 +300,16 @@ func (t Type) Equal(other Type) bool {
 // ParseType parses bool, int, float, string, array<T>, dict<T>, handle<name>,
 // and enum<name>{"member",...}.
 func ParseType(input string) (Type, error) {
-	p := &typeParser{s: strings.TrimSpace(input)}
+	return ParseTypeWith(input, nil)
+}
+
+// ParseTypeWith parses a type that may name one of the given aliases. A text
+// contract otherwise repeats a record's fields for every argument that has
+// that shape; a Go host just reuses the Type it built. Aliases do not nest:
+// one may not be written in terms of another, which keeps this a spelling
+// convenience rather than a second type system.
+func ParseTypeWith(input string, aliases map[string]Type) (Type, error) {
+	p := &typeParser{s: strings.TrimSpace(input), aliases: aliases}
 	t, err := p.parse()
 	if err != nil {
 		return Type{}, err
@@ -284,8 +325,9 @@ func ParseType(input string) (Type, error) {
 }
 
 type typeParser struct {
-	s string
-	i int
+	s       string
+	i       int
+	aliases map[string]Type
 }
 
 func (p *typeParser) skipSpace() {
@@ -297,7 +339,7 @@ func (p *typeParser) skipSpace() {
 func (p *typeParser) parse() (Type, error) {
 	p.skipSpace()
 	start := p.i
-	for p.i < len(p.s) && ((p.s[p.i] >= 'a' && p.s[p.i] <= 'z') || p.s[p.i] == '_') {
+	for p.i < len(p.s) && isTypeNameChar(p.s[p.i]) {
 		p.i++
 	}
 	name := p.s[start:p.i]
@@ -326,8 +368,15 @@ func (p *typeParser) parse() (Type, error) {
 	case "record":
 		return p.parseRecord()
 	default:
+		if alias, ok := p.aliases[name]; ok {
+			return CloneType(alias), nil
+		}
 		return Type{}, fmt.Errorf("unknown type %q", name)
 	}
+}
+
+func isTypeNameChar(ch byte) bool {
+	return ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
 }
 
 func (p *typeParser) parseEnum() (Type, error) {

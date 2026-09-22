@@ -14,7 +14,64 @@ export function typeName(type) {
   return type.name || type.kind || "unknown";
 }
 
-function equalType(left, right) {
+// aliasOf is the name a type was declared under, or null. The compiler expands
+// an alias before it builds anything, so the artifact and the runtime only ever
+// report the full record — this is how a console shows `Health` where the
+// operator wrote `Health`, instead of the four fields they named once.
+export function aliasOf(type, declared) {
+  if (!type || !declared) return null;
+  const text = typeName(type);
+  for (const [name, alias] of Object.entries(declared)) {
+    if (typeName(alias) === text) return name;
+  }
+  return null;
+}
+
+// formatValue prints a result the way someone reads it: a record or a long
+// array opens up, anything that already fits stays on its line. JSON.stringify
+// with an indent would break [200, 400, 800] across three lines, which is
+// noise, not structure.
+export function formatValue(value, indent = "") {
+  const inline = JSON.stringify(value);
+  if (inline === undefined) return "null";
+  if (inline.length <= 56 || value === null || typeof value !== "object") return inline;
+  const inner = `${indent}  `;
+  if (Array.isArray(value)) {
+    return `[\n${value.map((item) => inner + formatValue(item, inner)).join(",\n")}\n${indent}]`;
+  }
+  const entries = Object.entries(value).map(([key, item]) => `${inner}${JSON.stringify(key)}: ${formatValue(item, inner)}`);
+  return `{\n${entries.join(",\n")}\n${indent}}`;
+}
+
+// formatTypeText opens a record up one level so its fields can be read at a
+// glance. Nested types stay inline: what this answers is "what shape is this",
+// not "what shape is everything inside it".
+export function formatTypeText(text) {
+  const trimmed = String(text || "").trim().replace(/\s+/g, " ");
+  if (!trimmed.startsWith("record{") || !trimmed.endsWith("}")) return trimmed;
+  const fields = splitTopLevelCommas(trimmed.slice("record{".length, -1));
+  if (fields.length < 2) return trimmed;
+  return `record{\n${fields.map((field) => `  ${field.trim()}`).join(",\n")}\n}`;
+}
+
+function splitTopLevelCommas(text) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const character = text[i];
+    if (character === "<" || character === "{") depth += 1;
+    else if (character === ">" || character === "}") depth -= 1;
+    else if (character === "," && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+export function equalType(left, right) {
   if (!left || !right || left.kind !== right.kind || left.name !== right.name) return false;
   if (left.kind === "array" || left.kind === "dict") return equalType(left.elem, right.elem);
   if (left.kind === "record") return typeName(left) === typeName(right);
@@ -135,7 +192,9 @@ function cleanField(value, field, nodes) {
     case "int": return Number.isSafeInteger(Number(value)) ? Number(value) : 0;
     case "float": return String(value ?? "0.0");
     case "string": return String(value ?? "");
-    case "bool": return Boolean(value);
+    // An optional flag is omitted when false, which is what omitempty does on
+    // the server: the canonical JSON has to match byte for byte.
+    case "bool": return field.optional && !value ? undefined : Boolean(value);
     default: throw new Error(`不支持的字段类型 ${field.kind}`);
   }
 }
@@ -162,6 +221,7 @@ function blankField(field) {
     case "list": return Array.from({ length: field.min || 0 }, () => blankFields(field.fields));
     case "name":
     case "text": return field.optional && !field.default ? undefined : (field.default || "");
+    case "bool": return field.optional ? undefined : false;
     default: return LITERAL_DEFAULTS[field.kind];
   }
 }
@@ -325,15 +385,22 @@ export class FunRouteLanguage {
   // without one it builds an array and is written in brackets.
   _comprehensionSource(node) {
     const clauses = this._forClauses(node).join(" ");
-    if (!node.yield_key) return `[${this.expressionSource(node.yield)} ${clauses}]`;
-    return `{${this.expressionSource(node.yield_key)}: ${this.expressionSource(node.yield)} ${clauses}}`;
+    const inner = this._innerLoop(node);
+    if (!inner.yield_key) return `[${this.expressionSource(inner.yield)} ${clauses}]`;
+    return `{${this.expressionSource(inner.yield_key)}: ${this.expressionSource(inner.yield)} ${clauses}}`;
   }
 
+  // A spliced loop's yield is the loop written after it, so the whole chain
+  // prints as the one comprehension someone wrote: [e for x in xs for y in ys].
   _forClauses(node) {
     const clauses = [`for ${loopVariables(node)} in ${this.expressionSource(node.source)}`];
     if (node.where) clauses.push(`if ${this.expressionSource(node.where)}`);
+    if (isSpliced(node)) clauses.push(...this._forClauses(node.yield));
     return clauses;
   }
+
+  // innerLoop is the clause that yields the element: the outer ones only splice.
+  _innerLoop(node) { return isSpliced(node) ? this._innerLoop(node.yield) : node; }
 
   _forHead(node) {
     const head = `${loopVariables(node)} in ${this.expressionSource(node.source)}`;
@@ -347,9 +414,13 @@ export class FunRouteLanguage {
     switch (node?.node) {
       case "call": return { open: `${node.name}(`, parts: node.args || [], close: ")" };
       case "switch": return { open: node.value ? `switch(${this.expressionSource(node.value)},` : "switch(", parts: switchParts(node), close: ")" };
-      case "for": return node.yield_key
-        ? { open: "{", parts: [{ key: this.expressionSource(node.yield_key), value: node.yield, bare: true }, ...this._forClauses(node).map(literalPart)], close: "}", separator: "\n" }
-        : { open: "[", parts: [node.yield, ...this._forClauses(node).map(literalPart)], close: "]", separator: "\n" };
+      case "for": {
+        const inner = this._innerLoop(node);
+        const clauses = this._forClauses(node).map(literalPart);
+        return inner.yield_key
+          ? { open: "{", parts: [{ key: this.expressionSource(inner.yield_key), value: inner.yield, bare: true }, ...clauses], close: "}", separator: "\n" }
+          : { open: "[", parts: [inner.yield, ...clauses], close: "]", separator: "\n" };
+      }
       case "reduce": return { open: "reduce(", parts: [literalPart(this._forHead(node)), literalPart(this._accumulatorHead(node)), node.body], close: ")" };
       case "let": return { open: "let(", parts: [...(node.bindings || []).map(bindingPart), node.body], close: ")" };
       case "array": return { open: "[", parts: node.items || [], close: "]" };
@@ -512,6 +583,11 @@ function floatLiteral(text) {
   return /[.eE]/.test(value) ? value : `${value}.0`;
 }
 
+// A loop is spliced when it yields the loop written after it: that is what the
+// flatten flag means, and it is the only way a "for" node holds another one as
+// its whole yield.
+function isSpliced(node) { return Boolean(node?.flatten) && node.yield?.node === "for"; }
+
 function loopVariables(node) {
   const value = node.variable || "item";
   return node.key_variable ? `${node.key_variable}, ${value}` : value;
@@ -529,219 +605,4 @@ function switchParts(node) {
   const parts = [...(node.cases || []).map((branch) => ({ branch }))];
   if (node.default) parts.push({ fallback: node.default });
   return parts;
-}
-
-export function emptyContract() { return { args: [], result: null }; }
-
-export function isEmptyContract(contract) {
-  return !contract || (!contract.args?.length && !contract.result?.type && !contract.result?.doc);
-}
-
-export function contractPayload(contract) {
-  if (isEmptyContract(contract)) return null;
-  const args = (contract.args || []).map((arg) => ({
-    name: String(arg.name || "").trim(), type: String(arg.type || "").trim(), doc: arg.doc || undefined,
-  }));
-  const result = contract.result ? {
-    type: String(contract.result.type || "").trim(), doc: contract.result.doc || undefined,
-  } : undefined;
-  return { args, result };
-}
-
-export function contractComments(contract, source) {
-  const args = contract?.args || [];
-  const result = contract?.result;
-  if (!args.length && !result) return source;
-  let width = result ? 2 : 0;
-  for (const arg of args) width = Math.max(width, arg.name.length + 1);
-  const lines = args.map((arg) => commentLine(`${arg.name}:`, width, arg.type, arg.doc));
-  if (result) lines.push(commentLine("→", width, result.type, result.doc));
-  return `${lines.join("\n")}\n\n${source}`;
-}
-
-function commentLine(label, width, valueType, doc) {
-  const head = `// ${label.padEnd(width)} ${valueType}`;
-  return doc ? `${head.padEnd(28)} ${doc}` : head;
-}
-
-
-
-export class FunRouteClient {
-  constructor({ baseURL = "", fetch: fetchImpl = globalThis.fetch } = {}) {
-    if (!fetchImpl) throw new Error("FunRouteClient 需要 fetch 实现");
-    this.baseURL = baseURL.replace(/\/$/, "");
-    this.fetch = (...args) => fetchImpl.call(globalThis, ...args);
-  }
-
-  catalog() { return this.request("/api/catalog"); }
-  checkContract(contract) { return this.request("/api/contract/check", { contract: contractPayload(contract) }); }
-  parse(source) { return this.request("/api/parse", { source }); }
-  compile(payload) { return this.request("/api/compile", payload); }
-  run(payload) { return this.request("/api/run", payload); }
-
-  async request(path, payload) {
-    const response = await this.fetch(`${this.baseURL}${path}`, {
-      method: payload ? "POST" : "GET",
-      headers: payload ? { "Content-Type": "application/json" } : {},
-      body: payload ? JSON.stringify(payload) : undefined,
-    });
-    const body = await response.json();
-    if (!response.ok) {
-      // The compiler reports where, in the line:column form every compiler
-      // uses, so each place that shows a message shows the position with it.
-      const where = body.error?.line ? `${body.error.line}:${body.error.column} ` : "";
-      const failure = new Error(where + (body.error?.message || `HTTP ${response.status}`));
-      Object.assign(failure, { line: body.error?.line, column: body.error?.column });
-      throw failure;
-    }
-    return body;
-  }
-}
-
-export class FunRouteWorkspace {
-  constructor(client = new FunRouteClient()) {
-    this.client = client;
-    this.catalog = null;
-    this.language = null;
-    this.document = null;
-    this.contract = emptyContract();
-    this.contractCheck = null;
-    this.compiled = null;
-    this.result = null;
-    this.resultCheck = null;
-    this.status = { phase: "idle", message: "" };
-    this._listeners = new Set();
-    this._revision = 0;
-  }
-
-  subscribe(listener) {
-    this._listeners.add(listener);
-    listener(this.snapshot());
-    return () => this._listeners.delete(listener);
-  }
-
-  snapshot() {
-    return clone({ catalog: this.catalog, document: this.document, contract: this.contract,
-      contractCheck: this.contractCheck,
-      compiled: this.compiled, result: this.result, resultCheck: this.resultCheck, status: this.status });
-  }
-
-  async initialize() {
-    this._status("loading", "正在载入语言目录…");
-    this.catalog = await this.client.catalog();
-    this.language = new FunRouteLanguage(this.catalog);
-    this._status("ready", "语言目录已载入");
-    return this.catalog;
-  }
-
-  setDocument(document) {
-    this.document = clone(document);
-    this.compiled = null;
-    this.result = null;
-    this.resultCheck = null;
-    this._revision += 1;
-    this._status("dirty", "表达式已修改，等待编译");
-  }
-
-  setContract(contract) {
-    this.contract = clone(contract || emptyContract());
-    this.contractCheck = null;
-    this.compiled = null;
-    this.result = null;
-    this.resultCheck = null;
-    this._revision += 1;
-    this._status("dirty", "契约已修改，等待编译");
-  }
-
-  async checkContract() {
-    const payload = contractPayload(this.contract);
-    if (!payload?.result?.type) throw new Error("请先声明运行契约的返回类型");
-    const revision = this._revision;
-    this._status("loading", "正在检查运行契约…");
-    const checked = await this.client.checkContract(this.contract);
-    if (revision !== this._revision) return null;
-    this.contractCheck = checked;
-    this._status("success", `契约有效 · ${payload.args.length} 个入参 → ${payload.result.type}`);
-    return clone(checked);
-  }
-
-  async parseSource(source) {
-    const revision = ++this._revision;
-    this._status("loading", "正在解析表达式…");
-    const parsed = await this.client.parse(source);
-    if (revision !== this._revision) return null;
-    this.document = parsed.expr_json;
-    this.compiled = null;
-    this.result = null;
-    this.resultCheck = null;
-    this._status("ready", "表达式已解析");
-    return clone(this.document);
-  }
-
-  // Parse and compile a text expression as one transaction. UIs can use this
-  // before replacing their current canvas: a syntax or contract error leaves
-  // the last valid document untouched.
-  async compileSource(source) {
-    const revision = ++this._revision;
-    this._status("loading", "正在解析并检查表达式…");
-    const parsed = await this.client.parse(source);
-    if (revision !== this._revision) return null;
-    if (!this.contractCheck && !await this.checkContract()) return null;
-    if (revision !== this._revision) return null;
-    this._status("loading", "正在按运行契约编译表达式…");
-    const compiled = await this.client.compile(this._payload(parsed.expr_json));
-    if (revision !== this._revision) return null;
-    this.document = parsed.expr_json;
-    this.compiled = compiled;
-    this.result = null;
-    this.resultCheck = null;
-    this._status("success", `检查通过 · ${compiled.instructions} 条指令`);
-    return clone({ document: this.document, compiled });
-  }
-
-  async compile() {
-    if (!this.document) throw new Error("请先创建表达式");
-    if (!this.contractCheck && !await this.checkContract()) return null;
-    const revision = this._revision;
-    this._status("loading", "正在编译…");
-    const compiled = await this.client.compile(this._payload());
-    if (revision !== this._revision) return null;
-    this.compiled = compiled;
-    this.result = null;
-    this.resultCheck = null;
-    this._status("success", `编译成功 · ${compiled.instructions} 条指令`);
-    return clone(compiled);
-  }
-
-  async run(args, fuel = 10000) {
-    if (!this.compiled && !await this.compile()) return null;
-    const revision = this._revision;
-    this._status("loading", "正在运行…");
-    const result = await this.client.run({ ...this._payload(), args, fuel });
-    if (revision !== this._revision) return null;
-    const expected = this.compiled?.result || this.contractCheck?.result;
-    if (!equalType(result.type, expected)) {
-      const error = new Error(`运行结果类型 ${typeName(result.type)} 与契约 ${typeName(expected)} 不匹配`);
-      this.resultCheck = { valid: false, expected: clone(expected), actual: clone(result.type) };
-      this._status("error", error.message);
-      throw error;
-    }
-    this.result = result;
-    this.resultCheck = { valid: true, expected: clone(expected), actual: clone(result.type) };
-    this._status("success", "运行成功");
-    return clone(result);
-  }
-
-  reportError(error) {
-    this._status("error", error instanceof Error ? error.message : String(error));
-  }
-
-  _payload(document = this.document) {
-    return { expr_json: document, contract: contractPayload(this.contract) ?? undefined };
-  }
-
-  _status(phase, message) {
-    this.status = { phase, message };
-    for (const listener of this._listeners) listener(this.snapshot());
-  }
 }

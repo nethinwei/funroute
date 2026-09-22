@@ -97,7 +97,11 @@ var opcodes = [...]opcodeSpec{
 		},
 		validate: validateLoopInstruction,
 	},
-	OpLoopNext:    {name: "loop_next", effect: pushes(1), validate: validateLoopInstruction},
+	OpLoopNext: {name: "loop_next", effect: pushes(1), validate: validateLoopInstruction},
+	// A nested comprehension yields one array per outer item; spread collects
+	// their elements rather than the arrays, which is what makes
+	// [f(x, y) for x in xs for y in ys] one flat array.
+	OpLoopSpread:  {name: "loop_spread", effect: pushes(-1), validate: validateLoopInstruction},
 	OpJumpIfFalse: {name: "jump_if_false", effect: pushes(-1), validate: validateJumpTarget},
 	OpJump:        {name: "jump", validate: validateJumpTarget},
 	OpBeginFallback: {

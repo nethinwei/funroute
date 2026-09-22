@@ -28,12 +28,14 @@ type Doc struct {
 	// while a rule is compiled, and a rule that compiles differently at 3am is
 	// worse than one that computes a little more at run time.
 	Constexpr bool `json:"-"`
-	// ConstantArgs requires every argument of a call to be fixed at compile
-	// time. It is for a function whose result size follows from its arguments
-	// — range is the one — because a run-time length would let a single scalar
-	// stand for an arbitrarily long array and break the polynomial bound in
-	// docs/termination.md.
-	ConstantArgs bool `json:"-"`
+	// BoundedArgs requires every argument of a call to have a size the inputs
+	// already bound: a literal, the length of a container, or those combined
+	// by arithmetic. It is for a function whose result size follows from its
+	// arguments — range is the one — because an arbitrary run-time scalar
+	// would let one argument stand for an arbitrarily long array and break the
+	// polynomial bound in docs/termination.md. Requiring a *constant* would be
+	// stronger than that bound needs: range(len(fees)) is as safe as range(3).
+	BoundedArgs bool `json:"-"`
 	// Timeout and Detached are operational, so neither reaches a front end.
 	// Timeout caps one call of this function: the deadline it receives is the
 	// earlier of the request's and now+Timeout. Zero means the request's alone.

@@ -252,6 +252,11 @@ type ForExpr struct {
 	// result is dict<V> keyed by this expression, without it array<V>.
 	YieldKey Expr `json:"yield_key,omitempty"`
 	Yield    Expr `json:"yield"`
+	// Flatten says this loop's yield is itself an array to be spliced, which
+	// is how [f(x, y) for x in xs for y in ys] nests: every clause but the
+	// innermost carries it, so the result is one flat array instead of an
+	// array of arrays. Set only by the parser (and by ExprJSON that says so).
+	Flatten bool `json:"flatten,omitempty"`
 }
 
 func (*ForExpr) exprNode()          {}

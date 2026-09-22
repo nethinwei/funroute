@@ -37,6 +37,7 @@ const (
 	OpJump
 	OpBeginFallback
 	OpEndFallback
+	OpLoopSpread
 )
 
 type Parameter struct {

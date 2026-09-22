@@ -133,6 +133,11 @@
 .fr-contract__body { padding: 13px 18px 14px; display: grid; gap: 9px; }
 .fr-contract__row { display: grid; grid-template-columns: 30px minmax(120px, .65fr) 8px minmax(135px, .75fr) minmax(220px, 1.8fr) 32px; gap: 7px; align-items: center; }
 .fr-contract__row .fr-button--icon { grid-column: 6; grid-row: 1; }
+.fr-contract__row--type { align-items: start; }
+.fr-contract__row--type .fr-contract__tag,
+.fr-contract__row--type .fr-contract__name,
+.fr-contract__row--type .fr-contract__punct { margin-top: 3px; }
+.fr-contract__type--block { grid-column: 4 / 6; resize: vertical; line-height: 1.5; white-space: pre; overflow-x: auto; }
 .fr-contract__row--result .fr-contract__type { grid-column: 2 / 4; }
 .fr-contract__row--result .fr-contract__doc { grid-column: 4 / 6; }
 .fr-contract__row--result > .fr-muted { grid-column: 2 / 6; }

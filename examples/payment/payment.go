@@ -1,6 +1,8 @@
-// Package paymentdemo demonstrates how an application owns domain functions
-// while FunRoute keeps only a minimal computational core.
-package paymentdemo
+// Package payment is the example host. It shows how an application owns its
+// domain functions and assembles them into a console, while FunRoute itself
+// keeps only a minimal computational core. Nothing here ships with the
+// language: copy it, do not import it.
+package payment
 
 import (
 	"fmt"

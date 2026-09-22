@@ -59,21 +59,25 @@ Commands:
   run     -expr 'if(a,b,add(1,1))' -args '{"a":true,"b":7}'
 
 The contract is the host's: -types 'a=bool,b=int' declares the arguments and
-their order. Without it both are inferred.`)
+their order. Without it both are inferred. -alias names a type so a record
+does not have to be written out for every argument that has its shape:
+  -alias 'Order=record{amount: int, currency: string}' -types 'a=Order,b=Order'`)
 }
 
 type commonFlags struct {
-	set   *flag.FlagSet
-	expr  *string
-	types *string
+	set     *flag.FlagSet
+	expr    *string
+	types   *string
+	aliases *string
 }
 
 func flags(name string) commonFlags {
 	set := flag.NewFlagSet(name, flag.ContinueOnError)
 	return commonFlags{
-		set:   set,
-		expr:  set.String("expr", "", "expression source"),
-		types: set.String("types", "", "comma-separated argument type hints"),
+		set:     set,
+		expr:    set.String("expr", "", "expression source"),
+		types:   set.String("types", "", "comma-separated argument type hints"),
+		aliases: set.String("alias", "", "comma-separated type declarations, Name=type"),
 	}
 }
 
@@ -196,7 +200,11 @@ func compileSource(common commonFlags) (*lang.Artifact, error) {
 	if *common.expr == "" {
 		return nil, fmt.Errorf("-expr is required")
 	}
-	contract, err := parseContract(*common.types)
+	aliases, err := parseAliases(*common.aliases)
+	if err != nil {
+		return nil, err
+	}
+	contract, err := parseContract(*common.types, aliases)
 	if err != nil {
 		return nil, err
 	}
@@ -226,20 +234,49 @@ func newRegistry() (*lang.Registry, error) {
 	return registry, nil
 }
 
+// parseAliases reads -alias 'Order=record{...}'. An alias is spelling only: it
+// is expanded where it is named, so nothing about it reaches the artifact.
+func parseAliases(source string) (map[string]lang.Type, error) {
+	if strings.TrimSpace(source) == "" {
+		return nil, nil
+	}
+	aliases := map[string]lang.Type{}
+	for _, part := range splitTopLevel(source) {
+		name, text, err := splitDeclaration(part)
+		if err != nil {
+			return nil, err
+		}
+		typ, err := lang.ParseType(text)
+		if err != nil {
+			return nil, fmt.Errorf("type %s: %w", name, err)
+		}
+		aliases[name] = typ
+	}
+	return aliases, nil
+}
+
+// splitDeclaration cuts "name=type" at the first =, which no type text uses.
+func splitDeclaration(part string) (string, string, error) {
+	pair := strings.SplitN(strings.TrimSpace(part), "=", 2)
+	if len(pair) != 2 || strings.TrimSpace(pair[0]) == "" {
+		return "", "", fmt.Errorf("invalid declaration %q, expected name=type", part)
+	}
+	return strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1]), nil
+}
+
 // parseContract reads -types 'a=bool,b=int'. The text is ordered, so the
 // contract it produces is ordered too, and that order is the artifact's ABI.
-func parseContract(source string) ([]lang.ArgSpec, error) {
+func parseContract(source string, aliases map[string]lang.Type) ([]lang.ArgSpec, error) {
 	if strings.TrimSpace(source) == "" {
 		return nil, nil
 	}
 	var contract []lang.ArgSpec
 	for _, part := range splitTopLevel(source) {
-		pair := strings.SplitN(strings.TrimSpace(part), "=", 2)
-		if len(pair) != 2 || strings.TrimSpace(pair[0]) == "" {
-			return nil, fmt.Errorf("invalid type hint %q", part)
+		name, text, err := splitDeclaration(part)
+		if err != nil {
+			return nil, err
 		}
-		name := strings.TrimSpace(pair[0])
-		typ, err := lang.ParseType(strings.TrimSpace(pair[1]))
+		typ, err := lang.ParseTypeWith(text, aliases)
 		if err != nil {
 			return nil, fmt.Errorf("type hint %s: %w", name, err)
 		}

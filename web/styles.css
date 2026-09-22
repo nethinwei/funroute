@@ -246,7 +246,7 @@ funroute-designer { display: block; }
 .result__heading { margin-bottom: 7px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 9px; }
 .result__heading > span:first-child { font: 800 9px ui-monospace, monospace; letter-spacing: .14em; }
 .result__heading code { color: var(--green-ink); font: 700 10px ui-monospace, monospace; }
-.result__value { min-height: 50px; padding: 13px; border: 1px solid var(--green-line); border-radius: 10px; color: var(--green-ink); background: var(--green-soft); font: 700 14px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
+.result__value { min-height: 50px; white-space: pre-wrap; padding: 13px; border: 1px solid var(--green-line); border-radius: 10px; color: var(--green-ink); background: var(--green-soft); font: 700 14px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
 .result__value.is-empty { border-color: var(--line); color: var(--muted); background: var(--surface-2); font-size: 11px; font-weight: 500; }
 .result__value.is-error { border-color: var(--danger-line); color: var(--danger-ink); background: var(--danger-soft); }
 .result__check { margin-top: 7px; padding: 7px 9px; border-radius: 8px; font-size: 10px; line-height: 1.45; }

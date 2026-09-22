@@ -73,8 +73,12 @@ type expressionRequest struct {
 }
 
 type contractJSON struct {
-	Args   []argJSON   `json:"args,omitempty"`
-	Result *resultJSON `json:"result,omitempty"`
+	// Types names a record once so every argument with that shape can refer to
+	// it. Aliases are expanded where they are named and never reach the
+	// artifact, so two contracts that differ only in spelling still agree.
+	Types  map[string]string `json:"types,omitempty"`
+	Args   []argJSON         `json:"args,omitempty"`
+	Result *resultJSON       `json:"result,omitempty"`
 }
 
 type argJSON struct {
@@ -94,15 +98,19 @@ func (c *contractJSON) compileOptions() (lang.CompileOptions, error) {
 	if c == nil {
 		return options, nil
 	}
+	aliases, err := c.aliases()
+	if err != nil {
+		return options, err
+	}
 	for _, arg := range c.Args {
-		typ, err := lang.ParseType(arg.Type)
+		typ, err := lang.ParseTypeWith(arg.Type, aliases)
 		if err != nil {
 			return options, fmt.Errorf("%w: argument %q: %v", lang.ErrContract, arg.Name, err)
 		}
 		options.Args = append(options.Args, lang.ArgSpec{Name: arg.Name, Type: typ, Doc: arg.Doc})
 	}
 	if c.Result != nil {
-		typ, err := lang.ParseType(c.Result.Type)
+		typ, err := lang.ParseTypeWith(c.Result.Type, aliases)
 		if err != nil {
 			return options, fmt.Errorf("%w: result: %v", lang.ErrContract, err)
 		}
@@ -110,6 +118,23 @@ func (c *contractJSON) compileOptions() (lang.CompileOptions, error) {
 		options.ResultDoc = c.Result.Doc
 	}
 	return options, nil
+}
+
+// aliases resolves the declared types. They do not nest: one alias may not be
+// written in terms of another, so there is no order to resolve them in.
+func (c *contractJSON) aliases() (map[string]lang.Type, error) {
+	if len(c.Types) == 0 {
+		return nil, nil
+	}
+	aliases := make(map[string]lang.Type, len(c.Types))
+	for name, text := range c.Types {
+		typ, err := lang.ParseType(text)
+		if err != nil {
+			return nil, fmt.Errorf("%w: type %q: %v", lang.ErrContract, name, err)
+		}
+		aliases[name] = typ
+	}
+	return aliases, nil
 }
 
 func (c *contractJSON) checkedOptions() (lang.CompileOptions, error) {
@@ -143,9 +168,19 @@ func (s *Server) checkContract(response http.ResponseWriter, request *http.Reque
 	for i, arg := range options.Args {
 		args[i] = lang.Parameter{Name: arg.Name, Type: arg.Type, Doc: arg.Doc}
 	}
+	// The declared types go back parsed. An alias is expanded before the
+	// compiler sees it, so the artifact only knows the full record — a console
+	// that wants to show the name it was written under has to match the two,
+	// and matching them against text the operator typed is not the same thing.
+	aliases, err := payload.Contract.aliases()
+	if err != nil {
+		writeAPIError(response, http.StatusUnprocessableEntity, "CONTRACT_ERROR", err)
+		return
+	}
 	writeJSON(response, http.StatusOK, map[string]any{
 		"valid": true, "arguments": len(args), "args": args,
 		"result": options.Result, "result_doc": options.ResultDoc,
+		"types": aliases,
 	})
 }
 

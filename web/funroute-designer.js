@@ -1,4 +1,4 @@
-import { FunRouteLanguage, blankFields, blankNode, clone, contractEnums, isPathPrefix, isPlainExpression, samePath } from "./funroute-core.js";
+import { FunRouteLanguage, aliasOf, blankFields, blankNode, clone, contractEnums, isPathPrefix, isPlainExpression, samePath } from "./funroute-core.js";
 import { lookFor, typeName } from "./funroute-display.js";
 import { enumMemberField, expandedSlot, expressionRow, fieldText, parseInputValue, valueEditor } from "./funroute-fields.js";
 import { DND_MIME, dropTarget, placeBlock } from "./funroute-dnd.js";
@@ -169,7 +169,8 @@ export class FunRouteDesigner extends HTMLElement {
     const copy = element("div", "fr-canvas-contract__copy");
     copy.append(element("strong", "", "运行契约约束"), element("span", "", this._validation?.message || "等待检查"));
     const args = this._runtimeContract?.args || [];
-    const result = typeName(this._runtimeContract?.result);
+    const result = aliasOf(this._runtimeContract?.result, this._runtimeContract?.types)
+      || typeName(this._runtimeContract?.result);
     const summary = this._runtimeContract
       ? `${args.length} 个可用参数 · 必须返回 ${result}`
       : "契约未检查 · 只能使用当前作用域的本地变量";
@@ -408,6 +409,13 @@ export class FunRouteDesigner extends HTMLElement {
           break;
         case "list":
           this._renderList(body, target, field, fieldPath, `${key}.${field.name}`, text, compactChildren);
+          break;
+        case "bool":
+          // A flag is the shape of the program, not a value to fill in: a
+          // comprehension's `flatten` says this clause and the one inside it
+          // were written as one comprehension, which the nested card already
+          // shows. Changing that means adding or removing a `for` clause in
+          // the text, so there is nothing to offer here.
           break;
         default:
           body.append(this._nameRow(text, target, field));

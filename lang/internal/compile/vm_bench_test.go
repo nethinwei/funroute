@@ -54,8 +54,10 @@ func BenchmarkRunPaths(b *testing.B) {
 
 // BenchmarkVectorPassThrough is the deep-learning shape: a feature vector goes
 // from the host through the VM into an extension and a score comes back. The
-// cost must not depend on the vector's length, because nothing is converted or
-// copied along the way.
+// three sizes must print the same ns/op — nothing along the way converts,
+// copies, or even reads the elements. The allocations that remain are
+// reflect.Call's, because this extension is registered with Logic; they are
+// the same count at every size, and a FunctionSpec has none.
 func BenchmarkVectorPassThrough(b *testing.B) {
 	for _, size := range []int{16, 1024, 65536} {
 		b.Run(fmt.Sprintf("n=%d", size), func(b *testing.B) { benchVector(b, size) })

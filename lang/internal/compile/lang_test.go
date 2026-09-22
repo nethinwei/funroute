@@ -709,3 +709,61 @@ func TestCatalogCarriesTheParsersSourceContract(t *testing.T) {
 		t.Fatalf("operator precedences = %v", found)
 	}
 }
+
+// A call does not pay for checking its own arguments. Both halves of that were
+// once false and both showed up right here: hasType built a whole Type just to
+// compare a record against one, and every RunValues rescanned float backings
+// for NaN — 16µs for a 65536-element vector, on a value whose constructor had
+// already rejected them.
+func TestArgumentChecksDoNotAllocate(t *testing.T) {
+	registry := machine.CoreRegistry()
+	order := machine.RecordOf(
+		machine.Field{Name: "amount", Type: machine.IntType},
+		machine.Field{Name: "currency", Type: machine.StringType},
+	)
+	record, err := machine.Record(order, []machine.Value{machine.Int(1200), machine.String("SGD")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector, err := machine.ToValue(make([]float64, 4096))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, source string
+		arg          ArgSpec
+		value        machine.Value
+	}{
+		{"record 参数", `order.amount + 1`, ArgSpec{Name: "order", Type: order}, record},
+		{"向量参数", `len(features)`, ArgSpec{Name: "features", Type: machine.ArrayOf(machine.FloatType)}, vector},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertCallDoesNotAllocate(t, registry, test.source, test.arg, test.value)
+		})
+	}
+}
+
+func assertCallDoesNotAllocate(t *testing.T, registry *machine.Registry, source string, arg ArgSpec, value machine.Value) {
+	t.Helper()
+	artifact, err := CompileExpr(source, registry, CompileOptions{Args: []ArgSpec{arg}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []machine.Value{value}
+	var failure error
+	allocs := testing.AllocsPerRun(100, func() {
+		if _, err := runtime.RunValues(context.Background(), args, machine.RunOptions{Fuel: 1000}); err != nil {
+			failure = err
+		}
+	})
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	if allocs != 0 {
+		t.Fatalf("%s allocated %.0f times per call", source, allocs)
+	}
+}

@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"funroute/extensions/paymentdemo"
+	"funroute/examples/payment"
 	"funroute/lang"
 	webui "funroute/web"
 )
@@ -29,7 +29,7 @@ type mvpExample struct {
 
 func TestMVPExamplesRunAndCoverTheCatalog(t *testing.T) {
 	manifest := readExampleManifest(t)
-	registry, err := paymentdemo.NewRegistry()
+	registry, err := payment.NewRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,18 +24,20 @@ func collectEnums(dst map[string]machine.Type, hints map[string]machine.Type, re
 	return collectEnum(dst, *ret)
 }
 
+// collectEnum registers every enum the type holds, at any depth — an element,
+// a record field, a field of a field. A host that passes the whole order in
+// declares its channel enum there, not as a separate argument.
 func collectEnum(dst map[string]machine.Type, typ machine.Type) error {
-	if typ.Elem != nil {
-		return collectEnum(dst, *typ.Elem)
-	}
-	if typ.Kind != machine.EnumKind {
+	return machine.WalkTypes(typ, func(inner machine.Type) error {
+		if inner.Kind != machine.EnumKind {
+			return nil
+		}
+		if existing, ok := dst[inner.Name]; ok && !existing.Equal(inner) {
+			return fmt.Errorf("the contract declares %s and %s under the same name", existing.Summary(), inner.Summary())
+		}
+		dst[inner.Name] = machine.CloneType(inner)
 		return nil
-	}
-	if existing, ok := dst[typ.Name]; ok && !existing.Equal(typ) {
-		return fmt.Errorf("the contract declares %s and %s under the same name", existing.Summary(), typ.Summary())
-	}
-	dst[typ.Name] = machine.CloneType(typ)
-	return nil
+	})
 }
 
 // resolveEnumReference decides which enum @member belongs to. A qualified
@@ -103,10 +105,7 @@ func validateEnumResult(expr syntax.Expr, inferred *inference, registry *machine
 }
 
 func containsEnum(typ machine.Type) bool {
-	if typ.Kind == machine.EnumKind {
-		return true
-	}
-	return typ.Elem != nil && containsEnum(*typ.Elem)
+	return machine.TypeContains(typ, machine.EnumKind)
 }
 
 func validateConstrainedReturn(expr syntax.Expr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
@@ -129,6 +128,10 @@ func validateConstrainedReturn(expr syntax.Expr, expected machine.Type, inferred
 	case *syntax.ForExpr:
 		return validateConstrainedFor(node, expected, inferred, registry)
 	default:
+		// A node with no case here is checked whole: its inferred type has to
+		// be the expected one. That is the conservative answer — it rejects a
+		// program this walk could have proven rather than letting one through
+		// — so a new node type costs precision here, never soundness.
 		return validateKnownType(expr, expected, inferred)
 	}
 }

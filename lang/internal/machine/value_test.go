@@ -77,6 +77,11 @@ func TestBuiltArraysUseTheNativeBacking(t *testing.T) {
 
 // The boundary keeps the language's invariants: no NaN gets in, and a native
 // slice of the wrong element type is refused rather than converted.
+//
+// This is the whole defence, not the first half of one. RunValues does not
+// re-check the values it is handed, because a Value holding a NaN cannot be
+// built in the first place — so a new public constructor that skips the check
+// would open the hole here, and this test is what stops it.
 func TestBoundaryKeepsTheInvariants(t *testing.T) {
 	if _, err := ToValue([]float64{1, nan()}); err == nil || !strings.Contains(err.Error(), "item 1") {
 		t.Fatalf("NaN error = %v", err)

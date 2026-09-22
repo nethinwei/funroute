@@ -17,6 +17,11 @@ import (
 	"funroute/lang"
 )
 
+var (
+	errNoAbsolute   = fmt.Errorf("the smallest int has no absolute value")
+	errDivideByZero = fmt.Errorf("division by zero")
+)
+
 // maxRangeLength caps one range call. The compiler already requires constant
 // arguments (FunctionSpec.ConstantArgs), so this only stops a rule from
 // writing an absurd literal; it is not what bounds the language.
@@ -29,7 +34,7 @@ func Register(registry *lang.Registry) error {
 	}
 	for _, register := range []func(*lang.Registry) error{
 		registerSum, registerExtremes, registerQuantifiers, registerRange,
-		registerStrings, registerArrays,
+		registerStrings, registerArrays, registerNumbers, registerStatistics, registerSelect, registerGroups, registerDicts,
 	} {
 		if err := register(registry); err != nil {
 			return err
@@ -47,10 +52,7 @@ func registerSum(registry *lang.Registry) error {
 		Params:      []string{"数组"},
 		Result:      "总和",
 	}
-	if err := lang.Logic(registry, "sum", doc, sumInts); err != nil {
-		return err
-	}
-	return lang.Logic(registry, "sum", doc, sumFloats)
+	return eachType(registry, "sum", doc, sumInts, sumFloats)
 }
 
 func registerExtremes(registry *lang.Registry) error {
@@ -58,22 +60,22 @@ func registerExtremes(registry *lang.Registry) error {
 		name, label, result string
 		ints                func([]int64) (int64, error)
 		floats              func([]float64) (float64, error)
+		texts               func([]string) (string, error)
 	}{
-		{"min", "最小值", "最小的元素", minOf[int64], minOf[float64]},
-		{"max", "最大值", "最大的元素", maxOf[int64], maxOf[float64]},
+		{"min", "最小值", "最小的元素", minOf[int64], minOf[float64], minOf[string]},
+		{"max", "最大值", "最大的元素", maxOf[int64], maxOf[float64], maxOf[string]},
 	} {
 		doc := lang.Doc{Constexpr: true,
 			Label:       extreme.label,
-			Description: "取数组里" + extreme.label + "；空数组报错，因为没有可取的元素。",
+			Description: "取数组里" + extreme.label + "；数值按大小、字符串按 UTF-8 字节序；空数组报错，因为没有可取的元素。",
 			Category:    "聚合",
 			Cost:        4,
 			Params:      []string{"数组"},
 			Result:      extreme.result,
 		}
-		if err := lang.Logic(registry, extreme.name, doc, extreme.ints); err != nil {
-			return err
-		}
-		if err := lang.Logic(registry, extreme.name, doc, extreme.floats); err != nil {
+		// Strings order the same way the comparison operators order them, so
+		// the extremes work on them too.
+		if err := eachType(registry, extreme.name, doc, extreme.ints, extreme.floats, extreme.texts); err != nil {
 			return err
 		}
 	}
@@ -141,13 +143,13 @@ func rangeSpec(params []lang.Type, labels []string, bounds func([]lang.Value) (i
 			return sequence(start, stop, step)
 		},
 		Doc: lang.Doc{Constexpr: true,
-			Label:        "整数序列",
-			Description:  "生成一段整数：range(3) 是 [0,1,2]，range(1,4) 是 [1,2,3]，第三个参数是步长。参数必须在编译期已知，所以序列长度是写死的。",
-			ConstantArgs: true,
-			Category:     "聚合",
-			Cost:         8,
-			Params:       labels,
-			Result:       "整数数组",
+			Label:       "整数序列",
+			Description: "生成一段整数：range(3) 是 [0,1,2]，range(1,4) 是 [1,2,3]，第三个参数是步长。参数的规模必须由输入界定 —— 字面量、len(容器) 或两者的算术组合，所以 range(len(fees)) 可以，range(某个入参) 不行。",
+			BoundedArgs: true,
+			Category:    "聚合",
+			Cost:        8,
+			Params:      labels,
+			Result:      "整数数组",
 		},
 	}
 }
@@ -193,15 +195,15 @@ func sumFloats(items []float64) (float64, error) {
 	return total, nil
 }
 
-func minOf[T int64 | float64](items []T) (T, error) {
+func minOf[T int64 | float64 | string](items []T) (T, error) {
 	return extremeOf(items, "min", func(candidate, best T) bool { return candidate < best })
 }
 
-func maxOf[T int64 | float64](items []T) (T, error) {
+func maxOf[T int64 | float64 | string](items []T) (T, error) {
 	return extremeOf(items, "max", func(candidate, best T) bool { return candidate > best })
 }
 
-func extremeOf[T int64 | float64](items []T, name string, better func(T, T) bool) (T, error) {
+func extremeOf[T int64 | float64 | string](items []T, name string, better func(T, T) bool) (T, error) {
 	var best T
 	if len(items) == 0 {
 		return best, fmt.Errorf("%s of an empty array", name)
@@ -231,4 +233,18 @@ func allTrue(items []bool) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// eachType registers one name for every element type it serves. The language
+// has no type classes, so a function that works on int, float and string is
+// three registrations — that is the signature, not repetition. What this takes
+// out is the error check that used to be written once per type, and what it
+// buys back is a single place to read how many types a name covers.
+func eachType(registry *lang.Registry, name string, doc lang.Doc, implementations ...any) error {
+	for _, implementation := range implementations {
+		if err := lang.Logic(registry, name, doc, implementation); err != nil {
+			return err
+		}
+	}
+	return nil
 }

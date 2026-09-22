@@ -1,5 +1,6 @@
 import "./funroute-designer.js";
-import { FunRouteClient, FunRouteWorkspace, clone, contractComments } from "./funroute-core.js";
+import { aliasOf, clone, formatValue } from "./funroute-core.js";
+import { FunRouteClient, FunRouteWorkspace, contractComments } from "./funroute-workspace.js";
 import { typeName, typeSummary } from "./funroute-display.js";
 import { enumControl, enumOf, parseInputValue } from "./funroute-fields.js";
 import { ContractPanel } from "./funroute-contract.js";
@@ -131,7 +132,7 @@ async function checkContract() {
     elements.designer.runtimeContract = checked;
     elements.designer.validation = { phase: "dirty", message: "契约已检查，等待核对画布参数和返回类型。" };
     renderArgs(checked.args || []);
-    elements.expectedType.textContent = typeSummary(checked.result);
+    elements.expectedType.textContent = declaredTypeText(checked);
     resetResult();
     contract.setStatus("valid", `检查通过 · ${checked.arguments} 个入参 → ${contract.value.result.type}`);
     return checked;
@@ -284,7 +285,9 @@ function renderArgs(parameters) {
     heading.className = "arg__heading";
     heading.append(parameter.name);
     const code = document.createElement("code");
-    code.textContent = typeSummary(parameter.type);
+    // An argument's type gets the same treatment as the result's: the name it
+    // was declared under, with the full shape one hover away.
+    code.textContent = declaredNameOf(parameter.type);
     code.title = typeName(parameter.type);
     heading.append(code);
     const value = previous.get(parameter.name) ?? exampleValue(parameter.type, parameter.name);
@@ -326,6 +329,18 @@ async function parseFragment(source) {
     // away from the part that locates the mistake.
     throw new Error(error.message.replace(/^expression compilation failed:\s*/, ""));
   }
+}
+
+// declaredTypeText prefers the name the contract declared the type under: a
+// record written out in full is the same information the type row already
+// shows, and it is the part that does not fit.
+function declaredTypeText(checked) {
+  return aliasOf(checked.result, checked.types) || typeSummary(checked.result);
+}
+
+// declaredNameOf is the same lookup against whatever contract is in force.
+function declaredNameOf(type) {
+  return aliasOf(type, workspace.contractCheck?.types) || typeSummary(type);
 }
 
 function renderArgsMessage(message) {
@@ -384,13 +399,13 @@ async function compile({ validationRevision = 0 } = {}) {
 
 function renderCompiled(compiled) {
   renderArgs(compiled.args);
-  elements.expectedType.textContent = typeSummary(compiled.result);
+  elements.expectedType.textContent = declaredNameOf(compiled.result);
   resetResult();
   elements.metrics.textContent = `${compiled.instructions} instructions · ${(compiled.calls || []).length} calls · ${compiled.digest.slice(0, 12)}`;
   contract.setStatus("valid", "契约有效，表达式输入与返回类型完全匹配");
   elements.designer.validation = {
     phase: "valid",
-    message: `参数均来自运行契约或本地作用域，返回 ${typeSummary(compiled.result)} 与契约一致。`,
+    message: `参数均来自运行契约或本地作用域，返回 ${declaredNameOf(compiled.result)} 与契约一致。`,
   };
 }
 
@@ -424,9 +439,12 @@ async function run() {
     appliedToCanvas = true;
     const response = await workspace.run(collectArgs());
     if (!response) return;
-    elements.result.textContent = `${JSON.stringify(response.value)}  :  ${typeSummary(response.type)}`;
+    // The declared type is already stated above the box, so the value stands
+    // on its own here; repeating the type a second and a third time pushed the
+    // answer off the screen on anything with a record in it.
+    elements.result.textContent = formatValue(response.value);
     elements.result.className = "result__value";
-    elements.resultCheck.textContent = `✓ 实际类型 ${typeSummary(response.type)} 与契约一致`;
+    elements.resultCheck.textContent = "✓ 返回值与契约声明的类型一致";
     elements.resultCheck.className = "result__check is-valid";
   } catch (error) {
     elements.designer.validation = {

@@ -293,10 +293,14 @@ func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOption
 			r.releaseFrame(f)
 			return Value{}, fmt.Errorf("%w: argument %q: expected %s, got %s", ErrContract, param.Name, param.Type.Summary(), args[i].Type().Summary())
 		}
-		if err := args[i].validateInvariant(); err != nil {
-			r.releaseFrame(f)
-			return Value{}, fmt.Errorf("%w: argument %q: %v", ErrContract, param.Name, err)
-		}
+		// No invariant re-check here. A Value cannot hold a NaN in the first
+		// place: every public constructor rejects one where it enters —
+		// lang.Float is CheckedFloat, ToValue goes through checkFloats, and
+		// Array/Dict/Record validate what they pack. Scanning again on every
+		// call made a 65536-element vector cost 16µs instead of 200ns, and it
+		// never protected the one case it could not see anyway — a host that
+		// mutates a backing it promised to treat as read-only can do that just
+		// as well after this line.
 		space[i] = args[i]
 	}
 	return r.runFrame(ctx, f, space, options)

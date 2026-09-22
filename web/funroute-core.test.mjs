@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FunRouteLanguage, FunRouteWorkspace, contractPayload, firstEmptySlot, isPlainExpression } from "./funroute-core.js";
+import { FunRouteLanguage, aliasOf, firstEmptySlot, formatTypeText, formatValue, isPlainExpression } from "./funroute-core.js";
+import { FunRouteWorkspace, contractPayload } from "./funroute-workspace.js";
 import { FIELD_TEXT, parseInputValue } from "./funroute-fields.js";
 import { typeName, typeSummary } from "./funroute-display.js";
 import { placeBlock } from "./funroute-dnd.js";
@@ -53,6 +54,7 @@ function catalog() {
         { name: "variable", kind: "name", role: "local", binds: ["where", "yield"], default: "item" },
         { name: "where", kind: "expr", optional: true },
         { name: "yield", kind: "expr" },
+        { name: "flatten", kind: "bool", optional: true },
       ] },
       { node: "reduce", fields: [
         { name: "source", kind: "expr" },
@@ -287,6 +289,60 @@ test("contract payload preserves incomplete rows for authoritative validation", 
   const payload = contractPayload({ args: [{ name: "", type: "int" }], result: { type: "string" } });
   assert.deepEqual(payload.args, [{ name: "", type: "int", doc: undefined }]);
   assert.equal(payload.result.type, "string");
+});
+
+test("declared types travel as a map and an unnamed row is dropped", () => {
+  const payload = contractPayload({
+    types: [{ name: "Order", type: "record{amount: int}" }, { name: "  ", type: "int" }],
+    args: [{ name: "a", type: "Order" }], result: { type: "int" },
+  });
+  assert.deepEqual(payload.types, { Order: "record{amount: int}" });
+  // Nothing declared means nothing sent: the field stays out of the request.
+  assert.equal(contractPayload({ args: [{ name: "a", type: "int" }], result: { type: "int" } }).types, undefined);
+});
+
+test("a spliced loop chain prints as the one comprehension it was written as", () => {
+  const language = new FunRouteLanguage(catalog());
+  const loop = (variable, source, yielded, extra = {}) => ({
+    node: "for", source: variable ? { node: "var", name: source } : null,
+    variable, yield: yielded, ...extra,
+  });
+  const nested = loop("a", "xs", loop("b", "ys", call("max", variable("a"), variable("b"))), { flatten: true });
+  assert.equal(language.expressionSource(nested), "[max(a, b) for a in xs for b in ys]");
+
+  // The flag is optional, so a single clause must not gain it: the canonical
+  // JSON has to stay byte for byte what the server produces.
+  const single = language.document(loop("a", "xs", variable("a"))).expr;
+  assert.equal("flatten" in single, false);
+  assert.equal(language.document(nested).expr.flatten, true);
+});
+
+test("a declared type is shown by the name it was declared under", () => {
+  const health = { kind: "record", fields: [{ name: "p95", type: { kind: "float" } }, { name: "ok", type: { kind: "bool" } }] };
+  // The compiler expands an alias before it builds anything, so what comes
+  // back is always the full record — matching it against the declared types is
+  // the only way a console can say "Health" where the operator wrote "Health".
+  assert.equal(aliasOf(health, { Health: health }), "Health");
+  assert.equal(aliasOf({ kind: "int" }, { Health: health }), null);
+  assert.equal(aliasOf(health, null), null);
+});
+
+test("a result opens up only where opening it says something", () => {
+  assert.equal(formatValue({ p95: 385, jitter: 0, degraded: true, backoff: [200, 400, 800] }),
+    '{\n  "p95": 385,\n  "jitter": 0,\n  "degraded": true,\n  "backoff": [200,400,800]\n}');
+  // Short values stay on their line: breaking [1,2,3] across three of them is
+  // noise, not structure.
+  assert.equal(formatValue([1, 2, 3]), "[1,2,3]");
+  assert.equal(formatValue("EUR"), '"EUR"');
+});
+
+test("a record type is written across lines, one field each", () => {
+  assert.equal(formatTypeText("record{a: int, b: array<int>}"), "record{\n  a: int,\n  b: array<int>\n}");
+  // A nested type stays inline — the question is this type's shape, not every
+  // shape inside it — and anything that is not a record is left alone.
+  assert.equal(formatTypeText("record{a: record{x: int, y: int}, b: int}"), "record{\n  a: record{x: int, y: int},\n  b: int\n}");
+  assert.equal(formatTypeText("array<int>"), "array<int>");
+  assert.equal(formatTypeText("record{\n  a: int,\n  b: int\n}"), "record{\n  a: int,\n  b: int\n}");
 });
 
 test("headless workspace owns parse, compile and run without a DOM", async () => {

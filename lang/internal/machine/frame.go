@@ -219,6 +219,8 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 		return f.loopInit(pc, instruction)
 	case OpLoopCollect:
 		return pc + 1, f.loopCollect(instruction)
+	case OpLoopSpread:
+		return pc + 1, f.loopSpread(instruction)
 	case OpLoopNext:
 		return f.loopNext(pc, instruction)
 	case OpJumpIfFalse:
@@ -641,6 +643,29 @@ func (f *frame) loopCollect(instruction Instruction) error {
 	return nil
 }
 
+// loopSpread is loopCollect for a nested comprehension: the value on the stack
+// is the whole array the inner loop built, and its elements — not it — belong
+// in the output. Every element was already produced by an iteration that spent
+// its own fuel, so splicing them costs no more steps than collecting them.
+func (f *frame) loopSpread(instruction Instruction) error {
+	if len(f.loops) == 0 {
+		return fmt.Errorf("loop spread without active loop")
+	}
+	value, err := f.pop1()
+	if err != nil {
+		return err
+	}
+	if !value.hasType(*instruction.Type) {
+		return fmt.Errorf("nested loop body returned %s, want %s", value.Type(), *instruction.Type)
+	}
+	loop := &f.loops[len(f.loops)-1]
+	if loop.folds() {
+		return fmt.Errorf("a fold cannot spread")
+	}
+	loop.output.addAll(value)
+	return nil
+}
+
 func (f *frame) loopNext(pc int, instruction Instruction) (int, error) {
 	if len(f.loops) == 0 {
 		return 0, fmt.Errorf("loop next without active loop")
@@ -676,10 +701,14 @@ func (f *frame) loopResult(loop *loopFrame) (Value, error) {
 	if loop.collected == nil {
 		return loop.output.finish(), nil
 	}
-	// A later key wins, the way a literal's duplicate key would.
+	// A repeated key is refused here the way a literal's is refused when it
+	// is parsed: one key, one value, whichever door the dictionary came in by.
 	built := loop.output.finish()
 	entries := make(map[string]Value, len(loop.collected))
 	for i, key := range loop.collected {
+		if _, taken := entries[key]; taken {
+			return Value{}, fmt.Errorf("the comprehension produced the key %q twice", key)
+		}
 		entries[key] = built.at(i)
 	}
 	return Dict(built.elemType(), entries)
