@@ -13,6 +13,7 @@
 - 契约归宿主；变量名禁点（`.` 留给字段访问）。
 - 目录只承载含义：`Doc` 是宿主写的唯一结构（注册入参、存储、目录输出同一个），签名来自反射、分类缺省取命名空间、颜色与图标只在前端；`Keywords`/`Examples`/`Order`/`FunctionDisplay`/`ParameterDisplay` 等平行结构删除。
 - 聚合与遍历分工：`reduce` 保留为自定义折叠的逃生口（对照 expr —— 它有 70 个内建，仍然保留 `reduce`），日常聚合由可选包 `extensions/std` 提供（`sum`/`count`/`min`/`max`/`any`/`all`/`range`），内核仍是 15 个函数名。`reduce` 有推导式同款的 `if` 子句，累加器初值写作 `acc = init`（与 `let` 同形）。`range` 的参数必须编译期已知（`FunctionSpec.ConstantArgs`），否则一个标量就能代表任意长的数组，定理 B 失效。
+- 编译期算清（`constexpr`）：不读参数且每个调用都获授权的表达式在编译期跑完，容器与记录也进常量池（`[1,2,3]`、`upper("adyen")`、`sum(range(4))` 各编译成一条载入指令）；闭合表达式的失败是**编译错误**，包括写在惰性分支里的（`1 / 0`、`[1,2][5]`、溢出），与 Go 对常量除零的处理一致。授权由 `Doc.Constexpr` 给出：内核与 `extensions/std` 全有，模型/时钟/远程调用没有 —— 否则参数恰好是常量时，推理引擎会在编译规则时被调进去。
 - 前端与 SDK 的边界清理：契约面板的样式随库走（此前 MVP 外壳的 `.fr-muted` 在全局覆盖画布自己的字号）、控制块面板去掉空转的搜索框（面板里最多六个块）、`funroute-core.js` 只导出外部真正 import 的符号；`lang` 包的每个公开类型都在 `lang_test.go` 被宿主视角显式命名一次，少一个别名就编译不过。
 - 策略工作台的编辑模型：控制块是卡片、其余是一行就地编辑的源码；控制块集合、类型建议、值节点文案都由目录推导，前端不再有硬编码清单。
 
@@ -59,19 +60,19 @@ expr 的内建是 70 个函数 + 20 个运算符，本语言内核是 15 个函�
 
 对比用的 benchmark 依赖 expr，不进这个零依赖仓库：复现方式是另建一个 module，`replace funroute => ../funroute` 并 require expr，对同一组表达式各写一份。
 
-## 阶段 1：结构与语言补齐（未开始）
+## 阶段 1：结构与语言补齐（进行中）
 
 顺序按**返工成本**排，不按影响面排：`record` 贯穿推导、ExprJSON、digest 与前端，越晚做返工越大；`decimal` 只影响示例里的 float 字面量，是小时级的改写。所以原先「先 `decimal`」的顺序改为下表 —— `decimal` 退到 `record` 之后、`money`（阶段 2B）之前，前面先补三项低风险的地基。
 
 | 顺序 | 项 | 决策 | 取舍 |
 |---|---|---|---|
-| 1 | 索引 `xs[i]`、`d[k]`，`%`，`in`，`len` | 内核函数 + 糖，不加节点，不动 digest | 现在 dict 取一个键都做不到、只能整表遍历，补上后它才是可用类型 |
-| 2 | record 类型 | struct 映射、字段访问 `r.field`、契约按字段声明 | 贯穿推导、ExprJSON、常量、前端的最大改动；路由、对账、模型多输出都依赖它。一次性 bump ExprJSON 与 Artifact 版本 |
-| 3 | 标准库扩展包 `extensions/std`（**聚合部分已完成**，字符串与数值库待补） | 不进内核，由注册表开关；`any` / `all` / `sum` 接推导式现推的数组，`sort_by` / `top_k` 将接平行 key 数组 | 不需要 lambda，终止性不变。已落地：`sum` `count` `min` `max` `any` `all` `range`。待补：`upper`/`lower`/`trim`/`split`/`join`/`contains`、`abs`/`round`/`ceil`/`floor`，以及 `sort_by`/`top_k`（排在阶段 2A 的路由包里） |
-| 4 | 错误带行列与节点路径 | 编译错误附行列与 ExprJSON 路径，画布高亮 | 现在报的是 `at byte 7`，运营读不懂 |
-| 5 | `decimal` 类型（定点 int64 系数 + 指数，中间运算 128 位） | **不带后缀的小数字面量默认 decimal**，`1.7f` 显式 float | 用户决策。写钱的人不会误用 float。代价：模型分数比较 `risk > 0.5` 需要字面量按上下文定型（见下），现有示例中的 float 字面量要复核 |
-| 5（同批） | 数值字面量定型 | 小数字面量是**未定型常量**：默认 decimal，与 float 上下文 unify 时成为 float（同 Go 的 untyped constant）；`1.7f` 强制 float、`1.7d` 强制 decimal | 这是让「默认 decimal」与模型分数共存的唯一不引入大量重载的方式；`implicitTypeScore` 与 `mixedPenalty` 相应调整 |
-| 6 | 多层与字典推导、`else =>`、尾随逗号统一 | — | 完整性 |
+| 1 ✅ | 索引 `xs[i]`、`d[k]`，`%`，`in`，`len` | 内核函数 + 糖，不加节点，不动 digest；越界与缺键是错误，不引入 null | 已完成。内核从 15 个函数名增到 19 个（`at`/`member`/`len`/`mod`），`len` 顺带取代了 `std` 里同义的 `count` |
+| 2 ✅ | record 类型 | 契约按字段声明（`record{amount: int, currency: string}`）、字段访问 `r.field`、记录字面量 `{name: 值}`；字段顺序即类型，访问编译成下标 | 已完成：两个节点（`record`/`field`）、两个 opcode（`make_record`/`field`）、`RecordKind` 贯通类型/值/推导/边界/前端。Go struct 双向映射也已完成（只有带 `funroute` tag 的导出字段在记录里，不做任何名字推断；声明顺序即类型），JSON 输出保字段序，字段名规则三个入口统一。**只剩字段更新**（`{...order, amount: 1}`）没做：改一个字段要把字段重写一遍，等真实规则喊疼再加 |
+| 3 ✅ | 标准库扩展包 `extensions/std` | 不进内核，由注册表开关；全包标 `Doc.Constexpr`，所以闭合调用在编译期算完 | 不需要 lambda，终止性不变。已落地：聚合 `sum`/`min`/`max`/`any`/`all`/`range`，字符串 `upper`/`lower`/`trim`/`contains`/`starts_with`/`ends_with`/`slice`/`split`/`join`/`replace`，数组 `first`/`last`/`take`/`reverse`/`concat`/`unique`/`flatten`/`sort`。计数由内核的 `len` 承担。`sort_by`/`top_k` 留在阶段 2A |
+| 4 ✅（行列部分） | 错误带行列 | `syntax.At` 是唯一产生方式，错误携带 offset，`lang.LineColumn(err, source)` 由宿主换算；MVP 的 API 回 `line`/`column`，CLI 与前端按 `行:列` 显示 | 已完成。**ExprJSON 节点路径没做**：画布逐槽提交，出错时它已经知道是哪个槽；路径要等"整棵树提交后要高亮某个节点"这个消费者真出现再说 |
+| 5 | ~~`decimal` 类型~~ → 直接做 `money`（见阶段 2B） | **不做通用 decimal**：钱本来就是「某币种的最小单位整数」，`money<CCY>` 底层是 int64，乘费率用 `math/bits` 做 128 位中间运算。零依赖、零分配、精确 | 用户决策（2026-09-23）。通用 decimal 只有和 money 一起才有价值，单独做它要拖上「未定型常量」那套大改动。`0.025` 仍是 float，模型分数不受影响 |
+| ~~5（同批）~~ | ~~数值字面量定型~~ | **取消**：它只为「decimal 当通用数值类型」而存在，而 decimal 不再是通用类型（见下） | 推导层一行不用改，这是阶段 1 里最难的一块 |
+| 6 ✅（字典推导） | 字典推导 `{k: v for k, v in d}` | `ForExpr` 加一个可选的 `yield_key`：有它就产出 dict，没有就产出 array；不加节点 | 已完成。它同时消掉一个陷阱：`{country: rate}` 一直被当成字段名为 country 的记录，而想要动态键的人本来无路可走。**多层推导**（`[e for x in xs for y in ys]`）不做：嵌套推导加 `flatten` 能表达同一件事 |
 
 开工前要定的两件事：
 
@@ -80,7 +81,7 @@ expr 的内建是 70 个函数 + 20 个运算符，本语言内核是 15 个函�
 
 ## 阶段 2A：路由包（先做）
 
-`decision` 返回 record + 原因码、`reject(code)`、确定性 `split(key, weights)`、渠道快照筛选排序（`sort_by`、`top_k`）、级联重试输入标准与拒付码分类、时间窗标准库（`now` 与时区作参数）。规则集组合放宿主 `RuleSet`，不进语言。
+（record 已经就位，所以 `sort_by(channels, .cost)` 这类写法不必再走平行 key 数组的权宜方案。）`decision` 返回 record + 原因码、`reject(code)`、确定性 `split(key, weights)`、渠道快照筛选排序（`sort_by`、`top_k`）、级联重试输入标准与拒付码分类、时间窗标准库（`now` 与时区作参数）。规则集组合放宿主 `RuleSet`，不进语言。
 
 ## 阶段 2B：金融包
 

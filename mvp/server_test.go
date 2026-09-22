@@ -51,6 +51,33 @@ func TestCatalogAPIIncludesExtensionPresentation(t *testing.T) {
 	}
 }
 
+// A compile error says where: the console puts the caret there instead of
+// making an operator hunt through the expression.
+func TestCompileErrorsCarryLineAndColumn(t *testing.T) {
+	server := testServer(t)
+	response := postJSON(t, server, "/api/compile",
+		`{"source":"amount\n  + \"x\"","contract":{"args":[{"name":"amount","type":"int"}],"result":{"type":"int"}}}`)
+	if response.Code != 422 {
+		t.Fatalf("status = %d", response.Code)
+	}
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+			Line    int    `json:"line"`
+			Column  int    `json:"column"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Line != 2 || body.Error.Column != 3 {
+		t.Fatalf("position = %d:%d, want 2:3 (%s)", body.Error.Line, body.Error.Column, body.Error.Message)
+	}
+	if strings.Contains(body.Error.Message, "byte") {
+		t.Fatalf("the message should not carry a byte offset: %s", body.Error.Message)
+	}
+}
+
 func TestContractCheckAPIValidatesTheRuntimeABI(t *testing.T) {
 	server := testServer(t)
 	valid := postJSON(t, server, "/api/contract/check", `{

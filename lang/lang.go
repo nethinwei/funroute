@@ -29,6 +29,9 @@ import (
 type (
 	Value = machine.Value
 	Type  = machine.Type
+	// Field is one field of a record: a name and its own type. The order of a
+	// record's fields is part of its type.
+	Field = machine.Field
 	Kind  = machine.Kind
 )
 
@@ -39,6 +42,7 @@ var (
 	String = machine.String
 	Bool   = machine.Bool
 	Array  = machine.Array
+	Record = machine.Record
 	Dict   = machine.Dict
 )
 
@@ -66,6 +70,7 @@ var (
 	FloatType  = machine.FloatType
 	StringType = machine.StringType
 	TypeVar    = machine.TypeVar
+	RecordOf   = machine.RecordOf
 	ArrayOf    = machine.ArrayOf
 	DictOf     = machine.DictOf
 	HandleOf   = machine.HandleOf
@@ -115,6 +120,14 @@ var (
 )
 
 // The errors a host tells apart with errors.Is.
+// A compile error knows where it happened. The offset is what the lexer and
+// the parser have; LineColumn turns it into what a person reads, against the
+// source the host still holds — a program compiled from ExprJSON has no text,
+// and then there is nothing to report.
+type PositionError = syntax.PosError
+
+var LineColumn = syntax.LineColumn
+
 var (
 	ErrCompile   = machine.ErrCompile
 	ErrContract  = machine.ErrContract

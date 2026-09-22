@@ -79,14 +79,14 @@ func TestNodeSchemasMirrorTheDefinitions(t *testing.T) {
 			letNode = i
 		}
 	}
-	for _, want := range []string{"int", "float", "string", "bool", "var", "array", "dict", "call", "switch", "for", "reduce", "let"} {
+	for _, want := range []string{"int", "float", "string", "bool", "var", "array", "dict", "record", "field", "call", "switch", "for", "reduce", "let"} {
 		if !schemas[want] {
 			t.Errorf("schema for %s is missing", want)
 		}
 	}
 	variable := NodeSchemas()[forNode].Fields[1]
 	if variable.Name != "variable" || variable.Kind != "name" || variable.Role != "local" || variable.Default != "item" ||
-		strings.Join(variable.Binds, ",") != "where,yield" {
+		strings.Join(variable.Binds, ",") != "where,yield_key,yield" {
 		t.Fatalf("for.variable = %+v", variable)
 	}
 	if NodeSchemas()[forNode].Form != "for" {

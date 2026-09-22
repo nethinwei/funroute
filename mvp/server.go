@@ -167,7 +167,7 @@ func (s *Server) parse(response http.ResponseWriter, request *http.Request) {
 	}
 	encoded, err := s.parsePayload(payload)
 	if err != nil {
-		writeAPIError(response, http.StatusUnprocessableEntity, "PARSE_ERROR", err)
+		writeSourceError(response, "PARSE_ERROR", err, payload.Source)
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"expr_json": json.RawMessage(encoded)})
@@ -187,7 +187,7 @@ func (s *Server) compile(response http.ResponseWriter, request *http.Request) {
 	}
 	artifact, err := s.compilePayload(payload)
 	if err != nil {
-		writeAPIError(response, http.StatusUnprocessableEntity, typedErrorCode(err, "COMPILE_ERROR"), err)
+		writeSourceError(response, typedErrorCode(err, "COMPILE_ERROR"), err, payload.Source)
 		return
 	}
 	writeJSON(response, http.StatusOK, summarize(artifact))
@@ -215,7 +215,7 @@ func (s *Server) run(response http.ResponseWriter, request *http.Request) {
 	}
 	writeJSON(response, http.StatusOK, map[string]any{
 		"artifact": summarize(artifact),
-		"value":    result.Any(),
+		"value":    result,
 		"type":     artifact.Result,
 	})
 }
@@ -272,6 +272,16 @@ func summarize(artifact *lang.Artifact) compileResponse {
 		Digest: artifact.Digest, Args: artifact.Args, Result: artifact.Result,
 		Instructions: len(artifact.Instructions), Calls: artifact.Calls, ExprJSON: artifact.ExprJSON,
 	}
+}
+
+// writeSourceError adds the line and column an error points at, so the console
+// can put the caret there instead of making the operator hunt for it.
+func writeSourceError(response http.ResponseWriter, code string, err error, source string) {
+	body := map[string]any{"code": code, "message": err.Error()}
+	if line, column, ok := lang.LineColumn(err, source); ok {
+		body["line"], body["column"] = line, column
+	}
+	writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"error": body})
 }
 
 func writeAPIError(response http.ResponseWriter, status int, code string, err error) {

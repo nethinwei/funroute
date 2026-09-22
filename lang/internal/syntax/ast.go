@@ -142,6 +142,64 @@ func (e *DictExpr) check() error {
 	return nil
 }
 
+// RecordFieldExpr is one field of a record literal. Unlike a dictionary entry
+// the name is an identifier, and unlike a dictionary the order is kept: it is
+// part of the record's type.
+type RecordFieldExpr struct {
+	Name  string `json:"name" role:"text" default:"field"`
+	Value Expr   `json:"value"`
+}
+
+// RecordExpr is {amount: 1200, currency: "SGD"}: a fixed set of named fields,
+// each with its own type. A dictionary literal writes its keys as strings
+// ({"a": 1}) and every value shares one type; a record writes them as names
+// and every field has its own.
+type RecordExpr struct {
+	ID     int               `json:"-"`
+	Pos    int               `json:"-"`
+	Fields []RecordFieldExpr `json:"fields" min:"1"`
+}
+
+func (*RecordExpr) exprNode()       {}
+func (e *RecordExpr) NodeID() int   { return e.ID }
+func (e *RecordExpr) Position() int { return e.Pos }
+func (*RecordExpr) kind() string    { return "record" }
+
+func (e *RecordExpr) check() error {
+	seen := make(map[string]bool, len(e.Fields))
+	for _, field := range e.Fields {
+		if !machine.IsValidFieldName(field.Name) {
+			return fmt.Errorf("invalid record field name %q", field.Name)
+		}
+		if seen[field.Name] {
+			return fmt.Errorf("duplicate record field %q", field.Name)
+		}
+		seen[field.Name] = true
+	}
+	return nil
+}
+
+// FieldExpr is r.field. The field name is resolved to a position in the
+// record's type at compile time, so nothing is looked up while the rule runs.
+type FieldExpr struct {
+	ID    int    `json:"-"`
+	Pos   int    `json:"-"`
+	Value Expr   `json:"value"`
+	Field string `json:"field" role:"text" default:"field"`
+}
+
+func (e *FieldExpr) check() error {
+	if !machine.IsValidFieldName(e.Field) {
+		return fmt.Errorf("invalid record field name %q", e.Field)
+	}
+	return nil
+}
+
+func (*FieldExpr) exprNode()       {}
+func (e *FieldExpr) NodeID() int   { return e.ID }
+func (e *FieldExpr) Position() int { return e.Pos }
+func (*FieldExpr) kind() string    { return "field" }
+
 type CallExpr struct {
 	ID   int    `json:"-"`
 	Pos  int    `json:"-"`
@@ -178,17 +236,22 @@ func (e *SwitchExpr) Position() int    { return e.Pos }
 func (*SwitchExpr) kind() string       { return "switch" }
 func (*SwitchExpr) Form() machine.Form { return machine.SwitchForm }
 
-// ForExpr is [yield for variable in source if where]. The names are locally
-// bound and do not become program arguments; KeyVariable is set for a
-// dictionary walk ([e for k, v in d]) and empty for an array.
+// ForExpr is [yield for variable in source if where], or
+// {yield_key: yield for variable in source if where} when it builds a
+// dictionary. The names are locally bound and do not become program arguments;
+// KeyVariable is set for a dictionary walk ([e for k, v in d]) and empty for
+// an array.
 type ForExpr struct {
 	ID          int    `json:"-"`
 	Pos         int    `json:"-"`
 	Source      Expr   `json:"source"`
-	Variable    string `json:"variable" role:"local" binds:"where,yield" default:"item"`
-	KeyVariable string `json:"key_variable,omitempty" role:"local" binds:"where,yield"`
+	Variable    string `json:"variable" role:"local" binds:"where,yield_key,yield" default:"item"`
+	KeyVariable string `json:"key_variable,omitempty" role:"local" binds:"where,yield_key,yield"`
 	Where       Expr   `json:"where,omitempty"`
-	Yield       Expr   `json:"yield"`
+	// YieldKey turns the comprehension into a dictionary one: with it the
+	// result is dict<V> keyed by this expression, without it array<V>.
+	YieldKey Expr `json:"yield_key,omitempty"`
+	Yield    Expr `json:"yield"`
 }
 
 func (*ForExpr) exprNode()          {}
@@ -275,5 +338,5 @@ func distinctNames(names ...string) error {
 // has four tags, one per value kind; the others have one each.
 var nodeTypes = []Expr{
 	&LiteralExpr{}, &VariableExpr{}, &EnumExpr{}, &ArrayExpr{}, &DictExpr{}, &CallExpr{},
-	&SwitchExpr{}, &ForExpr{}, &ReduceExpr{}, &LetExpr{},
+	&RecordExpr{}, &FieldExpr{}, &SwitchExpr{}, &ForExpr{}, &ReduceExpr{}, &LetExpr{},
 }

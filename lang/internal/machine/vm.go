@@ -178,8 +178,21 @@ func validateMakeInstruction(instruction Instruction, _ *Artifact, fail failFunc
 		}
 		return nil
 	}
+	if instruction.Op == OpMakeRecord {
+		if instruction.Type == nil || instruction.Type.Kind != RecordKind || instruction.A != len(instruction.Type.Fields) {
+			return fail("malformed record")
+		}
+		return nil
+	}
 	if instruction.A < 0 || len(instruction.Keys) != instruction.A || instruction.Type == nil || instruction.Type.Kind != DictKind {
 		return fail("malformed dictionary")
+	}
+	return nil
+}
+
+func validateFieldInstruction(instruction Instruction, _ *Artifact, fail failFunc) error {
+	if instruction.A < 0 || instruction.Type == nil {
+		return fail("malformed field access")
 	}
 	return nil
 }
@@ -213,7 +226,8 @@ func validateLoopInstruction(instruction Instruction, artifact *Artifact, fail f
 		return fail("malformed loop key slot %d", instruction.D)
 	}
 	if instruction.C == NoAccumulator {
-		if !isArrayType(instruction.Type) {
+		// A comprehension builds an array, or a dictionary when it has a key.
+		if !isArrayType(instruction.Type) && !isDictType(instruction.Type) {
 			return fail("malformed loop result type")
 		}
 		return nil
@@ -222,6 +236,10 @@ func validateLoopInstruction(instruction Instruction, artifact *Artifact, fail f
 		return fail("malformed loop accumulator %d", instruction.C)
 	}
 	return nil
+}
+
+func isDictType(typ *Type) bool {
+	return typ != nil && typ.Kind == DictKind && typ.Elem != nil
 }
 
 func isArrayType(typ *Type) bool {

@@ -10,10 +10,16 @@ import (
 )
 
 func TestBareExpressionIsTheGrammar(t *testing.T) {
-	// A dotted name is a function's; a variable is plain, so "." stays free
-	// for field access.
-	if _, err := syntax.Parse(`a.b + 1`); err == nil || !strings.Contains(err.Error(), `invalid variable name "a.b"`) {
-		t.Fatalf("dotted variable error = %v", err)
+	// A dotted name being called is a function's (route.score_v1); anywhere
+	// else it is a variable and the fields read off it.
+	dotted, err := syntax.Parse(`a.b + 1`)
+	if err != nil {
+		t.Fatalf("a.b should parse as a field access: %v", err)
+	}
+	if encoded, err := syntax.ExportExprJSON(dotted); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(string(encoded), `"node":"field"`) {
+		t.Fatalf("a.b did not become a field access: %s", encoded)
 	}
 	// A bare expression is the whole grammar.
 	if _, err := syntax.Parse(`add(1,2)`); err != nil {
@@ -82,8 +88,8 @@ func TestSugarSemantics(t *testing.T) {
 		// The right side would divide by zero, so this also proves && and ||
 		// short circuit.
 		{`a > 0 && b > 0`, map[string]any{"a": 1, "b": 2}, true},
-		{`a > 0 || div(1,0) > 0`, map[string]any{"a": 1}, true},
-		{`a < 0 && div(1,0) > 0`, map[string]any{"a": 1}, false},
+		{`a > 0 || div(1,zero) > 0`, map[string]any{"a": 1, "zero": 0}, true},
+		{`a < 0 && div(1,zero) > 0`, map[string]any{"a": 1, "zero": 0}, false},
 		{`!(a > b)`, map[string]any{"a": 1, "b": 2}, true},
 		{"// 选主渠道\n a + 1 // 加一", map[string]any{"a": 1}, int64(2)},
 		{`1_000_000 + 1`, map[string]any{}, int64(1000001)},
@@ -224,10 +230,10 @@ func TestSwitchIsStillLazyAndTypeChecked(t *testing.T) {
 	registry := consoleRegistry(t)
 	// The untaken branch must not be evaluated, in both shapes.
 	for _, source := range []string{
-		`switch(country, case "SG" => 1, else div(1,0))`,
-		`switch(case country == "SG" => 1, else div(1,0))`,
+		`switch(country, case "SG" => 1, else div(1,zero))`,
+		`switch(case country == "SG" => 1, else div(1,zero))`,
 	} {
-		value, _ := compileAndRun(t, source, registry, map[string]any{"country": "SG"}, machine.RunOptions{Fuel: 1000})
+		value, _ := compileAndRun(t, source, registry, map[string]any{"country": "SG", "zero": 0}, machine.RunOptions{Fuel: 1000})
 		if got, _ := value.Int(); got != 1 {
 			t.Fatalf("%s = %v", source, value.Any())
 		}

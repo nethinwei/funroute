@@ -26,9 +26,13 @@ const (
 	// contract. Runtime values stay ordinary strings; the type carries the
 	// allowed set for boundary checks and switch exhaustiveness.
 	EnumKind
+	// RecordKind is a fixed set of named fields, each with its own type. The
+	// field order is part of the type: values store their fields in it, so a
+	// field access compiles to an index rather than a name lookup.
+	RecordKind
 )
 
-var kindNames = [...]string{"invalid", "bool", "int", "float", "string", "array", "dict", "var", "handle", "enum"}
+var kindNames = [...]string{"invalid", "bool", "int", "float", "string", "array", "dict", "var", "handle", "enum", "record"}
 
 func (k Kind) String() string {
 	if int(k) < len(kindNames) {
@@ -59,6 +63,17 @@ type Type struct {
 	Elem   *Type    `json:"elem,omitempty"`
 	Name   string   `json:"name,omitempty"`
 	Values []string `json:"values,omitempty"`
+	// Fields is a record's fields, in order. The order is the type: it decides
+	// where a field sits in the value and which index a field access compiles
+	// to, so two records with the same fields in a different order are two
+	// types.
+	Fields []Field `json:"fields,omitempty"`
+}
+
+// Field is one field of a record.
+type Field struct {
+	Name string `json:"name"`
+	Type Type   `json:"type"`
 }
 
 var (
@@ -77,6 +92,12 @@ func IsAnyEnum(t Type) bool { return t.Kind == EnumKind && t.Name == "" && len(t
 
 func ArrayOf(elem Type) Type { return Type{Kind: ArrayKind, Elem: typePtr(elem)} }
 func DictOf(elem Type) Type  { return Type{Kind: DictKind, Elem: typePtr(elem)} }
+
+// RecordOf builds a record type from fields in the order they are given.
+func RecordOf(fields ...Field) Type {
+	return Type{Kind: RecordKind, Fields: append([]Field(nil), fields...)}
+}
+
 func TypeVar(name string) Type {
 	return Type{Kind: VarKind, Name: name}
 }
@@ -105,6 +126,12 @@ func CloneType(t Type) Type {
 		out.Elem = &elem
 	}
 	out.Values = append([]string(nil), t.Values...)
+	if t.Fields != nil {
+		out.Fields = make([]Field, len(t.Fields))
+		for i, field := range t.Fields {
+			out.Fields[i] = Field{Name: field.Name, Type: CloneType(field.Type)}
+		}
+	}
 	return out
 }
 
@@ -120,6 +147,8 @@ func (t Type) String() string {
 			return "?"
 		}
 		return t.Name
+	case RecordKind:
+		return "record{" + strings.Join(t.fieldTexts(false), ", ") + "}"
 	case HandleKind:
 		return fmt.Sprintf("handle<%s>", t.Name)
 	case EnumKind:
@@ -132,6 +161,18 @@ func (t Type) String() string {
 	}
 }
 
+func (t Type) fieldTexts(summary bool) []string {
+	out := make([]string, len(t.Fields))
+	for i, field := range t.Fields {
+		if summary {
+			out[i] = field.Name + ": " + field.Type.Summary()
+			continue
+		}
+		out[i] = field.Name + ": " + field.Type.String()
+	}
+	return out
+}
+
 // enumSummaryLimit is how many members an error message spells out. A contract
 // may declare hundreds (every country, every currency); a person reading the
 // error needs the enum's name and a sample, not the whole set.
@@ -140,6 +181,9 @@ const enumSummaryLimit = 6
 // Summary is String for a message. String stays complete because ParseType has
 // to read it back; Summary is only ever shown.
 func (t Type) Summary() string {
+	if t.Kind == RecordKind {
+		return "record{" + strings.Join(t.fieldTexts(true), ", ") + "}"
+	}
 	if t.Elem != nil {
 		return fmt.Sprintf("%s<%s>", t.Kind, t.Elem.Summary())
 	}
@@ -172,12 +216,48 @@ func (t Type) IsConcrete() bool {
 	if t.Kind == ArrayKind || t.Kind == DictKind {
 		return t.Elem != nil && t.Elem.IsConcrete()
 	}
+	if t.Kind == RecordKind {
+		return t.fieldsAreConcrete()
+	}
 	return true
+}
+
+func (t Type) fieldsAreConcrete() bool {
+	if len(t.Fields) == 0 {
+		return false
+	}
+	seen := make(map[string]bool, len(t.Fields))
+	for _, field := range t.Fields {
+		if seen[field.Name] || !IsValidVariableName(field.Name) || !field.Type.IsConcrete() {
+			return false
+		}
+		seen[field.Name] = true
+	}
+	return true
+}
+
+// FieldIndex is where a field sits in a record, or -1. The compiler resolves a
+// field access with it, so nothing looks a name up at run time.
+func (t Type) FieldIndex(name string) int {
+	for i, field := range t.Fields {
+		if field.Name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 func (t Type) Equal(other Type) bool {
 	if t.Kind != other.Kind || t.Name != other.Name || !slices.Equal(t.Values, other.Values) {
 		return false
+	}
+	if len(t.Fields) != len(other.Fields) {
+		return false
+	}
+	for i, field := range t.Fields {
+		if field.Name != other.Fields[i].Name || !field.Type.Equal(other.Fields[i].Type) {
+			return false
+		}
 	}
 	if t.Elem == nil || other.Elem == nil {
 		return t.Elem == nil && other.Elem == nil
@@ -243,6 +323,8 @@ func (p *typeParser) parse() (Type, error) {
 		return p.angled(name, p.handleName)
 	case "enum":
 		return p.parseEnum()
+	case "record":
+		return p.parseRecord()
 	default:
 		return Type{}, fmt.Errorf("unknown type %q", name)
 	}
@@ -263,6 +345,68 @@ func (p *typeParser) parseEnum() (Type, error) {
 		return Type{}, err
 	}
 	return EnumOf(named.Name, values...), nil
+}
+
+// parseRecord reads record{name: type, other: type}.
+func (p *typeParser) parseRecord() (Type, error) {
+	p.skipSpace()
+	if p.i >= len(p.s) || p.s[p.i] != '{' {
+		return Type{}, fmt.Errorf("record requires a field set")
+	}
+	p.i++
+	var fields []Field
+	for {
+		p.skipSpace()
+		if p.i < len(p.s) && p.s[p.i] == '}' {
+			p.i++
+			if len(fields) == 0 {
+				return Type{}, fmt.Errorf("record field set cannot be empty")
+			}
+			return RecordOf(fields...), nil
+		}
+		field, err := p.recordField()
+		if err != nil {
+			return Type{}, err
+		}
+		fields = append(fields, field)
+		p.skipSpace()
+		if p.i >= len(p.s) || (p.s[p.i] != ',' && p.s[p.i] != '}') {
+			return Type{}, fmt.Errorf("expected ',' or '}' in record field set")
+		}
+		if p.s[p.i] == ',' {
+			p.i++
+		}
+	}
+}
+
+func (p *typeParser) recordField() (Field, error) {
+	name, err := p.fieldName()
+	if err != nil {
+		return Field{}, err
+	}
+	p.skipSpace()
+	if p.i >= len(p.s) || p.s[p.i] != ':' {
+		return Field{}, fmt.Errorf("record field %q needs a type after ':'", name)
+	}
+	p.i++
+	typ, err := p.parse()
+	if err != nil {
+		return Field{}, err
+	}
+	return Field{Name: name, Type: typ}, nil
+}
+
+func (p *typeParser) fieldName() (string, error) {
+	p.skipSpace()
+	start := p.i
+	for p.i < len(p.s) && isMemberChar(p.s[p.i]) {
+		p.i++
+	}
+	name := p.s[start:p.i]
+	if !IsValidFieldName(name) {
+		return "", fmt.Errorf("invalid record field name %q", name)
+	}
+	return name, nil
 }
 
 func (p *typeParser) enumMembers() ([]string, error) {

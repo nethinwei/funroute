@@ -21,6 +21,19 @@ type Doc struct {
 	Cost        uint64   `json:"cost"`
 	Params      []string `json:"params,omitempty"` // parameter labels, in order
 	Result      string   `json:"result,omitempty"` // result label
+	// Constexpr says the compiler may call this function while folding, the
+	// way C++ marks a function usable in a constant expression. The kernel's
+	// functions all are. A host function is not unless it says so: folding
+	// would otherwise reach an inference engine, a clock or a remote service
+	// while a rule is compiled, and a rule that compiles differently at 3am is
+	// worse than one that computes a little more at run time.
+	Constexpr bool `json:"-"`
+	// ConstantArgs requires every argument of a call to be fixed at compile
+	// time. It is for a function whose result size follows from its arguments
+	// — range is the one — because a run-time length would let a single scalar
+	// stand for an arbitrarily long array and break the polynomial bound in
+	// docs/termination.md.
+	ConstantArgs bool `json:"-"`
 	// Timeout and Detached are operational, so neither reaches a front end.
 	// Timeout caps one call of this function: the deadline it receives is the
 	// earlier of the request's and now+Timeout. Zero means the request's alone.

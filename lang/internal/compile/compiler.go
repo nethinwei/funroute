@@ -132,7 +132,11 @@ type bytecodeCompiler struct {
 }
 
 func (c *bytecodeCompiler) compile(expr syntax.Expr) error {
-	if c.tryFold(expr) {
+	folded, err := c.tryFold(expr)
+	if err != nil {
+		return err
+	}
+	if folded {
 		return nil
 	}
 	switch node := expr.(type) {
@@ -154,6 +158,10 @@ func (c *bytecodeCompiler) compile(expr syntax.Expr) error {
 		return c.compileReduce(node)
 	case *syntax.LetExpr:
 		return c.compileLet(node)
+	case *syntax.RecordExpr:
+		return c.compileRecord(node)
+	case *syntax.FieldExpr:
+		return c.compileField(node)
 	case *syntax.CallExpr:
 		return c.compileCall(node)
 	default:
@@ -225,6 +233,40 @@ func (c *bytecodeCompiler) compileDict(node *syntax.DictExpr) error {
 		return fmt.Errorf("cannot compile dictionary with unresolved type")
 	}
 	c.emit(machine.Instruction{Op: machine.OpMakeDict, A: len(entries), Keys: keys, Type: &typ})
+	return nil
+}
+
+// compileRecord evaluates the fields in the order the type declares and packs
+// them; compileField turns the name into the index it resolved to, so reading
+// a field is one instruction and no name survives into the bytecode.
+func (c *bytecodeCompiler) compileRecord(node *syntax.RecordExpr) error {
+	resultType, ok := c.inferred.NodeTypes[node.ID]
+	if !ok || resultType.Kind != machine.RecordKind {
+		return fmt.Errorf("cannot compile record with unresolved type")
+	}
+	for _, field := range node.Fields {
+		if err := c.compile(field.Value); err != nil {
+			return err
+		}
+	}
+	c.emit(machine.Instruction{Op: machine.OpMakeRecord, A: len(node.Fields), Type: &resultType})
+	return nil
+}
+
+func (c *bytecodeCompiler) compileField(node *syntax.FieldExpr) error {
+	sourceType, ok := c.inferred.NodeTypes[node.Value.NodeID()]
+	if !ok || sourceType.Kind != machine.RecordKind {
+		return fmt.Errorf("cannot compile field access on a non-record")
+	}
+	index := sourceType.FieldIndex(node.Field)
+	if index < 0 {
+		return fmt.Errorf("%s has no field %q", sourceType.Summary(), node.Field)
+	}
+	if err := c.compile(node.Value); err != nil {
+		return err
+	}
+	resultType := c.inferred.NodeTypes[node.ID]
+	c.emit(machine.Instruction{Op: machine.OpField, A: index, Type: &resultType})
 	return nil
 }
 
@@ -371,7 +413,8 @@ func (c *bytecodeCompiler) compileFor(node *syntax.ForExpr) error {
 		return err
 	}
 	resultType, ok := c.inferred.NodeTypes[node.ID]
-	if !ok || resultType.Kind != machine.ArrayKind || resultType.Elem == nil {
+	if !ok || resultType.Elem == nil ||
+		(resultType.Kind != machine.ArrayKind && resultType.Kind != machine.DictKind) {
 		return fmt.Errorf("cannot compile for with unresolved result type")
 	}
 	slot := c.bindLocal(node.Variable)
@@ -388,11 +431,20 @@ func (c *bytecodeCompiler) compileFor(node *syntax.ForExpr) error {
 		}
 		jumpFiltered = c.emit(machine.Instruction{Op: machine.OpJumpIfFalse})
 	}
+	// A dictionary comprehension pushes the key first, so loop_collect finds
+	// the value on top and the key under it.
+	pairs := 0
+	if node.YieldKey != nil {
+		if err := c.compile(node.YieldKey); err != nil {
+			return err
+		}
+		pairs = 1
+	}
 	if err := c.compile(node.Yield); err != nil {
 		return err
 	}
 	yieldType := machine.CloneType(*resultType.Elem)
-	c.emit(machine.Instruction{Op: machine.OpLoopCollect, Type: &yieldType})
+	c.emit(machine.Instruction{Op: machine.OpLoopCollect, A: pairs, Type: &yieldType})
 	next := c.emit(machine.Instruction{Op: machine.OpLoopNext, A: loopStart, Type: &resultType})
 	if jumpFiltered >= 0 {
 		c.instructions[jumpFiltered].A = next
@@ -479,7 +531,11 @@ func (c *bytecodeCompiler) compileReduce(node *syntax.ReduceExpr) error {
 // is computed and nothing is stored at run time.
 func (c *bytecodeCompiler) compileLet(node *syntax.LetExpr) error {
 	for _, binding := range node.Bindings {
-		if index, folded := c.foldBinding(binding.Value); folded {
+		index, folded, err := c.foldBinding(binding.Value)
+		if err != nil {
+			return err
+		}
+		if folded {
 			c.bindConstant(binding.Name, index)
 			defer c.unbindConstant(binding.Name)
 			c.folded++

@@ -44,6 +44,11 @@ var sourceOperators = []operatorSpec{
 	{tokenMinus, "-", "infix", "left", 5, "sub", "", []string{"left", "right"}, expandCall},
 	{tokenStar, "*", "infix", "left", 6, "mul", "", []string{"left", "right"}, expandCall},
 	{tokenSlash, "/", "infix", "left", 6, "div", "", []string{"left", "right"}, expandCall},
+	{tokenPercent, "%", "infix", "left", 6, "mod", "", []string{"left", "right"}, expandCall},
+	// "in" is spelled as a word, so it is matched by text rather than by token
+	// kind; "[]" is postfix and is matched by the parser where a primary ends.
+	{tokenIdentifier, "in", "infix", "left", 4, "member", "", []string{"left", "right"}, expandCall},
+	{tokenLeftBracket, "[]", "index", "left", 8, "at", "", []string{"left", "right"}, expandCall},
 	{tokenBang, "!", "prefix", "", 7, "", "not", []string{"operand"}, expandNot},
 	{tokenMinus, "-", "prefix", "", 7, "sub", "", []string{"operand"}, expandNegate},
 }
@@ -54,12 +59,28 @@ var unaryOperators = operatorMap("prefix")
 func operatorMap(fixity string) map[tokenKind]operatorSpec {
 	out := make(map[tokenKind]operatorSpec)
 	for _, spec := range sourceOperators {
-		if spec.fixity == fixity {
+		if spec.fixity == fixity && !spec.spelledAsWord() {
 			out[spec.kind] = spec
 		}
 	}
 	return out
 }
+
+// keywordOperators holds the infix operators written as words. They cannot be
+// indexed by token kind, because that kind is "identifier" — the same kind a
+// variable has — so the parser looks them up by text.
+var keywordOperators = func() map[string]operatorSpec {
+	out := make(map[string]operatorSpec)
+	for _, spec := range sourceOperators {
+		if spec.fixity == "infix" && spec.spelledAsWord() {
+			out[spec.token] = spec
+		}
+	}
+	return out
+}()
+
+// spelledAsWord reports an operator whose token is a word, not punctuation.
+func (s operatorSpec) spelledAsWord() bool { return s.kind == tokenIdentifier }
 
 func lexedOperators() []struct {
 	text string
@@ -71,7 +92,9 @@ func lexedOperators() []struct {
 	}{{"=>", tokenFatArrow}, {"=", tokenAssign}}
 	seen := map[string]bool{"=>": true, "=": true}
 	for _, spec := range sourceOperators {
-		if seen[spec.token] {
+		// Words are lexed as identifiers and "[]" is punctuation the lexer
+		// already knows; neither is a symbol to match here.
+		if seen[spec.token] || spec.spelledAsWord() || spec.fixity == "index" {
 			continue
 		}
 		seen[spec.token] = true

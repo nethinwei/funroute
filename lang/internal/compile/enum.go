@@ -71,7 +71,7 @@ func resolveQualifiedEnum(node *syntax.EnumExpr, enums map[string]machine.Type) 
 			node.Pos, node.Enum, declaredEnums(enums))
 	}
 	if !slices.Contains(typ.Values, node.Member) {
-		return machine.Type{}, fmt.Errorf("type error at byte %d: %q is not a member of %s", node.Pos, node.Member, typ.Summary())
+		return machine.Type{}, syntax.At(node.Pos, "type error: %q is not a member of %s", node.Member, typ.Summary())
 	}
 	return typ, nil
 }
@@ -222,5 +222,5 @@ func validateKnownType(expr syntax.Expr, expected machine.Type, inferred *infere
 }
 
 func enumReturnError(pos int, expected machine.Type) error {
-	return fmt.Errorf("type error at byte %d: cannot prove the expression returns %s", pos, expected.Summary())
+	return syntax.At(pos, "type error: cannot prove the expression returns %s", expected.Summary())
 }

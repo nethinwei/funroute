@@ -224,8 +224,8 @@
     {
       "label": "聚合函数",
       "category": "基础语法",
-      "description": "求和、计数、最值不用手写折叠：推导式先算出要聚合的东西，再交给 sum / count / max",
-      "source": "let(\n  large = [price for price in prices if price >= minimum],\n  {\"total\": sum(large), \"count\": count(large), \"max\": max(large)}\n)",
+      "description": "求和、计数、最值不用手写折叠：推导式先算出要聚合的东西，再交给 sum / len / max",
+      "source": "let(\n  large = [price for price in prices if price >= minimum],\n  {\"total\": sum(large), \"count\": len(large), \"max\": max(large)}\n)",
       "contract": {
         "args": [
           {"name": "prices", "type": "array<int>", "doc": "各笔金额，单位：分"},
@@ -235,8 +235,60 @@
       },
       "args": {"prices": [1250, 2750, 4000], "minimum": 2000},
       "expected": {"total": 6750, "count": 2, "max": 4000},
-      "covers": ["sum", "count", "max"],
+      "covers": ["sum", "len", "max"],
       "operators": ["infix:>="]
+    },
+    {
+      "label": "索引与取余",
+      "category": "基础语法",
+      "description": "数组按下标取、字典按键取，越界或缺键是错误而不是空值；% 取余数",
+      "source": "let(\n  first = prices[0],\n  rate = rates[\"adyen\"],\n  cents = total % 100,\n  {\"first\": first, \"rate\": rate, \"cents\": cents}\n)",
+      "contract": {
+        "args": [
+          {"name": "prices", "type": "array<int>", "doc": "各笔金额，单位：分"},
+          {"name": "rates", "type": "dict<int>", "doc": "各渠道费率，单位：基点"},
+          {"name": "total", "type": "int", "doc": "合计，单位：分"}
+        ],
+        "result": {"type": "dict<int>", "doc": "首笔、渠道费率与不足一元的零头"}
+      },
+      "args": {"prices": [1250, 2750], "rates": {"adyen": 250, "stripe": 290}, "total": 12345},
+      "expected": {"first": 1250, "rate": 250, "cents": 45},
+      "covers": ["at", "mod"],
+      "operators": ["index:[]", "infix:%"]
+    },
+    {
+      "label": "记录与字段",
+      "category": "基础语法",
+      "description": "契约可以声明 record：字段各有自己的类型，用 order.amount 读，用 {name: 值} 造",
+      "source": "{total: order.amount + order.fee, currency: order.currency}",
+      "contract": {
+        "args": [
+          {"name": "order", "type": "record{amount: int, fee: int, currency: string}", "doc": "订单，金额单位：分"}
+        ],
+        "result": {"type": "record{total: int, currency: string}", "doc": "应收总额与币种"}
+      },
+      "args": {"order": {"amount": 1200, "fee": 30, "currency": "SGD"}},
+      "expected": {"total": 1230, "currency": "SGD"},
+      "covers": [],
+      "operators": ["infix:+"]
+    },
+    {
+      "label": "成员判断",
+      "category": "基础语法",
+      "description": "x in xs 问数组里有没有这个元素，\"k\" in d 问字典里有没有这个键",
+      "source": "switch(\n  case currency in settled => \"settle:\" + currency,\n  case currency in accepted => \"hold:\" + currency,\n  else \"reject\"\n)",
+      "contract": {
+        "args": [
+          {"name": "currency", "type": "string", "doc": "交易币种"},
+          {"name": "settled", "type": "array<string>", "doc": "可直接结算的币种"},
+          {"name": "accepted", "type": "array<string>", "doc": "可受理但需留存的币种"}
+        ],
+        "result": {"type": "string", "doc": "结算处置"}
+      },
+      "args": {"currency": "SGD", "settled": ["USD", "EUR"], "accepted": ["SGD", "MYR"]},
+      "expected": "hold:SGD",
+      "covers": ["member"],
+      "operators": ["infix:in"]
     },
     {
       "label": "整数序列与全体判断",
@@ -254,6 +306,58 @@
       "expected": [200, 400, 600],
       "covers": ["range", "all"],
       "operators": ["infix:*", "infix:<="]
+    },
+    {
+      "label": "卡 BIN 与品牌",
+      "category": "基础语法",
+      "description": "字符串操作用在最常见的地方：清洗、取前缀、判前缀、规范化大小写",
+      "source": "let(\n  bin = slice(trim(card), 0, 6),\n  brand = switch(\n    case starts_with(bin, \"4\") => \"visa\",\n    case starts_with(bin, \"5\") => \"mastercard\",\n    else \"other\"\n  ),\n  {bin: bin, brand: upper(brand), supported: contains(accepted, brand)}\n)",
+      "contract": {
+        "args": [
+          {"name": "card", "type": "string", "doc": "卡号，可能带空白"},
+          {"name": "accepted", "type": "string", "doc": "受理的品牌，逗号分隔"}
+        ],
+        "result": {"type": "record{bin: string, brand: string, supported: bool}", "doc": "BIN、品牌与是否受理"}
+      },
+      "args": {"card": "  4111111111111111  ", "accepted": "visa,mastercard"},
+      "expected": {"bin": "411111", "brand": "VISA", "supported": true},
+      "covers": ["slice", "trim", "starts_with", "upper", "contains"],
+      "operators": []
+    },
+    {
+      "label": "原因码归一",
+      "category": "基础语法",
+      "description": "拆分、逐项替换、再拼回去：split / replace / join 配推导式就是一条清洗流水线",
+      "source": "let(\n  parts = split(lower(reason), \";\"),\n  cleaned = [replace(part, \"_\", \":\") for part in parts],\n  {code: join(cleaned, \"|\"), urgent: ends_with(reason, \"!\")}\n)",
+      "contract": {
+        "args": [
+          {"name": "reason", "type": "string", "doc": "原始原因码，分号分隔"}
+        ],
+        "result": {"type": "record{code: string, urgent: bool}", "doc": "归一后的原因码"}
+      },
+      "args": {"reason": "RISK_HIGH;FX_LIMIT"},
+      "expected": {"code": "risk:high|fx:limit", "urgent": false},
+      "covers": ["split", "lower", "replace", "join", "ends_with"],
+      "operators": []
+    },
+    {
+      "label": "候选池整理",
+      "category": "数据结构",
+      "description": "数组操作：合并去重、排序取端、拉平分组——都不需要 lambda",
+      "source": "let(\n  ranked = sort(fees),\n  {\n    pool: unique(concat(primary, backup)),\n    cheapest: first(ranked),\n    dearest: last(ranked),\n    top_two: take(reverse(ranked), 2),\n    all_fees: flatten(groups)\n  }\n)",
+      "contract": {
+        "args": [
+          {"name": "primary", "type": "array<string>", "doc": "主渠道"},
+          {"name": "backup", "type": "array<string>", "doc": "备用渠道"},
+          {"name": "fees", "type": "array<int>", "doc": "候选费用，单位：分"},
+          {"name": "groups", "type": "array<array<int>>", "doc": "按批分组的费用"}
+        ],
+        "result": {"type": "record{pool: array<string>, cheapest: int, dearest: int, top_two: array<int>, all_fees: array<int>}", "doc": "整理后的候选池"}
+      },
+      "args": {"primary": ["adyen", "stripe"], "backup": ["stripe", "pix"], "fees": [30, 10, 20], "groups": [[1, 2], [3]]},
+      "expected": {"pool": ["adyen", "stripe", "pix"], "cheapest": 10, "dearest": 30, "top_two": [30, 20], "all_fees": [1, 2, 3]},
+      "covers": ["sort", "unique", "concat", "first", "last", "take", "reverse", "flatten"],
+      "operators": []
     },
     {
       "label": "类型转换",
@@ -396,7 +500,7 @@
       "label": "健康候选筛选",
       "category": "支付路由",
       "description": "推导式按 key 遍历字典筛出可用渠道，reduce 数出结果长度（语言没有 length 原语），全灭时退到应急渠道",
-      "source": "let(\n  healthy = [name for name, status in channel_statuses if route.is_healthy_v1(status)],\n  live = count(healthy),\n  switch(case live == 0 => [emergency_channel], else healthy)\n)",
+      "source": "let(\n  healthy = [name for name, status in channel_statuses if route.is_healthy_v1(status)],\n  live = len(healthy),\n  switch(case live == 0 => [emergency_channel], else healthy)\n)",
       "contract": {
         "args": [
           {"name": "channel_statuses", "type": "dict<string>", "doc": "渠道健康快照，key 是渠道号"},
@@ -409,7 +513,7 @@
         "emergency_channel": "stripe"
       },
       "expected": ["adyen", "pix"],
-      "covers": ["for", "eq", "count"],
+      "covers": ["for", "eq", "len"],
       "operators": ["infix:=="]
     },
     {
@@ -459,7 +563,7 @@
       "label": "全球支付决策",
       "category": "复杂策略",
       "description": "合规、风险、渠道、币种、额度各由最合适的结构算成一个局部量，最后一条扁平条件链收口，而不是十层 switch 套娃",
-      "source": "let(\n  flagged = count([name for name, hit in watchlists if hit]),\n  risk = fallback(model.fraud_v1(model.embed_v1(features)), risk_fallback),\n  candidates = [name for name, status in channel_statuses if route.is_healthy_v1(status)],\n  live = count(candidates),\n  settlement = switch(case currency == settlement_currency => \"local\", else \"fx\"),\n  tier = switch(\n    case amount >= high_value_limit => \"high\",\n    case amount <= minimum_amount   => \"micro\",\n    else \"standard\"\n  ),\n  needs_3ds = method == \"card\" && !three_ds_completed && amount > three_ds_limit,\n  switch(\n    case !enabled            => \"disabled\",\n    case flagged > 0         => \"reject:compliance\",\n    case risk >= risk_reject => \"reject:risk\",\n    case risk >= risk_review => \"review:risk\",\n    case tier == \"micro\"     => \"reject:minimum\",\n    case tier == \"high\"      => \"review:high_value\",\n    case live == 0           => \"hold:no_channel\",\n    case needs_3ds           => \"challenge:3ds\",\n    else \"route:\" + settlement + \":\" + capture_mode\n  )\n)",
+      "source": "let(\n  flagged = len([name for name, hit in watchlists if hit]),\n  risk = fallback(model.fraud_v1(model.embed_v1(features)), risk_fallback),\n  candidates = [name for name, status in channel_statuses if route.is_healthy_v1(status)],\n  live = len(candidates),\n  settlement = switch(case currency == settlement_currency => \"local\", else \"fx\"),\n  tier = switch(\n    case amount >= high_value_limit => \"high\",\n    case amount <= minimum_amount   => \"micro\",\n    else \"standard\"\n  ),\n  needs_3ds = method == \"card\" && !three_ds_completed && amount > three_ds_limit,\n  switch(\n    case !enabled            => \"disabled\",\n    case flagged > 0         => \"reject:compliance\",\n    case risk >= risk_reject => \"reject:risk\",\n    case risk >= risk_review => \"review:risk\",\n    case tier == \"micro\"     => \"reject:minimum\",\n    case tier == \"high\"      => \"review:high_value\",\n    case live == 0           => \"hold:no_channel\",\n    case needs_3ds           => \"challenge:3ds\",\n    else \"route:\" + settlement + \":\" + capture_mode\n  )\n)",
       "contract": {
         "args": [
           {"name": "enabled", "type": "bool", "doc": "策略总开关"},
@@ -499,7 +603,7 @@
       "label": "结构化支付编排",
       "category": "复杂策略",
       "description": "模型评分与信号计数先定处置，每个下游阶段只管自己那一件事，最后由一个 if 决定发出放行包还是拦截包",
-      "source": "let(\n  risk = fallback(model.fraud_v1(model.embed_v1(features)), risk_fallback),\n  hits = count([name for name, fired in signals if fired]),\n  action = switch(\n    case blocked => \"reject\",\n    case risk >= 0.90 => \"review\",\n    case hits >= 2 => \"review\",\n    case amount > review_limit => \"review\",\n    else \"approve\"\n  ),\n  route = switch(\n    case country == \"BR\" && method == \"bank\" => \"pix\",\n    case method == \"wallet\" => \"wallet\",\n    case route.is_healthy_v1(primary_health) => \"adyen\",\n    else \"stripe\"\n  ),\n  auth_mode = switch(\n    case method != \"card\" => \"native\",\n    case amount > three_ds_limit => \"three_ds\",\n    else \"frictionless\"\n  ),\n  capture = switch(case risk >= 0.70 => \"manual\", else \"auto\"),\n  if(action == \"approve\",\n    {\"action\": action, \"route\": route, \"auth\": auth_mode, \"capture\": capture, \"reason\": \"approved\"},\n    {\"action\": action, \"route\": \"none\", \"auth\": \"none\", \"capture\": \"none\",\n     \"reason\": switch(action, case \"reject\" => \"risk_or_blocklist\", else \"manual_review\")}\n  )\n)",
+      "source": "let(\n  risk = fallback(model.fraud_v1(model.embed_v1(features)), risk_fallback),\n  hits = len([name for name, fired in signals if fired]),\n  action = switch(\n    case blocked => \"reject\",\n    case risk >= 0.90 => \"review\",\n    case hits >= 2 => \"review\",\n    case amount > review_limit => \"review\",\n    else \"approve\"\n  ),\n  route = switch(\n    case country == \"BR\" && method == \"bank\" => \"pix\",\n    case method == \"wallet\" => \"wallet\",\n    case route.is_healthy_v1(primary_health) => \"adyen\",\n    else \"stripe\"\n  ),\n  auth_mode = switch(\n    case method != \"card\" => \"native\",\n    case amount > three_ds_limit => \"three_ds\",\n    else \"frictionless\"\n  ),\n  capture = switch(case risk >= 0.70 => \"manual\", else \"auto\"),\n  if(action == \"approve\",\n    {\"action\": action, \"route\": route, \"auth\": auth_mode, \"capture\": capture, \"reason\": \"approved\"},\n    {\"action\": action, \"route\": \"none\", \"auth\": \"none\", \"capture\": \"none\",\n     \"reason\": switch(action, case \"reject\" => \"risk_or_blocklist\", else \"manual_review\")}\n  )\n)",
       "contract": {
         "args": [
           {"name": "features", "type": "array<float>", "doc": "反欺诈模型特征"},
@@ -702,6 +806,25 @@
       "expected": {"fees": [150, 30], "gross_and_net": [10000, 9820]},
       "covers": [],
       "operators": []
+    },
+    {
+      "label": "结构化订单决策",
+      "category": "数据结构",
+      "description": "宿主把订单整个传进来，规则读字段、算费用并返回一条结构化决策，而不是拍平成几十个入参",
+      "source": "let(\n  needs_review = order.amount > limit || order.currency != settlement,\n  fee = order.amount * bps / 10000,\n  {\n    channel: switch(case needs_review => \"manual\", else \"auto\"),\n    net: order.amount - fee,\n    reason: switch(\n      case order.amount > limit          => \"high_value\",\n      case order.currency != settlement  => \"cross_border\",\n      else                                  \"standard\"\n    )\n  }\n)",
+      "contract": {
+        "args": [
+          {"name": "order", "type": "record{amount: int, currency: string}", "doc": "订单，金额单位：分"},
+          {"name": "limit", "type": "int", "doc": "人工复核起点，单位：分"},
+          {"name": "settlement", "type": "string", "doc": "结算币种"},
+          {"name": "bps", "type": "int", "doc": "费率，单位：基点"}
+        ],
+        "result": {"type": "record{channel: string, net: int, reason: string}", "doc": "路由决策、净额与原因码"}
+      },
+      "args": {"order": {"amount": 900000, "currency": "SGD"}, "limit": 500000, "settlement": "USD", "bps": 250},
+      "expected": {"channel": "manual", "net": 877500, "reason": "high_value"},
+      "covers": [],
+      "operators": ["infix:>", "infix:||", "infix:!=", "infix:-"]
     },
     {
       "label": "稳定调用契约",

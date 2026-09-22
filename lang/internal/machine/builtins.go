@@ -18,6 +18,7 @@ func CoreRegistry() *Registry {
 	registerArithmetic(r)
 	registerComparisons(r)
 	registerConversions(r)
+	registerContainers(r)
 	return r
 }
 
@@ -192,7 +193,6 @@ func registerMixedNumeric(registry *Registry, name, label string, eval func(floa
 
 func numericFloat(value Value) (float64, error) {
 	if value.kind == IntKind {
-		const maxExactFloatInt = int64(1 << 53)
 		if value.i < -maxExactFloatInt || value.i > maxExactFloatInt {
 			return 0, fmt.Errorf("int %d cannot be represented exactly as float", value.i)
 		}

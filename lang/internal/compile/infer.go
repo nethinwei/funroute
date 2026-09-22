@@ -15,6 +15,11 @@ type typeTerm struct {
 	elem   *typeTerm
 	name   string // a handle's host name; empty otherwise
 	values []string
+	// record is a record type as a whole. Its fields are already concrete
+	// wherever one appears — a record comes from the contract or from a
+	// literal whose field values have types — so unification compares the
+	// type rather than unifying field by field.
+	record *machine.Type
 }
 
 type inferState struct {
@@ -66,6 +71,11 @@ func containerTerm(kind machine.Kind, elem typeTerm) typeTerm {
 	return typeTerm{kind: kind, elem: &elem}
 }
 
+func recordTerm(t machine.Type) typeTerm {
+	cloned := machine.CloneType(t)
+	return typeTerm{kind: machine.RecordKind, record: &cloned}
+}
+
 func (s *inferState) deref(term typeTerm) typeTerm {
 	seen := map[int]bool{}
 	for term.kind == machine.VarKind {
@@ -109,6 +119,11 @@ func (s *inferState) unify(left, right typeTerm) error {
 			return fmt.Errorf("malformed container type")
 		}
 		return s.unify(*left.elem, *right.elem)
+	}
+	if left.kind == machine.RecordKind {
+		if left.record == nil || right.record == nil || !left.record.Equal(*right.record) {
+			return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
+		}
 	}
 	return nil
 }
@@ -159,6 +174,9 @@ func concreteTerm(t machine.Type) typeTerm {
 		elem := concreteTerm(*t.Elem)
 		return containerTerm(t.Kind, elem)
 	}
+	if t.Kind == machine.RecordKind {
+		return recordTerm(t)
+	}
 	return typeTerm{kind: t.Kind, name: t.Name, values: append([]string(nil), t.Values...)}
 }
 
@@ -167,6 +185,11 @@ func (s *inferState) publicType(term typeTerm) (machine.Type, bool) {
 	switch term.kind {
 	case machine.VarKind, machine.InvalidKind:
 		return machine.Type{}, false
+	case machine.RecordKind:
+		if term.record == nil {
+			return machine.Type{}, false
+		}
+		return machine.CloneType(*term.record), true
 	case machine.ArrayKind, machine.DictKind:
 		if term.elem == nil {
 			return machine.Type{}, false
@@ -462,6 +485,10 @@ func implicitTypeScore(typ machine.Type) int {
 			return 100
 		}
 		return 2 + implicitTypeScore(*typ.Elem)
+	case machine.RecordKind:
+		// A record matches only itself, so it never competes with a numeric
+		// promotion; the score just has to be worse than the scalars'.
+		return 30
 	default:
 		return 100
 	}

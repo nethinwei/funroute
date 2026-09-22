@@ -244,7 +244,7 @@ func TestExprJSONCanonicalRoundTrip(t *testing.T) {
 
 func TestIfIsLazyAndFuelIsEnforced(t *testing.T) {
 	registry := machine.CoreRegistry()
-	artifact, err := CompileExpr(`if(flag,7,div(1,0))`, registry, CompileOptions{})
+	artifact, err := CompileExpr(`if(flag,7,div(1,zero))`, registry, CompileOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,14 +252,14 @@ func TestIfIsLazyAndFuelIsEnforced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(context.Background(), map[string]any{"flag": true}, machine.RunOptions{})
+	result, err := runtime.Run(context.Background(), map[string]any{"flag": true, "zero": 0}, machine.RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if value, ok := result.Int(); !ok || value != 7 {
 		t.Fatalf("result = %#v", result.Any())
 	}
-	_, err = runtime.Run(context.Background(), map[string]any{"flag": true}, machine.RunOptions{Fuel: 1})
+	_, err = runtime.Run(context.Background(), map[string]any{"flag": true, "zero": 0}, machine.RunOptions{Fuel: 1})
 	if err == nil || !strings.Contains(err.Error(), "fuel") {
 		t.Fatalf("fuel error = %v", err)
 	}
@@ -310,7 +310,7 @@ func TestFunctionalForBindsLocalFiltersAndMaps(t *testing.T) {
 
 func TestFunctionalSwitchIsLazyAndTyped(t *testing.T) {
 	registry := consoleRegistry(t)
-	artifact, err := CompileExpr(`switch(country, case "SG" => 1, case "MY" => 2, else div(1,0))`, registry, CompileOptions{})
+	artifact, err := CompileExpr(`switch(country, case "SG" => 1, case "MY" => 2, else div(1,zero))`, registry, CompileOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestFunctionalSwitchIsLazyAndTyped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(context.Background(), map[string]any{"country": "MY"}, machine.RunOptions{})
+	result, err := runtime.Run(context.Background(), map[string]any{"country": "MY", "zero": 0}, machine.RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,13 +410,14 @@ func TestCoreCatalogIsMinimalAndCarriesDisplayMetadata(t *testing.T) {
 	}
 	for _, name := range []string{
 		"if", "fallback", "eq", "lt", "le", "gt", "ge",
-		"add", "sub", "mul", "div", "int", "float", "string", "bool",
+		"add", "sub", "mul", "div", "mod", "int", "float", "string", "bool",
+		"at", "member", "len",
 	} {
 		if !names[name] {
 			t.Fatalf("core function %q is missing", name)
 		}
 	}
-	if len(names) != 15 {
+	if len(names) != 19 {
 		t.Fatalf("core registry is not minimal: %#v", names)
 	}
 	if !fallback.Variadic || fallback.Signature != "fallback(T,T,...)->T" || len(fallback.Params) != 2 {

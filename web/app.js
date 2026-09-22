@@ -253,13 +253,25 @@ function defaultValue(type, name) {
   };
   if (named[name] !== undefined) return named[name];
   if (type.kind === "enum") return type.values?.[0] || "";
+  if (type.kind === "record") return JSON.stringify(recordSkeleton(type));
   return { bool: "true", int: name === "n" ? "6" : "0", float: "0.0", string: "value", array: "[]", dict: "{}" }[type.kind] || "";
+}
+
+// recordSkeleton is a record with every field filled in, because a record with
+// a field missing is not that record and the runtime says so.
+function recordSkeleton(type) {
+  const out = {};
+  for (const field of type.fields || []) {
+    const blank = { bool: true, int: 0, float: 0, string: "", array: [], dict: {} }[field.type.kind];
+    out[field.name] = field.type.kind === "record" ? recordSkeleton(field.type) : (blank ?? "");
+  }
+  return out;
 }
 
 function exampleValue(type, name) {
   if (!Object.hasOwn(exampleArgs, name)) return defaultValue(type, name);
   const value = exampleArgs[name];
-  return type.kind === "array" || type.kind === "dict" ? JSON.stringify(value) : String(value);
+  return typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
 }
 
 function renderArgs(parameters) {

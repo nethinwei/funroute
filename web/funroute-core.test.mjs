@@ -15,7 +15,7 @@ const bool = (value) => ({ node: "bool", bool: value });
 function catalog() {
   return {
     source: {
-      expr_json_version: 2,
+      expr_json_version: 1,
       variable_name_pattern: "[A-Za-z_][A-Za-z0-9_]*",
       keywords: ["case", "else", "for", "in"],
       operators: [
@@ -24,9 +24,14 @@ function catalog() {
         operator("!=", 3, call("if", call("eq", placeholder("left"), placeholder("right")), bool(false), bool(true))),
         operator("<", 4, call("lt", placeholder("left"), placeholder("right"))),
         operator("+", 5, call("add", placeholder("left"), placeholder("right"))),
+        operator("in", 4, call("member", placeholder("left"), placeholder("right"))),
         {
           token: "!", fixity: "prefix", precedence: 7, form: "not", operands: ["operand"],
           template: call("if", placeholder("operand"), bool(false), bool(true)),
+        },
+        {
+          token: "[]", fixity: "index", associativity: "left", precedence: 8, form: "",
+          operands: ["left", "right"], template: call("at", placeholder("left"), placeholder("right")),
         },
       ],
     },
@@ -96,6 +101,24 @@ test("formatter uses precedence supplied by the Go catalog", () => {
     operands: [call("eq", variable("a"), variable("b")), variable("c")],
     paths: [["args", 0], ["args", 1]],
   });
+});
+
+// Indexing and membership are spellings of at() and member(), so the printer
+// has to put them back the way they were written — the catalog says how.
+test("formatter prints index and keyword operators from the catalog", () => {
+  const language = new FunRouteLanguage(catalog());
+  const indexed = call("at", variable("prices"), { node: "int", int: 0 });
+  const keyed = call("at", variable("rates"), { node: "string", string: "adyen" });
+  const inside = call("member", variable("currency"), variable("accepted"));
+  assert.equal(language.expressionSource(indexed), "prices[0]");
+  assert.equal(language.expressionSource(keyed), 'rates["adyen"]');
+  assert.equal(language.expressionSource(inside), "currency in accepted");
+  // An index binds tighter than arithmetic, so no parentheses appear here.
+  assert.equal(language.expressionSource(call("add", indexed, { node: "int", int: 1 })), "prices[0] + 1");
+  // Every one of them is a plain expression: no card, edited as one line.
+  for (const node of [indexed, keyed, inside]) {
+    assert.equal(isPlainExpression(node, language), true);
+  }
 });
 
 test("formatter keeps exhaustive enum switch without an else", () => {

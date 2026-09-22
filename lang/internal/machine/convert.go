@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 )
 
 // The host boundary, in both directions, with one list of Go types.
@@ -47,8 +48,25 @@ func fromGo(input any) (Value, error) {
 		}
 		return Value{kind: DictKind, box: x}, nil
 	default:
+		return structFromGo(input)
+	}
+}
+
+// structFromGo is the one open-ended case: a struct is a record, and which
+// struct it is only reflection can say. Everything above is a closed list, so
+// this is the only place the boundary pays for reflection.
+func structFromGo(input any) (Value, error) {
+	value := reflect.ValueOf(input)
+	for value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return Value{}, errUnsupportedGoType
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
 		return Value{}, errUnsupportedGoType
 	}
+	return structValue(value)
 }
 
 // checkFloats is the one pass a float slice gets: a read, not a copy, and it
@@ -119,7 +137,28 @@ func FromValue[T any](value Value) (T, error) {
 	if boxed, ok := value.box.(T); ok {
 		return boxed, nil
 	}
+	if value.kind == RecordKind {
+		return fromRecord[T](value)
+	}
 	return out, fmt.Errorf("argument is %s, want %T", value.Type(), out)
+}
+
+// fromRecord fills the struct (or map) a host asked for from a record.
+func fromRecord[T any](value Value) (T, error) {
+	var out T
+	target := reflect.ValueOf(&out).Elem()
+	if target.Kind() == reflect.Map || target.Kind() == reflect.Interface {
+		converted, ok := value.Any().(T)
+		if !ok {
+			return out, fmt.Errorf("argument is %s, want %T", value.Type().Summary(), out)
+		}
+		return converted, nil
+	}
+	filled, err := intoStruct(nil, value, target.Type())
+	if err != nil {
+		return out, err
+	}
+	return filled.Interface().(T), nil
 }
 
 func assign[T any](target *T, get func(Value) (T, bool), value Value) error {
@@ -173,9 +212,36 @@ func coerce(input any, expected Type) (Value, error) {
 		return coerceArray(input, expected)
 	case DictKind:
 		return coerceDict(input, expected)
+	case RecordKind:
+		return coerceRecord(input, expected)
 	default:
 		return Value{}, fmt.Errorf("unsupported expected type %s", expected)
 	}
+}
+
+// coerceRecord builds a record from the object a host or a JSON decoder hands
+// over. Every field the type declares must be there — a record with a missing
+// field is not that record, and there is no null to stand in for one. Fields
+// the contract does not declare are ignored: one payload serves many rules,
+// and a misspelled name still shows up as the missing one.
+func coerceRecord(input any, expected Type) (Value, error) {
+	entries, ok := input.(map[string]any)
+	if !ok {
+		return Value{}, fmt.Errorf("got %T, want %s", input, expected.Summary())
+	}
+	fields := make([]Value, len(expected.Fields))
+	for i, field := range expected.Fields {
+		raw, present := entries[field.Name]
+		if !present {
+			return Value{}, fmt.Errorf("field %q is missing", field.Name)
+		}
+		value, err := coerce(raw, field.Type)
+		if err != nil {
+			return Value{}, fmt.Errorf("field %q: %w", field.Name, err)
+		}
+		fields[i] = value
+	}
+	return Record(expected, fields)
 }
 
 // leniently reports whether a mismatched native value may still convert: a
@@ -184,10 +250,26 @@ func leniently(kind Kind) bool {
 	return kind == IntKind || kind == FloatKind
 }
 
-func containerKind(kind Kind) bool { return kind == ArrayKind || kind == DictKind }
+func containerKind(kind Kind) bool {
+	return kind == ArrayKind || kind == DictKind || kind == RecordKind
+}
+
+// maxExactFloatInt is where float64 stops counting whole numbers exactly.
+// Widening an integer past it would round, so it is refused instead.
+const maxExactFloatInt = int64(1) << 53
 
 func coerceInt(input any) (Value, error) {
 	switch value := input.(type) {
+	case uint8:
+		return Int(int64(value)), nil
+	case uint16:
+		return Int(int64(value)), nil
+	case uint32:
+		return Int(int64(value)), nil
+	case uint:
+		return unsignedInt(uint64(value))
+	case uint64:
+		return unsignedInt(value)
 	case int:
 		return Int(int64(value)), nil
 	case int8:
@@ -214,6 +296,13 @@ func coerceInt(input any) (Value, error) {
 	}
 }
 
+func unsignedInt(value uint64) (Value, error) {
+	if value > uint64(math.MaxInt64) {
+		return Value{}, fmt.Errorf("%d does not fit in an int", value)
+	}
+	return Int(int64(value)), nil
+}
+
 func coerceFloat(input any) (Value, error) {
 	switch value := input.(type) {
 	case float32:
@@ -227,6 +316,16 @@ func coerceFloat(input any) (Value, error) {
 		}
 		return CheckedFloat(parsed)
 	default:
+		// A whole number is a float with nothing lost, which is what a host
+		// means by passing 1 where a rate is wanted — the same thing the JSON
+		// boundary already accepts. Past 2^53 it would round, so it stops.
+		if integer, err := coerceInt(input); err == nil {
+			whole, _ := integer.Int()
+			if whole < -maxExactFloatInt || whole > maxExactFloatInt {
+				return Value{}, fmt.Errorf("%d cannot be represented exactly as float", whole)
+			}
+			return CheckedFloat(float64(whole))
+		}
 		return Value{}, fmt.Errorf("got %T, want float", input)
 	}
 }

@@ -25,6 +25,9 @@ type loopFrame struct {
 	keyLocal int
 	acc      int
 	output   arrayBuilder
+	// collected is where a comprehension that produces a dictionary puts its
+	// keys; the values go through output like any other comprehension's.
+	collected []string
 }
 
 type fallbackFrame struct {
@@ -204,6 +207,10 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 		return pc + 1, f.makeArray(instruction)
 	case OpMakeDict:
 		return pc + 1, f.makeDict(instruction)
+	case OpMakeRecord:
+		return pc + 1, f.makeRecord(instruction)
+	case OpField:
+		return pc + 1, f.field(instruction)
 	case OpEqual:
 		return pc + 1, f.equal()
 	case OpCall:
@@ -376,6 +383,29 @@ func (f *frame) makeDict(instruction Instruction) error {
 		return fmt.Errorf("make dictionary: %w", err)
 	}
 	return f.push(value)
+}
+
+func (f *frame) makeRecord(instruction Instruction) error {
+	fields, err := f.popN(instruction.A)
+	if err != nil {
+		return err
+	}
+	value, err := Record(*instruction.Type, fields)
+	if err != nil {
+		return fmt.Errorf("make record: %w", err)
+	}
+	return f.push(value)
+}
+
+func (f *frame) field(instruction Instruction) error {
+	record, err := f.pop1()
+	if err != nil {
+		return err
+	}
+	if record.kind != RecordKind {
+		return fmt.Errorf("field access needs a record")
+	}
+	return f.push(record.Field(instruction.A))
 }
 
 func (f *frame) equal() error {
@@ -554,6 +584,9 @@ func (f *frame) loopInit(pc int, instruction Instruction) (int, error) {
 	}
 	if !loop.folds() {
 		loop.output = newArrayBuilder(*instruction.Type.Elem, length)
+		if instruction.Type.Kind == DictKind {
+			loop.collected = make([]string, 0, length)
+		}
 	}
 	f.bindItem(&loop, 0)
 	f.loops = append(f.loops, loop)
@@ -564,6 +597,9 @@ func (f *frame) loopInit(pc int, instruction Instruction) (int, error) {
 // an empty array.
 func (f *frame) loopSeed(instruction Instruction, values []Value, folds bool) (Value, error) {
 	if !folds {
+		if instruction.Type.Kind == DictKind {
+			return Dict(*instruction.Type.Elem, nil)
+		}
 		return Array(*instruction.Type.Elem, nil)
 	}
 	if !values[1].hasType(*instruction.Type) {
@@ -589,6 +625,17 @@ func (f *frame) loopCollect(instruction Instruction) error {
 	if loop.folds() {
 		f.bindLocal(loop.acc, value)
 		return nil
+	}
+	if instruction.A == 1 {
+		key, err := f.pop1()
+		if err != nil {
+			return err
+		}
+		text, ok := key.String()
+		if !ok {
+			return fmt.Errorf("a dictionary comprehension needs a string key, got %s", key.Type().Summary())
+		}
+		loop.collected = append(loop.collected, text)
 	}
 	loop.output.add(value)
 	return nil
@@ -626,7 +673,16 @@ func (f *frame) loopResult(loop *loopFrame) (Value, error) {
 	if loop.folds() {
 		return f.locals[loop.acc], nil
 	}
-	return loop.output.finish(), nil
+	if loop.collected == nil {
+		return loop.output.finish(), nil
+	}
+	// A later key wins, the way a literal's duplicate key would.
+	built := loop.output.finish()
+	entries := make(map[string]Value, len(loop.collected))
+	for i, key := range loop.collected {
+		entries[key] = built.at(i)
+	}
+	return Dict(built.elemType(), entries)
 }
 
 func (f *frame) jumpIfFalse(pc int, instruction Instruction) (int, error) {

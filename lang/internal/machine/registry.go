@@ -44,12 +44,6 @@ type FunctionSpec struct {
 	// a front end, so there is one structure rather than an input shape and a
 	// parallel output shape that have to be kept in step.
 	Doc Doc
-	// ConstantArgs requires every argument of a call to be fixed at compile
-	// time. It is for a function whose result size follows from its arguments
-	// — range is the one — because a run-time length would let a single scalar
-	// stand for an arbitrarily long array and break the polynomial bound in
-	// docs/termination.md.
-	ConstantArgs bool
 
 	special specialForm
 	builtin bool
@@ -77,7 +71,11 @@ func (f *RegisteredFunction) Key() string { return f.key }
 
 // NeedsConstantArgs reports whether the compiler must refuse a call whose
 // arguments are not fixed at compile time.
-func (f *RegisteredFunction) NeedsConstantArgs() bool { return f.ConstantArgs }
+func (f *RegisteredFunction) NeedsConstantArgs() bool { return f.Doc.ConstantArgs }
+
+// IsConstexpr reports whether folding may call this function. Everything the
+// kernel registers is; a host function says so for itself.
+func (f *RegisteredFunction) IsConstexpr() bool { return f.builtin || f.Doc.Constexpr }
 
 // IsLazyIf reports whether this is the kernel's `if`, which the compiler emits
 // as jumps instead of a call so the untaken branch is never evaluated.
@@ -142,6 +140,9 @@ func DefineHandle[T any](registry *Registry, name string) error {
 
 // handleName is the handle type a Go type was defined as, if any.
 func (r *Registry) handleName(typ reflect.Type) (string, bool) {
+	if r == nil {
+		return "", false
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	name, ok := r.handles[typ]
@@ -241,6 +242,13 @@ func IsReservedName(name string) bool {
 	return reservedNames[name]
 }
 
+// IsValidFieldName is the one rule for a record's field names, used by the
+// type parser, the source parser and the ExprJSON importer alike: a plain
+// name, and not one the syntax has taken.
+func IsValidFieldName(name string) bool {
+	return IsValidVariableName(name) && !IsReservedName(name) && name != "true" && name != "false"
+}
+
 func (r *Registry) Register(spec FunctionSpec) error {
 	if !functionNamePattern.MatchString(spec.Name) {
 		return fmt.Errorf("invalid function name %q", spec.Name)
@@ -323,6 +331,13 @@ func validateTypePattern(t Type, vars map[string]bool) error {
 			return fmt.Errorf("%s is missing its element type", t.Kind)
 		}
 		return validateTypePattern(*t.Elem, vars)
+	case RecordKind:
+		// A record in a signature is fixed: its fields are its identity, so
+		// there is nothing to leave open the way an element type can be.
+		if !t.IsConcrete() {
+			return fmt.Errorf("invalid record type %s", t)
+		}
+		return nil
 	default:
 		return fmt.Errorf("invalid type %s", t)
 	}

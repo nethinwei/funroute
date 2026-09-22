@@ -1,7 +1,6 @@
 package syntax
 
 import (
-	"fmt"
 	"strings"
 	"unicode"
 )
@@ -26,6 +25,8 @@ const (
 	tokenMinus
 	tokenStar
 	tokenSlash
+	tokenPercent
+	tokenDot
 	tokenLess
 	tokenLessEq
 	tokenGreater
@@ -80,6 +81,9 @@ var singleCharTokens = map[byte]tokenKind{
 	'}': tokenRightBrace,
 	',': tokenComma,
 	':': tokenColon,
+	// A dot inside a name belongs to the name (route.score_v1, order.amount);
+	// this one follows something that is not a name: orders[0].amount.
+	'.': tokenDot,
 }
 
 // skipSpace also eats // line comments. Comments are lexical only: they never
@@ -124,7 +128,7 @@ func (l *lexer) next() (token, error) {
 	case isIdentifierStart(ch):
 		return l.identifier(start)
 	default:
-		return token{}, fmt.Errorf("syntax error at byte %d: unexpected %q", start, ch)
+		return token{}, At(start, "syntax error: unexpected %q", ch)
 	}
 }
 
@@ -160,7 +164,7 @@ func (l *lexer) enumMember(start int) (token, error) {
 
 func (l *lexer) memberName(start int) (string, error) {
 	if l.pos >= len(l.source) || !isIdentifierStart(l.source[l.pos]) {
-		return "", fmt.Errorf("syntax error at byte %d: @ must be followed by an enum member name", start)
+		return "", At(start, "syntax error: @ must be followed by an enum member name")
 	}
 	from := l.pos
 	l.pos++
@@ -194,7 +198,7 @@ func (l *lexer) number() (token, error) {
 		kind = tokenFloat
 		l.pos++
 		if !l.startsDigit() {
-			return token{}, fmt.Errorf("syntax error at byte %d: float requires digits after '.'", start)
+			return token{}, At(start, "syntax error: float requires digits after '.'")
 		}
 		l.digits()
 	}
@@ -205,7 +209,7 @@ func (l *lexer) number() (token, error) {
 			l.pos++
 		}
 		if !l.startsDigit() {
-			return token{}, fmt.Errorf("syntax error at byte %d: exponent requires digits", start)
+			return token{}, At(start, "syntax error: exponent requires digits")
 		}
 		l.digits()
 	}
@@ -253,5 +257,5 @@ func (l *lexer) stringToken() (token, error) {
 			return token{kind: tokenString, text: l.source[start:l.pos], pos: start}, nil
 		}
 	}
-	return token{}, fmt.Errorf("syntax error at byte %d: unterminated string", start)
+	return token{}, At(start, "syntax error: unterminated string")
 }

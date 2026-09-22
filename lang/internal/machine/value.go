@@ -45,6 +45,14 @@ type nestedDict struct {
 	entries map[string]Value
 }
 
+// recordValue backs a record: the fields in the type's order, plus the type
+// itself, because a record's fields are what it is. A field access already
+// knows its index at compile time, so nothing here is looked up by name.
+type recordValue struct {
+	typ    Type
+	fields []Value
+}
+
 func Bool(v bool) Value     { return Value{kind: BoolKind, b: v} }
 func Int(v int64) Value     { return Value{kind: IntKind, i: v} }
 func Float(v float64) Value { return Value{kind: FloatKind, f: v} }
@@ -78,6 +86,38 @@ func Array(elem Type, values []Value) (Value, error) {
 		builder.add(value)
 	}
 	return builder.finish(), nil
+}
+
+// Record builds a record from the values of its fields, in the type's order.
+func Record(typ Type, fields []Value) (Value, error) {
+	if typ.Kind != RecordKind || !typ.IsConcrete() {
+		return Value{}, fmt.Errorf("record type must be concrete: %s", typ)
+	}
+	if len(fields) != len(typ.Fields) {
+		return Value{}, fmt.Errorf("record %s takes %d fields, got %d", typ, len(typ.Fields), len(fields))
+	}
+	stored := make([]Value, len(fields))
+	for i, field := range fields {
+		if !field.hasType(typ.Fields[i].Type) {
+			return Value{}, fmt.Errorf("field %q has type %s, want %s",
+				typ.Fields[i].Name, field.Type().Summary(), typ.Fields[i].Type.Summary())
+		}
+		if err := field.validateInvariant(); err != nil {
+			return Value{}, fmt.Errorf("field %q: %w", typ.Fields[i].Name, err)
+		}
+		stored[i] = field
+	}
+	return Value{kind: RecordKind, box: &recordValue{typ: CloneType(typ), fields: stored}}, nil
+}
+
+// Field is the value at a record's i-th field. The compiler resolved the name
+// to that index, so this is a slice read.
+func (v Value) Field(i int) Value {
+	record, ok := v.box.(*recordValue)
+	if !ok || i < 0 || i >= len(record.fields) {
+		return Value{}
+	}
+	return record.fields[i]
 }
 
 // Dict is Array's counterpart for dictionaries.
@@ -131,6 +171,9 @@ func (v Value) hasType(t Type) bool {
 	if v.kind == HandleKind {
 		return v.s == t.Name
 	}
+	if v.kind == RecordKind {
+		return v.Type().Equal(t)
+	}
 	if v.kind != ArrayKind && v.kind != DictKind {
 		return true
 	}
@@ -153,6 +196,11 @@ func (v Value) Type() Type {
 		return DictOf(CloneType(v.elemType()))
 	case HandleKind:
 		return HandleOf(v.s)
+	case RecordKind:
+		if record, ok := v.box.(*recordValue); ok {
+			return CloneType(record.typ)
+		}
+		return Type{Kind: InvalidKind}
 	default:
 		return Type{Kind: InvalidKind}
 	}
@@ -162,6 +210,16 @@ func (v Value) Bool() (bool, bool)     { return v.b, v.kind == BoolKind }
 func (v Value) Int() (int64, bool)     { return v.i, v.kind == IntKind }
 func (v Value) Float() (float64, bool) { return v.f, v.kind == FloatKind }
 func (v Value) String() (string, bool) { return v.s, v.kind == StringKind }
+
+// At is the i-th item of an array, handed over without copying the container.
+// It is what a pack like extensions/std needs to write a generic container
+// function: the element is read-only, like everything else a Value gives out.
+func (v Value) At(i int) (Value, bool) {
+	if v.kind != ArrayKind || i < 0 || i >= v.length() {
+		return Value{}, false
+	}
+	return v.at(i), true
+}
 
 // Length is how many items a container holds, without building any of them:
 // count needs the number, not the values.
@@ -218,12 +276,26 @@ func (v Value) Any() any {
 		return v.s
 	case ArrayKind, DictKind:
 		return v.containerAny()
+	case RecordKind:
+		return v.recordAny()
 	case HandleKind:
 		// A handle has no JSON form; naming its type is all a log can show.
 		return v.Type().String()
 	default:
 		return nil
 	}
+}
+
+func (v Value) recordAny() any {
+	record, ok := v.box.(*recordValue)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]any, len(record.fields))
+	for i, field := range record.fields {
+		out[record.typ.Fields[i].Name] = field.Any()
+	}
+	return out
 }
 
 func (v Value) containerAny() any {
@@ -246,7 +318,77 @@ func (v Value) containerAny() any {
 }
 
 func (v Value) MarshalJSON() ([]byte, error) {
+	if v.kind == RecordKind {
+		return v.marshalRecord()
+	}
+	// A container of records has to be walked too, or the field order would
+	// hold at the top level and quietly go alphabetical one level down.
+	if (v.kind == ArrayKind || v.kind == DictKind) && holdsRecord(v.Type()) {
+		return v.marshalContainer()
+	}
 	return json.Marshal(v.Any())
+}
+
+func holdsRecord(typ Type) bool {
+	if typ.Kind == RecordKind {
+		return true
+	}
+	return typ.Elem != nil && holdsRecord(*typ.Elem)
+}
+
+func (v Value) marshalContainer() ([]byte, error) {
+	if v.kind == ArrayKind {
+		items := make([]json.RawMessage, v.length())
+		for i := range items {
+			encoded, err := json.Marshal(v.at(i))
+			if err != nil {
+				return nil, err
+			}
+			items[i] = encoded
+		}
+		return json.Marshal(items)
+	}
+	// Dictionary keys have no order of their own, so they are sorted, which is
+	// what encoding/json does for a Go map and keeps the output stable.
+	entries := make(map[string]json.RawMessage, v.length())
+	for _, key := range v.keys() {
+		item, _ := v.lookup(key)
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return nil, err
+		}
+		entries[key] = encoded
+	}
+	return json.Marshal(entries)
+}
+
+// marshalRecord writes the fields in the type's order. A Go map would come out
+// alphabetical, and the order of a record's fields is part of its type, so the
+// JSON a host reads back matches the contract it wrote.
+func (v Value) marshalRecord() ([]byte, error) {
+	record, ok := v.box.(*recordValue)
+	if !ok {
+		return []byte("null"), nil
+	}
+	var out []byte
+	out = append(out, '{')
+	for i, field := range record.fields {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		name, err := json.Marshal(record.typ.Fields[i].Name)
+		if err != nil {
+			return nil, err
+		}
+		value, err := json.Marshal(field)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, name...)
+		out = append(out, ':')
+		out = append(out, value...)
+	}
+	return append(out, '}'), nil
 }
 
 // Equal compares two values of one type. Handles are never equal: the
@@ -269,9 +411,27 @@ func (v Value) Equal(other Value) bool {
 		return v.equalArray(other)
 	case DictKind:
 		return v.equalDict(other)
+	case RecordKind:
+		return v.equalRecord(other)
 	default:
 		return false
 	}
+}
+
+// equalRecord compares field by field. The types matched already, so both
+// records hold the same fields in the same order.
+func (v Value) equalRecord(other Value) bool {
+	left, leftOK := v.box.(*recordValue)
+	right, rightOK := other.box.(*recordValue)
+	if !leftOK || !rightOK || len(left.fields) != len(right.fields) {
+		return false
+	}
+	for i := range left.fields {
+		if !left.fields[i].Equal(right.fields[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (v Value) equalArray(other Value) bool {
@@ -330,6 +490,12 @@ func (v Value) validateInvariant() error {
 		for key, value := range box {
 			if math.IsNaN(value) || math.IsInf(value, 0) {
 				return fmt.Errorf("entry %q: non-finite floats are not supported", key)
+			}
+		}
+	case *recordValue:
+		for i, value := range box.fields {
+			if err := value.validateInvariant(); err != nil {
+				return fmt.Errorf("field %q: %w", box.typ.Fields[i].Name, err)
 			}
 		}
 	case *nestedArray:

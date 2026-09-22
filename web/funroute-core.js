@@ -8,6 +8,7 @@
 export function typeName(type) {
   if (!type) return "unknown";
   if (type.kind === "array" || type.kind === "dict") return `${type.kind}<${typeName(type.elem)}>`;
+  if (type.kind === "record") return `record{${(type.fields || []).map((f) => `${f.name}: ${typeName(f.type)}`).join(", ")}}`;
   if (type.kind === "handle") return `handle<${type.name}>`;
   if (type.kind === "enum") return `enum<${type.name}>{${(type.values || []).join(",")}}`;
   return type.name || type.kind || "unknown";
@@ -16,6 +17,7 @@ export function typeName(type) {
 function equalType(left, right) {
   if (!left || !right || left.kind !== right.kind || left.name !== right.name) return false;
   if (left.kind === "array" || left.kind === "dict") return equalType(left.elem, right.elem);
+  if (left.kind === "record") return typeName(left) === typeName(right);
   if (left.kind === "enum") return JSON.stringify(left.values || []) === JSON.stringify(right.values || []);
   return true;
 }
@@ -248,10 +250,12 @@ export class FunRouteLanguage {
       case "bool": return node.bool ? "true" : "false";
       case "array": return `[${(node.items || []).map((item) => this.expressionSource(item)).join(", ")}]`;
       case "dict": return `{${(node.entries || []).map((entry) => `${JSON.stringify(entry.key || "")}: ${this.expressionSource(entry.value)}`).join(", ")}}`;
+      case "record": return `{${(node.fields || []).map((field) => `${field.name || "field"}: ${this.expressionSource(field.value)}`).join(", ")}}`;
+      case "field": return `${this.expressionSource(node.value)}.${node.field || "field"}`;
       case "enum": return node.enum ? `@${node.enum}.${node.member || "member"}` : `@${node.member || "member"}`;
       case "call": return `${node.name}(${(node.args || []).map((arg) => this.expressionSource(arg)).join(", ")})`;
       case "switch": return this._switchSource(node);
-      case "for": return `[${[this.expressionSource(node.yield), ...this._forClauses(node)].join(" ")}]`;
+      case "for": return this._comprehensionSource(node);
       case "reduce": return `reduce(${this._forHead(node)}, ${this._accumulatorHead(node)}, ${this.expressionSource(node.body)})`;
       case "let": return `let(${[...this._letBindings(node), this.expressionSource(node.body)].join(", ")})`;
       default: return "_";
@@ -298,6 +302,9 @@ export class FunRouteLanguage {
     const values = (descriptor.operands || []).map((name) => captures[name]?.node);
     const precedence = descriptor.precedence;
     if (descriptor.fixity === "prefix") return `${descriptor.token}${this.expressionSource(values[0], precedence)}`;
+    if (descriptor.fixity === "index") {
+      return `${this.expressionSource(values[0], precedence)}[${this.expressionSource(values[1])}]`;
+    }
     const left = this.expressionSource(values[0], precedence);
     const right = this.expressionSource(values[1], precedence + (descriptor.associativity === "left" ? 1 : 0));
     const text = `${left} ${descriptor.token} ${right}`;
@@ -312,6 +319,14 @@ export class FunRouteLanguage {
     });
     const fallback = node.default ? `, else ${this.expressionSource(node.default)}` : "";
     return `switch(${head}${branches.join(", ")}${fallback})`;
+  }
+
+  // A comprehension with a key builds a dictionary and is written in braces;
+  // without one it builds an array and is written in brackets.
+  _comprehensionSource(node) {
+    const clauses = this._forClauses(node).join(" ");
+    if (!node.yield_key) return `[${this.expressionSource(node.yield)} ${clauses}]`;
+    return `{${this.expressionSource(node.yield_key)}: ${this.expressionSource(node.yield)} ${clauses}}`;
   }
 
   _forClauses(node) {
@@ -332,11 +347,14 @@ export class FunRouteLanguage {
     switch (node?.node) {
       case "call": return { open: `${node.name}(`, parts: node.args || [], close: ")" };
       case "switch": return { open: node.value ? `switch(${this.expressionSource(node.value)},` : "switch(", parts: switchParts(node), close: ")" };
-      case "for": return { open: "[", parts: [node.yield, ...this._forClauses(node).map(literalPart)], close: "]", separator: "\n" };
+      case "for": return node.yield_key
+        ? { open: "{", parts: [{ key: this.expressionSource(node.yield_key), value: node.yield, bare: true }, ...this._forClauses(node).map(literalPart)], close: "}", separator: "\n" }
+        : { open: "[", parts: [node.yield, ...this._forClauses(node).map(literalPart)], close: "]", separator: "\n" };
       case "reduce": return { open: "reduce(", parts: [literalPart(this._forHead(node)), literalPart(this._accumulatorHead(node)), node.body], close: ")" };
       case "let": return { open: "let(", parts: [...(node.bindings || []).map(bindingPart), node.body], close: ")" };
       case "array": return { open: "[", parts: node.items || [], close: "]" };
       case "dict": return { open: "{", parts: (node.entries || []).map((entry) => ({ key: entry.key || "", value: entry.value })), close: "}" };
+      case "record": return { open: "{", parts: (node.fields || []).map((field) => ({ key: field.name || "field", value: field.value, bare: true })), close: "}" };
       default: return null;
     }
   }
@@ -349,7 +367,11 @@ export class FunRouteLanguage {
       return this._headedPart(`case ${matches} => `, part.branch.result, indent);
     }
     if (part?.fallback !== undefined) return this._headedPart("else ", part.fallback, indent);
-    if (part?.key !== undefined) return this._headedPart(`${JSON.stringify(part.key)}: `, part.value, indent);
+    // A dictionary key is a string ("k": v); a record field is a name (k: v).
+    if (part?.key !== undefined) {
+      const head = part.bare ? `${part.key}: ` : `${JSON.stringify(part.key)}: `;
+      return this._headedPart(head, part.value, indent);
+    }
     return this.formatSource(part, indent);
   }
 
@@ -564,7 +586,14 @@ export class FunRouteClient {
       body: payload ? JSON.stringify(payload) : undefined,
     });
     const body = await response.json();
-    if (!response.ok) throw new Error(body.error?.message || `HTTP ${response.status}`);
+    if (!response.ok) {
+      // The compiler reports where, in the line:column form every compiler
+      // uses, so each place that shows a message shows the position with it.
+      const where = body.error?.line ? `${body.error.line}:${body.error.column} ` : "";
+      const failure = new Error(where + (body.error?.message || `HTTP ${response.status}`));
+      Object.assign(failure, { line: body.error?.line, column: body.error?.column });
+      throw failure;
+    }
     return body;
   }
 }

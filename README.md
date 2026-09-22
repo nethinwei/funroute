@@ -90,11 +90,12 @@ expression = expression binary expression      // 中缀，见下表
            | primary
 primary    = integer | float | string | "true" | "false"
            | "@" identifier [ "." identifier ]      // 枚举成员，见「契约」
-           | identifier
+           | identifier { "." identifier }          // 变量，以及读它的字段
            | identifier "(" [ expression { "," expression } [ "," ] ] ")"
            | "[" [ expression { "," expression } [ "," ] ] "]"
            | "[" expression "for" identifier "in" expression [ "if" expression ] "]"
            | "{" [ string ":" expression { "," string ":" expression } [ "," ] ] "}"
+           | "{" identifier ":" expression { "," identifier ":" expression } [ "," ] "}"
            | "(" expression ")"
 ```
 
@@ -108,6 +109,9 @@ primary    = integer | float | string | "true" | "false"
 | 4 | `<` `<=` `>` `>=` | `lt` / `le` / `gt` / `ge` |
 | 5 | `+` `-` | `add` / `sub` |
 | 6 | `*` `/` | `mul` / `div` |
+| 6 | `%` | `mod` |
+| 4 | `in` | `member`（`x in xs` 查数组元素，`"k" in d` 查字典的键） |
+| 8 | `xs[i]` `d["k"]` | `at`（后缀，比算术结合得更紧） |
 | 7 | `!` `-`（一元） | `if(a,false,true)` / `sub(0,a)` |
 
 二元运算符都是左结合，`(...)` 可覆盖优先级。另外：`//` 行注释、`1_000_000` 数字分隔符、列表尾随逗号——这三项是纯词法糖，不进 AST，所以不会在 ExprJSON 往返中保留。
@@ -155,6 +159,43 @@ reduce(name, weight in weights, sum = 0.0, sum + weight)                // 两�
 | `enum<name>{a,b}` | `enum<channel>{adyen,stripe}` | 契约中的命名闭集；表达式里成员写作 `@adyen`，运行值是成员名字符串，编译器检查返回值与 `switch` 穷尽性 |
 | `array<T>` | `[1,2,3]` | 所有元素必须同型 |
 | `dict<T>` | `{"primary":1}` | key 固定为 string，所有 value 必须同型 |
+| `record{…}` | `record{amount: int, currency: string}` | 字段固定、各有自己的类型；`r.amount` 读，`{amount: 1200}` 造 |
+
+### 记录
+
+`record` 是宿主本来就有的东西：一个对象，字段各有自己的类型。契约声明它，规则读它的字段，也能造一个新的送回去：
+
+```text
+{net: order.amount - fee, currency: order.currency}
+```
+
+- **字段顺序就是类型**。值按这个顺序紧凑存放，`order.amount` 在编译期解析成下标，运行时不查名字。所以 `record{a: int, b: int}` 与 `record{b: int, a: int}` 是两个类型。
+- **没有缺失值**。边界上少一个字段，那就不是这个 record，直接拒绝；`r.missing` 在编译期就报错。和数组越界、字典缺键一样 —— 语言里没有 null 可以交回去。
+- **和字典靠写法区分**：`{"k": v}` 是 `dict`（字符串键、值同型），`{k: v}` 是 `record`（名字键、各有各的类型）。
+- **字段读法只有一种含义**：`order.amount` 与 `orders[0].amount`、`quote_v1(x).fee`、`{a: 1}.a` 都是同一个 `field` 节点。带点的名字只有在**被调用**时才是函数名（`route.score_v1(…)`）。
+- **相等是逐字段的**：`left == right` 与 `switch(order, case {amount: 1} => …)` 按字段依次比较，`order in orders` 也据此判断。
+
+record 和别的构造随意组合：`[o.amount for o in orders]`、`reduce(o in orders, total = 0, total + o.amount)`、`order.tags[0]`、`dict<record{…}>` 都成立。
+
+**Go struct 就是 record**，这也是 record 存在的理由 —— 宿主手里本来就是 struct，让它先转成 `map[string]any` 正是这层边界要省掉的事：
+
+```go
+type Order struct {
+    Amount       int64     `funroute:"amount"`
+    CurrencyCode string    `funroute:"currency_code"`
+    Tags         []string  `funroute:"tags"`
+    UpdatedAt    time.Time // 没有 tag，不属于这条记录
+    internal     int       // 未导出，语言更看不见
+}
+
+lang.Logic(registry, "route.decide_v1", doc, func(order Order) (Decision, error) { … })
+runtime.Run(ctx, map[string]any{"order": order}, options)   // 直接把 struct 传进来
+decision, _ := lang.FromValue[Decision](result)             // 也直接取回来
+```
+
+映射里**没有任何推断**，规则只有一条：**带 `funroute` tag 的字段才在记录里**，tag 写明它在记录里叫什么。从 Go 字段名推出契约字段名的话，某天有人在 Go 侧重命名，契约就被悄悄改了 —— 和句柄要显式登记名字是同一个理由。漏标也不会静默：那个字段不在记录里，任何读它的表达式在编译期就报 `has no field`。字段顺序是**声明顺序**，它就是 record 的类型；未导出字段无论如何都不在里面。字段名不能是保留字 —— 类型文本、源码字面量和 ExprJSON 三个入口同一条规则。
+
+`record` 的 JSON 输出也按字段顺序（不是字母序），所以宿主读回来的顺序与契约声明的一致；`Value.Any()` 交出的是 Go `map`，那是 Go 的顺序，宿主自己序列化时按字母序 —— 要保序就直接 `json.Marshal(value)`。
 
 空数组/字典必须从所在函数签名或编译参数提示中获得元素类型。金额不应使用 `float`；生产版应注册独立的 `money`/`decimal` 类型和函数族。
 
@@ -229,6 +270,18 @@ switch(country, case "SG", "MY" => amount * 2, else amount)
 
 "这个值是常量吗"由**编译器**判断，不需要关键字声明 —— 所以没有 `@const`：在一个无可变性、无类型层计算的纯语言里，求值时机完全由"它依赖什么"决定，而那是编译器 100% 算得准的事。
 
+不依赖参数的东西**全部**在编译期算完，容器和记录也一样：
+
+```text
+[1, 2, 3]                    → 一条载入指令
+upper("adyen")               → 一条载入指令
+sum(range(4))                → 一条载入指令
+let(base = {a: 1}, base.a)   → 一条载入指令
+1 / 0                        → 编译错误，即使写在不会走的分支里
+```
+
+编译期能调用哪些函数由宿主授权：`Doc.Constexpr` 是 C++ `constexpr` 的对应物。内核与 `extensions/std` 全都是，模型函数**不是** —— 否则参数恰好是常量时，推理引擎会在编译规则时被调进去，而"3 点钟编译出来不一样"的规则比多算一点更糟。
+
 不读参数也不读循环变量的子表达式，在编译期就用真正的 VM 跑掉：
 
 ```text
@@ -284,12 +337,15 @@ go run ./cmd/funroute inspect \
 
 ## 最小内核
 
-`lang.CoreRegistry()` 只有 15 个通用函数名；同名重载在拖拽面板合并为一张卡：
+`lang.CoreRegistry()` 只有 19 个通用函数名；同名重载在拖拽面板合并为一张卡：
 
 - 控制：`if`、`fallback`、`eq`
 - 比较：`lt`、`le`、`gt`、`ge`（各有 int/float/string 与混合数值签名）
-- 算术：`add`、`sub`、`mul`、`div`
+- 算术：`add`、`sub`、`mul`、`div`、`mod`
+- 容器：`at`、`member`、`len`（数组与字典各一套签名，`len` 还接字符串）
 - 转换：`int`、`float`、`string`、`bool`
+
+容器三个函数都有对应的写法：`xs[i]` / `d["k"]` 是 `at`，`x in xs` 是 `member`，`len` 直接写。**没有缺失值这回事**：越界的下标和不存在的键是错误，和除零一样——语言里没有 null 可以交回去，编造一个就是把静默的错答案放在应该停下的地方。
 
 `if` 与 `fallback` 是内核的惰性调用：前者只执行选中的分支；后者接受至少两个同类型候选，按顺序求值，仅在当前候选得到 `ErrExtension` 或 `ErrDeadline` 时继续下一项。布尔运算不在内核里——它们是**派生形式**，见下一节。
 
@@ -693,8 +749,8 @@ VM 是确定性栈式字节码解释器，**程序执行本身不分配内存**�
 - 编译后端当前是确定性栈式字节码，稳定 API 已把后续 Wasm/JIT 与语言前端隔离；
 终止性与表达力的形式化论证（强正规化、多项式时间上界、表达力边界，以及“如果要图灵完备该怎么加”）见 [`docs/termination.md`](docs/termination.md)。
 
-- 常量池只存标量，所以闭合的数组/字典仍在运行时构造；要折叠它们需要扩展 Artifact 的常量格式（会 bump `ArtifactVersion`）；
-- 正式用于支付前，还需要 `decimal/money`、结构化 record、Option/显式业务错误类型、决策 trace、Wasm 后端和独立宿主 ABI manifest。
+- 不读参数的表达式在编译期算完，容器与记录也进常量池（`[1,2,3]` 编译成一条载入指令）；闭合表达式的失败是编译错误，`1 / 0` 与 `[1,2][5]` 编译不过，即使写在不会走的分支里；
+- 正式用于支付前，还需要 `decimal/money`、Option/显式业务错误类型、决策 trace、Wasm 后端和独立宿主 ABI manifest；`record` 的字段更新（`{...order, amount: 1}`）也还没有，改一个字段要把字段重写一遍。
 
 选择这个顺序是为了先冻结函数式语法、类型便利规则和扩展边界，再替换机器码后端，避免语言语义与 JIT 同时变化。
 
@@ -709,4 +765,4 @@ go test ./lang/internal/compile -bench . -benchtime 2000x   # VM 基准
 
 `make lint` 由 `tools/lint`（仅标准库）实现，强制风格预算：单个方法不超过 50 行、嵌套不超过 3 层、单个文件不超过 800 行。
 
-测试覆盖样例推导、数值提升与显式转换、同型容器拒绝、扩展函数推导、函数式 `switch/for/reduce`、形式开关边界（含 ExprJSON 路径）、递归深度与 fuel 拦截、局部变量、目录只承载含义（出现样式即失败）、参数标签数校验、枚举成员解析与 nominal 边界、大枚举只在消息里缩略、ExprJSON 往返与导入校验、节点 schema 与定义一致、容器跨边界零拷贝（指针相等断言）、惰性分支、Artifact 防篡改和 MVP HTTP API。前端测试覆盖控制块集合由目录推导、放置规则的包裹与替换、格式化的换行与幂等、文案键与目录字段一致；39 个示例由 Go 测试逐条实跑并守住目录全覆盖。
+测试覆盖样例推导、数值提升与显式转换、同型容器拒绝、扩展函数推导、函数式 `switch/for/reduce`、形式开关边界（含 ExprJSON 路径）、递归深度与 fuel 拦截、局部变量、目录只承载含义（出现样式即失败）、参数标签数校验、枚举成员解析与 nominal 边界、大枚举只在消息里缩略、ExprJSON 往返与导入校验、节点 schema 与定义一致、容器跨边界零拷贝（指针相等断言）、惰性分支、Artifact 防篡改和 MVP HTTP API。前端测试覆盖控制块集合由目录推导、放置规则的包裹与替换、格式化的换行与幂等、文案键与目录字段一致；43 个示例由 Go 测试逐条实跑并守住目录全覆盖。

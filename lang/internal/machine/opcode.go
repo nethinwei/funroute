@@ -53,6 +53,19 @@ var opcodes = [...]opcodeSpec{
 		effect:   func(in Instruction) int { return 1 - in.A },
 		validate: validateMakeInstruction,
 	},
+	// Pops the field values and pushes the record.
+	OpMakeRecord: {
+		name:     "make_record",
+		effect:   func(in Instruction) int { return 1 - in.A },
+		validate: validateMakeInstruction,
+	},
+	// Pops a record and pushes the field at A. The compiler resolved the name
+	// to that index, so nothing is looked up here.
+	OpField: {
+		name:     "field",
+		effect:   pushes(0),
+		validate: validateFieldInstruction,
+	},
 	// Pops two operands and pushes the comparison.
 	OpEqual: {name: "equal", effect: pushes(-1)},
 	OpCall: {
@@ -72,7 +85,18 @@ var opcodes = [...]opcodeSpec{
 		},
 		validate: validateLoopInstruction,
 	},
-	OpLoopCollect: {name: "loop_collect", effect: pushes(-1), validate: validateLoopInstruction},
+	// A = 1 when the comprehension builds a dictionary, and the instruction
+	// then takes the key as well as the value.
+	OpLoopCollect: {
+		name: "loop_collect",
+		effect: func(in Instruction) int {
+			if in.A == 1 {
+				return -2
+			}
+			return -1
+		},
+		validate: validateLoopInstruction,
+	},
 	OpLoopNext:    {name: "loop_next", effect: pushes(1), validate: validateLoopInstruction},
 	OpJumpIfFalse: {name: "jump_if_false", effect: pushes(-1), validate: validateJumpTarget},
 	OpJump:        {name: "jump", validate: validateJumpTarget},

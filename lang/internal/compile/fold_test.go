@@ -2,6 +2,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"funroute/lang/internal/machine"
 	"testing"
 )
@@ -10,6 +11,14 @@ func foldRegistry(t *testing.T) *machine.Registry {
 	t.Helper()
 	registry := machine.CoreRegistry()
 	if err := registry.EnableForm(machine.SwitchForm, machine.ForForm, machine.ReduceForm); err != nil {
+		t.Fatal(err)
+	}
+	// An extension that always fails, to show that a failing extension is not
+	// a compile error the way a failing kernel expression is.
+	err := machine.Logic(registry, "fold.boom_v1", machine.Doc{
+		Label: "总是失败", Category: "演示", Cost: 1, Params: []string{"值"}, Result: "值",
+	}, func(value int64) (int64, error) { return 0, fmt.Errorf("boom") })
+	if err != nil {
 		t.Fatal(err)
 	}
 	return registry
@@ -100,16 +109,17 @@ func TestRuntimeBindingKeepsItsSlot(t *testing.T) {
 	}
 }
 
-// Folding must not turn a branch that never runs into a compile error: `if` is
-// lazy, so a failing closed branch is left as work.
+// A branch that is not taken is not evaluated: the failing division reads an
+// argument, so nothing about it is settled at compile time.
 func TestFoldingRespectsLaziness(t *testing.T) {
 	registry := foldRegistry(t)
-	artifact := compileFolded(t, registry, "if(use_bad, 1 / 0, 42)", ArgSpec{Name: "use_bad", Type: machine.BoolType})
+	artifact := compileFolded(t, registry, "if(use_bad, 1 / zero, 42)",
+		ArgSpec{Name: "use_bad", Type: machine.BoolType}, ArgSpec{Name: "zero", Type: machine.IntType})
 	runtime, err := machine.Instantiate(artifact, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(context.Background(), map[string]any{"use_bad": false}, machine.RunOptions{Fuel: 100})
+	result, err := runtime.Run(context.Background(), map[string]any{"use_bad": false, "zero": 0}, machine.RunOptions{Fuel: 100})
 	if err != nil {
 		t.Fatalf("a failing branch that is not taken broke the program: %v", err)
 	}
@@ -124,22 +134,27 @@ func TestFoldingRespectsLaziness(t *testing.T) {
 
 // Containers have no constant form, so a closed array or dictionary falls back
 // to being built at run time rather than failing to compile.
-func TestContainersFallBackToBeingBuilt(t *testing.T) {
+func TestClosedContainersAreInterned(t *testing.T) {
 	registry := foldRegistry(t)
-	artifact := compileFolded(t, registry, "[1, 2, 3]")
-	if len(artifact.Instructions) == 1 {
-		t.Fatal("an array was interned as a constant; the pool cannot hold one")
+	// A list, a dictionary and a record that read no argument are built once,
+	// while the rule compiles, and the bytecode is a single load.
+	for _, source := range []string{`[1, 2, 3]`, `{"a": 1, "b": 2}`, `{amount: 1, currency: "SGD"}`} {
+		artifact := compileFolded(t, registry, source)
+		if len(artifact.Instructions) != 1 {
+			t.Fatalf("%s compiled to %d instructions, want one load", source, len(artifact.Instructions))
+		}
+		runtime, err := machine.Instantiate(artifact, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runtime.Run(context.Background(), map[string]any{}, machine.RunOptions{Fuel: 100}); err != nil {
+			t.Fatalf("run %s: %v", source, err)
+		}
 	}
-	runtime, err := machine.Instantiate(artifact, registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := runtime.Run(context.Background(), map[string]any{}, machine.RunOptions{Fuel: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if items, _ := result.Array(); len(items) != 3 {
-		t.Fatalf("result = %#v", result.Any())
+	// A container that reads an argument is still built at run time.
+	built := compileFolded(t, registry, `[1, n]`, ArgSpec{Name: "n", Type: machine.IntType})
+	if len(built.Instructions) == 1 {
+		t.Fatal("an array that reads an argument cannot be a constant")
 	}
 }
 
@@ -177,5 +192,33 @@ func TestFoldingPreservesResults(t *testing.T) {
 		if result.Any() != test.want {
 			t.Fatalf("%s = %#v, want %#v", test.source, result.Any(), test.want)
 		}
+	}
+}
+
+// Anything that reads no argument is settled while the rule is compiled —
+// including inside a branch that happens not to be taken, the way a constant
+// division by zero is an error in Go even under `if false`.
+func TestClosedFailuresAreCompileErrors(t *testing.T) {
+	registry := foldRegistry(t)
+	for _, source := range []string{
+		`1 / 0`,
+		`let(x = 10 / 0, x)`,
+		`if(use_bad, 1 / 0, 42)`,
+		`switch(case use_bad => 1 / 0, else 2)`,
+		`fallback(1 / 0, 7)`,
+		`[1, 2][5]`,
+		`9223372036854775807 + 1`,
+	} {
+		_, err := CompileExpr(source, registry, CompileOptions{
+			Args: []ArgSpec{{Name: "use_bad", Type: machine.BoolType}},
+		})
+		if err == nil {
+			t.Fatalf("%s must fail to compile", source)
+		}
+	}
+	// An extension can fail for reasons that are not in the program, so a
+	// failing one is left as work rather than reported.
+	if _, err := CompileExpr(`fold.boom_v1(1)`, registry, CompileOptions{}); err != nil {
+		t.Fatalf("a failing extension must not become a compile error: %v", err)
 	}
 }

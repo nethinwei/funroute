@@ -34,6 +34,10 @@ func inferExpr(expr syntax.Expr, state *inferState, context inferContext) ([]inf
 		return inferFor(node, state, context)
 	case *syntax.ReduceExpr:
 		return inferReduce(node, state, context)
+	case *syntax.RecordExpr:
+		return inferRecord(node, state, context)
+	case *syntax.FieldExpr:
+		return inferField(node, state, context)
 	case *syntax.LetExpr:
 		return inferLet(node, state, context)
 	case *syntax.CallExpr:
@@ -80,7 +84,7 @@ func inferHomogeneous(node syntax.Expr, items []syntax.Expr, kind machine.Kind, 
 			return nil, err
 		}
 		if len(next) == 0 {
-			return nil, fmt.Errorf("type error at byte %d: %s", pos, message)
+			return nil, syntax.At(pos, "type error: %s", message)
 		}
 		states = next
 	}
@@ -149,7 +153,7 @@ func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContex
 		return nil, err
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("type error at byte %d: switch default must match the branch result type", node.Pos)
+		return nil, syntax.At(node.Pos, "type error: switch default must match the branch result type")
 	}
 	return record(node, out), nil
 }
@@ -180,7 +184,7 @@ func validateEnumSwitch(node *syntax.SwitchExpr, partials []partialSwitch) error
 		typ, ok := partial.state.publicType(partial.subject)
 		if !ok || typ.Kind != machine.EnumKind {
 			if node.Default == nil {
-				return fmt.Errorf("type error at byte %d: switch without else requires a declared enum subject", node.Pos)
+				return syntax.At(node.Pos, "type error: switch without else requires a declared enum subject")
 			}
 			continue
 		}
@@ -209,23 +213,23 @@ func validateEnumCases(node *syntax.SwitchExpr, enum machine.Type) error {
 			missing = append(missing, value)
 		}
 	}
-	return fmt.Errorf("type error at byte %d: enum switch is not exhaustive; missing %s", node.Pos, strings.Join(missing, ", "))
+	return syntax.At(node.Pos, "type error: enum switch is not exhaustive; missing %s", strings.Join(missing, ", "))
 }
 
 func recordEnumMatch(node *syntax.SwitchExpr, enum machine.Type, match syntax.Expr, seen map[string]bool) error {
 	member, ok := match.(*syntax.EnumExpr)
 	if !ok {
 		if node.Default == nil {
-			return fmt.Errorf("type error at byte %d: an exhaustive enum switch matches enum members, such as @%s", match.Position(), enum.Values[0])
+			return syntax.At(match.Position(), "type error: an exhaustive enum switch matches enum members, such as @%s", enum.Values[0])
 		}
 		return nil
 	}
 	value := member.Member
 	if !slices.Contains(enum.Values, value) {
-		return fmt.Errorf("type error at byte %d: %q is not a member of %s", match.Position(), value, enum.Summary())
+		return syntax.At(match.Position(), "type error: %q is not a member of %s", value, enum.Summary())
 	}
 	if seen[value] {
-		return fmt.Errorf("type error at byte %d: enum member %q is matched more than once", match.Position(), value)
+		return syntax.At(match.Position(), "type error: enum member %q is matched more than once", value)
 	}
 	seen[value] = true
 	return nil
@@ -317,7 +321,7 @@ func inferFor(node *syntax.ForExpr, state *inferState, context inferContext) ([]
 		out = append(out, yielded...)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("type error at byte %d: %s and the condition must be bool", node.Pos, loopSourceHint(node.KeyVariable))
+		return nil, syntax.At(node.Pos, "type error: %s, the condition must be bool and a dictionary comprehension needs a string key", loopSourceHint(node.KeyVariable))
 	}
 	return record(node, out), nil
 }
@@ -329,11 +333,18 @@ func inferForSource(node *syntax.ForExpr, source inferResult, context inferConte
 		return nil, nil
 	}
 	local := withLoopLocals(context, node.KeyVariable, node.Variable, elem)
-	states, err := filterCondition(node.Where, []*inferState{candidate}, local)
+	states, err := constrain(node.Where, []*inferState{candidate}, local, machine.BoolKind)
 	if err != nil {
 		return nil, err
 	}
-	return inferYield(node.Yield, states, local)
+	if node.YieldKey == nil {
+		return inferYield(node.Yield, states, local, machine.ArrayKind)
+	}
+	keyed, err := constrain(node.YieldKey, states, local, machine.StringKind)
+	if err != nil {
+		return nil, err
+	}
+	return inferYield(node.Yield, keyed, local, machine.DictKind)
 }
 
 // loopKind is what the source must be: two loop variables mean a dictionary.
@@ -365,19 +376,23 @@ func withLocal(context inferContext, name string, term typeTerm) inferContext {
 	return local
 }
 
-func filterCondition(where syntax.Expr, states []*inferState, context inferContext) ([]*inferState, error) {
-	if where == nil {
+// constrain types expr in every state and keeps the ones where it came out the
+// wanted kind: a comprehension's condition has to be bool, and the key of a
+// dictionary comprehension has to be a string. A nil expression constrains
+// nothing, which is how the optional clauses opt out.
+func constrain(expr syntax.Expr, states []*inferState, context inferContext, kind machine.Kind) ([]*inferState, error) {
+	if expr == nil {
 		return states, nil
 	}
 	var filtered []*inferState
 	for _, partial := range states {
-		conditions, err := inferExpr(where, partial, context)
+		conditions, err := inferExpr(expr, partial, context)
 		if err != nil {
 			return nil, err
 		}
 		for _, condition := range conditions {
 			candidate := condition.state.clone()
-			if err := candidate.unify(condition.typ, scalarTerm(machine.BoolKind)); err == nil {
+			if err := candidate.unify(condition.typ, scalarTerm(kind)); err == nil {
 				filtered = append(filtered, candidate)
 			}
 		}
@@ -385,7 +400,7 @@ func filterCondition(where syntax.Expr, states []*inferState, context inferConte
 	return filtered, nil
 }
 
-func inferYield(yield syntax.Expr, states []*inferState, context inferContext) ([]inferResult, error) {
+func inferYield(yield syntax.Expr, states []*inferState, context inferContext, kind machine.Kind) ([]inferResult, error) {
 	var out []inferResult
 	for _, partial := range states {
 		yields, err := inferExpr(yield, partial, context)
@@ -393,7 +408,7 @@ func inferYield(yield syntax.Expr, states []*inferState, context inferContext) (
 			return nil, err
 		}
 		for _, result := range yields {
-			out = append(out, inferResult{typ: containerTerm(machine.ArrayKind, result.typ), state: result.state})
+			out = append(out, inferResult{typ: containerTerm(kind, result.typ), state: result.state})
 		}
 	}
 	return out, nil
@@ -442,7 +457,7 @@ func inferArgs(args []syntax.Expr, state *inferState, context inferContext) ([]p
 func inferCall(node *syntax.CallExpr, state *inferState, context inferContext) ([]inferResult, error) {
 	functions := context.registry.Overloads(node.Name)
 	if len(functions) == 0 {
-		return nil, fmt.Errorf("unknown function %q at byte %d", node.Name, node.Pos)
+		return nil, syntax.At(node.Pos, "unknown function %q", node.Name)
 	}
 	if functions[0].IsLazyFallback() {
 		return inferFallback(node, state, context, functions[0])
@@ -463,7 +478,7 @@ func inferCall(node *syntax.CallExpr, state *inferState, context inferContext) (
 
 func inferFallback(node *syntax.CallExpr, state *inferState, context inferContext, function *machine.RegisteredFunction) ([]inferResult, error) {
 	if len(node.Args) < 2 {
-		return nil, fmt.Errorf("fallback requires at least 2 arguments at byte %d", node.Pos)
+		return nil, syntax.At(node.Pos, "fallback requires at least 2 arguments")
 	}
 	partials, err := inferArgs(node.Args, state, context)
 	if err != nil {
@@ -536,7 +551,73 @@ func noOverloadError(node *syntax.CallExpr, partials []partialArgs) error {
 			actual[i] = partials[0].state.describe(arg)
 		}
 	}
-	return fmt.Errorf("type error at byte %d: no overload %s(%s)", node.Pos, node.Name, strings.Join(actual, ", "))
+	return syntax.At(node.Pos, "type error: no overload %s(%s)", node.Name, strings.Join(actual, ", "))
+}
+
+// inferRecord types a record literal: every field is typed on its own, and
+// the record's type is those types in the order they were written. A field
+// whose type does not settle — an empty array, say — has to be written with a
+// type the way any other literal does.
+func inferRecord(node *syntax.RecordExpr, state *inferState, context inferContext) ([]inferResult, error) {
+	results := []inferResult{{typ: recordTerm(machine.RecordOf()), state: state}}
+	for _, field := range node.Fields {
+		next, err := inferRecordField(field, results, context)
+		if err != nil {
+			return nil, err
+		}
+		results = next
+	}
+	if len(results) == 0 {
+		return nil, syntax.At(node.Pos, "type error: every record field needs a type of its own")
+	}
+	return record(node, results), nil
+}
+
+// inferRecordField extends each record built so far with one more field.
+func inferRecordField(field syntax.RecordFieldExpr, sofar []inferResult, context inferContext) ([]inferResult, error) {
+	var out []inferResult
+	for _, partial := range sofar {
+		values, err := inferExpr(field.Value, partial.state, context)
+		if err != nil {
+			return nil, err
+		}
+		for _, value := range values {
+			typ, ok := value.state.publicType(value.typ)
+			if !ok {
+				continue
+			}
+			grown := machine.CloneType(*partial.typ.record)
+			grown.Fields = append(grown.Fields, machine.Field{Name: field.Name, Type: typ})
+			out = append(out, inferResult{typ: recordTerm(grown), state: value.state})
+		}
+	}
+	return out, nil
+}
+
+// inferField reads one field off a record. The record's type has to be known
+// here — from the contract, from a literal or from a let binding — because the
+// field's own type comes from it.
+func inferField(node *syntax.FieldExpr, state *inferState, context inferContext) ([]inferResult, error) {
+	values, err := inferExpr(node.Value, state, context)
+	if err != nil {
+		return nil, err
+	}
+	var out []inferResult
+	for _, value := range values {
+		typ, ok := value.state.publicType(value.typ)
+		if !ok || typ.Kind != machine.RecordKind {
+			continue
+		}
+		index := typ.FieldIndex(node.Field)
+		if index < 0 {
+			return nil, syntax.At(node.Pos, "type error: %s has no field %q", typ.Summary(), node.Field)
+		}
+		out = append(out, inferResult{typ: concreteTerm(typ.Fields[index].Type), state: value.state})
+	}
+	if len(out) == 0 {
+		return nil, syntax.At(node.Pos, "type error: %q is read off something that is not a record with a known type", node.Field)
+	}
+	return record(node, out), nil
 }
 
 func inferReduce(node *syntax.ReduceExpr, state *inferState, context inferContext) ([]inferResult, error) {
@@ -553,7 +634,7 @@ func inferReduce(node *syntax.ReduceExpr, state *inferState, context inferContex
 		out = append(out, folded...)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("type error at byte %d: %s, the condition must be bool and the body must return the accumulator type", node.Pos, loopSourceHint(node.KeyVariable))
+		return nil, syntax.At(node.Pos, "type error: %s, the condition must be bool and the body must return the accumulator type", loopSourceHint(node.KeyVariable))
 	}
 	return record(node, out), nil
 }
@@ -565,7 +646,7 @@ func inferReduceSource(node *syntax.ReduceExpr, source inferResult, context infe
 		return nil, nil
 	}
 	local := withLoopLocals(context, node.KeyVariable, node.Variable, elem)
-	states, err := filterCondition(node.Where, []*inferState{candidate}, local)
+	states, err := constrain(node.Where, []*inferState{candidate}, local, machine.BoolKind)
 	if err != nil {
 		return nil, err
 	}
@@ -650,7 +731,7 @@ func inferLet(node *syntax.LetExpr, state *inferState, context inferContext) ([]
 		if dropped != nil {
 			return nil, dropped
 		}
-		return nil, fmt.Errorf("type error at byte %d: the let body is not typeable", node.Pos)
+		return nil, syntax.At(node.Pos, "type error: the let body is not typeable")
 	}
 	return record(node, out), nil
 }
@@ -678,7 +759,7 @@ func inferLetBindings(node *syntax.LetExpr, state *inferState, context inferCont
 			if dropped != nil {
 				return nil, dropped
 			}
-			return nil, fmt.Errorf("type error at byte %d: let binding %q is not typeable", node.Pos, binding.Name)
+			return nil, syntax.At(node.Pos, "type error: let binding %q is not typeable", binding.Name)
 		}
 		scopes = next
 	}

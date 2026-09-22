@@ -27,7 +27,13 @@ export const FIELD_TEXT = {
   "for.variable": ["元素局部名", "仅本节点可见"],
   "for.key_variable": ["键局部名", "填写即遍历字典"],
   "for.where": ["筛选条件", "bool；留空表示全部"],
+  "for.yield_key": ["键表达式", "填了就产出字典（键必须是 string），留空则产出数组"],
   "for.yield": ["产出表达式", "每个保留元素产出一个值"],
+  "record.fields": ["字段", "每个字段有自己的名字和类型"],
+  "record.fields.name": ["字段名", "标识符；顺序就是记录的类型"],
+  "record.fields.value": ["字段值", "这个字段的表达式"],
+  "field.value": ["记录", "从哪个记录读"],
+  "field.field": ["字段名", "必须是该记录声明过的字段"],
   "reduce.source": ["输入", "array<T> 或 dict<T>"],
   "reduce.variable": ["元素局部名", "仅本节点可见"],
   "reduce.key_variable": ["键局部名", "填写即遍历字典"],
@@ -304,7 +310,8 @@ export function parseInputValue(raw, type) {
       return value;
     }
     case "array":
-    case "dict": {
+    case "dict":
+    case "record": {
       const value = JSON.parse(text);
       validateTypedJSON(value, type, "$参数");
       return value;
@@ -326,6 +333,18 @@ function validateTypedJSON(value, type, path) {
       if (!Array.isArray(value)) throw new Error(`${path} 必须是数组`);
       value.forEach((item, index) => validateTypedJSON(item, type.elem, `${path}[${index}]`));
       break;
+    case "record": {
+      if (!value || Array.isArray(value) || typeof value !== "object") throw new Error(`${path} 必须是对象`);
+      const declared = new Set((type.fields || []).map((field) => field.name));
+      for (const name of Object.keys(value)) {
+        if (!declared.has(name)) throw new Error(`${path} 没有声明字段 ${name}`);
+      }
+      for (const field of type.fields || []) {
+        if (!(field.name in value)) throw new Error(`${path} 缺少字段 ${field.name}`);
+        validateTypedJSON(value[field.name], field.type, `${path}.${field.name}`);
+      }
+      break;
+    }
     case "dict":
       if (!value || Array.isArray(value) || typeof value !== "object") throw new Error(`${path} 必须是对象`);
       Object.entries(value).forEach(([key, item]) => validateTypedJSON(item, type.elem, `${path}.${key}`));

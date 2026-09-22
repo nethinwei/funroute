@@ -11,7 +11,9 @@ func compileError(err error) error {
 	if err == nil || errors.Is(err, machine.ErrCompile) || errors.Is(err, machine.ErrContract) {
 		return err
 	}
-	return fmt.Errorf("%w: %v", machine.ErrCompile, err)
+	// Both are wrapped: errors.Is finds the class, errors.As finds the
+	// position the lexer or the type checker recorded.
+	return fmt.Errorf("%w: %w", machine.ErrCompile, err)
 }
 
 func contractErrorf(format string, args ...any) error {

@@ -26,6 +26,8 @@ const (
 	OpStoreLocal
 	OpMakeArray
 	OpMakeDict
+	OpMakeRecord
+	OpField
 	OpEqual
 	OpCall
 	OpLoopInit
@@ -52,10 +54,18 @@ type Constant struct {
 	Float  *string `json:"float,omitempty"`
 	String *string `json:"string,omitempty"`
 	Bool   *bool   `json:"bool,omitempty"`
+	// Elem, Items and Keys carry a container: Items holds an array's elements
+	// or a record's fields in the type's order, and Keys pairs with Items for
+	// a dictionary. Elem is the element type an empty array or dictionary
+	// would otherwise lose, and the record's own type for a record.
+	Elem  *Type      `json:"elem,omitempty"`
+	Items []Constant `json:"items,omitempty"`
+	Keys  []string   `json:"keys,omitempty"`
 }
 
-// ConstantFromValue interns a compile-time value. Containers have no constant
-// form, so they report an error and the compiler emits the work instead.
+// ConstantFromValue interns a compile-time value, containers included: a
+// literal list or record that does not read an argument is built once, while
+// the rule compiles, rather than on every run.
 func ConstantFromValue(value Value) (Constant, error) {
 	switch value.kind {
 	case IntKind:
@@ -70,9 +80,49 @@ func ConstantFromValue(value Value) (Constant, error) {
 	case BoolKind:
 		v := value.b
 		return Constant{Type: BoolKind, Bool: &v}, nil
+	case ArrayKind, DictKind, RecordKind:
+		return containerConstant(value)
 	default:
 		return Constant{}, fmt.Errorf("bytecode constant cannot contain %s", value.Type())
 	}
+}
+
+func containerConstant(value Value) (Constant, error) {
+	typ := value.Type()
+	out := Constant{Type: value.kind, Elem: &typ}
+	switch value.kind {
+	case ArrayKind:
+		for i := 0; i < value.length(); i++ {
+			item, err := ConstantFromValue(value.at(i))
+			if err != nil {
+				return Constant{}, err
+			}
+			out.Items = append(out.Items, item)
+		}
+	case DictKind:
+		for _, key := range value.keys() {
+			entry, _ := value.lookup(key)
+			item, err := ConstantFromValue(entry)
+			if err != nil {
+				return Constant{}, err
+			}
+			out.Keys = append(out.Keys, key)
+			out.Items = append(out.Items, item)
+		}
+	default:
+		record, ok := value.box.(*recordValue)
+		if !ok {
+			return Constant{}, fmt.Errorf("malformed record constant")
+		}
+		for _, field := range record.fields {
+			item, err := ConstantFromValue(field)
+			if err != nil {
+				return Constant{}, err
+			}
+			out.Items = append(out.Items, item)
+		}
+	}
+	return out, nil
 }
 
 func (c Constant) value() (Value, error) {
@@ -101,8 +151,39 @@ func (c Constant) value() (Value, error) {
 			return Value{}, fmt.Errorf("bool constant is missing bool")
 		}
 		return Bool(*c.Bool), nil
+	case ArrayKind, DictKind, RecordKind:
+		return c.container()
 	default:
 		return Value{}, fmt.Errorf("unknown constant type %q", c.Type)
+	}
+}
+
+func (c Constant) container() (Value, error) {
+	if c.Elem == nil || !c.Elem.IsConcrete() {
+		return Value{}, fmt.Errorf("container constant is missing its type")
+	}
+	items := make([]Value, len(c.Items))
+	for i, item := range c.Items {
+		value, err := item.value()
+		if err != nil {
+			return Value{}, err
+		}
+		items[i] = value
+	}
+	switch c.Type {
+	case ArrayKind:
+		return Array(*c.Elem.Elem, items)
+	case RecordKind:
+		return Record(*c.Elem, items)
+	default:
+		if len(c.Keys) != len(items) {
+			return Value{}, fmt.Errorf("dictionary constant has %d keys for %d values", len(c.Keys), len(items))
+		}
+		entries := make(map[string]Value, len(items))
+		for i, key := range c.Keys {
+			entries[key] = items[i]
+		}
+		return Dict(*c.Elem.Elem, entries)
 	}
 }
 

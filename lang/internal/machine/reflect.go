@@ -34,6 +34,12 @@ func reflectType(registry *Registry, typ reflect.Type) (Type, error) {
 			return Type{}, err
 		}
 		return ArrayOf(elem), nil
+	case reflect.Struct:
+		fields, _, err := structFields(registry, typ)
+		if err != nil {
+			return Type{}, err
+		}
+		return RecordOf(fields...), nil
 	case reflect.Map:
 		if typ.Key().Kind() != reflect.String {
 			return Type{}, fmt.Errorf("unsupported Go type %s: dictionary keys must be strings", typ)
@@ -73,6 +79,8 @@ func intoGo(registry *Registry, value Value, typ reflect.Type) (reflect.Value, e
 		return intoSlice(registry, value, typ)
 	case reflect.Map:
 		return intoMap(registry, value, typ)
+	case reflect.Struct:
+		return intoStruct(registry, value, typ)
 	default:
 		return intoScalar(value, typ)
 	}
@@ -167,6 +175,8 @@ func outOfGo(registry *Registry, value reflect.Value, typ Type) (Value, error) {
 		return NewHandle(typ.Name, value.Interface()), nil
 	case ArrayKind:
 		return outOfSlice(registry, value, typ)
+	case RecordKind:
+		return outOfStruct(registry, value, typ)
 	default:
 		return outOfMap(registry, value, typ)
 	}

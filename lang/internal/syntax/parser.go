@@ -71,7 +71,7 @@ func (p *parser) parseBinary(min int) (Expr, error) {
 	}
 	for {
 		operator := p.peek()
-		spec, ok := binaryOperators[operator.kind]
+		spec, ok := p.infixOperator(operator)
 		if !ok || spec.precedence < min {
 			return left, nil
 		}
@@ -82,6 +82,17 @@ func (p *parser) parseBinary(min int) (Expr, error) {
 		}
 		left = p.expandOperator(operator, spec, left, right)
 	}
+}
+
+// infixOperator finds the operator a token starts, whether it is punctuation
+// (+, %) or a word (in).
+func (p *parser) infixOperator(tok token) (operatorSpec, bool) {
+	if tok.kind == tokenIdentifier {
+		spec, ok := keywordOperators[tok.text]
+		return spec, ok
+	}
+	spec, ok := binaryOperators[tok.kind]
+	return spec, ok
 }
 
 func (p *parser) expandOperator(operator token, spec operatorSpec, operands ...Expr) Expr {
@@ -105,7 +116,11 @@ func (p *parser) parseUnary() (Expr, error) {
 	operator := p.peek()
 	spec, ok := unaryOperators[operator.kind]
 	if !ok {
-		return p.parsePrimary()
+		primary, err := p.parsePrimary()
+		if err != nil {
+			return nil, err
+		}
+		return p.parsePostfix(primary)
 	}
 	p.index++
 	if spec.expansion == expandNegate {
@@ -116,6 +131,58 @@ func (p *parser) parseUnary() (Expr, error) {
 		return nil, err
 	}
 	return p.expandOperator(operator, spec, operand), nil
+}
+
+// parsePostfix reads what can follow a primary: subscripts and field reads.
+// xs[i] is at(xs, i) and d["k"] is at(d, "k"), so indexing adds no node — only
+// a spelling; .field is the same FieldExpr a dotted name produces, which is
+// why orders[0].amount and order.amount mean the same thing.
+func (p *parser) parsePostfix(base Expr) (Expr, error) {
+	for {
+		switch p.peek().kind {
+		case tokenLeftBracket:
+			indexed, err := p.parseSubscript(base)
+			if err != nil {
+				return nil, err
+			}
+			base = indexed
+		case tokenDot:
+			field, err := p.parseFieldRead(base)
+			if err != nil {
+				return nil, err
+			}
+			base = field
+		default:
+			return base, nil
+		}
+	}
+}
+
+func (p *parser) parseSubscript(base Expr) (Expr, error) {
+	bracket := p.peek()
+	p.index++
+	index, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expect(tokenRightBracket, "']' after the index"); err != nil {
+		return nil, err
+	}
+	return p.call(bracket, "at", base, index), nil
+}
+
+func (p *parser) parseFieldRead(base Expr) (Expr, error) {
+	dot := p.peek()
+	p.index++
+	name := p.peek()
+	if name.kind != tokenIdentifier || strings.Contains(name.text, ".") {
+		return nil, p.errorf(name, "expected a field name after '.'")
+	}
+	p.index++
+	if err := validName(name.text, "text"); err != nil {
+		return nil, p.errorf(name, "%v", err)
+	}
+	return p.node(dot, &FieldExpr{ID: p.id(), Pos: dot.pos, Value: base, Field: name.text})
 }
 
 // negate keeps -42 a literal and turns -e into sub(0, e).
@@ -203,30 +270,54 @@ func (p *parser) parsePrimary() (Expr, error) {
 		if p.peek().kind == tokenLeftParen {
 			return p.parseCall(tok)
 		}
-		// A dotted name is a function's: route.score_v1. Variables are plain,
-		// which keeps "." free for field access.
-		if err := validName(tok.text, "var"); err != nil {
-			return nil, p.errorf(tok, "%v", err)
-		}
-		return &VariableExpr{ID: p.id(), Pos: tok.pos, Name: tok.text}, nil
+		// A dotted name that is not being called is a variable and the fields
+		// read off it: order.amount is at(order).amount, never one name. A
+		// call keeps its dots, because that is how a function is versioned:
+		// route.score_v1(…).
+		return p.variableWithFields(tok)
 	case tokenLeftParen:
-		// Grouping, so infix precedence can be overridden.
-		p.index++
-		inner, err := p.parseExpr()
-		if err != nil {
-			return nil, err
-		}
-		if err := p.expect(tokenRightParen, "')'"); err != nil {
-			return nil, err
-		}
-		return inner, nil
+		return p.parseGroup()
 	case tokenLeftBracket:
 		return p.parseArray()
 	case tokenLeftBrace:
-		return p.parseDict()
+		return p.parseBrace()
 	default:
 		return nil, p.errorf(tok, "expected an expression")
 	}
+}
+
+// parseGroup reads (e), which is only there to override infix precedence.
+func (p *parser) parseGroup() (Expr, error) {
+	p.index++
+	inner, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expect(tokenRightParen, "')'"); err != nil {
+		return nil, err
+	}
+	return inner, nil
+}
+
+// variableWithFields splits name.field.field into a variable and the field
+// accesses on it, checking each part is a usable name.
+func (p *parser) variableWithFields(tok token) (Expr, error) {
+	parts := strings.Split(tok.text, ".")
+	if err := validName(parts[0], "var"); err != nil {
+		return nil, p.errorf(tok, "%v", err)
+	}
+	var expr Expr = &VariableExpr{ID: p.id(), Pos: tok.pos, Name: parts[0]}
+	for _, field := range parts[1:] {
+		if err := validName(field, "text"); err != nil {
+			return nil, p.errorf(tok, "%v", err)
+		}
+		node, err := p.node(tok, &FieldExpr{ID: p.id(), Pos: tok.pos, Value: expr, Field: field})
+		if err != nil {
+			return nil, err
+		}
+		expr = node
+	}
+	return expr, nil
 }
 
 func (p *parser) parseCall(name token) (Expr, error) {
@@ -463,68 +554,6 @@ func (p *parser) parseArray() (Expr, error) {
 	return &ArrayExpr{ID: p.id(), Pos: start.pos, Items: items}, nil
 }
 
-// comprehension reads [yield for item in source if condition], the same shape
-// Python and Haskell use. It is sugar for a ForExpr, so ExprJSON and the canvas
-// see one node either way.
-func (p *parser) comprehension(start token, yield Expr) (Expr, error) {
-	p.index++ // for
-	key, variable, err := p.loopVariables(start)
-	if err != nil {
-		return nil, err
-	}
-	p.index++ // in
-	source, err := p.parseExpr()
-	if err != nil {
-		return nil, err
-	}
-	where, err := p.loopFilter()
-	if err != nil {
-		return nil, err
-	}
-	if err := p.expect(tokenRightBracket, "']'"); err != nil {
-		return nil, err
-	}
-	return p.node(start, &ForExpr{
-		ID: p.id(), Pos: start.pos, Source: source,
-		Variable: variable, KeyVariable: key, Where: where, Yield: yield,
-	})
-}
-
-// loopFilter reads the optional "if condition" that both loop forms share:
-// items the condition rejects are neither yielded nor folded.
-func (p *parser) loopFilter() (Expr, error) {
-	if !p.keyword("if") {
-		return nil, nil
-	}
-	p.index++
-	return p.parseExpr()
-}
-
-// loopVariables reads "v" or "k, v" and leaves the parser on the in keyword.
-// Two variables mean a dictionary walk: the key comes first, like Python's
-// `for k, v in d.items()`.
-func (p *parser) loopVariables(at token) (key string, value string, err error) {
-	first, err := p.localIdentifier()
-	if err != nil {
-		return "", "", err
-	}
-	if p.peek().kind != tokenComma {
-		if !p.keyword("in") {
-			return "", "", p.errorf(p.peek(), "expected 'in' after the loop variable")
-		}
-		return "", first, nil
-	}
-	p.index++
-	second, err := p.localIdentifier()
-	if err != nil {
-		return "", "", err
-	}
-	if !p.keyword("in") {
-		return "", "", p.errorf(p.peek(), "expected 'in' after the loop variables")
-	}
-	return first, second, nil
-}
-
 // localIdentifier consumes one identifier and checks it can name a local.
 func (p *parser) localIdentifier() (string, error) {
 	tok := p.peek()
@@ -572,48 +601,6 @@ func (p *parser) parseRest(first Expr, end tokenKind) ([]Expr, error) {
 	}
 }
 
-func (p *parser) parseDict() (Expr, error) {
-	start := p.peek()
-	p.index++
-	var entries []DictEntryExpr
-	if p.peek().kind == tokenRightBrace {
-		p.index++
-		return &DictExpr{ID: p.id(), Pos: start.pos}, nil
-	}
-	for {
-		keyToken := p.peek()
-		if keyToken.kind != tokenString {
-			return nil, p.errorf(keyToken, "dictionary keys must be strings")
-		}
-		p.index++
-		key, err := strconv.Unquote(keyToken.text)
-		if err != nil {
-			return nil, p.errorf(keyToken, "invalid dictionary key")
-		}
-		if p.peek().kind != tokenColon {
-			return nil, p.errorf(p.peek(), "expected ':' after dictionary key")
-		}
-		p.index++
-		value, err := p.parseExpr()
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, DictEntryExpr{Key: key, Value: value})
-		if p.peek().kind == tokenRightBrace {
-			p.index++
-			return p.node(start, &DictExpr{ID: p.id(), Pos: start.pos, Entries: entries})
-		}
-		if p.peek().kind != tokenComma {
-			return nil, p.errorf(p.peek(), "expected ',' or '}'")
-		}
-		p.index++
-		if p.peek().kind == tokenRightBrace {
-			p.index++
-			return p.node(start, &DictExpr{ID: p.id(), Pos: start.pos, Entries: entries})
-		}
-	}
-}
-
 func (p *parser) id() int {
 	id := p.nextID
 	p.nextID++
@@ -631,5 +618,5 @@ func (p *parser) peekN(offset int) token {
 }
 
 func (p *parser) errorf(tok token, format string, args ...any) error {
-	return fmt.Errorf("syntax error at byte %d: %s", tok.pos, fmt.Sprintf(format, args...))
+	return At(tok.pos, "syntax error: %s", fmt.Sprintf(format, args...))
 }

@@ -362,6 +362,19 @@ func TestHostNamesTheValueTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	var dictType lang.Type = lang.DictOf(lang.FloatType)
+	// A record is named fields with their own types, in an order that is part
+	// of the type; the host writes both down.
+	var orderType lang.Type = lang.RecordOf(
+		lang.Field{Name: "amount", Type: lang.IntType},
+		lang.Field{Name: "currency", Type: lang.StringType},
+	)
+	order, err := lang.Record(orderType, []lang.Value{lang.Int(1200), lang.String("SGD")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if amount, _ := order.Field(0).Int(); amount != 1200 || !order.Type().Equal(orderType) {
+		t.Fatalf("record = %v", order.Any())
+	}
 	if kind.String() != "bool" || !flag.Type().Equal(boolType) {
 		t.Fatalf("kind = %s", kind)
 	}
@@ -384,7 +397,11 @@ func TestHostNamesTheRegistryAndArtifactTypes(t *testing.T) {
 	}
 	if err := registry.Register(lang.FunctionSpec{
 		Name: "demo.double", Params: []lang.Type{lang.IntType}, Result: lang.IntType, Eval: double,
-		Doc: lang.Doc{Label: "翻倍", Category: "演示", Cost: 2, Params: []string{"值"}, Result: "两倍"},
+		// Pure arithmetic, so the host lets folding run it while compiling.
+		Doc: lang.Doc{
+			Label: "翻倍", Category: "演示", Cost: 2, Params: []string{"值"}, Result: "两倍",
+			Constexpr: true,
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -398,8 +415,8 @@ func TestHostNamesTheRegistryAndArtifactTypes(t *testing.T) {
 	}
 	var constant lang.Constant = artifact.Constants[0]
 	var instruction lang.Instruction = artifact.Instructions[0]
-	// The call reads no argument, so folding ran it at compile time and the
-	// pool holds the answer rather than the input.
+	// The call reads no argument and the host marked it constexpr, so folding
+	// ran it at compile time and the pool holds the answer, not the input.
 	if constant.Int == nil || *constant.Int != 42 {
 		t.Fatalf("the folded result should be in the constant pool: %+v", constant)
 	}
@@ -455,4 +472,27 @@ func mustInstantiate(t *testing.T, artifact *lang.Artifact, registry *lang.Regis
 		t.Fatal(err)
 	}
 	return runtime
+}
+
+// A compile error carries where it happened; the text stays with the host, so
+// turning the offset into a line and a column is a call the host makes.
+func TestHostLocatesACompileError(t *testing.T) {
+	source := "amount\n  + \"x\""
+	_, err := lang.CompileExpr(source, lang.CoreRegistry(), lang.CompileOptions{
+		Args: []lang.ArgSpec{{Name: "amount", Type: lang.IntType}},
+	})
+	if err == nil {
+		t.Fatal("adding a string to an int must fail")
+	}
+	var positioned *lang.PositionError
+	if !errors.As(err, &positioned) {
+		t.Fatalf("the error should carry a position: %v", err)
+	}
+	line, column, ok := lang.LineColumn(err, source)
+	if !ok || line != 2 || column != 3 {
+		t.Fatalf("position = %d:%d (ok=%v)", line, column, ok)
+	}
+	if !errors.Is(err, lang.ErrCompile) {
+		t.Fatal("a positioned error is still a compile error")
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"funroute/extensions/std"
 	"io"
 	"os"
 	"strings"
@@ -36,6 +37,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
+}
+
+// locate prefixes a compile error with line:column, the way every compiler
+// reports one. The position comes off the error; the text is right here.
+func locate(err error, source string) error {
+	line, column, ok := lang.LineColumn(err, source)
+	if !ok {
+		return err
+	}
+	return fmt.Errorf("%d:%d: %w", line, column, err)
 }
 
 func usage() {
@@ -95,6 +106,9 @@ func exportExpr(args []string) error {
 	}
 	encoded, err := lang.ParseToJSON(*common.expr)
 	if err != nil {
+		return locate(err, *common.expr)
+	}
+	if err != nil {
 		return err
 	}
 	var pretty bytes.Buffer
@@ -152,7 +166,7 @@ func run(args []string) error {
 	encoded, err := json.MarshalIndent(map[string]any{
 		"digest": artifact.Digest,
 		"type":   result.Type().String(),
-		"value":  result.Any(),
+		"value":  result,
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -190,14 +204,23 @@ func compileSource(common commonFlags) (*lang.Artifact, error) {
 	if err != nil {
 		return nil, err
 	}
-	return lang.CompileExpr(*common.expr, registry, lang.CompileOptions{Args: contract})
+	artifact, err := lang.CompileExpr(*common.expr, registry, lang.CompileOptions{Args: contract})
+	if err != nil {
+		return nil, locate(err, *common.expr)
+	}
+	return artifact, nil
 }
 
-// newRegistry is the kernel with every lazy form enabled. Domain functions are
-// the host's business, so the CLI registers none.
+// newRegistry is the kernel with every lazy form enabled and the standard
+// pack. Domain functions are the host's business, so the CLI registers none of
+// those — but a tool for trying expressions out is useless without sum, len
+// and the rest.
 func newRegistry() (*lang.Registry, error) {
 	registry := lang.CoreRegistry()
 	if err := registry.EnableForm(lang.SwitchForm, lang.ForForm, lang.ReduceForm); err != nil {
+		return nil, err
+	}
+	if err := std.Register(registry); err != nil {
 		return nil, err
 	}
 	return registry, nil
@@ -230,9 +253,9 @@ func splitTopLevel(source string) []string {
 	depth, start := 0, 0
 	for i, r := range source {
 		switch r {
-		case '<':
+		case '<', '{':
 			depth++
-		case '>':
+		case '>', '}':
 			depth--
 		case ',':
 			if depth == 0 {
