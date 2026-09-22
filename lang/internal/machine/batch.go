@@ -83,7 +83,7 @@ func (b *Batch) Sites() int { return len(b.sites) }
 // under the earliest deadline in the batch, and each program under its own.
 func (b *Batch) Run(ctx context.Context, args []Value) (Value, error) {
 	if len(args) != len(b.runtime.artifact.Args) {
-		return Value{}, fmt.Errorf("expected %d arguments, got %d", len(b.runtime.artifact.Args), len(args))
+		return Value{}, fmt.Errorf("%w: expected %d arguments, got %d", ErrContract, len(b.runtime.artifact.Args), len(args))
 	}
 	if ctx == nil {
 		ctx = context.Background()

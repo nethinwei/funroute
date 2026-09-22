@@ -27,6 +27,12 @@ type loopFrame struct {
 	output   arrayBuilder
 }
 
+type fallbackFrame struct {
+	target int
+	stack  int
+	loops  int
+}
+
 // item is the value the loop binds at index: an array item, or the entry
 // under the index-th sorted key.
 func (l *loopFrame) item(index int) Value {
@@ -48,6 +54,7 @@ type frame struct {
 	locals     []Value
 	localSet   []bool
 	loops      []loopFrame
+	fallbacks  []fallbackFrame
 	fuel       *uint64
 	fuelLeft   uint64
 	fuelCell   uint64 // budget storage for a top-level run, kept off the heap
@@ -71,6 +78,7 @@ func (f *frame) reset(runtime *Runtime, args []Value, fuel *uint64, maxStack int
 	f.maxStack = maxStack
 	f.stack = f.stackArray[:0]
 	f.loops = f.loops[:0]
+	f.fallbacks = f.fallbacks[:0]
 	// The compiler knows how deep the stack gets. Reserving it here is what
 	// lets push skip its bounds check; a run whose limit is below the figure
 	// keeps the per-push check instead.
@@ -124,6 +132,7 @@ func (f *frame) release() {
 	clearValues(f.argsArray[:min(f.argsUsed, len(f.argsArray))])
 	clearValues(f.locals)
 	f.loops = f.loops[:0]
+	f.fallbacks = f.fallbacks[:0]
 }
 
 // stackUsed is how much of the inline stack array may hold a value: the
@@ -167,6 +176,10 @@ func (f *frame) run() (Value, error) {
 		f.fuelLeft--
 		next, err := f.step(pc, code[pc])
 		if err != nil {
+			if target, caught := f.catchFallback(err); caught {
+				pc = target
+				continue
+			}
 			*f.fuel = f.fuelLeft
 			return Value{}, err
 		}
@@ -205,9 +218,36 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 		return f.jumpIfFalse(pc, instruction)
 	case OpJump:
 		return instruction.A, nil
+	case OpBeginFallback:
+		f.fallbacks = append(f.fallbacks, fallbackFrame{
+			target: instruction.A, stack: len(f.stack), loops: len(f.loops),
+		})
+		return pc + 1, nil
+	case OpEndFallback:
+		if len(f.fallbacks) == 0 {
+			return 0, fmt.Errorf("fallback stack underflow")
+		}
+		f.fallbacks = f.fallbacks[:len(f.fallbacks)-1]
+		return pc + 1, nil
 	default:
 		return 0, fmt.Errorf("unknown opcode %q", instruction.Op)
 	}
+}
+
+func (f *frame) catchFallback(err error) (int, bool) {
+	if len(f.fallbacks) == 0 || (!errors.Is(err, ErrExtension) && !errors.Is(err, ErrDeadline)) {
+		return 0, false
+	}
+	last := len(f.fallbacks) - 1
+	handler := f.fallbacks[last]
+	f.fallbacks = f.fallbacks[:last]
+	clearValues(f.stack[handler.stack:])
+	f.stack = f.stack[:handler.stack]
+	for i := handler.loops; i < len(f.loops); i++ {
+		f.loops[i] = loopFrame{}
+	}
+	f.loops = f.loops[:handler.loops]
+	return handler.target, true
 }
 
 func (f *frame) result() (Value, error) {
@@ -352,7 +392,7 @@ func (f *frame) equal() error {
 
 func (f *frame) call(pc int, instruction Instruction) error {
 	function := f.runtime.functions[instruction.A]
-	if f.deadline && f.ctx.Err() != nil {
+	if !function.IsBuiltin() && f.deadline && f.ctx.Err() != nil {
 		return fmt.Errorf("%s: %w: %v", function.Name, ErrDeadline, f.ctx.Err())
 	}
 	if f.fuelLeft < function.Cost {
@@ -371,18 +411,23 @@ func (f *frame) call(pc int, instruction Instruction) error {
 	if ready, ok := f.prefetchedAt(pc); ok {
 		value, err = ready.Value, ready.Err
 	} else if function.Timeout == 0 && !function.Detached {
-		value, err = function.Eval(f.ctx, callArgs)
+		if len(f.fallbacks) > 0 {
+			value, err = callSafely(f.ctx, function, callArgs)
+		} else {
+			value, err = function.Eval(f.ctx, callArgs)
+		}
 	} else {
 		value, err = f.invokeBounded(function, callArgs)
 	}
 	if err != nil {
-		return fmt.Errorf("%s: %w", function.Name, f.classify(err))
+		return fmt.Errorf("%s: %w", function.Name, f.functionError(function, err))
 	}
 	if !value.hasType(*instruction.Type) {
-		return fmt.Errorf("%s returned %s, contract requires %s", function.Name, value.Type(), *instruction.Type)
+		err = fmt.Errorf("returned %s, contract requires %s", value.Type(), *instruction.Type)
+		return fmt.Errorf("%s: %w", function.Name, f.functionError(function, err))
 	}
 	if err := value.validateInvariant(); err != nil {
-		return fmt.Errorf("%s: %w: invalid result: %v", function.Name, ErrExtension, err)
+		return fmt.Errorf("%s: %w", function.Name, f.functionError(function, fmt.Errorf("invalid result: %v", err)))
 	}
 	return f.push(value)
 }
@@ -414,6 +459,8 @@ func (f *frame) invokeBounded(function *RegisteredFunction, args []Value) (Value
 	var err error
 	if function.Detached {
 		value, err = callDetached(ctx, function, args)
+	} else if len(f.fallbacks) > 0 {
+		value, err = callSafely(ctx, function, args)
 	} else {
 		value, err = function.Eval(ctx, args)
 	}
@@ -421,6 +468,13 @@ func (f *frame) invokeBounded(function *RegisteredFunction, args []Value) (Value
 		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, err)
 	}
 	return value, err
+}
+
+func (f *frame) functionError(function *RegisteredFunction, err error) error {
+	if function.IsBuiltin() {
+		return err
+	}
+	return f.classify(err)
 }
 
 // classify wraps an extension's failure as ErrDeadline when the request's

@@ -8,9 +8,9 @@ import (
 	"strings"
 )
 
-// CoreRegistry is the minimal computational kernel: ten operator-facing
-// function names and no special forms. Lazy forms are turned on with
-// EnableForm, list primitives with RegisterArrayPrimitives, and everything
+// CoreRegistry is the minimal computational kernel: operator-facing functions
+// plus the lazy if and fallback calls. Optional structural forms are turned on
+// with EnableForm, list primitives with RegisterArrayPrimitives, and everything
 // domain specific is registered by the host.
 func CoreRegistry() *Registry {
 	r := NewRegistry()
@@ -121,6 +121,7 @@ func registerControl(registry *Registry) {
 			Order:    10,
 		},
 	})
+	registerFallback(registry, t)
 	mustRegister(registry, FunctionSpec{
 		Name: "eq", Params: []Type{t, t}, Result: BoolType, Cost: 2,
 		Eval: func(_ context.Context, args []Value) (Value, error) { return compareEqual(args[0], args[1]) },
@@ -136,6 +137,27 @@ func registerControl(registry *Registry) {
 			},
 			Result: ResultDisplay{Label: "是否相等"},
 			Order:  20,
+		},
+	})
+}
+
+func registerFallback(registry *Registry, t Type) {
+	mustRegister(registry, FunctionSpec{
+		Name: "fallback", Params: []Type{t, t}, Result: t,
+		Cost: 1, special: specialFallback,
+		Display: FunctionDisplay{
+			Label:       "失败降级",
+			Description: "按顺序尝试候选表达式；遇到扩展失败或超时才继续下一项，不会吞掉 fuel、类型或内核运算错误。",
+			Category:    "控制",
+			Color:       "#7C3AED",
+			Icon:        "↘",
+			Parameters: []ParameterDisplay{
+				{Name: "candidate", Label: "首选候选", Description: "优先求值"},
+				{Name: "next", Label: "后续候选", Description: "前一项可降级失败时才求值；可继续添加"},
+			},
+			Result:   ResultDisplay{Label: "结果", Description: "类型 T"},
+			Examples: []FunctionExample{{Title: "渠道级联", Expression: "fallback(primary_quote,secondary_quote,default_quote)"}},
+			Order:    15,
 		},
 	})
 }
@@ -252,6 +274,9 @@ func registerFloatConversions(registry *Registry) {
 
 func registerStringConversions(registry *Registry) {
 	registerConversion(registry, "string", StringType, StringType, "转为字符串", "保持字符串不变。", func(_ context.Context, args []Value) (Value, error) { return args[0], nil })
+	registerConversion(registry, "string", AnyEnumType, StringType, "转为字符串", "取枚举成员的名字。枚举是 nominal 类型，当字符串用必须显式转换。", func(_ context.Context, args []Value) (Value, error) {
+		return String(args[0].s), nil
+	})
 	registerConversion(registry, "string", IntType, StringType, "转为字符串", "把整数格式化为十进制字符串。", func(_ context.Context, args []Value) (Value, error) {
 		return String(strconv.FormatInt(args[0].i, 10)), nil
 	})
@@ -294,6 +319,7 @@ func registerConversion(registry *Registry, name string, from, to Type, label, d
 }
 
 func mustRegister(registry *Registry, spec FunctionSpec) {
+	spec.builtin = true
 	if err := registry.Register(spec); err != nil {
 		panic(err)
 	}
@@ -323,6 +349,7 @@ func registerBinary(registry *Registry, name string, typ Type, label, descriptio
 // adding an unbounded recursion form to them would make expressible.
 func RegisterArrayPrimitives(registry *Registry) error {
 	for _, spec := range []FunctionSpec{arrayIsEmptySpec(), arrayPrependSpec(), arrayHeadSpec(), arrayTailSpec()} {
+		spec.builtin = true
 		if err := registry.Register(spec); err != nil {
 			return err
 		}

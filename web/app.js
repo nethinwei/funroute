@@ -1,10 +1,11 @@
 import "./funroute-designer.js";
 import {
   FunRouteClient, FunRouteWorkspace, clone, contractComments,
-  parseInputValue, typeName,
+  parseInputValue, typeName, typeSummary,
 } from "./funroute-core.js";
+import { enumControl, enumOf } from "./funroute-fields.js";
 import { ContractPanel } from "./funroute-contract.js";
-import { EXAMPLES } from "./funroute-examples.js";
+import { loadExamples } from "./funroute-examples.js";
 
 const elements = {
   designer: document.querySelector("#designer"),
@@ -17,7 +18,6 @@ const elements = {
   examples: document.querySelector("#examples"),
   version: document.querySelector("#version-badge"),
   metrics: document.querySelector("#compile-metrics"),
-  contractScope: document.querySelector("#contract-scope"),
   expectedType: document.querySelector("#expected-result-type"),
   resultCheck: document.querySelector("#result-check"),
   run: document.querySelector("#run"),
@@ -29,7 +29,6 @@ const contract = new ContractPanel(document.querySelector("#contract"), {
     workspace.setContract(contract.value);
     elements.designer.runtimeContract = null;
     elements.designer.validation = { phase: "dirty", message: "运行契约已修改，画布暂不可确认；正在重新检查…" };
-    renderContractScope();
     renderArgsMessage("正在重新检查契约…");
     resetResult();
     elements.metrics.textContent = "契约已修改，等待重新编译";
@@ -44,6 +43,8 @@ const contract = new ContractPanel(document.querySelector("#contract"), {
 
 let canvasCheckTimer = null;
 let canvasCheckRevision = 0;
+let examples = [];
+let exampleArgs = {};
 
 workspace.subscribe(({ status }) => renderStatus(status));
 
@@ -63,38 +64,25 @@ function renderHighlight() {
     elements.highlight.append(span);
   }
   elements.highlight.append(document.createTextNode("\n"));
-  elements.expression.style.height = "auto";
-  elements.expression.style.height = `${Math.min(elements.expression.scrollHeight, 320)}px`;
+  // The editor is a stretched flex item, so it fills the column when the test
+  // panel beside it is taller; its own content sets the minimum. The stretch is
+  // turned off while measuring, or the stretched height would be read back as
+  // the content height and the box could never shrink again. scrollHeight is the
+  // content box, so the border is added back or the last line is clipped.
+  const input = elements.expression;
+  input.style.alignSelf = "flex-start";
+  input.style.minHeight = "";
+  input.style.height = "auto";
+  const content = input.scrollHeight + input.offsetHeight - input.clientHeight;
+  input.style.alignSelf = "";
+  input.style.height = "";
+  input.style.minHeight = `${content}px`;
   elements.highlight.parentElement.scrollTop = elements.expression.scrollTop;
 }
 
 function setExpression(text) {
   elements.expression.value = text;
   renderHighlight();
-}
-
-function renderContractScope() {
-  elements.contractScope.replaceChildren();
-  const args = contract.value.args || [];
-  elements.contractScope.append(scopeLabel("可用入参"));
-  if (!args.length) elements.contractScope.append(scopeChip("无外部入参", "muted"));
-  for (const arg of args) elements.contractScope.append(scopeChip(`${arg.name || "未命名"}: ${arg.type || "未定义"}`));
-  elements.contractScope.append(scopeLabel("必须返回"));
-  elements.contractScope.append(scopeChip(contract.value.result?.type || "未定义", "result"));
-}
-
-function scopeLabel(text) {
-  const node = document.createElement("span");
-  node.className = "contract-scope__label";
-  node.textContent = text;
-  return node;
-}
-
-function scopeChip(text, kind = "") {
-  const node = document.createElement("code");
-  node.className = `contract-scope__chip ${kind ? `is-${kind}` : ""}`.trim();
-  node.textContent = text;
-  return node;
 }
 
 async function checkContract() {
@@ -106,7 +94,7 @@ async function checkContract() {
     elements.designer.runtimeContract = checked;
     elements.designer.validation = { phase: "dirty", message: "契约已检查，等待核对画布参数和返回类型。" };
     renderArgs(checked.args || []);
-    elements.expectedType.textContent = typeName(checked.result);
+    elements.expectedType.textContent = typeSummary(checked.result);
     resetResult();
     contract.setStatus("valid", `检查通过 · ${checked.arguments} 个入参 → ${contract.value.result.type}`);
     return checked;
@@ -161,10 +149,11 @@ async function copyExpression() {
 
 async function loadExample(example) {
   try {
+    exampleArgs = clone(example.args || {});
+    elements.args.replaceChildren();
     setExpression(example.source);
     contract.value = clone(example.contract);
     workspace.setContract(contract.value);
-    renderContractScope();
     await checkContract();
     const document = await workspace.parseSource(example.source);
     if (!document) return;
@@ -176,19 +165,42 @@ async function loadExample(example) {
 
 function renderExamples() {
   elements.examples.replaceChildren();
-  for (const [index, example] of EXAMPLES.entries()) {
-    const button = document.createElement("button");
-    button.className = index === 0 ? "example is-active" : "example";
-    button.type = "button";
-    button.textContent = example.label;
-    button.title = example.description;
-    button.addEventListener("click", () => {
-      for (const item of elements.examples.children) item.classList.remove("is-active");
-      button.classList.add("is-active");
-      loadExample(example);
-    });
-    elements.examples.append(button);
+  const groups = new Map();
+  for (const example of examples) {
+    const category = example.category || "其他";
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(example);
   }
+  let index = 0;
+  for (const [category, entries] of groups) {
+    const group = document.createElement("div");
+    group.className = "example-group";
+    const label = document.createElement("span");
+    label.className = "example-group__label";
+    label.textContent = category;
+    const items = document.createElement("div");
+    items.className = "example-group__items";
+    for (const example of entries) {
+      items.append(exampleButton(example, index));
+      index += 1;
+    }
+    group.append(label, items);
+    elements.examples.append(group);
+  }
+}
+
+function exampleButton(example, index) {
+  const button = document.createElement("button");
+  button.className = index === 0 ? "example is-active" : "example";
+  button.type = "button";
+  button.textContent = example.label;
+  button.title = example.description;
+  button.addEventListener("click", () => {
+    for (const item of elements.examples.querySelectorAll(".example")) item.classList.remove("is-active");
+    button.classList.add("is-active");
+    loadExample(example);
+  });
+  return button;
 }
 
 function renderDocument(document) {
@@ -203,11 +215,18 @@ function defaultValue(type, name) {
     acc: "0", risk: "0.3",
   };
   if (named[name] !== undefined) return named[name];
+  if (type.kind === "enum") return type.values?.[0] || "";
   return { bool: "true", int: name === "n" ? "6" : "0", float: "0.0", string: "value", array: "[]", dict: "{}" }[type.kind] || "";
 }
 
+function exampleValue(type, name) {
+  if (!Object.hasOwn(exampleArgs, name)) return defaultValue(type, name);
+  const value = exampleArgs[name];
+  return type.kind === "array" || type.kind === "dict" ? JSON.stringify(value) : String(value);
+}
+
 function renderArgs(parameters) {
-  const previous = new Map([...elements.args.querySelectorAll("input[data-arg]")].map((input) => [input.dataset.arg, input.value]));
+  const previous = new Map([...elements.args.querySelectorAll("[data-arg]")].map((input) => [input.dataset.arg, input.value]));
   elements.args.replaceChildren();
   for (const parameter of parameters) {
     const row = document.createElement("label");
@@ -216,18 +235,35 @@ function renderArgs(parameters) {
     heading.className = "arg__heading";
     heading.append(parameter.name);
     const code = document.createElement("code");
-    code.textContent = typeName(parameter.type);
+    code.textContent = typeSummary(parameter.type);
+    code.title = typeName(parameter.type);
     heading.append(code);
-    const input = document.createElement("input");
+    const value = previous.get(parameter.name) ?? exampleValue(parameter.type, parameter.name);
+    const input = argControl(parameter, value);
     input.dataset.arg = parameter.name;
     input.dataset.type = JSON.stringify(parameter.type);
-    input.value = previous.get(parameter.name) ?? defaultValue(parameter.type, parameter.name);
-    input.placeholder = typeName(parameter.type);
     row.append(heading, input);
     if (parameter.doc) row.append(hint(parameter.doc));
     elements.args.append(row);
   }
   if (!parameters.length) elements.args.append(hint("这个表达式没有外部参数。"));
+}
+
+// An enum argument is picked, not typed: the member set is known, so the panel
+// offers it rather than letting an operator guess a spelling.
+function argControl(parameter, value) {
+  const enumType = parameter.type?.kind === "enum" ? parameter.type : null;
+  if (enumType) {
+    return enumControl({
+      values: enumType.values, value, listHost: document,
+      listId: `fr-enum-${enumType.name}`, onChange: () => {},
+    });
+  }
+  const input = document.createElement("input");
+  input.value = value;
+  const nested = enumOf(parameter.type);
+  input.placeholder = nested ? `${typeSummary(parameter.type)} 的 JSON` : typeName(parameter.type);
+  return input;
 }
 
 function renderArgsMessage(message) {
@@ -250,7 +286,7 @@ function hint(text) {
 
 function collectArgs() {
   const args = {};
-  for (const input of elements.args.querySelectorAll("input[data-arg]")) {
+  for (const input of elements.args.querySelectorAll("[data-arg]")) {
     try {
       args[input.dataset.arg] = parseInputValue(input.value, JSON.parse(input.dataset.type));
       input.setCustomValidity("");
@@ -286,13 +322,13 @@ async function compile({ validationRevision = 0 } = {}) {
 
 function renderCompiled(compiled) {
   renderArgs(compiled.args);
-  elements.expectedType.textContent = typeName(compiled.result);
+  elements.expectedType.textContent = typeSummary(compiled.result);
   resetResult();
   elements.metrics.textContent = `${compiled.instructions} instructions · ${(compiled.calls || []).length} calls · ${compiled.digest.slice(0, 12)}`;
   contract.setStatus("valid", "契约有效，表达式输入与返回类型完全匹配");
   elements.designer.validation = {
     phase: "valid",
-    message: `参数均来自运行契约或本地作用域，返回 ${typeName(compiled.result)} 与契约一致。`,
+    message: `参数均来自运行契约或本地作用域，返回 ${typeSummary(compiled.result)} 与契约一致。`,
   };
 }
 
@@ -326,9 +362,9 @@ async function run() {
     appliedToCanvas = true;
     const response = await workspace.run(collectArgs());
     if (!response) return;
-    elements.result.textContent = `${JSON.stringify(response.value)}  :  ${typeName(response.type)}`;
+    elements.result.textContent = `${JSON.stringify(response.value)}  :  ${typeSummary(response.type)}`;
     elements.result.className = "result__value";
-    elements.resultCheck.textContent = `✓ 实际类型 ${typeName(response.type)} 与契约一致`;
+    elements.resultCheck.textContent = `✓ 实际类型 ${typeSummary(response.type)} 与契约一致`;
     elements.resultCheck.className = "result__check is-valid";
   } catch (error) {
     elements.designer.validation = {
@@ -380,9 +416,10 @@ elements.expression.addEventListener("keydown", (event) => {
 });
 
 try {
-  const catalog = await workspace.initialize();
+  const [catalog, loadedExamples] = await Promise.all([workspace.initialize(), loadExamples()]);
+  examples = loadedExamples;
   elements.designer.catalog = catalog;
   elements.version.textContent = `Catalog v${catalog.version} · ExprJSON v${catalog.source.expr_json_version} · Artifact v${catalog.artifact_version}`;
   renderExamples();
-  await loadExample(EXAMPLES[0]);
+  await loadExample(examples[0]);
 } catch (error) { fail(error); }

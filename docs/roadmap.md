@@ -12,17 +12,19 @@
 - 语法节点单一权威：struct tag 驱动导入、导出、作用域、schema 与前端卡片。
 - 契约归宿主；历史兼容层清除；变量名禁点（`.` 留给字段访问）。
 
-## 阶段 0：地基收口
+## 阶段 0：地基收口（已完成，2026-09-22）
 
-| 项 | 决策 | 取舍 |
-|---|---|---|
-| 反射注册 `Logic` / `Model`，删除 `Fn1/2/3`、`Model1/2` | 两个入口，名字同长；`FunctionSpec` 仍是手写逃生口 | 扩展调用每次约 +200 ns、几次分配；内核函数不走反射，纯表达式基准不变。换来任意元数、任意嵌套、Go 常见标量类型 |
-| `ctx` 贯通：`Run(ctx, …)`、`Batch.Run(ctx, …)`，扩展函数可选首参数 `context.Context`，`Doc.Timeout` 为函数级上限 | 实际 deadline = min(请求剩余预算, 函数上限)；VM 只在扩展调用前检查 | API 破坏性改动，趁未发布做 |
-| 超时执行方式 | **默认信任 ctx；注册时可标 `Detached`**，VM 放独立 goroutine 等，到点放弃 | `Detached` 每次约 1 µs，被放弃的调用继续占资源直到自行结束；只给无取消能力的引擎绑定用 |
-| `fallback(expr, default)` 惰性形式 | 只接扩展错误与超时，**不接** fuel 耗尽与类型错误 | 规则不能吞掉自身 bug |
-| 预算耗尽且无 `fallback` | 直接返回 `ErrDeadline`，宿主兜底 | 不加"规则级默认值"，避免同一件事两层机制 |
-| 类型化错误 | `ErrCompile`、`ErrContract`、`ErrFuel`、`ErrDeadline`、`ErrExtension`，`errors.Is` 可分 | — |
-| 枚举类型 + 返回类型穷尽检查 | 契约声明 `enum<channel>{…}`，`switch` 对枚举做穷尽检查 | 一个 kind、一种契约声明 |
+本阶段已全部落地并由 Go/JS 测试覆盖。`fallback` 使用专用字节码错误边界并支持同类型变参候选，按顺序惰性求值，批处理不会越过边界预取；内核运算错误与宿主扩展错误已分开。Artifact 因新增指令升级到 version 2；`switch.default` 变为可选后 ExprJSON 升级到 version 2；`fallback` 目录描述升级为变参后目录为 version 4。枚举保留为字符串运行表示，闭集由契约携带，因此不增加第二套值表示。
+
+| 状态 | 项 | 决策 | 取舍 |
+|---|---|---|---|
+| ✅ | 反射注册 `Logic` / `Model`，删除 `Fn1/2/3`、`Model1/2` | 两个入口，名字同长；`FunctionSpec` 仍是手写逃生口 | 扩展调用每次约 +200 ns、几次分配；内核函数不走反射，纯表达式基准不变。换来任意元数、任意嵌套、Go 常见标量类型 |
+| ✅ | `ctx` 贯通：`Run(ctx, …)`、`Batch.Run(ctx, …)`，扩展函数可选首参数 `context.Context`，`Doc.Timeout` 为函数级上限 | 实际 deadline = min(请求剩余预算, 函数上限)；VM 只在扩展调用前检查 | API 破坏性改动，趁未发布做 |
+| ✅ | 超时执行方式 | **默认信任 ctx；注册时可标 `Detached`**，VM 放独立 goroutine 等，到点放弃 | `Detached` 每次约 1 µs，被放弃的调用继续占资源直到自行结束；只给无取消能力的引擎绑定用 |
+| ✅ | `fallback(primary, secondary, ..., final)` 变参惰性形式 | 同类型候选按顺序尝试；只接扩展错误与超时，**不接** fuel 耗尽、类型错误与内核函数错误 | 规则不能吞掉自身 bug |
+| ✅ | 时间预算耗尽且无 `fallback` | 直接返回 `ErrDeadline`，宿主兜底 | 不加"规则级默认值"，避免同一件事两层机制 |
+| ✅ | 类型化错误 | `ErrCompile`、`ErrContract`、`ErrFuel`、`ErrDeadline`、`ErrExtension`，`errors.Is` 可分；MVP 映射稳定错误码 | — |
+| ✅ | 枚举类型 + 返回类型穷尽检查 | 契约声明 `enum<channel>{adyen,stripe}`，表达式里成员写作 `@adyen`（歧义时 `@channel.adyen`）；枚举是 nominal 类型，不与 `string` 互换；枚举入/出参做边界校验；无 `else` 的 `switch` 必须完整覆盖，契约变化会触发重新编译失败 | 一个 kind；运行值仍是 string |
 
 ## 阶段 1：结构与语言补齐
 

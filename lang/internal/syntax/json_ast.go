@@ -20,7 +20,7 @@ import (
 
 // ExprJSONVersion changes whenever the document shape does; a document with
 // any other version is rejected rather than guessed at.
-const ExprJSONVersion = 1
+const ExprJSONVersion = 2
 
 type exprJSONDocument struct {
 	Version int             `json:"version"`

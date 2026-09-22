@@ -18,7 +18,9 @@ test-js:
 check-js:
 	$(NODE) --check web/funroute-core.js
 	$(NODE) --check web/funroute-designer.js
+	$(NODE) --check web/funroute-semantic.js
 	$(NODE) --check web/funroute-contract.js
+	$(NODE) --check web/funroute-examples.js
 	$(NODE) --check web/app.js
 
 # lint enforces the style budget: <=50 lines per func, <=3 nesting levels,

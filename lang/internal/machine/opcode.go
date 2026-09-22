@@ -76,6 +76,11 @@ var opcodes = [...]opcodeSpec{
 	OpLoopNext:    {name: "loop_next", effect: pushes(1), validate: validateLoopInstruction},
 	OpJumpIfFalse: {name: "jump_if_false", effect: pushes(-1), validate: validateJumpTarget},
 	OpJump:        {name: "jump", validate: validateJumpTarget},
+	OpBeginFallback: {
+		name:     "begin_fallback",
+		validate: validateJumpTarget,
+	},
+	OpEndFallback: {name: "end_fallback"},
 }
 
 func pushes(n int) func(Instruction) int {

@@ -14,6 +14,7 @@ const TYPE_SUGGESTIONS = [
   "bool", "int", "float", "string",
   "array<int>", "array<float>", "array<string>", "array<bool>",
   "dict<int>", "dict<float>", "dict<string>", "dict<bool>",
+  'enum<channel>{adyen, stripe}',
 ];
 
 const TYPE_LIST_ID = "fr-type-suggestions";

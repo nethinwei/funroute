@@ -41,7 +41,7 @@ AST 类型**故意不公开**：宿主通过 ExprJSON 交换程序。`lang/lang_
 
 `syntax/ast.go` 的每个节点 struct 就是它的全部描述：`json:"..."` 是 ExprJSON 字段（`omitempty` = 可选），`role:"var|fn|local|text"` 决定名字校验规则，`binds:"a,b"` 说明这个局部名在哪些字段里可见（`@rest` = 同一列表里后面的项），`default`/`min` 给前端。`syntax/walk.go` 用反射把 tag 读成 plan，导入、导出、`FreeVariables`、`Children`、`FormOf`、`NodeSchemas` 全部由 plan 驱动，**不按节点类型分派**。节点自己的规则（重名、重复键）写在 `check()` 里，parser 的 `p.node()` 与导入器的 `finish()` 都调它 —— 源码和 JSON 一套规则。反射只在编译期跑，不在执行路径上。
 
-前端拿到的目录（`lang.Catalog(registry)`，不是 `Registry.Catalog()`）带 `nodes`：`web/funroute-source.js` 的 `cleanNode`/`blankNode` 与 `web/funroute-designer.js` 的卡片布局都从它生成，JS 里没有节点字段清单，只有文案表 `FIELD_TEXT`。端到端验证：10 个例子经 `cleanNode` 得到的 JSON 与服务端 `/api/parse` 的规范 JSON 逐字节相同。
+前端拿到的目录（`lang.Catalog(registry)`，不是 `Registry.Catalog()`）带 `nodes`：`web/funroute-core.js` 的 `cleanNode`/`blankNode` 与 `web/funroute-designer.js` 的卡片布局都从它生成，JS 里没有节点字段清单，只有 `funroute-core.js` 的文案表 `FIELD_TEXT`。端到端验证：10 个例子经 `cleanNode` 得到的 JSON 与服务端 `/api/parse` 的规范 JSON 逐字节相同。
 
 ### 契约在宿主，不在语言里
 
@@ -73,6 +73,7 @@ syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile
 - **常量折叠**（`compile/fold.go`）：不读参数也不读循环变量的子表达式在编译期用真 VM 跑掉（`EvaluateClosed`），折叠失败就原样发指令 —— 所以语义绝不变，这正是它能安全穿过惰性 `if` 的原因。折叠是传递的（`let(a = 250, a * 4)` 整个折掉），折成常量的绑定**不占局部槽**。常量池只存标量，容器自然回退。
 - `Artifact.MaxStack` 由编译期栈效应累加得出，帧据此一次预留，`push` 在预留内跳过上限检查；算错只影响优化不影响正确性（`push` 的回退路径仍检查）。`release` 只清用过的部分，靠 `reserved` 与溢出水位。
 - 类型推导是多候选分叉 + `implicitTypeScore` 打分选最优，同分报歧义；混合数值签名额外吃 `mixedPenalty`，所以 `risk < 0.5` 会把 `risk` 推成 float。
+- 枚举是 nominal 且只从契约进入程序：`EnumExpr`（`@member` / `@enum.member`）的所属枚举由 `compile/enum.go` 的 `collectEnums`/`resolveEnumReference` 在**契约的枚举命名空间**里解析，不靠上下文类型；`enum` 与 `string` 不 unify，编译成字符串常量，运行时值仍是成员名。
 - `SwitchExpr.Value` 可为 nil（条件形态），`SwitchCaseExpr.Match` 是列表（多值分支）。改这里只动 `syntax/ast.go`（tag 决定 JSON、作用域、前端布局）加 `compile/infer_expr.go`、`compile/compiler.go` 的语义，以及 `web/funroute-source.js` 的打印。
 - ExprJSON 文档只有 `{version, expr}`。`web/funroute-designer.js` 的 `EXPR_JSON_VERSION` 必须与 `syntax/json_ast.go` 的 `ExprJSONVersion` 同步。
 - 中缀与关键字糖全部在 parser 层脱糖，**AST 不新增任何节点类型**：`a+b` 就是 `add(a,b)`，`a&&b` 就是 `if(a,b,false)`，`[e for x in xs if c]` 就是 `ForExpr`。新增糖必须同时更新 `web/funroute-source.js` 的 `INFIX`/`sugarFromIf`/`forHead` 反向打印。
@@ -88,7 +89,7 @@ syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile
 - 新增惰性形式 → `machine/registry.go` 的 `knownForms` + 节点的 `Form()` 方法（`compile/forms.go` 靠它和 `Children` 通用校验）+ `machine/catalog.go` 的 `formDescriptors`。
 - 新增函数 → 只注册带 `Display` 的 `FunctionSpec`，目录与拖拽面板自动生效；要 ABI 版本就写进名字（`route.score_v1`）。按 Go 签名注册用 `Logic`（反射读签名，任意元数与嵌套，首参数可选 `context.Context`），模型函数用 `Model` 同时给单条与批量实现；引擎类型先 `DefineHandle[T]`。
 - `Kind` 加值 → `kindNames` 同步；若它有运行时表示，`Value.hasType`/`Type()`/`Any()`、`compile/infer.go` 的 `typeTerm`（含 `name`）、`implicitTypeScore`、`ParseType`、`validateTypePattern` 与前端 `typeName` 都要认识它（`HandleKind` 是现成范例）。
-- 新增 ExprJSON 节点 → 在 `syntax/ast.go` 定义带 tag 的 struct（含 `kind()`，需要时 `check()`/`Form()`）并加进 `nodeTypes`；导入、导出、作用域、schema、前端 `cleanNode`/空白模板/卡片全部自动生效。仍要手写的是语义：`compile/infer_expr.go`、`compile/compiler.go` 的 case，`web/funroute-source.js` 的 `expressionSource`/`splitNode` 打印，以及可选的 `FIELD_TEXT` 文案。`walk_test.go` 的 schema 测试会要求列出新节点。
+- 新增 ExprJSON 节点 → 在 `syntax/ast.go` 定义带 tag 的 struct（含 `kind()`，需要时 `check()`/`Form()`）并加进 `nodeTypes`；导入、导出、作用域、schema、前端 `cleanNode`/空白模板/卡片全部自动生效。仍要手写的是语义：`compile/infer_expr.go`、`compile/compiler.go` 的 case，`web/funroute-core.js` 的 `expressionSource`/`_splitNode` 打印，以及可选的 `FIELD_TEXT` 文案。`walk_test.go` 的 schema 测试会要求列出新节点。
 - 新增公开 API → `lang/lang.go` 加别名或转发，并在 `lang/lang_test.go` 以宿主视角用一次；能不加就不加。
 - 新增前端例子 → 只改 `web/funroute-examples.js`（例子是**源码 + 契约**两部分，点按钮走 `/api/parse`，按钮由 `renderExamples` 生成）。别手写 ExprJSON 模板。
 - 新增前端文件 → 加进 `web/embed.go` 的 `//go:embed` 列表。前端分层：`funroute-source.js`（纯函数：schema 驱动的 `cleanNode`/`blankNode`、打印/格式化/词法，无 DOM）、`funroute-contract.js`（契约面板，宿主数据）、`funroute-designer.js`（表达式画布，Web Component，卡片由 `catalog.nodes` 布局）、`funroute-examples.js`（例子）、`app.js`（MVP 外壳，把两部分组合起来提交）。**契约面板与画布之间没有同步点**：前者是宿主数据，后者是表达式，各自提交。

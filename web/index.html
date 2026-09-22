@@ -44,8 +44,27 @@
         <div><span class="step">01</span><div><h2 id="contract-title">运行契约</h2><p>先定义可用入参和必须返回的类型，再开始编写策略</p></div></div>
         <span class="contract-required">REQUIRED</span>
       </div>
-      <div class="contract-workbench">
-        <div id="contract" class="contract"></div>
+      <div id="contract" class="contract"></div>
+    </section>
+
+    <section class="source-panel" aria-labelledby="source-title">
+      <div class="section-heading">
+        <div><span class="step">02</span><div><h2 id="source-title">表达式</h2><p>编辑文本；运行检查通过后自动同步到策略画布</p></div></div>
+        <div class="source-toolbar" aria-label="表达式工具">
+          <span class="shortcut">⌘ / Ctrl + Enter 运行</span>
+          <button id="format-expression" class="icon-button" type="button" title="格式化当前表达式">格式化</button>
+          <button id="copy-expression" class="icon-button" type="button" title="复制表达式与契约说明">复制</button>
+        </div>
+      </div>
+      <div class="source-workbench">
+        <div class="source-panel__editor">
+          <div class="editor">
+            <pre class="editor__highlight" aria-hidden="true"><code id="expression-highlight"></code></pre>
+            <textarea id="expression" class="editor__input" rows="2" spellcheck="false" autocomplete="off"
+                      aria-label="FunRoute 表达式"
+                      placeholder='if(route.is_healthy_v1(health), "adyen", "stripe")'></textarea>
+          </div>
+        </div>
         <section class="contract-runner" aria-labelledby="contract-runner-title">
           <div class="contract-runner__heading">
             <div><span>CONTRACT TEST</span><h3 id="contract-runner-title">契约试运行</h3></div>
@@ -65,30 +84,10 @@
       </div>
     </section>
 
-    <section class="source-panel" aria-labelledby="source-title">
-      <div class="section-heading">
-        <div><span class="step">02</span><div><h2 id="source-title">表达式</h2><p>编辑文本；运行检查通过后自动同步到策略画布</p></div></div>
-        <div class="source-toolbar" aria-label="表达式工具">
-          <span class="shortcut">⌘ / Ctrl + Enter 运行</span>
-          <button id="format-expression" class="icon-button" type="button" title="格式化当前表达式">格式化</button>
-          <button id="copy-expression" class="icon-button" type="button" title="复制表达式与契约说明">复制</button>
-        </div>
-      </div>
-      <div id="contract-scope" class="contract-scope" aria-label="当前运行契约摘要"></div>
-      <div class="source-panel__editor">
-        <div class="editor">
-          <pre class="editor__highlight" aria-hidden="true"><code id="expression-highlight"></code></pre>
-          <textarea id="expression" class="editor__input" rows="2" spellcheck="false" autocomplete="off"
-                    aria-label="FunRoute 表达式"
-                    placeholder='if(route.is_healthy_v1(health), "adyen", "stripe")'></textarea>
-        </div>
-      </div>
-    </section>
-
     <div class="studio-layout">
       <section class="canvas-panel" aria-labelledby="canvas-title">
         <div class="section-heading section-heading--canvas">
-          <div><span class="step">03</span><div><h2 id="canvas-title">策略画布</h2><p>先看结构、再聚焦编辑单个步骤；熟练后可切换完整树</p></div></div>
+          <div><span class="step">03</span><div><h2 id="canvas-title">策略画布</h2><p>默认完整展开所有结构；需要逐步编辑时切换引导视图</p></div></div>
         </div>
         <funroute-designer id="designer"></funroute-designer>
       </section>

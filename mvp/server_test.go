@@ -163,6 +163,20 @@ func TestRunAPISupportsFunctionalSwitchAndFor(t *testing.T) {
 	}
 }
 
+func TestRunAPIPreservesEnumContractAndTypedErrors(t *testing.T) {
+	server := testServer(t)
+	body := `{"source":"switch(channel, case @adyen => @stripe, case @stripe => @adyen)","contract":{"args":[{"name":"channel","type":"enum<channel>{adyen,stripe}"}],"result":{"type":"enum<channel>{adyen,stripe}"}},"args":{"channel":"adyen"}}`
+	response := postJSON(t, server, "/api/run", body)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"kind":"enum"`) {
+		t.Fatalf("enum run: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	bad := strings.Replace(body, `"channel":"adyen"`, `"channel":"other"`, 1)
+	response = postJSON(t, server, "/api/run", bad)
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), `"code":"CONTRACT_ERROR"`) {
+		t.Fatalf("enum error: status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestStaticMVPIsEmbedded(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()

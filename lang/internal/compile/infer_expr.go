@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"funroute/lang/internal/machine"
 	"funroute/lang/internal/syntax"
+	"slices"
 	"strings"
 )
 
@@ -21,6 +22,8 @@ func inferExpr(expr syntax.Expr, state *inferState, context inferContext) ([]inf
 		return record(node, []inferResult{{typ: concreteTerm(node.Value.Type()), state: state}}), nil
 	case *syntax.VariableExpr:
 		return inferVariable(node, state, context)
+	case *syntax.EnumExpr:
+		return inferEnum(node, state, context)
 	case *syntax.ArrayExpr:
 		return inferHomogeneous(node, node.Items, machine.ArrayKind, node.Pos, "array elements must have one type", state, context)
 	case *syntax.DictExpr:
@@ -38,6 +41,16 @@ func inferExpr(expr syntax.Expr, state *inferState, context inferContext) ([]inf
 	default:
 		return nil, fmt.Errorf("internal error: unsupported expression %T", expr)
 	}
+}
+
+// inferEnum types @member from the contract's enum namespace, not from the
+// surrounding expression, so a reference is typed wherever it appears.
+func inferEnum(node *syntax.EnumExpr, state *inferState, context inferContext) ([]inferResult, error) {
+	typ, err := resolveEnumReference(node, context.enums)
+	if err != nil {
+		return nil, err
+	}
+	return record(node, []inferResult{{typ: concreteTerm(typ), state: state}}), nil
 }
 
 func inferVariable(node *syntax.VariableExpr, state *inferState, context inferContext) ([]inferResult, error) {
@@ -116,9 +129,20 @@ func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContex
 			return nil, err
 		}
 		if len(next) == 0 {
-			return nil, fmt.Errorf("type error at byte %d: switch branches must match the subject and return one type", node.Pos)
+			return nil, fmt.Errorf("type error at byte %d: switch branches must match the subject and return one type%s",
+				node.Pos, memberWrittenAsString(item, context.enums))
 		}
 		partials = next
+	}
+	if err := validateEnumSwitch(node, partials); err != nil {
+		return nil, err
+	}
+	if node.Default == nil {
+		out := make([]inferResult, len(partials))
+		for i, partial := range partials {
+			out[i] = inferResult{typ: partial.result, state: partial.state}
+		}
+		return record(node, out), nil
 	}
 	out, err := inferSwitchDefault(node.Default, partials, context)
 	if err != nil {
@@ -128,6 +152,83 @@ func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContex
 		return nil, fmt.Errorf("type error at byte %d: switch default must match the branch result type", node.Pos)
 	}
 	return record(node, out), nil
+}
+
+// memberWrittenAsString names the likely cause when a branch does not fit: a
+// member spelled as a string. An enum is nominal, so "adyen" is not @adyen.
+func memberWrittenAsString(item syntax.SwitchCaseExpr, enums map[string]machine.Type) string {
+	for _, match := range item.Match {
+		literal, ok := match.(*syntax.LiteralExpr)
+		if !ok {
+			continue
+		}
+		value, isString := literal.Value.String()
+		if !isString {
+			continue
+		}
+		for _, enum := range enums {
+			if slices.Contains(enum.Values, value) {
+				return fmt.Sprintf("; %q is a member of %s, written @%s", value, enum.Summary(), value)
+			}
+		}
+	}
+	return ""
+}
+
+func validateEnumSwitch(node *syntax.SwitchExpr, partials []partialSwitch) error {
+	for _, partial := range partials {
+		typ, ok := partial.state.publicType(partial.subject)
+		if !ok || typ.Kind != machine.EnumKind {
+			if node.Default == nil {
+				return fmt.Errorf("type error at byte %d: switch without else requires a declared enum subject", node.Pos)
+			}
+			continue
+		}
+		if err := validateEnumCases(node, typ); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateEnumCases(node *syntax.SwitchExpr, enum machine.Type) error {
+	seen := map[string]bool{}
+	for _, item := range node.Cases {
+		for _, match := range item.Match {
+			if err := recordEnumMatch(node, enum, match, seen); err != nil {
+				return err
+			}
+		}
+	}
+	if node.Default != nil || len(seen) == len(enum.Values) {
+		return nil
+	}
+	missing := make([]string, 0, len(enum.Values)-len(seen))
+	for _, value := range enum.Values {
+		if !seen[value] {
+			missing = append(missing, value)
+		}
+	}
+	return fmt.Errorf("type error at byte %d: enum switch is not exhaustive; missing %s", node.Pos, strings.Join(missing, ", "))
+}
+
+func recordEnumMatch(node *syntax.SwitchExpr, enum machine.Type, match syntax.Expr, seen map[string]bool) error {
+	member, ok := match.(*syntax.EnumExpr)
+	if !ok {
+		if node.Default == nil {
+			return fmt.Errorf("type error at byte %d: an exhaustive enum switch matches enum members, such as @%s", match.Position(), enum.Values[0])
+		}
+		return nil
+	}
+	value := member.Member
+	if !slices.Contains(enum.Values, value) {
+		return fmt.Errorf("type error at byte %d: %q is not a member of %s", match.Position(), value, enum.Summary())
+	}
+	if seen[value] {
+		return fmt.Errorf("type error at byte %d: enum member %q is matched more than once", match.Position(), value)
+	}
+	seen[value] = true
+	return nil
 }
 
 // inferSwitchSubject types the subject. The subjectless form has none, and its
@@ -343,6 +444,9 @@ func inferCall(node *syntax.CallExpr, state *inferState, context inferContext) (
 	if len(functions) == 0 {
 		return nil, fmt.Errorf("unknown function %q at byte %d", node.Name, node.Pos)
 	}
+	if functions[0].IsLazyFallback() {
+		return inferFallback(node, state, context, functions[0])
+	}
 	partials, err := inferArgs(node.Args, state, context)
 	if err != nil {
 		return nil, err
@@ -350,6 +454,33 @@ func inferCall(node *syntax.CallExpr, state *inferState, context inferContext) (
 	var out []inferResult
 	for _, partial := range partials {
 		out = append(out, selectOverloads(node, partial, functions)...)
+	}
+	if len(out) == 0 {
+		return nil, noOverloadError(node, partials)
+	}
+	return record(node, out), nil
+}
+
+func inferFallback(node *syntax.CallExpr, state *inferState, context inferContext, function *machine.RegisteredFunction) ([]inferResult, error) {
+	if len(node.Args) < 2 {
+		return nil, fmt.Errorf("fallback requires at least 2 arguments at byte %d", node.Pos)
+	}
+	partials, err := inferArgs(node.Args, state, context)
+	if err != nil {
+		return nil, err
+	}
+	params := make([]machine.Type, len(node.Args))
+	for i := range params {
+		params[i] = function.Params[0]
+	}
+	var out []inferResult
+	for _, partial := range partials {
+		candidate := partial.state.clone()
+		vars := map[string]typeTerm{}
+		if unifyParams(candidate, partial.args, params, vars) {
+			candidate.selections[node.ID] = function.Key()
+			out = append(out, inferResult{typ: candidate.instantiate(function.Result, vars), state: candidate})
+		}
 	}
 	if len(out) == 0 {
 		return nil, noOverloadError(node, partials)

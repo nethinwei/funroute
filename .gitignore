@@ -2,5 +2,8 @@
 /funroute
 *.test
 
+# 本地代码索引
+/.codegraph/
+
 # macOS
 .DS_Store

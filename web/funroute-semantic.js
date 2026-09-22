@@ -112,8 +112,11 @@ class SemanticTreeRenderer {
     const body = element("div", "fr-semantic-body fr-semantic-call");
     if (!(node.args || []).length) body.append(element("p", "fr-semantic-empty", "无参数调用"));
     (node.args || []).forEach((arg, index) => {
-      body.append(this.slot(labels[index]?.label || `参数 ${index + 1}`, [...path, "args", index], arg, {
-        hint: typeName(params[index]),
+      const item = descriptor.variadic ? Math.min(index, params.length - 1) : index;
+      const parameter = params[item];
+      const label = descriptor.variadic && index > 0 ? `候选 ${index + 1}` : labels[item]?.label;
+      body.append(this.slot(label || `参数 ${index + 1}`, [...path, "args", index], arg, {
+        hint: typeName(parameter),
       }));
     });
     return this.card(node, path, "call", body, "函数调用");
@@ -142,7 +145,10 @@ class SemanticTreeRenderer {
         this.slot("返回", [...path, "cases", caseIndex, "result"], branch.result, { tone: "success" }));
       cases.append(row);
     });
-    body.append(cases, this.slot("ELSE · 默认返回", [...path, "default"], node.default, { tone: "fallback" }));
+    body.append(cases, this.slot("ELSE · 默认返回（枚举穷尽时可省略）", [...path, "default"], node.default, {
+      hint: node.default ? "" : "运行并检查会核对契约成员",
+      tone: "fallback",
+    }));
     return this.card(node, path, "switch", body, "多分支控制");
   }
 

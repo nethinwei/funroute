@@ -9,7 +9,7 @@ FunRoute 是面向支付路由的强类型、纯表达式函数语言。仓库�
 - 不依赖参数的子表达式在**编译期**算掉，包括头部的常量绑定；
 - 只做安全、可解释的数值提升，跨领域转换必须显式写 `int(...)`、`float(...)`、`string(...)` 或 `bool(...)`；
 - 编译产物只引用精确的函数签名，运行时注册表漂移会拒绝装载；
-- 内核只有 14 个函数名，惰性形式 `switch(...)`、列表推导 `[...]`、`reduce(...)` 由宿主按需启用；
+- 内核只有 15 个函数名，其中 `if(...)` 与 `fallback(...)` 惰性求值；`switch(...)`、列表推导 `[...]`、`reduce(...)` 由宿主按需启用；
 - **所有程序保证终止**：迭代只遍历有限输入，语言刻意不图灵完备，fuel 是成本上限而非安全兜底；
 - 源表达式可无损往返规范化 `ExprJSON`。
 
@@ -77,6 +77,7 @@ expression = expression binary expression      // 中缀，见下表
            | unary expression                  // ! -
            | primary
 primary    = integer | float | string | "true" | "false"
+           | "@" identifier [ "." identifier ]      // 枚举成员，见「契约」
            | identifier
            | identifier "(" [ expression { "," expression } [ "," ] ] ")"
            | "[" [ expression { "," expression } [ "," ] ] "]"
@@ -113,9 +114,13 @@ switch(                                  // 无主体 = 条件链，替代嵌套
   else                    "auto")
 
 switch(country, "SG", "a", "MY", "b", "c")   // 位置形式，仍然接受
+
+switch(channel,                            // channel: enum<channel>{adyen,stripe}
+  case @adyen => @stripe,
+  case @stripe => @adyen)                 // 枚举已穷尽，可以省略 else
 ```
 
-两种形态是**同一个节点**：ExprJSON 的 `switch` 节点里 `value` 缺失即条件形态，`case.match` 是一个列表。所以拖拽面板上仍然是一张多分支卡片（主体槽留空即切到条件模式，每个分支的匹配值可增删），不会退化成一串嵌套 `if` 卡片。分支按书写顺序惰性求值，未选中的分支不会被计算。
+两种形态是**同一个节点**：ExprJSON 的 `switch` 节点里 `value` 缺失即条件形态，`case.match` 是一个列表。所以拖拽面板上仍然是一张多分支卡片（主体槽留空即切到条件模式，每个分支的匹配值可增删），不会退化成一串嵌套 `if` 卡片。分支按书写顺序惰性求值，未选中的分支不会被计算。通常必须写 `else`；只有 subject 是契约声明的枚举且所有成员都由 `@成员` 覆盖时才能省略。编译器会报告缺失、重复或越界成员，因此契约新增成员时旧规则无法静默漏接。
 
 `reduce` 也接受关键字形式，让位置参数的含义写在语法里（与位置形式脱糖到同一个节点）：
 
@@ -136,6 +141,7 @@ reduce(prices, price, total, 0, add(total, price))      // 位置形式，仍然
 | `int` | `42` | 有符号 64 位，溢出报错 |
 | `float` | `0.25` | IEEE 754 float64，拒绝 NaN/Infinity |
 | `string` | `"SGD"` | JSON 风格转义、UTF-8 |
+| `enum<name>{a,b}` | `enum<channel>{adyen,stripe}` | 契约中的命名闭集；表达式里成员写作 `@adyen`，运行值是成员名字符串，编译器检查返回值与 `switch` 穷尽性 |
 | `array<T>` | `[1,2,3]` | 所有元素必须同型 |
 | `dict<T>` | `{"primary":1}` | key 固定为 string，所有 value 必须同型 |
 
@@ -179,6 +185,18 @@ artifact, err := lang.CompileExpr(
 | 用了不声明 | 错误：`the expression reads "x" but the contract does not declare it` |
 | `Result` | 参与 unify 而非事后比对，所以能定死 `[]` 的元素类型、能在重载里选签名 |
 | `Doc` / `ResultDoc` | 唯一不进 digest 的东西 —— 改文案不会让已部署的 artifact 失效 |
+
+枚举也只存在于宿主契约。成员是标识符并规范排序，Go 侧可用 `lang.EnumOf("channel", "adyen", "stripe")`，文本契约写 `enum<channel>{adyen,stripe}`。枚举入参在运行边界拒绝集合外的字符串；枚举出参要求编译器能证明每条返回路径都落在成员集合内，扩展函数返回值还会在运行边界复查。
+
+表达式里引用成员要写 `@adyen`，**枚举是 nominal 类型**：名字参与身份（`enum<a>{x}` 与 `enum<b>{x}` 是两个类型），且不与 `string` 互换 —— 要当字符串用就写 `string(channel)`。`@adyen` 属于哪个枚举由**契约的枚举命名空间**决定，而不是由上下文类型推导：
+
+```text
+switch(channel, case @adyen => @stripe, case @stripe => @adyen)
+let(preferred = @stripe, channel == preferred)      // 没有类型上下文也能定型
+@channel.adyen                                       // 同名成员属于多个枚举时的全限定形式
+```
+
+契约里只有一个枚举含该成员时写短名；含它的枚举不止一个时编译器报歧义并要求全限定，一个都没有时报错列出契约声明了哪些枚举。因为枚举只从契约进入程序，这个命名空间天然封闭，所以解析不需要类型上下文，`let` 绑定这类没有约束的位置也能定型。
 
 `Result` 定不了字面量的类型：`1 + 2` 是 int 加法，声明 float 是真错误而不是转换请求。
 
@@ -255,14 +273,14 @@ go run ./cmd/funroute inspect \
 
 ## 最小内核
 
-`lang.CoreRegistry()` 只有 14 个通用函数名，没有任何惰性形式；同名重载在拖拽面板合并为一张卡：
+`lang.CoreRegistry()` 只有 15 个通用函数名；同名重载在拖拽面板合并为一张卡：
 
-- 控制：`if`、`eq`
+- 控制：`if`、`fallback`、`eq`
 - 比较：`lt`、`le`、`gt`、`ge`（各有 int/float/string 与混合数值签名）
 - 算术：`add`、`sub`、`mul`、`div`
 - 转换：`int`、`float`、`string`、`bool`
 
-布尔运算不在内核里——它们是**派生形式**，见下一节。
+`if` 与 `fallback` 是内核的惰性调用：前者只执行选中的分支；后者接受至少两个同类型候选，按顺序求值，仅在当前候选得到 `ErrExtension` 或 `ErrDeadline` 时继续下一项。布尔运算不在内核里——它们是**派生形式**，见下一节。
 
 其余一切都是宿主的选择：`lang.RegisterArrayPrimitives(registry)` 加上 `array.is_empty`/`array.prepend`/`array.head`/`array.tail` 四个列表原语，`registry.EnableForm(...)` 打开惰性形式。
 
@@ -397,9 +415,13 @@ result, err := batch.Run(ctx, args)   // 任意 goroutine 调用，阻塞到本�
 
 默认信任函数遵守 `ctx`（Go 惯例，零开销）；确实无法取消的引擎绑定注册时标 `Doc.Detached: true`，VM 在独立 goroutine 里等它，到点即放弃，被放弃的调用继续运行到自己结束。
 
-错误是类型化的：`ErrDeadline`（预算耗尽）、`ErrExtension`（函数报错）、`ErrFuel`（程序超出成本上限）用 `errors.Is` 区分。规则层的降级形式 `fallback` 只接前两种，程序自己的问题不该被规则吞掉。
+错误是类型化的：`ErrCompile`（源码、ExprJSON 或类型编译失败）、`ErrContract`（宿主 ABI 非法或表达式读取未声明入参）、`ErrDeadline`（请求或函数时间预算耗尽）、`ErrExtension`（宿主函数报错）、`ErrFuel`（程序超出成本上限）都可用 `errors.Is` 区分；MVP HTTP API 也映射为稳定错误码。规则层的 `fallback(primary, secondary, ..., final)` 只接 `ErrExtension` 与 `ErrDeadline`，并按顺序惰性尝试下一项；fuel、类型错误、除零和空数组取首项等表达式自身错误不会被吞掉。
 
-`Batch` 只提升字节码能证明**提前算不改变任何可观察行为**的调用（`PrefetchSites`）：参数直接来自请求参数或常量、不在循环里、没有条件跳转能跳过它。`if`/`switch` 分支里的模型调用仍按需逐条执行，惰性语义不变。被提升的调用在程序里仍扣 fuel，所以预算与运行方式无关；引擎报错记在每个请求上，只在程序真的走到那次调用时抛出。排队中的请求取消后会立即返回并在 flush 时被剔除；批实现同样捕获 panic，并遵守 `Timeout` / `Detached`。
+```text
+fallback(primary.quote_v1(order), secondary.quote_v1(order), 0.0)
+```
+
+`Batch` 只提升字节码能证明**提前算不改变任何可观察行为**的调用（`PrefetchSites`）：参数直接来自请求参数或常量、不在循环里、没有条件跳转能跳过它。`if`/`switch` 分支和 `fallback` 的所有候选仍按需逐条执行，惰性语义不变。被提升的调用在程序里仍扣 fuel，所以预算与运行方式无关；引擎报错记在每个请求上，只在程序真的走到那次调用时抛出。排队中的请求取消后会立即返回并在 flush 时被剔除；批实现同样捕获 panic，并遵守 `Timeout` / `Detached`。
 
 ## 包边界
 
@@ -483,7 +505,7 @@ Run(map) / RunValues(slice) → Value
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "expr": { "node": "call", "name": "mul", "args": [] }
 }
 ```
@@ -596,6 +618,8 @@ POST /api/run      编译并执行
 GET  /api/health   健康检查
 ```
 
+MVP 示例集中定义在 `web/funroute-examples.json`。每条示例都携带独立运行契约、可直接试跑的场景入参和预期结果；测试套件会逐条编译执行，并要求示例集合覆盖当前目录公开的全部函数、特殊形式、源码运算符与 ExprJSON 节点。注册表新增能力却没有补示例时，CI 会直接失败。
+
 能用哪些形式完全由服务端注册表决定，请求里没有任何权限字段。
 
 ## 性能
@@ -625,22 +649,22 @@ VM 是确定性栈式字节码解释器，**程序执行本身不分配内存**�
 - **单一激活**：没有递归就没有嵌套激活，每次 `Run` 只有一个帧，且帧来自 `sync.Pool`；栈与顶层参数存在帧内联数组里。
 - **操作数零拷贝**：出栈返回栈上视窗而非副本，因此扩展函数收到的 `[]Value` 只在调用期间有效（`EvalFunc` 文档已说明，需要保留就自行复制）。
 - **边界不分配**：`Run(map)` 对每个参数先试精确 Go 类型再走宽松路径，失败用哨兵错误而非 `fmt.Errorf`；`ToValue`/`FromValue` 的标量经指针匹配，不装箱。
-- **紧凑枚举**：`Kind` 与 `OpCode` 是 `uint8`，指令分派走跳表；两者的 JSON 表示仍是原来的名字，因此 Artifact digest 与既有 ExprJSON 不受影响。
+- **紧凑标签**：`Kind` 与 `OpCode` 是 `uint8`，指令分派走跳表；JSON 使用稳定名称。阶段 0 新增错误边界指令后 `ArtifactVersion` 已提升到 2，旧产物会被明确拒绝而不是误解释。
 - **panic 防护贴着并发边界**：普通调用每次激活只 `recover` 一次；`Detached` 与批调用在自己的 goroutine / batch 边界恢复，panic 不会逃出进程。
 - **不依赖参数的运算不进运行时**：常量折叠在编译期把闭合子表达式算成常量，折成常量的 `let` 绑定连局部槽都不占。编译因此略慢（一次性），运行时更短。
 - **两条调用路径**：`Run(map)` 按名字转换，`RunValues(slice)` 按 ABI 顺序直接传 —— profile 显示名字查找与转换占一次短决策的 22%，所以热路径值得走后者。
 
 ## 当前实现边界
 
-当前是语言内核 v0.3：
+当前已完成 roadmap 的阶段 0：
 
-- 已实现解析、宿主契约（参数顺序/类型/说明、返回类型参与推导）、类型推导、泛型与重载、数值安全提升、显式转换、扩展注册、规范化 JSON AST、字节码编译、常量折叠、Artifact digest、惰性 `if/switch`、共用一套循环指令的推导式与 `reduce`、fuel/stack 限制和 VM；
+- 已实现解析、宿主契约（含命名枚举）、类型推导、泛型与重载、数值安全提升、显式转换、扩展注册、规范化 JSON AST、字节码编译、常量折叠、Artifact digest、惰性 `if/switch/fallback`、枚举 `switch` 穷尽检查、共用一套循环指令的推导式与 `reduce`、五类可判别错误、fuel/stack 限制和 VM；
 - 推导式与 `reduce` 的局部变量由编译器分配，不污染外部参数；语言不提供一等 lambda、闭包、自定义局部函数与无界循环；
 - 编译后端当前是确定性栈式字节码，稳定 API 已把后续 Wasm/JIT 与语言前端隔离；
 终止性与表达力的形式化论证（强正规化、多项式时间上界、表达力边界，以及“如果要图灵完备该怎么加”）见 [`docs/termination.md`](docs/termination.md)。
 
 - 常量池只存标量，所以闭合的数组/字典仍在运行时构造；要折叠它们需要扩展 Artifact 的常量格式（会 bump `ArtifactVersion`）；
-- 正式用于支付前，还需要 `decimal/money`、结构化 record、错误/Option 类型、决策 trace、Wasm 后端和独立宿主 ABI manifest。
+- 正式用于支付前，还需要 `decimal/money`、结构化 record、Option/显式业务错误类型、决策 trace、Wasm 后端和独立宿主 ABI manifest。
 
 选择这个顺序是为了先冻结函数式语法、类型便利规则和扩展边界，再替换机器码后端，避免语言语义与 JIT 同时变化。
 

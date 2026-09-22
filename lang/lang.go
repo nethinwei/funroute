@@ -68,6 +68,7 @@ var (
 	ArrayOf    = machine.ArrayOf
 	DictOf     = machine.DictOf
 	HandleOf   = machine.HandleOf
+	EnumOf     = machine.EnumOf
 	ParseType  = machine.ParseType
 )
 
@@ -119,6 +120,8 @@ var (
 
 // The errors a host tells apart with errors.Is.
 var (
+	ErrCompile   = machine.ErrCompile
+	ErrContract  = machine.ErrContract
 	ErrFuel      = machine.ErrFuel
 	ErrDeadline  = machine.ErrDeadline
 	ErrExtension = machine.ErrExtension

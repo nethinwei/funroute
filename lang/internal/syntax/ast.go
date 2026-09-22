@@ -67,6 +67,40 @@ func (e *VariableExpr) NodeID() int   { return e.ID }
 func (e *VariableExpr) Position() int { return e.Pos }
 func (*VariableExpr) kind() string    { return "var" }
 
+// EnumExpr is a member of a host-declared enum, written @adyen, or
+// @channel.adyen when the member name alone is ambiguous. The member set lives
+// in the contract, so the node carries names only; the compiler resolves which
+// enum it belongs to and emits the member string as a constant.
+type EnumExpr struct {
+	ID     int    `json:"-"`
+	Pos    int    `json:"-"`
+	Enum   string `json:"enum,omitempty" role:"text"`
+	Member string `json:"member" role:"text" default:"member"`
+}
+
+func (*EnumExpr) exprNode()       {}
+func (e *EnumExpr) NodeID() int   { return e.ID }
+func (e *EnumExpr) Position() int { return e.Pos }
+func (*EnumExpr) kind() string    { return "enum" }
+
+// Source reprints the reference the way it was written.
+func (e *EnumExpr) Source() string {
+	if e.Enum == "" {
+		return "@" + e.Member
+	}
+	return "@" + e.Enum + "." + e.Member
+}
+
+func (e *EnumExpr) check() error {
+	if !machine.IsValidVariableName(e.Member) || machine.IsReservedName(e.Member) {
+		return fmt.Errorf("invalid enum member %q", e.Member)
+	}
+	if e.Enum != "" && !machine.IsValidVariableName(e.Enum) {
+		return fmt.Errorf("invalid enum name %q", e.Enum)
+	}
+	return nil
+}
+
 type ArrayExpr struct {
 	ID    int    `json:"-"`
 	Pos   int    `json:"-"`
@@ -135,7 +169,7 @@ type SwitchExpr struct {
 	Pos     int              `json:"-"`
 	Value   Expr             `json:"value,omitempty"`
 	Cases   []SwitchCaseExpr `json:"cases" min:"1"`
-	Default Expr             `json:"default"`
+	Default Expr             `json:"default,omitempty"`
 }
 
 func (*SwitchExpr) exprNode()          {}
@@ -237,6 +271,6 @@ func distinctNames(names ...string) error {
 // nodeTypes lists every node the walker knows, by its ExprJSON tag. A literal
 // has four tags, one per value kind; the others have one each.
 var nodeTypes = []Expr{
-	&LiteralExpr{}, &VariableExpr{}, &ArrayExpr{}, &DictExpr{}, &CallExpr{},
+	&LiteralExpr{}, &VariableExpr{}, &EnumExpr{}, &ArrayExpr{}, &DictExpr{}, &CallExpr{},
 	&SwitchExpr{}, &ForExpr{}, &ReduceExpr{}, &LetExpr{},
 }

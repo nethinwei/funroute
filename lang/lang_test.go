@@ -13,6 +13,21 @@ import (
 	"funroute/lang"
 )
 
+func TestPhaseZeroPublicContract(t *testing.T) {
+	registry := lang.CoreRegistry()
+	if _, err := lang.CompileExpr("if(", registry, lang.CompileOptions{}); !errors.Is(err, lang.ErrCompile) {
+		t.Fatalf("compile error = %v", err)
+	}
+	if err := lang.ValidateContract(lang.CompileOptions{
+		Args: []lang.ArgSpec{{Name: "x", Type: lang.IntType}, {Name: "x", Type: lang.IntType}},
+	}); !errors.Is(err, lang.ErrContract) {
+		t.Fatalf("contract error = %v", err)
+	}
+	if got := lang.EnumOf("channel", "stripe", "adyen").String(); got != `enum<channel>{adyen,stripe}` {
+		t.Fatalf("enum type = %s", got)
+	}
+}
+
 // These tests are written the way a host writes one: they may only use what
 // package lang exports, so they also guard the public surface. If one of them
 // needs something from internal/core, the surface is too narrow — or the change

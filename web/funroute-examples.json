@@ -1,0 +1,691 @@
+{
+  "version": 1,
+  "examples": [
+    {
+      "label": "四则运算",
+      "category": "基础语法",
+      "description": "中缀运算符是源码层的糖，脱糖后 AST 里只有函数调用，乘除先于加减",
+      "source": "amount * bps / 10000",
+      "contract": {
+        "args": [
+          {"name": "amount", "type": "int", "doc": "交易金额，单位：分"},
+          {"name": "bps", "type": "int", "doc": "费率，基点"}
+        ],
+        "result": {"type": "int", "doc": "手续费，单位：分"}
+      },
+      "args": {"amount": 100000, "bps": 250},
+      "expected": 2500,
+      "covers": ["mul", "div"],
+      "operators": ["infix:*", "infix:/"]
+    },
+    {
+      "label": "比较",
+      "category": "基础语法",
+      "description": "比较两个数值得到 bool；整数与浮点混合时整数会被安全提升",
+      "source": "amount > limit",
+      "contract": {
+        "args": [
+          {"name": "amount", "type": "int", "doc": "交易金额，单位：分"},
+          {"name": "limit", "type": "int", "doc": "阈值，单位：分"}
+        ],
+        "result": {"type": "bool", "doc": "是否超过阈值"}
+      },
+      "args": {"amount": 2500, "limit": 1000},
+      "expected": true,
+      "covers": ["gt"],
+      "operators": ["infix:>"]
+    },
+    {
+      "label": "布尔组合",
+      "category": "基础语法",
+      "description": "&&、|| 与 ! 都是 if 的派生形式，不进注册表，求值保持短路",
+      "source": "enabled && !blocked",
+      "contract": {
+        "args": [
+          {"name": "enabled", "type": "bool", "doc": "规则是否启用"},
+          {"name": "blocked", "type": "bool", "doc": "是否命中黑名单"}
+        ],
+        "result": {"type": "bool", "doc": "是否放行"}
+      },
+      "args": {"enabled": true, "blocked": false},
+      "expected": true,
+      "covers": ["and", "not"],
+      "operators": ["infix:&&", "prefix:!"]
+    },
+    {
+      "label": "条件选择",
+      "category": "基础语法",
+      "description": "if 是惰性的：只有被选中的那个分支会求值，两个分支必须同型",
+      "source": "if(vip, discount, 0)",
+      "contract": {
+        "args": [
+          {"name": "vip", "type": "bool", "doc": "是否 VIP 商户"},
+          {"name": "discount", "type": "int", "doc": "VIP 优惠，单位：分"}
+        ],
+        "result": {"type": "int", "doc": "实际优惠，单位：分"}
+      },
+      "args": {"vip": true, "discount": 500},
+      "expected": 500,
+      "covers": ["if"],
+      "operators": []
+    },
+    {
+      "label": "局部绑定",
+      "category": "基础语法",
+      "description": "let 给中间结果起名，绑定只在表达式内可见，不会进入契约",
+      "source": "let(\n  fee = amount * bps / 10000,\n  amount - fee\n)",
+      "contract": {
+        "args": [
+          {"name": "amount", "type": "int", "doc": "交易金额，单位：分"},
+          {"name": "bps", "type": "int", "doc": "费率，基点"}
+        ],
+        "result": {"type": "int", "doc": "扣费后金额，单位：分"}
+      },
+      "args": {"amount": 100000, "bps": 250},
+      "expected": 97500,
+      "covers": ["let", "sub"],
+      "operators": ["infix:-"]
+    },
+    {
+      "label": "值分支",
+      "category": "基础语法",
+      "description": "switch 带主体时逐个匹配值，分支惰性求值，通常要写 else",
+      "source": "switch(country,\n  case \"SG\" => \"adyen_sg\",\n  case \"MY\" => \"stripe_my\",\n  else \"stripe_global\"\n)",
+      "contract": {
+        "args": [{"name": "country", "type": "string", "doc": "ISO 3166-1 二字码"}],
+        "result": {"type": "string", "doc": "渠道号"}
+      },
+      "args": {"country": "MY"},
+      "expected": "stripe_my",
+      "covers": ["switch"],
+      "operators": []
+    },
+    {
+      "label": "枚举穷尽",
+      "category": "基础语法",
+      "description": "契约里的 enum 是命名闭集，成员在表达式里写作 @成员；成员被覆盖完就可以省略 else，契约新增成员会让旧规则编译失败",
+      "source": "switch(channel,\n  case @adyen  => \"primary\",\n  case @stripe => \"backup\"\n)",
+      "contract": {
+        "args": [{"name": "channel", "type": "enum<channel>{adyen, stripe}", "doc": "当前渠道，运行边界拒绝集合外的字符串"}],
+        "result": {"type": "string", "doc": "渠道角色"}
+      },
+      "args": {"channel": "stripe"},
+      "expected": "backup",
+      "covers": [],
+      "operators": []
+    },
+    {
+      "label": "条件链",
+      "category": "基础语法",
+      "description": "switch 不写主体就是条件链，替代嵌套 if，按书写顺序命中",
+      "source": "switch(\n  case amount >= 100000 => \"large\",\n  case amount >= 1000   => \"medium\",\n  else \"small\"\n)",
+      "contract": {
+        "args": [{"name": "amount", "type": "int", "doc": "交易金额，单位：分"}],
+        "result": {"type": "string", "doc": "金额档位"}
+      },
+      "args": {"amount": 2500},
+      "expected": "medium",
+      "covers": ["ge"],
+      "operators": ["infix:>="]
+    },
+    {
+      "label": "字符串拼接",
+      "category": "基础语法",
+      "description": "加号在字符串上是拼接，具体重载由类型推导选出",
+      "source": "country + \":\" + channel",
+      "contract": {
+        "args": [
+          {"name": "country", "type": "string", "doc": "交易国家"},
+          {"name": "channel", "type": "string", "doc": "渠道号"}
+        ],
+        "result": {"type": "string", "doc": "路由键"}
+      },
+      "args": {"country": "SG", "channel": "adyen"},
+      "expected": "SG:adyen",
+      "covers": ["add"],
+      "operators": ["infix:+"]
+    },
+    {
+      "label": "数组字面量",
+      "category": "基础语法",
+      "description": "数组元素必须同型，元素可以是任意表达式",
+      "source": "[base, base * 2, base * 3]",
+      "contract": {
+        "args": [{"name": "base", "type": "int", "doc": "基准金额，单位：分"}],
+        "result": {"type": "array<int>", "doc": "阶梯金额，单位：分"}
+      },
+      "args": {"base": 100},
+      "expected": [100, 200, 300],
+      "covers": [],
+      "operators": []
+    },
+    {
+      "label": "字典字面量",
+      "category": "基础语法",
+      "description": "字典的 key 固定是字符串，所有 value 必须同型",
+      "source": "{\"gross\": amount, \"fee\": fee, \"net\": amount - fee}",
+      "contract": {
+        "args": [
+          {"name": "amount", "type": "int", "doc": "交易总额，单位：分"},
+          {"name": "fee", "type": "int", "doc": "渠道费，单位：分"}
+        ],
+        "result": {"type": "dict<int>", "doc": "金额分解，单位：分"}
+      },
+      "args": {"amount": 10000, "fee": 180},
+      "expected": {"gross": 10000, "fee": 180, "net": 9820},
+      "covers": [],
+      "operators": []
+    },
+    {
+      "label": "列表推导",
+      "category": "基础语法",
+      "description": "读作“产出什么 ← 从哪来”，推导式本身是一个表达式，返回新数组",
+      "source": "[price * 2 for price in prices]",
+      "contract": {
+        "args": [{"name": "prices", "type": "array<int>", "doc": "各笔金额，单位：分"}],
+        "result": {"type": "array<int>", "doc": "翻倍后的金额，单位：分"}
+      },
+      "args": {"prices": [100, 250]},
+      "expected": [200, 500],
+      "covers": ["for"],
+      "operators": []
+    },
+    {
+      "label": "推导式筛选",
+      "category": "基础语法",
+      "description": "推导式的 if 子句是筛选条件，可省略；循环变量不会进入契约",
+      "source": "[price for price in prices if price >= minimum]",
+      "contract": {
+        "args": [
+          {"name": "prices", "type": "array<int>", "doc": "各笔金额，单位：分"},
+          {"name": "minimum", "type": "int", "doc": "保留下限，单位：分"}
+        ],
+        "result": {"type": "array<int>", "doc": "达标金额，单位：分"}
+      },
+      "args": {"prices": [100, 2500, 900], "minimum": 1000},
+      "expected": [2500],
+      "covers": [],
+      "operators": []
+    },
+    {
+      "label": "折叠求和",
+      "category": "基础语法",
+      "description": "reduce 把数组折进累加器：元素名、累加器名与初值都写在语法里",
+      "source": "reduce(price in prices, total from 0, total + price)",
+      "contract": {
+        "args": [{"name": "prices", "type": "array<int>", "doc": "各笔金额，单位：分"}],
+        "result": {"type": "int", "doc": "合计，单位：分"}
+      },
+      "args": {"prices": [1250, 2750, 4000]},
+      "expected": 8000,
+      "covers": ["reduce"],
+      "operators": ["infix:+"]
+    },
+    {
+      "label": "类型转换",
+      "category": "基础语法",
+      "description": "类型之间没有隐式转换，跨类型要显式写 int / float / string / bool",
+      "source": "string(float(cents) / 100.0)",
+      "contract": {
+        "args": [{"name": "cents", "type": "int", "doc": "金额，单位：分"}],
+        "result": {"type": "string", "doc": "以元为单位的文本"}
+      },
+      "args": {"cents": 12345},
+      "expected": "123.45",
+      "covers": ["float", "string"],
+      "operators": []
+    },
+    {
+      "label": "调用扩展函数",
+      "category": "基础语法",
+      "description": "宿主注册的函数与内核函数写法相同，签名由 Go 类型反推",
+      "source": "route.is_healthy_v1(health)",
+      "contract": {
+        "args": [{"name": "health", "type": "string", "doc": "渠道健康状态，UP 表示可用"}],
+        "result": {"type": "bool", "doc": "渠道是否可用"}
+      },
+      "args": {"health": "UP"},
+      "expected": true,
+      "covers": ["route.is_healthy_v1"],
+      "operators": []
+    },
+    {
+      "label": "失败降级",
+      "category": "基础语法",
+      "description": "fallback 只在扩展调用失败或超时时才尝试下一项，不吞类型和 fuel 错误",
+      "source": "fallback(route.fee_quote_v1(status, quoted_fee), backup_fee)",
+      "contract": {
+        "args": [
+          {"name": "status", "type": "string", "doc": "报价服务状态"},
+          {"name": "quoted_fee", "type": "float", "doc": "该渠道报价"},
+          {"name": "backup_fee", "type": "float", "doc": "备用费率"}
+        ],
+        "result": {"type": "float", "doc": "最终采用的费率"}
+      },
+      "args": {"status": "DOWN", "quoted_fee": 0.018, "backup_fee": 0.024},
+      "expected": 0.024,
+      "covers": ["fallback", "route.fee_quote_v1"],
+      "operators": []
+    },
+    {
+      "label": "主备路由",
+      "category": "支付路由",
+      "description": "健康快照与降级开关一起决定主备渠道：if 加上短路的与、非",
+      "source": "if(route.is_healthy_v1(health) && !degraded, \"adyen_primary\", \"stripe_backup\")",
+      "contract": {
+        "args": [
+          {"name": "health", "type": "string", "doc": "主渠道健康状态，UP 表示可用"},
+          {"name": "degraded", "type": "bool", "doc": "主渠道是否处于人工降级"}
+        ],
+        "result": {"type": "string", "doc": "选中的渠道"}
+      },
+      "args": {"health": "UP", "degraded": false},
+      "expected": "adyen_primary",
+      "covers": ["if", "route.is_healthy_v1", "and", "not"],
+      "operators": ["infix:&&", "prefix:!"]
+    },
+    {
+      "label": "报价级联分档",
+      "category": "支付路由",
+      "description": "let 接住一次 fallback 级联的报价，再用条件 switch 判断落在哪一档",
+      "source": "let(\n  quote = fallback(\n    route.fee_quote_v1(primary_status, primary_fee),\n    route.fee_quote_v1(backup_status, backup_fee),\n    ceiling_fee\n  ),\n  switch(\n    case quote >= ceiling_fee => \"ceiling\",\n    case quote > primary_fee  => \"backup\",\n    else \"primary\"\n  )\n)",
+      "contract": {
+        "args": [
+          {"name": "primary_status", "type": "string", "doc": "主渠道报价服务状态"},
+          {"name": "primary_fee", "type": "float", "doc": "主渠道费率"},
+          {"name": "backup_status", "type": "string", "doc": "备用渠道报价服务状态"},
+          {"name": "backup_fee", "type": "float", "doc": "备用渠道费率"},
+          {"name": "ceiling_fee", "type": "float", "doc": "两路都失败时的兜底费率"}
+        ],
+        "result": {"type": "string", "doc": "最终报价来源"}
+      },
+      "args": {
+        "primary_status": "DOWN", "primary_fee": 0.018,
+        "backup_status": "UP", "backup_fee": 0.024, "ceiling_fee": 0.030
+      },
+      "expected": "backup",
+      "covers": ["fallback", "route.fee_quote_v1"],
+      "operators": ["infix:>="]
+    },
+    {
+      "label": "枚举渠道切换",
+      "category": "支付路由",
+      "description": "枚举 switch 穷尽后不需要 else，每个分支内部再按健康状态二次收敛",
+      "source": "switch(channel,\n  case @adyen  => switch(case route.is_healthy_v1(health) => @adyen,  else @stripe),\n  case @stripe => switch(case route.is_healthy_v1(health) => @stripe, else @adyen)\n)",
+      "contract": {
+        "args": [
+          {"name": "channel", "type": "enum<channel>{adyen, stripe}", "doc": "当前渠道"},
+          {"name": "health", "type": "string", "doc": "当前渠道健康状态"}
+        ],
+        "result": {"type": "enum<channel>{adyen, stripe}", "doc": "切换后的渠道"}
+      },
+      "args": {"channel": "adyen", "health": "DOWN"},
+      "expected": "stripe",
+      "covers": ["switch"],
+      "operators": []
+    },
+    {
+      "label": "地区与额度分流",
+      "category": "支付路由",
+      "description": "值 switch 归拢国家、条件 switch 归拢额度，两个局部绑定再拼成路由键",
+      "source": "let(\n  region = switch(country,\n    case \"SG\", \"MY\", \"TH\" => \"asia\",\n    case \"US\", \"CA\"       => \"na\",\n    else \"global\"\n  ),\n  tier = switch(\n    case amount >= 1000000 => \"enterprise\",\n    case amount >= 10000   => \"standard\",\n    else \"micro\"\n  ),\n  region + \":\" + tier\n)",
+      "contract": {
+        "args": [
+          {"name": "country", "type": "string", "doc": "ISO 3166-1 二字码"},
+          {"name": "amount", "type": "int", "doc": "交易金额，单位：分"}
+        ],
+        "result": {"type": "string", "doc": "路由键"}
+      },
+      "args": {"country": "MY", "amount": 250000},
+      "expected": "asia:standard",
+      "covers": [],
+      "operators": ["infix:+"]
+    },
+    {
+      "label": "最优渠道打分",
+      "category": "支付路由",
+      "description": "reduce 在候选授权率里折出最高的一个，再交给评分函数和 if 定档",
+      "source": "let(\n  best = reduce(rate in auth_rates, top from 0.0,\n    switch(case rate > top => rate, else top)\n  ),\n  if(route.score_v1(best, cost) > 90.0, \"adyen_primary\", \"stripe_backup\")\n)",
+      "contract": {
+        "args": [
+          {"name": "auth_rates", "type": "array<float>", "doc": "候选渠道授权成功率，0 到 1"},
+          {"name": "cost", "type": "float", "doc": "渠道成本评分"}
+        ],
+        "result": {"type": "string", "doc": "渠道号"}
+      },
+      "args": {"auth_rates": [0.88, 0.93, 0.61], "cost": 0.7},
+      "expected": "adyen_primary",
+      "covers": ["route.score_v1", "gt"],
+      "operators": ["infix:>"]
+    },
+    {
+      "label": "健康候选筛选",
+      "category": "支付路由",
+      "description": "推导式按 key 遍历字典筛出可用渠道，reduce 数出结果长度（语言没有 length 原语），全灭时退到应急渠道",
+      "source": "let(\n  healthy = [name for name, status in channel_statuses if route.is_healthy_v1(status)],\n  live = reduce(name in healthy, count from 0, count + 1),\n  switch(case live == 0 => [emergency_channel], else healthy)\n)",
+      "contract": {
+        "args": [
+          {"name": "channel_statuses", "type": "dict<string>", "doc": "渠道健康快照，key 是渠道号"},
+          {"name": "emergency_channel", "type": "string", "doc": "全部不可用时的应急渠道"}
+        ],
+        "result": {"type": "array<string>", "doc": "可用渠道号"}
+      },
+      "args": {
+        "channel_statuses": {"adyen": "UP", "stripe": "DOWN", "pix": "UP"},
+        "emergency_channel": "stripe"
+      },
+      "expected": ["adyen", "pix"],
+      "covers": ["for", "eq"],
+      "operators": ["infix:=="]
+    },
+    {
+      "label": "灰度权重归一",
+      "category": "支付路由",
+      "description": "先用 reduce 求出权重总和，再用推导式筛出归一化后达到下限的渠道",
+      "source": "let(\n  total = reduce(name, weight in weights, sum from 0.0, sum + weight),\n  [name for name, weight in weights if weight / total >= floor]\n)",
+      "contract": {
+        "args": [
+          {"name": "weights", "type": "dict<float>", "doc": "渠道权重，key 是渠道号"},
+          {"name": "floor", "type": "float", "doc": "归一化后的权重下限"}
+        ],
+        "result": {"type": "array<string>", "doc": "达标渠道"}
+      },
+      "args": {"weights": {"adyen": 0.5, "stripe": 0.3, "pix": 0.2}, "floor": 0.25},
+      "expected": ["adyen", "stripe"],
+      "covers": [],
+      "operators": ["infix:/"]
+    },
+    {
+      "label": "报价级联择优",
+      "category": "复杂策略",
+      "description": "主路是一次宽 fallback 级联，备份池用推导式逐个报价、失败的自动落到挂牌价，reduce 取最低后再与主路比价",
+      "source": "let(\n  primary = fallback(\n    route.fee_quote_v1(status_01, 0.018),\n    route.fee_quote_v1(status_02, 0.020),\n    route.fee_quote_v1(status_03, 0.022),\n    route.fee_quote_v1(status_04, 0.024),\n    route.fee_quote_v1(status_05, 0.026),\n    listed_fee\n  ),\n  pool = [fallback(route.fee_quote_v1(pool_status, fee), listed_fee) for fee in pool_fees],\n  cheapest = reduce(fee in pool, low from listed_fee,\n    switch(case fee < low => fee, else low)\n  ),\n  {\n    \"primary\": primary,\n    \"pool_best\": cheapest,\n    \"chosen\": switch(case cheapest < primary => cheapest, else primary)\n  }\n)",
+      "contract": {
+        "args": [
+          {"name": "status_01", "type": "string", "doc": "主路渠道 1 状态"},
+          {"name": "status_02", "type": "string", "doc": "主路渠道 2 状态"},
+          {"name": "status_03", "type": "string", "doc": "主路渠道 3 状态"},
+          {"name": "status_04", "type": "string", "doc": "主路渠道 4 状态"},
+          {"name": "status_05", "type": "string", "doc": "主路渠道 5 状态"},
+          {"name": "pool_status", "type": "string", "doc": "备份池共用的健康探针"},
+          {"name": "pool_fees", "type": "array<float>", "doc": "备份池各渠道挂牌费率"},
+          {"name": "listed_fee", "type": "float", "doc": "全部失败时的兜底挂牌费率"}
+        ],
+        "result": {"type": "dict<float>", "doc": "主路报价、备份池最低价与最终选用价"}
+      },
+      "args": {
+        "status_01": "DOWN", "status_02": "DOWN", "status_03": "DOWN", "status_04": "DOWN", "status_05": "UP",
+        "pool_status": "UP", "pool_fees": [0.023, 0.021], "listed_fee": 0.030
+      },
+      "expected": {"primary": 0.026, "pool_best": 0.021, "chosen": 0.021},
+      "covers": [],
+      "operators": ["infix:<"]
+    },
+    {
+      "label": "全球支付决策",
+      "category": "复杂策略",
+      "description": "合规、风险、渠道、币种、额度各由最合适的结构算成一个局部量，最后一条扁平条件链收口，而不是十层 switch 套娃",
+      "source": "let(\n  flagged = reduce(name, hit in watchlists, count from 0,\n    switch(case hit => count + 1, else count)\n  ),\n  risk = fallback(model.fraud_v1(model.embed_v1(features)), risk_fallback),\n  candidates = [name for name, status in channel_statuses if route.is_healthy_v1(status)],\n  live = reduce(name in candidates, count from 0, count + 1),\n  settlement = switch(case currency == settlement_currency => \"local\", else \"fx\"),\n  tier = switch(\n    case amount >= high_value_limit => \"high\",\n    case amount <= minimum_amount   => \"micro\",\n    else \"standard\"\n  ),\n  needs_3ds = method == \"card\" && !three_ds_completed && amount > three_ds_limit,\n  switch(\n    case !enabled            => \"disabled\",\n    case flagged > 0         => \"reject:compliance\",\n    case risk >= risk_reject => \"reject:risk\",\n    case risk >= risk_review => \"review:risk\",\n    case tier == \"micro\"     => \"reject:minimum\",\n    case tier == \"high\"      => \"review:high_value\",\n    case live == 0           => \"hold:no_channel\",\n    case needs_3ds           => \"challenge:3ds\",\n    else \"route:\" + settlement + \":\" + capture_mode\n  )\n)",
+      "contract": {
+        "args": [
+          {"name": "enabled", "type": "bool", "doc": "策略总开关"},
+          {"name": "watchlists", "type": "dict<bool>", "doc": "各合规名单是否命中，key 是名单名"},
+          {"name": "features", "type": "array<float>", "doc": "反欺诈模型特征"},
+          {"name": "risk_fallback", "type": "float", "doc": "模型失败时的风险分"},
+          {"name": "risk_reject", "type": "float", "doc": "直接拒绝的风险线"},
+          {"name": "risk_review", "type": "float", "doc": "转人工的风险线"},
+          {"name": "channel_statuses", "type": "dict<string>", "doc": "渠道健康快照，key 是渠道号"},
+          {"name": "amount", "type": "int", "doc": "交易金额，单位：分"},
+          {"name": "minimum_amount", "type": "int", "doc": "起付金额，单位：分"},
+          {"name": "high_value_limit", "type": "int", "doc": "大额复核线，单位：分"},
+          {"name": "currency", "type": "string", "doc": "交易币种"},
+          {"name": "settlement_currency", "type": "string", "doc": "结算币种"},
+          {"name": "method", "type": "string", "doc": "支付方式"},
+          {"name": "three_ds_completed", "type": "bool", "doc": "是否已完成 3DS"},
+          {"name": "three_ds_limit", "type": "int", "doc": "强制 3DS 金额阈值，单位：分"},
+          {"name": "capture_mode", "type": "string", "doc": "扣款模式"}
+        ],
+        "result": {"type": "string", "doc": "最终路由或处置动作"}
+      },
+      "args": {
+        "enabled": true,
+        "watchlists": {"sanctions": false, "blacklist": false},
+        "features": [0.2, 0.1, 0.15], "risk_fallback": 0.5, "risk_reject": 0.98, "risk_review": 0.85,
+        "channel_statuses": {"adyen": "UP", "stripe": "DOWN"},
+        "amount": 90000, "minimum_amount": 100, "high_value_limit": 1000000,
+        "currency": "USD", "settlement_currency": "SGD", "method": "card",
+        "three_ds_completed": true, "three_ds_limit": 20000, "capture_mode": "auto"
+      },
+      "expected": "route:fx:auto",
+      "min_control_depth": 4,
+      "covers": [],
+      "operators": []
+    },
+    {
+      "label": "结构化支付编排",
+      "category": "复杂策略",
+      "description": "模型评分与信号计数先定处置，每个下游阶段只管自己那一件事，最后由一个 if 决定发出放行包还是拦截包",
+      "source": "let(\n  risk = fallback(model.fraud_v1(model.embed_v1(features)), risk_fallback),\n  hits = reduce(name, fired in signals, count from 0,\n    switch(case fired => count + 1, else count)\n  ),\n  action = switch(\n    case blocked => \"reject\",\n    case risk >= 0.90 => \"review\",\n    case hits >= 2 => \"review\",\n    case amount > review_limit => \"review\",\n    else \"approve\"\n  ),\n  route = switch(\n    case country == \"BR\" && method == \"bank\" => \"pix\",\n    case method == \"wallet\" => \"wallet\",\n    case route.is_healthy_v1(primary_health) => \"adyen\",\n    else \"stripe\"\n  ),\n  auth_mode = switch(\n    case method != \"card\" => \"native\",\n    case amount > three_ds_limit => \"three_ds\",\n    else \"frictionless\"\n  ),\n  capture = switch(case risk >= 0.70 => \"manual\", else \"auto\"),\n  if(action == \"approve\",\n    {\"action\": action, \"route\": route, \"auth\": auth_mode, \"capture\": capture, \"reason\": \"approved\"},\n    {\"action\": action, \"route\": \"none\", \"auth\": \"none\", \"capture\": \"none\",\n     \"reason\": switch(action, case \"reject\" => \"risk_or_blocklist\", else \"manual_review\")}\n  )\n)",
+      "contract": {
+        "args": [
+          {"name": "features", "type": "array<float>", "doc": "反欺诈模型特征"},
+          {"name": "risk_fallback", "type": "float", "doc": "模型失败时的风险分"},
+          {"name": "signals", "type": "dict<bool>", "doc": "规则信号是否命中，key 是信号名"},
+          {"name": "blocked", "type": "bool", "doc": "是否命中黑名单"},
+          {"name": "amount", "type": "int", "doc": "交易金额，单位：分"},
+          {"name": "review_limit", "type": "int", "doc": "人工复核金额阈值"},
+          {"name": "country", "type": "string", "doc": "交易国家"},
+          {"name": "method", "type": "string", "doc": "支付方式"},
+          {"name": "primary_health", "type": "string", "doc": "主渠道健康状态"},
+          {"name": "three_ds_limit", "type": "int", "doc": "强制 3DS 金额阈值"}
+        ],
+        "result": {"type": "dict<string>", "doc": "包含处置、路由、认证、扣款和原因的决策包"}
+      },
+      "args": {
+        "features": [0.2, 0.1, 0.15], "risk_fallback": 0.5,
+        "signals": {"velocity": true, "device": false, "geo": false}, "blocked": false,
+        "amount": 90000, "review_limit": 500000, "country": "SG", "method": "card",
+        "primary_health": "UP", "three_ds_limit": 100000
+      },
+      "expected": {
+        "action": "approve", "route": "adyen", "auth": "frictionless", "capture": "auto", "reason": "approved"
+      },
+      "covers": [],
+      "operators": ["infix:!="]
+    },
+    {
+      "label": "跨境结算流水线",
+      "category": "复杂策略",
+      "description": "reduce 汇总明细，顺序 let 表达十段计算流水线，条件费用由 switch 决定，最后打包成数组字典",
+      "source": "let(\n  gross = reduce(item in line_items, total from 0, total + item),\n  interchange = gross * interchange_bps / 10000,\n  scheme_fee = gross * scheme_bps / 10000,\n  fx_fee = switch(case cross_border => gross * fx_bps / 10000, else 0),\n  gateway_fee = gross * gateway_bps / 10000 + fixed_fee,\n  total_fee = interchange + scheme_fee + fx_fee + gateway_fee,\n  reserve = gross * reserve_bps / 10000,\n  net_before_tax = gross - total_fee - reserve,\n  withholding = switch(case taxable => net_before_tax * tax_bps / 10000, else 0),\n  payable = net_before_tax - withholding,\n  {\"fees\": [interchange, scheme_fee, fx_fee, gateway_fee, total_fee], \"settlement\": [gross, reserve, withholding, payable]}\n)",
+      "contract": {
+        "args": [
+          {"name": "line_items", "type": "array<int>", "doc": "批次内各笔金额，单位：分"},
+          {"name": "interchange_bps", "type": "int", "doc": "交换费率，基点"},
+          {"name": "scheme_bps", "type": "int", "doc": "卡组织费率，基点"},
+          {"name": "cross_border", "type": "bool", "doc": "是否跨境"},
+          {"name": "fx_bps", "type": "int", "doc": "换汇费率，基点"},
+          {"name": "gateway_bps", "type": "int", "doc": "网关费率，基点"},
+          {"name": "fixed_fee", "type": "int", "doc": "固定网关费，单位：分"},
+          {"name": "reserve_bps", "type": "int", "doc": "准备金比例，基点"},
+          {"name": "taxable", "type": "bool", "doc": "是否需要代扣税"},
+          {"name": "tax_bps", "type": "int", "doc": "代扣税率，基点"}
+        ],
+        "result": {"type": "dict<array<int>>", "doc": "费用与结算分解"}
+      },
+      "args": {
+        "line_items": [60000, 40000], "interchange_bps": 150, "scheme_bps": 20, "cross_border": true,
+        "fx_bps": 10, "gateway_bps": 50, "fixed_fee": 30, "reserve_bps": 200,
+        "taxable": true, "tax_bps": 100
+      },
+      "expected": {
+        "fees": [1500, 200, 100, 530, 2330],
+        "settlement": [100000, 2000, 956, 94714]
+      },
+      "covers": [],
+      "operators": []
+    },
+    {
+      "label": "风控组合",
+      "category": "风险控制",
+      "description": "reduce 数出越线的风险信号，再与白名单、风险分、币种一致性和开关组合，逻辑运算保持短路",
+      "source": "let(\n  breached = reduce(name, score in signals, hits from 0,\n    switch(case score > ceiling => hits + 1, else hits)\n  ),\n  !trusted && (risk > 0.8 || breached > 0 || currency != settlement_currency) && enabled == true\n)",
+      "contract": {
+        "args": [
+          {"name": "signals", "type": "dict<float>", "doc": "各风险信号评分，key 是信号名"},
+          {"name": "ceiling", "type": "float", "doc": "单信号越线阈值"},
+          {"name": "trusted", "type": "bool", "doc": "是否白名单商户"},
+          {"name": "risk", "type": "float", "doc": "欺诈评分，0 到 1"},
+          {"name": "currency", "type": "string", "doc": "支付币种"},
+          {"name": "settlement_currency", "type": "string", "doc": "结算币种"},
+          {"name": "enabled", "type": "bool", "doc": "规则是否启用"}
+        ],
+        "result": {"type": "bool", "doc": "是否进入人工复核"}
+      },
+      "args": {
+        "signals": {"velocity": 0.95, "device": 0.2}, "ceiling": 0.9,
+        "trusted": false, "risk": 0.92, "currency": "USD", "settlement_currency": "USD", "enabled": true
+      },
+      "expected": true,
+      "covers": ["not", "and", "or", "eq", "let"],
+      "operators": ["prefix:!", "infix:&&", "infix:||", "infix:!=", "infix:==", "infix:>"]
+    },
+    {
+      "label": "模型反欺诈",
+      "category": "风险控制",
+      "description": "推导式逐行把特征向量化并评分，reduce 取出最坏一行，再由条件 switch 定处置",
+      "source": "let(\n  scores = [model.fraud_v1(model.embed_v1(row)) for row in feature_rows],\n  worst = reduce(score in scores, top from 0.0,\n    switch(case score > top => score, else top)\n  ),\n  switch(\n    case worst > 0.8 => \"review\",\n    case worst > 0.5 => \"challenge\",\n    else \"accept\"\n  )\n)",
+      "contract": {
+        "args": [{"name": "feature_rows", "type": "array<array<float>>", "doc": "逐行特征向量"}],
+        "result": {"type": "string", "doc": "风控处置"}
+      },
+      "args": {"feature_rows": [[0.9, 0.85, 0.95], [0.1, 0.2, 0.1]]},
+      "expected": "review",
+      "covers": ["model.embed_v1", "model.fraud_v1", "reduce"],
+      "operators": []
+    },
+    {
+      "label": "金额分层",
+      "category": "风险控制",
+      "description": "上游字符串逐条转成整数，推导式里再用无主体 switch 覆盖小额、标准额和大额边界",
+      "source": "let(\n  amounts = [int(text) for text in amount_texts],\n  [switch(\n     case amount < 1000       => \"micro\",\n     case amount <= 100000    => \"standard\",\n     case amount >= 1000000   => \"manual_review\",\n     else \"enhanced_review\"\n   ) for amount in amounts]\n)",
+      "contract": {
+        "args": [{"name": "amount_texts", "type": "array<string>", "doc": "上游金额字符串，单位：分"}],
+        "result": {"type": "array<string>", "doc": "逐笔处理层级"}
+      },
+      "args": {"amount_texts": ["250", "50000", "250000", "1500000"]},
+      "expected": ["micro", "standard", "enhanced_review", "manual_review"],
+      "covers": ["lt", "le", "ge"],
+      "operators": ["infix:<", "infix:<=", "infix:>="]
+    },
+    {
+      "label": "费率结算",
+      "category": "金融计算",
+      "description": "reduce 汇总批次金额，switch 给变动费封顶，局部绑定接着算固定费、准备金和净结算额",
+      "source": "let(\n  gross = reduce(amount in amounts, total from 0, total + amount),\n  variable_fee = gross * bps / 10000,\n  capped_fee = switch(case variable_fee > fee_cap => fee_cap, else variable_fee),\n  net = gross - capped_fee - fixed_fee,\n  net + reserve\n)",
+      "contract": {
+        "args": [
+          {"name": "amounts", "type": "array<int>", "doc": "批次内各笔金额，单位：分"},
+          {"name": "bps", "type": "int", "doc": "费率，基点"},
+          {"name": "fee_cap", "type": "int", "doc": "变动费上限，单位：分"},
+          {"name": "fixed_fee", "type": "int", "doc": "固定费用，单位：分"},
+          {"name": "reserve", "type": "int", "doc": "风险准备金，单位：分"}
+        ],
+        "result": {"type": "int", "doc": "净结算额加准备金，单位：分"}
+      },
+      "args": {"amounts": [150000, 100000], "bps": 180, "fee_cap": 4000, "fixed_fee": 50, "reserve": 1000},
+      "expected": 246950,
+      "covers": ["add", "sub", "mul", "div"],
+      "operators": ["infix:+", "infix:-", "infix:*", "infix:/"]
+    },
+    {
+      "label": "结算偏差",
+      "category": "金融计算",
+      "description": "筛选条件同时检查负向和正向容差（一元负号），产出项再按方向标注是少结还是多结",
+      "source": "[account + switch(case delta < 0 => \":short\", else \":over\")\n for account, delta in deltas\n if delta <= -tolerance || delta >= tolerance]",
+      "contract": {
+        "args": [
+          {"name": "deltas", "type": "dict<int>", "doc": "各账户实结与应结差额，单位：分"},
+          {"name": "tolerance", "type": "int", "doc": "允许偏差，单位：分"}
+        ],
+        "result": {"type": "array<string>", "doc": "超出容差的账户及方向"}
+      },
+      "args": {
+        "deltas": {"acq_settlement": -501, "fx_clearing": 120, "wallet_payout": 900},
+        "tolerance": 500
+      },
+      "expected": ["acq_settlement:short", "wallet_payout:over"],
+      "covers": [],
+      "operators": ["prefix:-"]
+    },
+    {
+      "label": "批次金额汇总",
+      "category": "金融计算",
+      "description": "reduce 在有限交易批次上累加，累加体内用 switch 跳过起征点以下的碎单",
+      "source": "reduce(price in prices, total from 0,\n  switch(case price >= minimum => total + price, else total)\n)",
+      "contract": {
+        "args": [
+          {"name": "prices", "type": "array<int>", "doc": "批次内各笔金额，单位：分"},
+          {"name": "minimum", "type": "int", "doc": "计入汇总的起征点，单位：分"}
+        ],
+        "result": {"type": "int", "doc": "批次总额，单位：分"}
+      },
+      "args": {"prices": [1250, 400, 2750, 4000], "minimum": 500},
+      "expected": 8000,
+      "covers": [],
+      "operators": []
+    },
+    {
+      "label": "对账字段归一化",
+      "category": "金融计算",
+      "description": "推导式把上游字符串逐条转成整数，reduce 求和，再经布尔和浮点转换输出稳定文本",
+      "source": "let(\n  cents = [int(text) for text in amount_texts],\n  total = reduce(cent in cents, sum from 0, sum + cent),\n  captured = bool(captured_text),\n  if(captured, \"captured:\" + string(float(total) / 100.0), \"not_captured\")\n)",
+      "contract": {
+        "args": [
+          {"name": "amount_texts", "type": "array<string>", "doc": "上游金额字符串，单位：分"},
+          {"name": "captured_text", "type": "string", "doc": "上游扣款状态字符串"}
+        ],
+        "result": {"type": "string", "doc": "归一化后的对账摘要"}
+      },
+      "args": {"amount_texts": ["12000", "345"], "captured_text": "true"},
+      "expected": "captured:123.45",
+      "covers": ["int", "bool", "string", "float"],
+      "operators": []
+    },
+    {
+      "label": "资金快照",
+      "category": "数据结构",
+      "description": "reduce 合计各项费用，同型数组和字典一次返回金额分解",
+      "source": "let(\n  total_fee = reduce(fee in fees, sum from 0, sum + fee),\n  {\"gross_and_net\": [gross, gross - total_fee], \"fees\": fees}\n)",
+      "contract": {
+        "args": [
+          {"name": "gross", "type": "int", "doc": "交易总额，单位：分"},
+          {"name": "fees", "type": "array<int>", "doc": "各项费用，单位：分"}
+        ],
+        "result": {"type": "dict<array<int>>", "doc": "金额分解快照"}
+      },
+      "args": {"gross": 10000, "fees": [150, 30]},
+      "expected": {"fees": [150, 30], "gross_and_net": [10000, 9820]},
+      "covers": [],
+      "operators": []
+    },
+    {
+      "label": "稳定调用契约",
+      "category": "契约治理",
+      "description": "调用方仍传旧字段时，表达式可以不读取它，保持 ABI 稳定",
+      "source": "switch(case amount >= threshold => amount * 2, else amount)",
+      "contract": {
+        "args": [
+          {"name": "amount", "type": "int", "doc": "交易金额，单位：分"},
+          {"name": "threshold", "type": "int", "doc": "加倍起点，单位：分"},
+          {"name": "legacy_flag", "type": "bool", "doc": "调用方仍在传、策略已不再使用"}
+        ],
+        "result": {"type": "int", "doc": "调整后金额，单位：分"}
+      },
+      "args": {"amount": 2500, "threshold": 1000, "legacy_flag": false},
+      "expected": 5000,
+      "covers": [],
+      "operators": ["infix:*"]
+    }
+  ]
+}

@@ -7,9 +7,61 @@ export const VALUE_TEMPLATES = [
   { id: "value:float", node: "float", label: "浮点数", description: "有限 float64 立即值", icon: ".", color: "#0891B2" },
   { id: "value:string", node: "string", label: "字符串", description: "UTF-8 立即值", icon: "”", color: "#059669" },
   { id: "value:bool", node: "bool", label: "布尔值", description: "true / false", icon: "?", color: "#0EA5E9" },
+  { id: "value:enum", node: "enum", label: "枚举成员", description: "宿主契约声明的命名闭集的成员，写作 @成员", icon: "@", color: "#C2410C" },
   { id: "value:array", node: "array", label: "数组", description: "元素必须同型", icon: "[ ]", color: "#D97706" },
   { id: "value:dict", node: "dict", label: "字典", description: "string key、value 同型", icon: "{ }", color: "#EA580C" },
 ];
+
+// FIELD_TEXT is the console's wording for the fields a node schema describes.
+// The field list itself always comes from the catalog, never from here.
+export const FIELD_TEXT = {
+  "enum.enum": ["枚举名", "同名成员属于多个枚举时才需要填"],
+  "enum.member": ["成员", "契约里声明的枚举成员"],
+  "array.items": ["元素", "元素必须同型"],
+  "dict.entries": ["键值", "value 同型"],
+  "dict.entries.key": ["键", "string"],
+  "dict.entries.value": ["值", "与其他值同型"],
+  "switch.value": ["待匹配值", "留空则每个分支是 bool 条件"],
+  "switch.cases": ["分支", "任一匹配即选中"],
+  "switch.cases.match": ["匹配值", "与待匹配值同类型；无待匹配值时为 bool"],
+  "switch.cases.result": ["返回结果", "所有结果同类型"],
+  "switch.default": ["默认结果（else）", "未匹配时返回"],
+  "for.source": ["输入", "array<T> 或 dict<T>"],
+  "for.variable": ["元素局部名", "仅本节点可见"],
+  "for.key_variable": ["键局部名", "填写即遍历字典"],
+  "for.where": ["筛选条件", "bool；留空表示全部"],
+  "for.yield": ["产出表达式", "每个保留元素产出一个值"],
+  "reduce.source": ["输入", "array<T> 或 dict<T>"],
+  "reduce.variable": ["元素局部名", "仅本节点可见"],
+  "reduce.key_variable": ["键局部名", "填写即遍历字典"],
+  "reduce.accumulator": ["累加器局部名", "仅本节点可见"],
+  "reduce.init": ["初始值", "累加器初值 R"],
+  "reduce.body": ["累加表达式", "必须返回 R"],
+  "let.bindings": ["绑定", "后续绑定与主体可引用"],
+  "let.bindings.name": ["名称", "仅本节点可见"],
+  "let.bindings.value": ["值", ""],
+  "let.body": ["主体", "整体结果"],
+};
+
+export function fieldText(key, field) {
+  const [label, hint] = FIELD_TEXT[key] || [field.name, ""];
+  return { label: field.optional ? `${label}（可空）` : label, hint };
+}
+
+// contractEnums lists every enum the host contract declares, so a canvas can
+// offer the members a program may refer to. It follows the same rule the
+// compiler does: arguments and the result, containers included.
+export function contractEnums(contract) {
+  const found = new Map();
+  const visit = (type) => {
+    if (!type) return;
+    if (type.elem) return visit(type.elem);
+    if (type.kind === "enum" && type.name) found.set(type.name, type.values || []);
+  };
+  for (const arg of contract?.args || []) visit(arg.type);
+  visit(contract?.result?.type);
+  return [...found].map(([name, values]) => ({ name, values }));
+}
 
 export function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -153,6 +205,7 @@ export class FunRouteLanguage {
       case "bool": return node.bool ? "true" : "false";
       case "array": return `[${(node.items || []).map((item) => this.expressionSource(item)).join(", ")}]`;
       case "dict": return `{${(node.entries || []).map((entry) => `${JSON.stringify(entry.key || "")}: ${this.expressionSource(entry.value)}`).join(", ")}}`;
+      case "enum": return node.enum ? `@${node.enum}.${node.member || "member"}` : `@${node.member || "member"}`;
       case "call": return `${node.name}(${(node.args || []).map((arg) => this.expressionSource(arg)).join(", ")})`;
       case "switch": return this._switchSource(node);
       case "for": return `[${[this.expressionSource(node.yield), ...this._forClauses(node)].join(" ")}]`;
@@ -162,9 +215,13 @@ export class FunRouteLanguage {
     }
   }
 
-  formatSource(node, indent = "") {
+  // used is what the caller already wrote on this line (a binding name, a case
+  // head, a dict key), so a value only stays inline when the whole line fits.
+  formatSource(node, indent = "", used = 0) {
     const inline = this.expressionSource(node);
-    if (inline.length <= 54 || this._operator(node)) return inline;
+    if (indent.length + used + inline.length < MAX_LINE) return inline;
+    const operator = this._operator(node);
+    if (operator) return this._chainSource(node, operator.descriptor, indent) ?? inline;
     const split = this._splitNode(node);
     if (!split) return inline;
     const inner = `${indent}  `;
@@ -210,7 +267,8 @@ export class FunRouteLanguage {
       const matches = (item.match || []).map((match) => this.expressionSource(match)).join(", ");
       return `case ${matches} => ${this.expressionSource(item.result)}`;
     });
-    return `switch(${head}${branches.join(", ")}, else ${this.expressionSource(node.default)})`;
+    const fallback = node.default ? `, else ${this.expressionSource(node.default)}` : "";
+    return `switch(${head}${branches.join(", ")}${fallback})`;
   }
 
   _forClauses(node) {
@@ -229,7 +287,7 @@ export class FunRouteLanguage {
       case "switch": return { open: node.value ? `switch(${this.expressionSource(node.value)},` : "switch(", parts: switchParts(node), close: ")" };
       case "for": return { open: "[", parts: [node.yield, ...this._forClauses(node).map(literalPart)], close: "]", separator: "\n" };
       case "reduce": return { open: "reduce(", parts: [literalPart(this._forHead(node)), literalPart(this._accumulatorHead(node)), node.body], close: ")" };
-      case "let": return { open: "let(", parts: [...this._letBindings(node).map(literalPart), node.body], close: ")" };
+      case "let": return { open: "let(", parts: [...(node.bindings || []).map(bindingPart), node.body], close: ")" };
       case "array": return { open: "[", parts: node.items || [], close: "]" };
       case "dict": return { open: "{", parts: (node.entries || []).map((entry) => ({ key: entry.key || "", value: entry.value })), close: "}" };
       default: return null;
@@ -238,20 +296,43 @@ export class FunRouteLanguage {
 
   _formatPart(part, indent) {
     if (part?.literal !== undefined) return part.literal;
+    if (part?.binding) return this._headedPart(`${part.binding.name || "value"} = `, part.binding.value, indent);
     if (part?.branch) {
       const matches = (part.branch.match || []).map((item) => this.formatSource(item, indent)).join(", ");
-      return `case ${matches} => ${this.formatSource(part.branch.result, indent)}`;
+      return this._headedPart(`case ${matches} => `, part.branch.result, indent);
     }
-    if (part?.fallback !== undefined) return `else ${this.formatSource(part.fallback, indent)}`;
-    if (part?.key !== undefined) return `${JSON.stringify(part.key)}: ${this.formatSource(part.value, indent)}`;
+    if (part?.fallback !== undefined) return this._headedPart("else ", part.fallback, indent);
+    if (part?.key !== undefined) return this._headedPart(`${JSON.stringify(part.key)}: `, part.value, indent);
     return this.formatSource(part, indent);
   }
 
+  _headedPart(head, node, indent) { return head + this.formatSource(node, indent, head.length); }
+
+  // A long infix chain breaks before each operator instead of running off the
+  // line; the continuation lines are indented and parse back to the same nodes.
+  _chainSource(node, descriptor, indent) {
+    if (descriptor.fixity !== "infix") return null;
+    const parts = this._chainParts(node, descriptor, 0);
+    return parts.length > 1 ? parts.join(`\n${indent}  ${descriptor.token} `) : null;
+  }
+
+  _chainParts(node, descriptor, parentPrecedence) {
+    const match = this._operator(node);
+    if (match?.descriptor.token !== descriptor.token) return [this.expressionSource(node, parentPrecedence)];
+    const [left, right] = (descriptor.operands || []).map((name) => match.captures[name]?.node);
+    const precedence = descriptor.precedence;
+    return [
+      ...this._chainParts(left, descriptor, precedence),
+      this.expressionSource(right, precedence + (descriptor.associativity === "left" ? 1 : 0)),
+    ];
+  }
+
   _classifyToken(match, text) {
-    const [raw, comment, string, number, identifier, operator] = match;
+    const [raw, comment, string, number, member, identifier, operator] = match;
     if (comment !== undefined) return { kind: "comment", text: raw };
     if (string !== undefined) return { kind: "string", text: raw };
     if (number !== undefined) return { kind: "number", text: raw };
+    if (member !== undefined) return { kind: "enum", text: raw };
     if (operator !== undefined) return { kind: "op", text: raw };
     if (identifier === undefined) return { kind: "punct", text: raw };
     if (identifier === "true" || identifier === "false") return { kind: "bool", text: raw };
@@ -324,7 +405,7 @@ function bindingsForTarget(target, fields, targetName) {
 function tokenPattern(operators) {
   const spellings = [...new Set(["=>", "=", ...(operators || []).map((item) => item.token)])]
     .sort((left, right) => right.length - left.length).map(escapeRegExp).join("|");
-  return new RegExp(`(//[^\\n]*)|("(?:[^"\\\\]|\\\\.)*")|(\\d[\\d_]*(?:\\.\\d[\\d_]*)?(?:[eE][+\\-]?\\d[\\d_]*)?)|([A-Za-z_][A-Za-z0-9_.]*)|(${spellings})|([(),:\\[\\]{}])|(\\s+)`, "g");
+  return new RegExp(`(//[^\\n]*)|("(?:[^"\\\\]|\\\\.)*")|(\\d[\\d_]*(?:\\.\\d[\\d_]*)?(?:[eE][+\\-]?\\d[\\d_]*)?)|(@[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)?)|([A-Za-z_][A-Za-z0-9_.]*)|(${spellings})|([(),:\\[\\]{}])|(\\s+)`, "g");
 }
 
 function escapeRegExp(text) { return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
@@ -367,22 +448,43 @@ function loopVariables(node) {
   return node.key_variable ? `${node.key_variable}, ${value}` : value;
 }
 
+// A line wider than this is split into parts, one per line. The budget counts
+// the indent, so a binding or branch nested three levels deep still fits.
+const MAX_LINE = 72;
+
 function literalPart(literal) { return { literal }; }
 
+function bindingPart(binding) { return { binding }; }
+
 function switchParts(node) {
-  return [...(node.cases || []).map((branch) => ({ branch })), { fallback: node.default }];
+  const parts = [...(node.cases || []).map((branch) => ({ branch }))];
+  if (node.default) parts.push({ fallback: node.default });
+  return parts;
 }
 
 export function typeName(type) {
   if (!type) return "unknown";
   if (type.kind === "array" || type.kind === "dict") return `${type.kind}<${typeName(type.elem)}>`;
   if (type.kind === "handle") return `handle<${type.name}>`;
+  if (type.kind === "enum") return `enum<${type.name}>{${(type.values || []).join(",")}}`;
   return type.name || type.kind || "unknown";
+}
+
+// typeSummary is typeName for display: a large enum shows a few members and a
+// count instead of all of them. Never send this to the server — the contract
+// carries the full type text, which ParseType has to be able to read back.
+export function typeSummary(type, limit = 6) {
+  if (!type) return "unknown";
+  if (type.kind === "array" || type.kind === "dict") return `${type.kind}<${typeSummary(type.elem, limit)}>`;
+  const values = type.values || [];
+  if (type.kind !== "enum" || values.length <= limit) return typeName(type);
+  return `enum<${type.name}>{${values.slice(0, limit).join(",")}… 共 ${values.length} 个}`;
 }
 
 export function equalType(left, right) {
   if (!left || !right || left.kind !== right.kind || left.name !== right.name) return false;
   if (left.kind === "array" || left.kind === "dict") return equalType(left.elem, right.elem);
+  if (left.kind === "enum") return JSON.stringify(left.values || []) === JSON.stringify(right.values || []);
   return true;
 }
 
@@ -424,6 +526,9 @@ export function parseInputValue(raw, type) {
   if (type.kind === "string") return raw;
   const text = raw.trim();
   switch (type.kind) {
+    case "enum":
+      if (!(type.values || []).includes(raw)) throw new Error(`值必须是 ${typeSummary(type)} 的成员`);
+      return raw;
     case "bool":
       if (text !== "true" && text !== "false") throw new Error("布尔值必须是 true 或 false");
       return text === "true";
@@ -455,6 +560,9 @@ function validateTypedJSON(value, type, path) {
     case "int": if (!Number.isSafeInteger(value)) throw new Error(`${path} 必须是安全整数`); break;
     case "float": if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${path} 必须是有限 float`); break;
     case "string": if (typeof value !== "string") throw new Error(`${path} 必须是 string`); break;
+    case "enum":
+      if (typeof value !== "string" || !(type.values || []).includes(value)) throw new Error(`${path} 必须是 ${typeSummary(type)} 的成员`);
+      break;
     case "array":
       if (!Array.isArray(value)) throw new Error(`${path} 必须是数组`);
       value.forEach((item, index) => validateTypedJSON(item, type.elem, `${path}[${index}]`));

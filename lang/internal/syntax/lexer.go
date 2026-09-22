@@ -37,6 +37,9 @@ const (
 	tokenBang
 	tokenFatArrow
 	tokenAssign
+	// tokenEnum is @member or @enum.member: an enum member reference. The "@"
+	// keeps it apart from a string and keeps "." out of expression syntax.
+	tokenEnum
 )
 
 // operatorTokens comes from the parser's sourceOperators table and is scanned
@@ -116,6 +119,8 @@ func (l *lexer) next() (token, error) {
 		return l.stringToken()
 	case ch >= '0' && ch <= '9':
 		return l.number()
+	case ch == '@':
+		return l.enumMember(start)
 	case isIdentifierStart(ch):
 		return l.identifier(start)
 	default:
@@ -132,6 +137,37 @@ func (l *lexer) operator(start int) (token, bool) {
 		}
 	}
 	return token{}, false
+}
+
+// enumMember scans "@member" or "@enum.member" as one lexeme, so the dot never
+// reaches expression syntax and stays available for field access later.
+func (l *lexer) enumMember(start int) (token, error) {
+	l.pos++
+	name, err := l.memberName(start)
+	if err != nil {
+		return token{}, err
+	}
+	if l.pos < len(l.source) && l.source[l.pos] == '.' {
+		l.pos++
+		qualified, err := l.memberName(start)
+		if err != nil {
+			return token{}, err
+		}
+		name += "." + qualified
+	}
+	return token{kind: tokenEnum, text: name, pos: start}, nil
+}
+
+func (l *lexer) memberName(start int) (string, error) {
+	if l.pos >= len(l.source) || !isIdentifierStart(l.source[l.pos]) {
+		return "", fmt.Errorf("syntax error at byte %d: @ must be followed by an enum member name", start)
+	}
+	from := l.pos
+	l.pos++
+	for l.pos < len(l.source) && isIdentifierPart(l.source[l.pos]) {
+		l.pos++
+	}
+	return l.source[from:l.pos], nil
 }
 
 func (l *lexer) identifier(start int) (token, error) {

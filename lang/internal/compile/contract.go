@@ -1,7 +1,6 @@
 package compile
 
 import (
-	"fmt"
 	"funroute/lang/internal/machine"
 )
 
@@ -88,18 +87,18 @@ func ValidateContract(options CompileOptions) error {
 	declared := make(map[string]bool, len(options.Args))
 	for _, arg := range options.Args {
 		if !machine.IsValidVariableName(arg.Name) || machine.IsReservedName(arg.Name) {
-			return fmt.Errorf("invalid argument name %q", arg.Name)
+			return contractErrorf("invalid argument name %q", arg.Name)
 		}
 		if declared[arg.Name] {
-			return fmt.Errorf("argument %q is declared twice", arg.Name)
+			return contractErrorf("argument %q is declared twice", arg.Name)
 		}
 		if !arg.Type.IsConcrete() {
-			return fmt.Errorf("argument %q has a non-concrete type: %s", arg.Name, arg.Type)
+			return contractErrorf("argument %q has a non-concrete type: %s", arg.Name, arg.Type)
 		}
 		declared[arg.Name] = true
 	}
 	if options.Result != nil && !options.Result.IsConcrete() {
-		return fmt.Errorf("the declared result type is not concrete: %s", *options.Result)
+		return contractErrorf("the declared result type is not concrete: %s", *options.Result)
 	}
 	return nil
 }
@@ -120,7 +119,7 @@ func (o CompileOptions) validate(used []string) error {
 	}
 	for _, name := range used {
 		if !declared[name] {
-			return fmt.Errorf("the expression reads %q but the contract does not declare it", name)
+			return contractErrorf("the expression reads %q but the contract does not declare it", name)
 		}
 	}
 	return nil

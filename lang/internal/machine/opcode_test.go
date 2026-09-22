@@ -47,6 +47,7 @@ func TestInstructionValidationUsesTheTable(t *testing.T) {
 		{"invalid opcode", Instruction{Op: OpInvalid}, true},
 		{"constant out of range", Instruction{Op: OpConstant, A: 7}, true},
 		{"jump past the end", Instruction{Op: OpJump, A: 99}, true},
+		{"fallback handler past the end", Instruction{Op: OpBeginFallback, A: 99}, true},
 		{"jump to the end is the normal exit", Instruction{Op: OpJump, A: 3}, false},
 		{"equal takes no operands", Instruction{Op: OpEqual}, false},
 	} {

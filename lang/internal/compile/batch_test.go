@@ -124,6 +124,8 @@ func TestPrefetchSitesAreTheUnconditionalTopLevelCalls(t *testing.T) {
 		{`let(e = model.embed_v1(features), if(flag, model.fraud_v1(e), 0.0))`, 1},     // the binding is unconditional
 		{`[model.fraud_v1(model.embed_v1(features)) for x in features]`, 0},            // inside a loop
 		{`switch(case flag => model.fraud_v1(model.embed_v1(features)), else 1.0)`, 0}, // a case body
+		{`fallback(model.fraud_v1(model.embed_v1(features)), 0.0)`, 0},                 // an error boundary
+		{`fallback(model.fraud_v1(model.embed_v1(features)), model.fraud_v1(model.embed_v1(features)), 0.0)`, 0},
 	} {
 		artifact, err := CompileExpr(test.source, registry, CompileOptions{Args: []ArgSpec{features, flag}})
 		if err != nil {

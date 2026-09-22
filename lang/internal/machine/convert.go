@@ -156,8 +156,8 @@ func coerce(input any, expected Type) (Value, error) {
 		// A typed Value of the wrong type is a host bug. A float64 where an
 		// int is expected is a JSON decoder at work, and the lenient path below
 		// takes it — but a []float64 never becomes an array<int>.
-		if _, isValue := input.(Value); isValue || !leniently(expected.Kind) {
-			return Value{}, fmt.Errorf("got %s, want %s", value.Type(), expected)
+		if _, isValue := input.(Value); isValue || (!leniently(expected.Kind) && !containerKind(expected.Kind)) {
+			return Value{}, fmt.Errorf("got %s, want %s", value.Type().Summary(), expected.Summary())
 		}
 	}
 	switch expected.Kind {
@@ -183,6 +183,8 @@ func coerce(input any, expected Type) (Value, error) {
 func leniently(kind Kind) bool {
 	return kind == IntKind || kind == FloatKind
 }
+
+func containerKind(kind Kind) bool { return kind == ArrayKind || kind == DictKind }
 
 func coerceInt(input any) (Value, error) {
 	switch value := input.(type) {
@@ -258,8 +260,14 @@ func anySlice(input any, expected Type) ([]any, error) {
 			raw[i] = values[i]
 		}
 		return raw, nil
+	case []string:
+		raw := make([]any, len(values))
+		for i := range values {
+			raw[i] = values[i]
+		}
+		return raw, nil
 	default:
-		return nil, fmt.Errorf("got %T, want %s", input, expected)
+		return nil, fmt.Errorf("got %T, want %s", input, expected.Summary())
 	}
 }
 
@@ -267,9 +275,9 @@ func coerceDict(input any, expected Type) (Value, error) {
 	if expected.Elem == nil {
 		return Value{}, fmt.Errorf("dictionary type is missing its value type")
 	}
-	raw, ok := input.(map[string]any)
-	if !ok {
-		return Value{}, fmt.Errorf("got %T, want %s", input, expected)
+	raw, err := anyMap(input, expected)
+	if err != nil {
+		return Value{}, err
 	}
 	entries := make(map[string]Value, len(raw))
 	for key, item := range raw {
@@ -280,4 +288,19 @@ func coerceDict(input any, expected Type) (Value, error) {
 		entries[key] = value
 	}
 	return packDict(*expected.Elem, entries), nil
+}
+
+func anyMap(input any, expected Type) (map[string]any, error) {
+	if raw, ok := input.(map[string]any); ok {
+		return raw, nil
+	}
+	values, ok := input.(map[string]string)
+	if !ok {
+		return nil, fmt.Errorf("got %T, want %s", input, expected.Summary())
+	}
+	raw := make(map[string]any, len(values))
+	for key, value := range values {
+		raw[key] = value
+	}
+	return raw, nil
 }

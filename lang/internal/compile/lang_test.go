@@ -396,8 +396,12 @@ func TestCoreCatalogIsMinimalAndCarriesDisplayMetadata(t *testing.T) {
 	registry := machine.CoreRegistry()
 	catalog := registry.Catalog()
 	names := map[string]bool{}
+	var fallback machine.FunctionDescriptor
 	for _, function := range catalog.Functions {
 		names[function.Name] = true
+		if function.Name == "fallback" {
+			fallback = function
+		}
 		if function.Display.Label == "" || function.Display.Description == "" || function.Display.Category == "" {
 			t.Fatalf("missing display metadata: %#v", function)
 		}
@@ -406,15 +410,18 @@ func TestCoreCatalogIsMinimalAndCarriesDisplayMetadata(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
-		"if", "eq", "lt", "le", "gt", "ge",
+		"if", "fallback", "eq", "lt", "le", "gt", "ge",
 		"add", "sub", "mul", "div", "int", "float", "string", "bool",
 	} {
 		if !names[name] {
 			t.Fatalf("core function %q is missing", name)
 		}
 	}
-	if len(names) != 14 {
+	if len(names) != 15 {
 		t.Fatalf("core registry is not minimal: %#v", names)
+	}
+	if !fallback.Variadic || fallback.Signature != "fallback(T,T,...)->T" || len(fallback.Params) != 2 {
+		t.Fatalf("fallback catalog = %#v", fallback)
 	}
 	for _, hidden := range []string{"array.is_empty", "array.prepend", "array.head", "array.tail"} {
 		if names[hidden] {

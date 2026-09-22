@@ -1,34 +1,8 @@
-import { FunRouteLanguage, VALUE_TEMPLATES, blankFields, blankNode, clone, parseInputValue, typeName } from "./funroute-core.js";
+import { FunRouteLanguage, VALUE_TEMPLATES, blankFields, blankNode, clone, contractEnums, fieldText, parseInputValue, typeName } from "./funroute-core.js";
+import { enumControl } from "./funroute-fields.js";
 import { renderSemanticTree } from "./funroute-semantic.js";
 
 const MIME = "application/x-funroute-node";
-
-const FIELD_TEXT = {
-  "array.items": ["元素", "元素必须同型"],
-  "dict.entries": ["键值", "value 同型"],
-  "dict.entries.key": ["键", "string"],
-  "dict.entries.value": ["值", "与其他值同型"],
-  "switch.value": ["待匹配值", "留空则每个分支是 bool 条件"],
-  "switch.cases": ["分支", "任一匹配即选中"],
-  "switch.cases.match": ["匹配值", "与待匹配值同类型；无待匹配值时为 bool"],
-  "switch.cases.result": ["返回结果", "所有结果同类型"],
-  "switch.default": ["默认结果（else）", "未匹配时返回"],
-  "for.source": ["输入", "array<T> 或 dict<T>"],
-  "for.variable": ["元素局部名", "仅本节点可见"],
-  "for.key_variable": ["键局部名", "填写即遍历字典"],
-  "for.where": ["筛选条件", "bool；留空表示全部"],
-  "for.yield": ["产出表达式", "每个保留元素产出一个值"],
-  "reduce.source": ["输入", "array<T> 或 dict<T>"],
-  "reduce.variable": ["元素局部名", "仅本节点可见"],
-  "reduce.key_variable": ["键局部名", "填写即遍历字典"],
-  "reduce.accumulator": ["累加器局部名", "仅本节点可见"],
-  "reduce.init": ["初始值", "累加器初值 R"],
-  "reduce.body": ["累加表达式", "必须返回 R"],
-  "let.bindings": ["绑定", "后续绑定与主体可引用"],
-  "let.bindings.name": ["名称", "仅本节点可见"],
-  "let.bindings.value": ["值", ""],
-  "let.body": ["主体", "整体结果"],
-};
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -44,11 +18,6 @@ function button(label, ghost, onClick) {
   return control;
 }
 
-function fieldText(key, field) {
-  const [label, hint] = FIELD_TEXT[key] || [field.name, ""];
-  return { label: field.optional ? `${label}（可空）` : label, hint };
-}
-
 export class FunRouteDesigner extends HTMLElement {
   constructor() {
     super();
@@ -60,7 +29,7 @@ export class FunRouteDesigner extends HTMLElement {
     this._functionDescriptors = new Map();
     this._search = "";
     this._paletteScroll = 0;
-    this._mode = "guide";
+    this._mode = "tree";
     this._focusPath = [];
     this._selectedTemplateId = null;
     this._runtimeContract = null;
@@ -365,7 +334,7 @@ export class FunRouteDesigner extends HTMLElement {
     } else if (this._nodes.has(descriptor.special)) {
       created = blankNode(this._schema(descriptor.special));
     } else {
-      const arity = descriptor.variadic ? 1 : (descriptor.params || []).length;
+      const arity = (descriptor.params || []).length;
       created = {
         node: "call",
         name: descriptor.name,
@@ -485,16 +454,20 @@ export class FunRouteDesigner extends HTMLElement {
     const params = descriptor.params || [];
     const labels = descriptor.display?.parameters || [];
     (node.args || []).forEach((arg, index) => {
+      const item = descriptor.variadic ? Math.min(index, params.length - 1) : index;
+      const parameter = params[item];
+      const display = labels[item];
+      const parameterLabel = descriptor.variadic && index > 0 ? `候选 ${index + 1}` : display?.label;
       const row = element("div", "fr-argument");
       const label = element("div", "fr-argument__label");
-      label.append(element("span", "", labels[index]?.label || `参数 ${index + 1}`));
-      label.append(element("code", "", typeName(params[index])));
-      if (labels[index]?.description) label.title = labels[index].description;
+      label.append(element("span", "", parameterLabel || `参数 ${index + 1}`));
+      label.append(element("code", "", typeName(parameter)));
+      if (display?.description) label.title = display.description;
       const argPath = [...path, "args", index];
-      row.append(label, arg ? this._childEditor(arg, argPath, compactChildren) : this._dropZone(argPath, labels[index]?.placeholder || "拖入参数"));
+      row.append(label, arg ? this._childEditor(arg, argPath, compactChildren) : this._dropZone(argPath, display?.placeholder || "拖入参数"));
       body.append(row);
     });
-    if (descriptor.variadic) body.append(this._listControls(node.args, 0, () => null));
+    if (descriptor.variadic) body.append(this._listControls(node.args, params.length, () => null, "候选"));
     return body;
   }
 
@@ -513,7 +486,9 @@ export class FunRouteDesigner extends HTMLElement {
           this._renderList(body, target, field, fieldPath, `${key}.${field.name}`, text, compactChildren);
           break;
         default:
-          body.append(this._nameRow(text, target, field));
+          body.append(target.node === "enum" && field.name === "member"
+            ? this._memberRow(text, target)
+            : this._nameRow(text, target, field));
       }
     }
   }
@@ -551,6 +526,33 @@ export class FunRouteDesigner extends HTMLElement {
     subtract.disabled = items.length <= min;
     controls.append(add, subtract);
     return controls;
+  }
+
+  // A member is picked from the contract, never typed. The control follows the
+  // member set's size: a dropdown while it is readable, a filtering input over
+  // one shared list when the contract declares hundreds of them.
+  _memberRow(text, target) {
+    const row = element("label", "fr-local-name");
+    row.append(element("span", "", text.label));
+    const enums = contractEnums(this._runtimeContract);
+    const owner = enums.find((item) => item.name === target.enum)
+      || enums.find((item) => item.values.includes(target.member)) || enums[0];
+    row.append(enumControl({
+      values: owner?.values || [],
+      value: target.member,
+      placeholder: enums.length ? "输入成员名" : "契约没有声明枚举",
+      listHost: this.shadowRoot,
+      listId: `fr-enum-${owner?.name || "none"}`,
+      onChange: (member) => {
+        target.member = member;
+        const owners = enums.filter((item) => item.values.includes(member));
+        if (owners.length > 1) target.enum = owner?.name || owners[0].name;
+        else delete target.enum;
+        this._changed();
+      },
+    }));
+    if (text.hint) row.title = text.hint;
+    return row;
   }
 
   _nameRow(text, target, field) {

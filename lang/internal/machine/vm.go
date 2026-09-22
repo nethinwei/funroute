@@ -105,6 +105,11 @@ func validateArtifact(artifact *Artifact) error {
 	if !artifact.Result.IsConcrete() {
 		return fmt.Errorf("artifact result type is not concrete: %s", artifact.Result)
 	}
+	for _, param := range artifact.Args {
+		if !IsValidVariableName(param.Name) || IsReservedName(param.Name) || !param.Type.IsConcrete() {
+			return fmt.Errorf("artifact argument is invalid: %s:%s", param.Name, param.Type)
+		}
+	}
 	if artifact.MaxStack < 1 {
 		return fmt.Errorf("artifact is missing its stack depth")
 	}
@@ -251,7 +256,7 @@ func (r *Runtime) Run(ctx context.Context, rawArgs map[string]any, options RunOp
 	args := f.argSpace(len(r.artifact.Args))
 	if err := r.bindArgs(args, rawArgs); err != nil {
 		r.releaseFrame(f)
-		return Value{}, err
+		return Value{}, fmt.Errorf("%w: %v", ErrContract, err)
 	}
 	return r.runFrame(ctx, f, args, options)
 }
@@ -261,18 +266,18 @@ func (r *Runtime) Run(ctx context.Context, rawArgs map[string]any, options RunOp
 // something to trust — but does no name lookup and no conversion.
 func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOptions) (Value, error) {
 	if len(args) != len(r.artifact.Args) {
-		return Value{}, fmt.Errorf("expected %d arguments, got %d", len(r.artifact.Args), len(args))
+		return Value{}, fmt.Errorf("%w: expected %d arguments, got %d", ErrContract, len(r.artifact.Args), len(args))
 	}
 	f := r.acquireFrame()
 	space := f.argSpace(len(args))
 	for i, param := range r.artifact.Args {
 		if !args[i].hasType(param.Type) {
 			r.releaseFrame(f)
-			return Value{}, fmt.Errorf("argument %q: expected %s, got %s", param.Name, param.Type, args[i].Type())
+			return Value{}, fmt.Errorf("%w: argument %q: expected %s, got %s", ErrContract, param.Name, param.Type.Summary(), args[i].Type().Summary())
 		}
 		if err := args[i].validateInvariant(); err != nil {
 			r.releaseFrame(f)
-			return Value{}, fmt.Errorf("argument %q: %w", param.Name, err)
+			return Value{}, fmt.Errorf("%w: argument %q: %v", ErrContract, param.Name, err)
 		}
 		space[i] = args[i]
 	}

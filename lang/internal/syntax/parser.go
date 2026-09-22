@@ -2,8 +2,10 @@ package syntax
 
 import (
 	"fmt"
-	"funroute/lang/internal/machine"
 	"strconv"
+	"strings"
+
+	"funroute/lang/internal/machine"
 )
 
 type parser struct {
@@ -43,6 +45,16 @@ func (p *parser) parseExpr() (Expr, error) {
 // node finishes a constructed node: the same normalisation and checks the
 // importer applies, so a rule is written once in ast.go. Errors are placed at
 // the node's opening token.
+// enumReference splits @member and @enum.member; which enum a bare member
+// belongs to is decided by the contract at compile time, not here.
+func enumReference(id int, tok token) Expr {
+	enum, member, qualified := strings.Cut(tok.text, ".")
+	if !qualified {
+		return &EnumExpr{ID: id, Pos: tok.pos, Member: enum}
+	}
+	return &EnumExpr{ID: id, Pos: tok.pos, Enum: enum, Member: member}
+}
+
 func (p *parser) node(at token, expr Expr) (Expr, error) {
 	finished, err := finish(expr)
 	if err != nil {
@@ -180,6 +192,9 @@ func (p *parser) parsePrimary() (Expr, error) {
 			return nil, p.errorf(tok, "invalid string escape: %v", err)
 		}
 		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.String(value)}, nil
+	case tokenEnum:
+		p.index++
+		return p.node(tok, enumReference(p.id(), tok))
 	case tokenIdentifier:
 		p.index++
 		if tok.text == "true" || tok.text == "false" {
@@ -395,7 +410,9 @@ func (p *parser) parseSwitchCall(name token) (Expr, error) {
 	return p.positionalSwitch(name, append([]Expr{subject}, rest...))
 }
 
-// switchBranches reads "case m1, m2 => r" groups and the final "else d".
+// switchBranches reads "case m1, m2 => r" groups and an optional final
+// "else d". The compiler accepts the missing else only when a declared enum
+// subject is covered exhaustively.
 func (p *parser) switchBranches(name token, subject Expr) (Expr, error) {
 	var cases []SwitchCaseExpr
 	for p.keyword("case") {
@@ -409,6 +426,9 @@ func (p *parser) switchBranches(name token, subject Expr) (Expr, error) {
 			return nil, err
 		}
 		cases = append(cases, SwitchCaseExpr{Match: matches, Result: result})
+		if p.peek().kind == tokenRightParen {
+			break
+		}
 		if err := p.expect(tokenComma, "',' after a switch branch"); err != nil {
 			return nil, err
 		}
@@ -416,18 +436,21 @@ func (p *parser) switchBranches(name token, subject Expr) (Expr, error) {
 	if len(cases) == 0 {
 		return nil, p.errorf(name, "switch needs at least one case")
 	}
-	if !p.keyword("else") {
-		return nil, p.errorf(p.peek(), "switch needs a final 'else' result")
-	}
-	p.index++
-	fallback, err := p.parseExpr()
-	if err != nil {
-		return nil, err
+	if p.keyword("else") {
+		p.index++
+		fallback, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if err := p.expect(tokenRightParen, "')'"); err != nil {
+			return nil, err
+		}
+		return &SwitchExpr{ID: p.id(), Pos: name.pos, Value: subject, Cases: cases, Default: fallback}, nil
 	}
 	if err := p.expect(tokenRightParen, "')'"); err != nil {
 		return nil, err
 	}
-	return &SwitchExpr{ID: p.id(), Pos: name.pos, Value: subject, Cases: cases, Default: fallback}, nil
+	return &SwitchExpr{ID: p.id(), Pos: name.pos, Value: subject, Cases: cases}, nil
 }
 
 // caseMatches reads "m1, m2, m3 =>"; any of them selects the branch.

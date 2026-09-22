@@ -10,7 +10,7 @@ import (
 
 // ArtifactVersion changes whenever anything the digest covers changes shape;
 // an artifact with any other version is refused rather than reinterpreted.
-const ArtifactVersion = 1
+const ArtifactVersion = 2
 
 // OpCode is a dense enum so the interpreter dispatches through a jump table.
 // The JSON form keeps the original mnemonics, so artifact digests do not move.
@@ -31,6 +31,8 @@ const (
 	OpLoopNext
 	OpJumpIfFalse
 	OpJump
+	OpBeginFallback
+	OpEndFallback
 )
 
 type Parameter struct {

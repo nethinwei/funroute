@@ -55,7 +55,7 @@ func guardedInstructions(code []Instruction) []bool {
 	guarded := make([]bool, len(code))
 	for pc, instruction := range code {
 		switch instruction.Op {
-		case OpJumpIfFalse, OpJump, OpLoopInit:
+		case OpJumpIfFalse, OpJump, OpLoopInit, OpBeginFallback:
 			markRange(guarded, pc+1, instruction.A)
 		}
 	}

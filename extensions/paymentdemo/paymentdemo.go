@@ -36,6 +36,9 @@ func Register(registry *lang.Registry) error {
 	if err := registerScore(registry); err != nil {
 		return err
 	}
+	if err := registerFeeQuote(registry); err != nil {
+		return err
+	}
 	return registerModel(registry)
 }
 
@@ -124,5 +127,29 @@ func registerScore(registry *lang.Registry) error {
 		Order:       20,
 	}, func(authRate, cost float64) (float64, error) {
 		return authRate*100 - cost, nil
+	})
+}
+
+func registerFeeQuote(registry *lang.Registry) error {
+	return lang.Logic(registry, "route.fee_quote_v1", lang.Doc{
+		Label:       "获取渠道费率",
+		Description: "演示一个可能失败的渠道调用：健康状态不是 UP 时返回扩展错误，可由 fallback 切到备用报价。",
+		Category:    "支付路由",
+		Color:       "#059669",
+		Icon:        "%",
+		Cost:        5,
+		Params:      []string{"健康状态", "渠道报价"},
+		Result:      "有效费率",
+		Keywords:    []string{"fee", "quote", "fallback", "费率", "降级"},
+		Examples: []lang.FunctionExample{{
+			Title:      "报价降级",
+			Expression: `fallback(route.fee_quote_v1(primary_status, primary_fee), backup_fee)`,
+		}},
+		Order: 30,
+	}, func(status string, fee float64) (float64, error) {
+		if !strings.EqualFold(status, "UP") {
+			return 0, fmt.Errorf("fee quote provider is %s", status)
+		}
+		return fee, nil
 	})
 }

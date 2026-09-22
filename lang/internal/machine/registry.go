@@ -22,6 +22,7 @@ type specialForm uint8
 const (
 	specialNone specialForm = iota
 	specialIf
+	specialFallback
 )
 
 // BatchEvalFunc evaluates one function for many argument lists at once — one
@@ -47,6 +48,7 @@ type FunctionSpec struct {
 	Display  FunctionDisplay
 
 	special specialForm
+	builtin bool
 }
 
 func (s FunctionSpec) Signature() string {
@@ -72,6 +74,16 @@ func (f *RegisteredFunction) Key() string { return f.key }
 // IsLazyIf reports whether this is the kernel's `if`, which the compiler emits
 // as jumps instead of a call so the untaken branch is never evaluated.
 func (f *RegisteredFunction) IsLazyIf() bool { return f.special == specialIf }
+
+// IsLazyFallback reports whether this is the kernel's error boundary. Every
+// candidate participates in type inference, but bytecode advances only when
+// the previous expression returns ErrExtension or ErrDeadline.
+func (f *RegisteredFunction) IsLazyFallback() bool { return f.special == specialFallback }
+
+// IsBuiltin distinguishes trusted kernel functions from host extensions.
+// Their ordinary domain errors (division by zero, head of an empty array)
+// are expression errors and must never become catchable ErrExtension values.
+func (f *RegisteredFunction) IsBuiltin() bool { return f.builtin }
 
 // Registry is immutable from the point of view of a running VM. Registration
 // is synchronized so applications can build a registry during startup.
@@ -277,6 +289,11 @@ func validateSignature(spec FunctionSpec) error {
 func validateTypePattern(t Type, vars map[string]bool) error {
 	switch t.Kind {
 	case BoolKind, IntKind, FloatKind, StringKind:
+		return nil
+	case EnumKind:
+		if !IsAnyEnum(t) && !t.IsConcrete() {
+			return fmt.Errorf("invalid enum type %s", t)
+		}
 		return nil
 	case HandleKind:
 		if !IsValidFunctionName(t.Name) {

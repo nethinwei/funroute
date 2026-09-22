@@ -10,7 +10,7 @@ import (
 func CompileExpr(source string, registry *machine.Registry, options CompileOptions) (*machine.Artifact, error) {
 	expr, err := syntax.Parse(source)
 	if err != nil {
-		return nil, err
+		return nil, compileError(err)
 	}
 	return CompileAST(expr, registry, options)
 }
@@ -22,7 +22,7 @@ func CompileExpr(source string, registry *machine.Registry, options CompileOptio
 func CompileJSON(exprJSON []byte, registry *machine.Registry, options CompileOptions) (*machine.Artifact, error) {
 	expr, err := syntax.ImportExprJSON(exprJSON)
 	if err != nil {
-		return nil, err
+		return nil, compileError(err)
 	}
 	return CompileAST(expr, registry, options)
 }
@@ -32,45 +32,47 @@ func CompileJSON(exprJSON []byte, registry *machine.Registry, options CompileOpt
 func ParseToJSON(source string) ([]byte, error) {
 	expr, err := syntax.Parse(source)
 	if err != nil {
-		return nil, err
+		return nil, compileError(err)
 	}
-	return syntax.ExportExprJSON(expr)
+	encoded, err := syntax.ExportExprJSON(expr)
+	return encoded, compileError(err)
 }
 
 // CompileAST is the single compile path: source and ExprJSON both reach it, so
 // there is no way for one to be accepted while the other is refused.
 func CompileAST(expr syntax.Expr, registry *machine.Registry, options CompileOptions) (*machine.Artifact, error) {
 	if registry == nil {
-		return nil, fmt.Errorf("registry is required")
+		return nil, compileError(fmt.Errorf("registry is required"))
 	}
 	if err := validateForms(expr, registry); err != nil {
-		return nil, err
+		return nil, compileError(err)
 	}
 	if err := options.validate(syntax.FreeVariables(expr)); err != nil {
 		return nil, err
 	}
 	inferred, err := inferProgram(expr, registry, options.argTypes(), options.argOrder(), options.Result)
 	if err != nil {
-		return nil, err
+		return nil, compileError(err)
 	}
 	attachDocs(inferred.Params, options.argDocs())
 	inferred.ResultDoc = options.ResultDoc
 	exprJSON, err := syntax.ExportExprJSON(expr)
 	if err != nil {
-		return nil, err
+		return nil, compileError(err)
 	}
 	compiler := newBytecodeCompiler(registry, inferred)
 	if err := compiler.compile(expr); err != nil {
-		return nil, err
+		return nil, compileError(err)
 	}
 	limit := options.MaxInstructions
 	if limit == 0 {
 		limit = 10_000
 	}
 	if len(compiler.instructions) > limit {
-		return nil, fmt.Errorf("compiled program has %d instructions, limit is %d", len(compiler.instructions), limit)
+		return nil, compileError(fmt.Errorf("compiled program has %d instructions, limit is %d", len(compiler.instructions), limit))
 	}
-	return sealArtifact(exprJSON, inferred, compiler)
+	artifact, err := sealArtifact(exprJSON, inferred, compiler)
+	return artifact, compileError(err)
 }
 
 func newBytecodeCompiler(registry *machine.Registry, inferred *inference) *bytecodeCompiler {
@@ -136,6 +138,8 @@ func (c *bytecodeCompiler) compile(expr syntax.Expr) error {
 	switch node := expr.(type) {
 	case *syntax.LiteralExpr:
 		return c.compileLiteral(node)
+	case *syntax.EnumExpr:
+		return c.compileLiteral(&syntax.LiteralExpr{ID: node.ID, Pos: node.Pos, Value: machine.String(node.Member)})
 	case *syntax.VariableExpr:
 		return c.compileVariable(node)
 	case *syntax.ArrayExpr:
@@ -236,6 +240,9 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	if function.IsLazyIf() {
 		return c.compileIf(node)
 	}
+	if function.IsLazyFallback() {
+		return c.compileFallback(node)
+	}
 	if err := c.compileAll(node.Args); err != nil {
 		return err
 	}
@@ -273,7 +280,30 @@ func (c *bytecodeCompiler) compileSwitch(node *syntax.SwitchExpr) error {
 		endJumps = append(endJumps, c.emit(machine.Instruction{Op: machine.OpJump}))
 		c.patch(misses, len(c.instructions))
 	}
-	if err := c.compile(node.Default); err != nil {
+	if node.Default != nil {
+		if err := c.compile(node.Default); err != nil {
+			return err
+		}
+	}
+	c.patch(endJumps, len(c.instructions))
+	return nil
+}
+
+func (c *bytecodeCompiler) compileFallback(node *syntax.CallExpr) error {
+	if len(node.Args) < 2 {
+		return fmt.Errorf("fallback requires at least 2 arguments")
+	}
+	endJumps := make([]int, 0, len(node.Args)-1)
+	for _, candidate := range node.Args[:len(node.Args)-1] {
+		begin := c.emit(machine.Instruction{Op: machine.OpBeginFallback})
+		if err := c.compile(candidate); err != nil {
+			return err
+		}
+		c.emit(machine.Instruction{Op: machine.OpEndFallback})
+		endJumps = append(endJumps, c.emit(machine.Instruction{Op: machine.OpJump}))
+		c.instructions[begin].A = len(c.instructions)
+	}
+	if err := c.compile(node.Args[len(node.Args)-1]); err != nil {
 		return err
 	}
 	c.patch(endJumps, len(c.instructions))

@@ -2,6 +2,7 @@ package mvp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -96,14 +97,14 @@ func (c *contractJSON) compileOptions() (lang.CompileOptions, error) {
 	for _, arg := range c.Args {
 		typ, err := lang.ParseType(arg.Type)
 		if err != nil {
-			return options, fmt.Errorf("argument %q: %w", arg.Name, err)
+			return options, fmt.Errorf("%w: argument %q: %v", lang.ErrContract, arg.Name, err)
 		}
 		options.Args = append(options.Args, lang.ArgSpec{Name: arg.Name, Type: typ, Doc: arg.Doc})
 	}
 	if c.Result != nil {
 		typ, err := lang.ParseType(c.Result.Type)
 		if err != nil {
-			return options, fmt.Errorf("result: %w", err)
+			return options, fmt.Errorf("%w: result: %v", lang.ErrContract, err)
 		}
 		options.Result = &typ
 		options.ResultDoc = c.Result.Doc
@@ -113,10 +114,10 @@ func (c *contractJSON) compileOptions() (lang.CompileOptions, error) {
 
 func (c *contractJSON) checkedOptions() (lang.CompileOptions, error) {
 	if c == nil {
-		return lang.CompileOptions{}, fmt.Errorf("runtime contract is required")
+		return lang.CompileOptions{}, fmt.Errorf("%w: runtime contract is required", lang.ErrContract)
 	}
 	if c.Result == nil || strings.TrimSpace(c.Result.Type) == "" {
-		return lang.CompileOptions{}, fmt.Errorf("result type is required")
+		return lang.CompileOptions{}, fmt.Errorf("%w: result type is required", lang.ErrContract)
 	}
 	options, err := c.compileOptions()
 	if err != nil {
@@ -186,7 +187,7 @@ func (s *Server) compile(response http.ResponseWriter, request *http.Request) {
 	}
 	artifact, err := s.compilePayload(payload)
 	if err != nil {
-		writeAPIError(response, http.StatusUnprocessableEntity, "COMPILE_ERROR", err)
+		writeAPIError(response, http.StatusUnprocessableEntity, typedErrorCode(err, "COMPILE_ERROR"), err)
 		return
 	}
 	writeJSON(response, http.StatusOK, summarize(artifact))
@@ -199,7 +200,7 @@ func (s *Server) run(response http.ResponseWriter, request *http.Request) {
 	}
 	artifact, err := s.compilePayload(payload)
 	if err != nil {
-		writeAPIError(response, http.StatusUnprocessableEntity, "COMPILE_ERROR", err)
+		writeAPIError(response, http.StatusUnprocessableEntity, typedErrorCode(err, "COMPILE_ERROR"), err)
 		return
 	}
 	runtime, err := lang.Instantiate(artifact, s.registry)
@@ -209,13 +210,13 @@ func (s *Server) run(response http.ResponseWriter, request *http.Request) {
 	}
 	result, err := runtime.Run(request.Context(), payload.Args, lang.RunOptions{Fuel: payload.Fuel})
 	if err != nil {
-		writeAPIError(response, http.StatusUnprocessableEntity, "RUN_ERROR", err)
+		writeAPIError(response, http.StatusUnprocessableEntity, typedErrorCode(err, "RUN_ERROR"), err)
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{
 		"artifact": summarize(artifact),
 		"value":    result.Any(),
-		"type":     result.Type(),
+		"type":     artifact.Result,
 	})
 }
 
@@ -277,6 +278,23 @@ func writeAPIError(response http.ResponseWriter, status int, code string, err er
 	writeJSON(response, status, map[string]any{
 		"error": map[string]string{"code": code, "message": err.Error()},
 	})
+}
+
+func typedErrorCode(err error, fallback string) string {
+	switch {
+	case errors.Is(err, lang.ErrContract):
+		return "CONTRACT_ERROR"
+	case errors.Is(err, lang.ErrCompile):
+		return "COMPILE_ERROR"
+	case errors.Is(err, lang.ErrFuel):
+		return "FUEL_EXHAUSTED"
+	case errors.Is(err, lang.ErrDeadline):
+		return "DEADLINE_EXCEEDED"
+	case errors.Is(err, lang.ErrExtension):
+		return "EXTENSION_ERROR"
+	default:
+		return fallback
+	}
 }
 
 func writeJSON(response http.ResponseWriter, status int, value any) {

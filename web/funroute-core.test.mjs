@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FunRouteLanguage, FunRouteWorkspace, contractPayload, parseInputValue } from "./funroute-core.js";
+import { FunRouteLanguage, FunRouteWorkspace, contractPayload, parseInputValue, typeName, typeSummary } from "./funroute-core.js";
+import { loadExamples } from "./funroute-examples.js";
 
 const placeholder = (name) => ({ $: name });
 const call = (name, ...args) => ({ node: "call", name, args });
@@ -10,7 +11,7 @@ const bool = (value) => ({ node: "bool", bool: value });
 function catalog() {
   return {
     source: {
-      expr_json_version: 1,
+      expr_json_version: 2,
       variable_name_pattern: "[A-Za-z_][A-Za-z0-9_]*",
       keywords: ["case", "else", "for", "in"],
       operators: [
@@ -61,6 +62,17 @@ function operator(token, precedence, template, form = "") {
 
 const variable = (name) => ({ node: "var", name });
 
+test("example manifest loader validates and returns shared example data", async () => {
+  const examples = await loadExamples(async (url) => ({
+    ok: url === "/funroute-examples.json", status: 200,
+    json: async () => ({ version: 1, examples: [{ label: "主备路由" }] }),
+  }));
+  assert.deepEqual(examples, [{ label: "主备路由" }]);
+  await assert.rejects(() => loadExamples(async () => ({
+    ok: true, status: 200, json: async () => ({ version: 2, examples: [] }),
+  })), /示例清单格式无效/);
+});
+
 test("formatter uses precedence supplied by the Go catalog", () => {
   const language = new FunRouteLanguage(catalog());
   const grouped = call("lt", call("eq", variable("a"), variable("b")), variable("c"));
@@ -72,6 +84,37 @@ test("formatter uses precedence supplied by the Go catalog", () => {
     operands: [call("eq", variable("a"), variable("b")), variable("c")],
     paths: [["args", 0], ["args", 1]],
   });
+});
+
+test("formatter keeps exhaustive enum switch without an else", () => {
+  const language = new FunRouteLanguage(catalog());
+  const text = language.expressionSource({
+    node: "switch", value: variable("channel"), cases: [
+      { match: [{ node: "string", string: "adyen" }], result: { node: "string", string: "stripe" } },
+      { match: [{ node: "string", string: "stripe" }], result: { node: "string", string: "adyen" } },
+    ],
+  });
+  assert.equal(text, 'switch(channel, case "adyen" => "stripe", case "stripe" => "adyen")');
+});
+
+test("formatter breaks long bindings and infix chains instead of one long line", () => {
+  const language = new FunRouteLanguage(catalog());
+  const text = (value) => ({ node: "string", string: value });
+  const and = (left, right) => call("if", left, right, bool(false));
+  const chain = and(and(variable("ready_for_settlement"), variable("trusted_merchant_profile")),
+    variable("enabled_in_current_window"));
+  const formatted = language.formatSource({
+    node: "let",
+    bindings: [{ name: "action", value: { node: "switch", cases: [
+      { match: [variable("blocked_by_compliance")], result: text("reject") },
+      { match: [call("lt", variable("review_limit"), variable("amount"))], result: text("review") },
+    ], default: text("approve") } }],
+    body: chain,
+  });
+  const lines = formatted.split("\n");
+  assert.ok(lines.every((line) => line.length <= 72), `行过长：${lines.find((line) => line.length > 72)}`);
+  assert.match(formatted, /\n  action = switch\(\n    case blocked_by_compliance => "reject",\n/);
+  assert.match(formatted, /\n    && trusted_merchant_profile\n    && enabled_in_current_window/);
 });
 
 test("derived forms are instantiated and recognized from catalog templates", () => {
@@ -137,6 +180,20 @@ test("typed input parsing never silently truncates or coerces", () => {
   assert.throws(() => parseInputValue('[1,"2"]', { kind: "array", elem: { kind: "int" } }), /必须是安全整数/);
   assert.equal(parseInputValue("-2.5e2", { kind: "float" }), -250);
   assert.deepEqual(parseInputValue("{\"a\":true}", { kind: "dict", elem: { kind: "bool" } }), { a: true });
+  const channel = { kind: "enum", name: "channel", values: ["adyen", "stripe"] };
+  assert.equal(parseInputValue("adyen", channel), "adyen");
+  assert.throws(() => parseInputValue("other", channel), /成员/);
+  assert.equal(typeName(channel), "enum<channel>{adyen,stripe}");
+});
+
+test("a large enum is summarized for display but never for the wire", () => {
+  const small = { kind: "enum", name: "channel", values: ["adyen", "stripe"] };
+  const big = { kind: "enum", name: "country", values: Array.from({ length: 212 }, (_, i) => `c${i}`) };
+  assert.equal(typeSummary(small), "enum<channel>{adyen,stripe}");
+  assert.equal(typeSummary(big), "enum<country>{c0,c1,c2,c3,c4,c5… 共 212 个}");
+  assert.equal(typeSummary({ kind: "array", elem: big }), "array<enum<country>{c0,c1,c2,c3,c4,c5… 共 212 个}>");
+  assert.equal(typeName(big).startsWith("enum<country>{c0,c1,"), true);
+  assert.equal(typeName(big).endsWith("c211}"), true);
 });
 
 test("contract payload preserves incomplete rows for authoritative validation", () => {
@@ -150,7 +207,7 @@ test("headless workspace owns parse, compile and run without a DOM", async () =>
   let checks = 0;
   const client = {
     catalog: async () => catalog(),
-    parse: async () => ({ expr_json: { version: 1, expr: variable("amount") } }),
+    parse: async () => ({ expr_json: { version: 2, expr: variable("amount") } }),
     checkContract: async () => {
       checks += 1;
       return { valid: true, arguments: 1, args: [{ name: "amount", type: { kind: "int" } }], result: { kind: "int" } };
@@ -174,8 +231,8 @@ test("headless workspace owns parse, compile and run without a DOM", async () =>
 });
 
 test("compileSource replaces the document only after parse and contract compilation pass", async () => {
-  const previous = { version: 1, expr: bool(true) };
-  const candidate = { version: 1, expr: variable("amount") };
+  const previous = { version: 2, expr: bool(true) };
+  const candidate = { version: 2, expr: variable("amount") };
   let rejectCompile = true;
   const workspace = new FunRouteWorkspace({
     catalog: async () => catalog(),
@@ -216,7 +273,7 @@ test("headless workspace requires a checked result contract before compile", asy
     compile: async () => { compiled = true; },
   });
   await workspace.initialize();
-  workspace.setDocument({ version: 1, expr: bool(true) });
+  workspace.setDocument({ version: 2, expr: bool(true) });
   await assert.rejects(() => workspace.compile(), /返回类型/);
   assert.equal(compiled, false);
 });
@@ -231,7 +288,7 @@ test("headless workspace rejects a runtime result that violates the contract", a
   });
   await workspace.initialize();
   workspace.setContract({ args: [], result: { type: "int" } });
-  workspace.setDocument({ version: 1, expr: bool(true) });
+  workspace.setDocument({ version: 2, expr: bool(true) });
   await assert.rejects(() => workspace.run({}), /结果类型 string 与契约 int 不匹配/);
   assert.equal(workspace.resultCheck.valid, false);
 });

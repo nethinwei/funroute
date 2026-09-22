@@ -48,15 +48,15 @@ func TestChildrenAreListedInDefinitionOrder(t *testing.T) {
 // Import applies the same rules as the parser, from the same definitions.
 func TestImportEnforcesTheNodeDefinitions(t *testing.T) {
 	for _, test := range []struct{ document, want string }{
-		{`{"version":1,"expr":{"node":"for","source":{"node":"var","name":"xs"},"yield":{"node":"var","name":"x"}}}`, "for node is missing variable"},
-		{`{"version":1,"expr":{"node":"let","bindings":[],"body":{"node":"int","int":1}}}`, "needs at least 1 item"},
-		{`{"version":1,"expr":{"node":"var","name":"x","extra":1}}`, `unknown field "extra"`},
-		{`{"version":1,"expr":{"node":"switch","cases":[{"match":[{"node":"bool","bool":true}],"result":{"node":"int","int":1}}],"default":{"node":"int","int":2},"value":null}}`, "null node"},
-		{`{"version":1,"expr":{"node":"dict","entries":[{"key":"a","value":{"node":"int","int":1}},{"key":"a","value":{"node":"int","int":2}}]}}`, `duplicate dictionary key "a"`},
-		{`{"version":1,"expr":{"node":"reduce","source":{"node":"var","name":"xs"},"variable":"x","accumulator":"x","init":{"node":"int","int":0},"body":{"node":"var","name":"x"}}}`, `"x" is bound twice`},
-		{`{"version":1,"expr":{"node":"for","source":{"node":"var","name":"xs"},"variable":"in","yield":{"node":"var","name":"x"}}}`, `invalid local variable name "in"`},
-		{`{"version":1,"expr":{"node":"float","float":"nan"}}`, "non-finite floats"},
-		{`{"version":1,"expr":{"node":"loop"}}`, `unknown expression node "loop"`},
+		{`{"version":2,"expr":{"node":"for","source":{"node":"var","name":"xs"},"yield":{"node":"var","name":"x"}}}`, "for node is missing variable"},
+		{`{"version":2,"expr":{"node":"let","bindings":[],"body":{"node":"int","int":1}}}`, "needs at least 1 item"},
+		{`{"version":2,"expr":{"node":"var","name":"x","extra":1}}`, `unknown field "extra"`},
+		{`{"version":2,"expr":{"node":"switch","cases":[{"match":[{"node":"bool","bool":true}],"result":{"node":"int","int":1}}],"default":{"node":"int","int":2},"value":null}}`, "null node"},
+		{`{"version":2,"expr":{"node":"dict","entries":[{"key":"a","value":{"node":"int","int":1}},{"key":"a","value":{"node":"int","int":2}}]}}`, `duplicate dictionary key "a"`},
+		{`{"version":2,"expr":{"node":"reduce","source":{"node":"var","name":"xs"},"variable":"x","accumulator":"x","init":{"node":"int","int":0},"body":{"node":"var","name":"x"}}}`, `"x" is bound twice`},
+		{`{"version":2,"expr":{"node":"for","source":{"node":"var","name":"xs"},"variable":"in","yield":{"node":"var","name":"x"}}}`, `invalid local variable name "in"`},
+		{`{"version":2,"expr":{"node":"float","float":"nan"}}`, "non-finite floats"},
+		{`{"version":2,"expr":{"node":"loop"}}`, `unknown expression node "loop"`},
 	} {
 		_, err := ImportExprJSON([]byte(test.document))
 		if err == nil || !strings.Contains(err.Error(), test.want) {

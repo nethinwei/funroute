@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-const CatalogVersion = 2
+const CatalogVersion = 4
 
 // FunctionDisplay contains presentation-only metadata. It never affects type
 // inference, artifact identity or runtime evaluation.
@@ -215,16 +215,24 @@ func describeFunction(function *RegisteredFunction) FunctionDescriptor {
 		params[i] = CloneType(function.Params[i])
 	}
 	special := ""
-	if function.special == specialIf {
+	signature := function.key
+	variadic := false
+	switch function.special {
+	case specialIf:
 		special = "if"
+	case specialFallback:
+		special = "fallback"
+		signature = "fallback(T,T,...)->T"
+		variadic = true
 	}
 	return FunctionDescriptor{
 		Name:      function.Name,
-		Signature: function.key,
+		Signature: signature,
 		Params:    params,
 		Result:    CloneType(function.Result),
 		Cost:      function.Cost,
 		Special:   special,
+		Variadic:  variadic,
 		Display:   cloneFunctionDisplay(function.Display),
 	}
 }
@@ -389,7 +397,7 @@ func switchSpecialForm() FunctionDescriptor {
 	r := TypeVar("R")
 	return FunctionDescriptor{
 		Name:      "switch",
-		Signature: "switch(value,match,result,...,default)->R",
+		Signature: "switch(value,case...[,default])->R",
 		Params:    []Type{t, t, r, r},
 		Result:    r,
 		Variadic:  true,
@@ -397,7 +405,7 @@ func switchSpecialForm() FunctionDescriptor {
 		Cost:      1,
 		Display: FunctionDisplay{
 			Label:       "多分支选择",
-			Description: "按顺序匹配值并返回第一个结果；最后一个参数是默认结果。所有结果必须同类型。",
+			Description: "按顺序匹配值并返回第一个结果；通常需要默认结果，枚举成员全部覆盖时可省略。所有结果必须同类型。",
 			Category:    "控制",
 			Color:       "#7C3AED",
 			Icon:        "≡",
@@ -405,7 +413,7 @@ func switchSpecialForm() FunctionDescriptor {
 				{Name: "value", Label: "待匹配值"},
 				{Name: "match", Label: "匹配值"},
 				{Name: "result", Label: "匹配结果"},
-				{Name: "default", Label: "默认结果"},
+				{Name: "default", Label: "默认结果", Description: "枚举已穷尽时可省略"},
 			},
 			Result:   ResultDisplay{Label: "所选结果", Description: "R"},
 			Examples: []FunctionExample{{Title: "按国家路由", Expression: `switch(country,"SG","adyen","MY","stripe","fallback")`}},

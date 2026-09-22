@@ -4,15 +4,17 @@ import (
 	"fmt"
 	"funroute/lang/internal/machine"
 	"funroute/lang/internal/syntax"
+	"slices"
 	"sort"
 	"strings"
 )
 
 type typeTerm struct {
-	kind machine.Kind
-	id   int
-	elem *typeTerm
-	name string // a handle's host name; empty otherwise
+	kind   machine.Kind
+	id     int
+	elem   *typeTerm
+	name   string // a handle's host name; empty otherwise
+	values []string
 }
 
 type inferState struct {
@@ -96,7 +98,10 @@ func (s *inferState) unify(left, right typeTerm) error {
 	if right.kind == machine.VarKind {
 		return s.unify(right, left)
 	}
-	if left.kind != right.kind || left.name != right.name {
+	if anyEnumPair(left, right) {
+		return nil
+	}
+	if left.kind != right.kind || left.name != right.name || !slices.Equal(left.values, right.values) {
 		return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
 	}
 	if left.kind == machine.ArrayKind || left.kind == machine.DictKind {
@@ -106,6 +111,16 @@ func (s *inferState) unify(left, right typeTerm) error {
 		return s.unify(*left.elem, *right.elem)
 	}
 	return nil
+}
+
+// anyEnumPair matches the enum wildcard in a signature against a declared
+// enum. Only a signature can hold the wildcard, so two declared enums with
+// different names still refuse to unify.
+func anyEnumPair(left, right typeTerm) bool {
+	if left.kind != machine.EnumKind || right.kind != machine.EnumKind {
+		return false
+	}
+	return (left.name == "" && len(left.values) == 0) || (right.name == "" && len(right.values) == 0)
 }
 
 func (s *inferState) occurs(id int, term typeTerm) bool {
@@ -144,7 +159,7 @@ func concreteTerm(t machine.Type) typeTerm {
 		elem := concreteTerm(*t.Elem)
 		return containerTerm(t.Kind, elem)
 	}
-	return typeTerm{kind: t.Kind, name: t.Name}
+	return typeTerm{kind: t.Kind, name: t.Name, values: append([]string(nil), t.Values...)}
 }
 
 func (s *inferState) publicType(term typeTerm) (machine.Type, bool) {
@@ -165,7 +180,7 @@ func (s *inferState) publicType(term typeTerm) (machine.Type, bool) {
 		}
 		return machine.DictOf(elem), true
 	default:
-		return machine.Type{Kind: term.kind, Name: term.name}, true
+		return machine.Type{Kind: term.kind, Name: term.name, Values: append([]string(nil), term.values...)}, true
 	}
 }
 
@@ -199,6 +214,9 @@ type inference struct {
 type inferContext struct {
 	args     map[string]typeTerm
 	registry *machine.Registry
+	// enums is the contract's enum namespace: every enum type the host
+	// declared for this program, by name. A bare @member is resolved in it.
+	enums map[string]machine.Type
 }
 
 type programCandidate struct {
@@ -227,6 +245,9 @@ func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string
 	}
 	initial := newInferState()
 	context := newInferContext(initial, names, registry)
+	if err := collectEnums(context.enums, hints, ret); err != nil {
+		return nil, err
+	}
 	if err := applyHints(initial, context.args, hints); err != nil {
 		return nil, err
 	}
@@ -243,7 +264,11 @@ func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string
 	if err != nil {
 		return nil, err
 	}
-	return buildInference(chosen), nil
+	inferred := buildInference(chosen)
+	if err := validateEnumResult(expr, inferred, registry); err != nil {
+		return nil, err
+	}
+	return inferred, nil
 }
 
 // applyResultType keeps the candidates whose result unifies with the declared
@@ -257,11 +282,12 @@ func applyResultType(results []inferResult, ret *machine.Type) ([]inferResult, e
 	var rejected string
 	for _, result := range results {
 		state := result.state.clone()
-		if err := state.unify(result.typ, concreteTerm(*ret)); err != nil {
+		target := concreteTerm(*ret)
+		if err := state.unify(result.typ, target); err != nil {
 			rejected = result.state.describe(result.typ)
 			continue
 		}
-		kept = append(kept, inferResult{typ: result.typ, state: state})
+		kept = append(kept, inferResult{typ: target, state: state})
 	}
 	if len(kept) == 0 {
 		if rejected == "" {
@@ -295,7 +321,7 @@ func newInferContext(state *inferState, names []string, registry *machine.Regist
 	for _, name := range names {
 		args[name] = state.fresh()
 	}
-	return inferContext{args: args, registry: registry}
+	return inferContext{args: args, registry: registry, enums: map[string]machine.Type{}}
 }
 
 func applyHints(state *inferState, args map[string]typeTerm, hints map[string]machine.Type) error {
@@ -426,6 +452,8 @@ func implicitTypeScore(typ machine.Type) int {
 	case machine.FloatKind:
 		return 10
 	case machine.StringKind:
+		return 20
+	case machine.EnumKind:
 		return 20
 	case machine.HandleKind:
 		return 30

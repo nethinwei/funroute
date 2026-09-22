@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 )
 
@@ -69,7 +70,7 @@ func Array(elem Type, values []Value) (Value, error) {
 	builder := newArrayBuilder(elem, len(values))
 	for i, value := range values {
 		if !value.hasType(elem) {
-			return Value{}, fmt.Errorf("array item %d has type %s, want %s", i, value.Type(), elem)
+			return Value{}, fmt.Errorf("array item %d has type %s, want %s", i, value.Type().Summary(), elem.Summary())
 		}
 		if err := value.validateInvariant(); err != nil {
 			return Value{}, fmt.Errorf("array item %d: %w", i, err)
@@ -121,6 +122,9 @@ func (v Value) elemType() Type {
 // hasType answers the same question as Type().Equal(t) without building a Type,
 // which would allocate for every container check in the interpreter loop.
 func (v Value) hasType(t Type) bool {
+	if t.Kind == EnumKind {
+		return v.kind == StringKind && slices.Contains(t.Values, v.s)
+	}
 	if v.kind != t.Kind {
 		return false
 	}
