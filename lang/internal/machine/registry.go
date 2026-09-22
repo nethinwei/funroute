@@ -76,19 +76,21 @@ func (f *RegisteredFunction) IsLazyIf() bool { return f.special == specialIf }
 // Registry is immutable from the point of view of a running VM. Registration
 // is synchronized so applications can build a registry during startup.
 type Registry struct {
-	mu      sync.RWMutex
-	byName  map[string][]*RegisteredFunction
-	byKey   map[string]*RegisteredFunction
-	forms   map[Form]bool
-	handles map[reflect.Type]string
+	mu       sync.RWMutex
+	byName   map[string][]*RegisteredFunction
+	byKey    map[string]*RegisteredFunction
+	forms    map[Form]bool
+	handles  map[reflect.Type]string
+	byHandle map[string]reflect.Type
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		byName:  map[string][]*RegisteredFunction{},
-		byKey:   map[string]*RegisteredFunction{},
-		forms:   map[Form]bool{},
-		handles: map[reflect.Type]string{},
+		byName:   map[string][]*RegisteredFunction{},
+		byKey:    map[string]*RegisteredFunction{},
+		forms:    map[Form]bool{},
+		handles:  map[reflect.Type]string{},
+		byHandle: map[string]reflect.Type{},
 	}
 }
 
@@ -106,7 +108,11 @@ func DefineHandle[T any](registry *Registry, name string) error {
 	if existing, ok := registry.handles[typ]; ok && existing != name {
 		return fmt.Errorf("Go type %s is already handle<%s>", typ, existing)
 	}
+	if existing, ok := registry.byHandle[name]; ok && existing != typ {
+		return fmt.Errorf("handle<%s> is already Go type %s", name, existing)
+	}
 	registry.handles[typ] = name
+	registry.byHandle[name] = typ
 	return nil
 }
 
@@ -122,8 +128,8 @@ func (r *Registry) handleName(typ reflect.Type) (string, bool) {
 func (r *Registry) Handles() []Type {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]Type, 0, len(r.handles))
-	for _, name := range r.handles {
+	out := make([]Type, 0, len(r.byHandle))
+	for name := range r.byHandle {
 		out = append(out, HandleOf(name))
 	}
 	slices.SortFunc(out, func(a, b Type) int { return strings.Compare(a.Name, b.Name) })

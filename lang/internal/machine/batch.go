@@ -2,6 +2,7 @@ package machine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -44,9 +45,12 @@ type batchSite struct {
 }
 
 type batchRequest struct {
-	ctx   context.Context
-	args  []Value
-	done  chan struct{}
+	ctx  context.Context
+	args []Value
+	done chan batchResult
+}
+
+type batchResult struct {
 	value Value
 	err   error
 }
@@ -84,12 +88,19 @@ func (b *Batch) Run(ctx context.Context, args []Value) (Value, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	request := &batchRequest{ctx: ctx, args: args, done: make(chan struct{})}
+	if err := ctx.Err(); err != nil {
+		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, err)
+	}
+	request := &batchRequest{ctx: ctx, args: args, done: make(chan batchResult, 1)}
 	if err := b.enqueue(request); err != nil {
 		return Value{}, err
 	}
-	<-request.done
-	return request.value, request.err
+	select {
+	case result := <-request.done:
+		return result.value, result.err
+	case <-ctx.Done():
+		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, ctx.Err())
+	}
 }
 
 func (b *Batch) enqueue(request *batchRequest) error {
@@ -102,7 +113,7 @@ func (b *Batch) enqueue(request *batchRequest) error {
 	if len(b.pending) >= b.options.MaxSize {
 		requests := b.take()
 		b.mu.Unlock()
-		b.execute(requests)
+		go b.execute(requests)
 		return nil
 	}
 	if len(b.pending) == 1 {
@@ -142,18 +153,34 @@ func (b *Batch) Close() {
 
 // execute is one batch: every hoisted call once, then every program.
 func (b *Batch) execute(requests []*batchRequest) {
-	prefetched := make([]map[int]Prefetched, len(requests))
-	ctx, cancel := earliestDeadline(requests)
+	active := b.rejectCanceled(requests)
+	if len(active) == 0 {
+		return
+	}
+	prefetched := make([]map[int]Prefetched, len(active))
+	ctx, cancel := earliestDeadline(active)
 	defer cancel()
 	for _, site := range b.sites {
-		b.prefetch(ctx, site, requests, prefetched)
+		b.prefetch(ctx, site, active, prefetched)
 	}
 	options := b.options.Run
-	for i, request := range requests {
+	for i, request := range active {
 		options.Prefetched = prefetched[i]
-		request.value, request.err = b.runtime.RunValues(request.ctx, request.args, options)
-		close(request.done)
+		value, err := b.runtime.RunValues(request.ctx, request.args, options)
+		request.done <- batchResult{value: value, err: err}
 	}
+}
+
+func (b *Batch) rejectCanceled(requests []*batchRequest) []*batchRequest {
+	active := make([]*batchRequest, 0, len(requests))
+	for _, request := range requests {
+		if err := request.ctx.Err(); err != nil {
+			request.done <- batchResult{err: fmt.Errorf("%w: %v", ErrDeadline, err)}
+			continue
+		}
+		active = append(active, request)
+	}
+	return active
 }
 
 // earliestDeadline is the budget a shared engine call runs under: the tightest
@@ -165,10 +192,25 @@ func earliestDeadline(requests []*batchRequest) (context.Context, context.Cancel
 			earliest = deadline
 		}
 	}
+	var ctx context.Context
+	var cancel context.CancelFunc
 	if earliest.IsZero() {
-		return context.Background(), func() {}
+		ctx, cancel = context.WithCancel(context.Background())
+	} else {
+		ctx, cancel = context.WithDeadline(context.Background(), earliest)
 	}
-	return context.WithDeadline(context.Background(), earliest)
+	stops := make([]func() bool, 0, len(requests))
+	for _, request := range requests {
+		if request.ctx.Done() != nil {
+			stops = append(stops, context.AfterFunc(request.ctx, cancel))
+		}
+	}
+	return ctx, func() {
+		for _, stop := range stops {
+			stop()
+		}
+		cancel()
+	}
 }
 
 // prefetch runs one hoisted call for the whole batch and files each request's
@@ -178,15 +220,10 @@ func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchR
 	for i, request := range requests {
 		calls[i] = b.operands(site, request.args)
 	}
-	if site.function.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, site.function.Timeout)
-		defer cancel()
-	}
-	results, err := site.function.EvalBatch(ctx, calls)
-	if err != nil && ctx.Err() != nil {
+	results, err := invokeBatch(ctx, site.function, calls)
+	if err != nil && !errors.Is(err, ErrDeadline) && ctx.Err() != nil {
 		err = fmt.Errorf("%w: %v", ErrDeadline, err)
-	} else if err != nil {
+	} else if err != nil && !errors.Is(err, ErrDeadline) && !errors.Is(err, ErrExtension) {
 		err = fmt.Errorf("%w: %v", ErrExtension, err)
 	}
 	if err == nil && len(results) != len(requests) {
@@ -201,6 +238,52 @@ func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchR
 			continue
 		}
 		prefetched[i][site.PC] = Prefetched{Value: results[i]}
+	}
+}
+
+func invokeBatch(ctx context.Context, function *RegisteredFunction, calls [][]Value) ([]Value, error) {
+	if function.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, function.Timeout)
+		defer cancel()
+	}
+	var results []Value
+	var err error
+	if function.Detached {
+		results, err = callBatchDetached(ctx, function, calls)
+	} else {
+		results, err = callBatchSafely(ctx, function, calls)
+	}
+	if err != nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDeadline, err)
+	}
+	return results, err
+}
+
+func callBatchSafely(ctx context.Context, function *RegisteredFunction, calls [][]Value) (results []Value, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("batch extension panicked: %v", recovered)
+		}
+	}()
+	return function.EvalBatch(ctx, calls)
+}
+
+func callBatchDetached(ctx context.Context, function *RegisteredFunction, calls [][]Value) ([]Value, error) {
+	type outcome struct {
+		values []Value
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		values, err := callBatchSafely(ctx, function, calls)
+		done <- outcome{values: values, err: err}
+	}()
+	select {
+	case result := <-done:
+		return result.values, result.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 

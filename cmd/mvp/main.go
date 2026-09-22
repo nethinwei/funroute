@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"time"
 
 	"funroute/extensions/paymentdemo"
 	"funroute/mvp"
@@ -21,5 +22,13 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("FunRoute MVP: http://%s", *address)
-	log.Fatal(http.ListenAndServe(*address, server))
+	httpServer := &http.Server{
+		Addr:              *address,
+		Handler:           server,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	log.Fatal(httpServer.ListenAndServe())
 }

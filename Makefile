@@ -1,15 +1,25 @@
 GO ?= go
+NODE ?= node
 
-.PHONY: ci build test lint vet fmt check-fmt run clean
+.PHONY: ci build test test-js check-js lint vet fmt check-fmt run clean
 
 # ci must pass before any commit.
-ci: check-fmt vet lint build test
+ci: check-fmt check-js vet lint build test test-js
 
 build:
 	$(GO) build ./...
 
 test:
 	$(GO) test ./...
+
+test-js:
+	$(NODE) --test web/funroute-core.test.mjs
+
+check-js:
+	$(NODE) --check web/funroute-core.js
+	$(NODE) --check web/funroute-designer.js
+	$(NODE) --check web/funroute-contract.js
+	$(NODE) --check web/app.js
 
 # lint enforces the style budget: <=50 lines per func, <=3 nesting levels,
 # <=800 lines per file. See tools/lint.

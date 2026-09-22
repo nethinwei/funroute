@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"unsafe"
@@ -93,6 +94,15 @@ func TestBoundaryKeepsTheInvariants(t *testing.T) {
 	}
 	if _, err := FromValue[[]int64](Float(1)); err == nil || !strings.Contains(err.Error(), "want []int64") {
 		t.Fatalf("type error = %v", err)
+	}
+}
+
+func TestValueConstructorsRejectNestedNonFiniteFloats(t *testing.T) {
+	if _, err := Array(FloatType, []Value{Float(math.Inf(1))}); err == nil {
+		t.Fatal("array accepted infinity")
+	}
+	if _, err := Dict(FloatType, map[string]Value{"risk": Float(math.NaN())}); err == nil {
+		t.Fatal("dictionary accepted NaN")
 	}
 }
 

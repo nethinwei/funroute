@@ -18,38 +18,6 @@ func tokenize(source string) ([]token, error) {
 	return lex.tokens()
 }
 
-// Infix operators are pure source sugar: they desugar into calls, so the AST,
-// ExprJSON and the canvas never see them. Every one is left associative.
-var precedences = map[tokenKind]int{
-	tokenOrOr:      1,
-	tokenAndAnd:    2,
-	tokenEqEq:      3,
-	tokenBangEq:    3,
-	tokenLess:      4,
-	tokenLessEq:    4,
-	tokenGreater:   4,
-	tokenGreaterEq: 4,
-	tokenPlus:      5,
-	tokenMinus:     5,
-	tokenStar:      6,
-	tokenSlash:     6,
-}
-
-// binaryFunctions maps an operator to the kernel function it becomes. The
-// operators missing here (&&, ||, !=) are derived forms that expand into `if`
-// instead; see desugarBinary.
-var binaryFunctions = map[tokenKind]string{
-	tokenEqEq:      "eq",
-	tokenLess:      "lt",
-	tokenLessEq:    "le",
-	tokenGreater:   "gt",
-	tokenGreaterEq: "ge",
-	tokenPlus:      "add",
-	tokenMinus:     "sub",
-	tokenStar:      "mul",
-	tokenSlash:     "div",
-}
-
 // Parse reads an expression. A program is only an expression: the contract it
 // runs under is the host's, and arrives through CompileOptions.
 func Parse(source string) (Expr, error) {
@@ -91,49 +59,51 @@ func (p *parser) parseBinary(min int) (Expr, error) {
 	}
 	for {
 		operator := p.peek()
-		precedence, ok := precedences[operator.kind]
-		if !ok || precedence < min {
+		spec, ok := binaryOperators[operator.kind]
+		if !ok || spec.precedence < min {
 			return left, nil
 		}
 		p.index++
-		right, err := p.parseBinary(precedence + 1)
+		right, err := p.parseBinary(spec.precedence + 1)
 		if err != nil {
 			return nil, err
 		}
-		left = p.desugarBinary(operator, left, right)
+		left = p.expandOperator(operator, spec, left, right)
 	}
 }
 
-func (p *parser) desugarBinary(operator token, left, right Expr) Expr {
-	switch operator.kind {
-	case tokenBangEq:
+func (p *parser) expandOperator(operator token, spec operatorSpec, operands ...Expr) Expr {
+	switch spec.expansion {
+	case expandNotEqual:
+		left, right := operands[0], operands[1]
 		return p.pick(operator, p.call(operator, "eq", left, right), p.boolean(operator, false), p.boolean(operator, true))
-	case tokenAndAnd:
+	case expandAnd:
 		// Short circuits, because if is lazy.
-		return p.pick(operator, left, right, p.boolean(operator, false))
-	case tokenOrOr:
-		return p.pick(operator, left, p.boolean(operator, true), right)
+		return p.pick(operator, operands[0], operands[1], p.boolean(operator, false))
+	case expandOr:
+		return p.pick(operator, operands[0], p.boolean(operator, true), operands[1])
+	case expandNot:
+		return p.pick(operator, operands[0], p.boolean(operator, false), p.boolean(operator, true))
 	default:
-		return p.call(operator, binaryFunctions[operator.kind], left, right)
+		return p.call(operator, spec.function, operands...)
 	}
 }
 
 func (p *parser) parseUnary() (Expr, error) {
 	operator := p.peek()
-	switch operator.kind {
-	case tokenMinus:
-		p.index++
-		return p.negate(operator)
-	case tokenBang:
-		p.index++
-		operand, err := p.parseUnary()
-		if err != nil {
-			return nil, err
-		}
-		return p.pick(operator, operand, p.boolean(operator, false), p.boolean(operator, true)), nil
-	default:
+	spec, ok := unaryOperators[operator.kind]
+	if !ok {
 		return p.parsePrimary()
 	}
+	p.index++
+	if spec.expansion == expandNegate {
+		return p.negate(operator)
+	}
+	operand, err := p.parseUnary()
+	if err != nil {
+		return nil, err
+	}
+	return p.expandOperator(operator, spec, operand), nil
 }
 
 // negate keeps -42 a literal and turns -e into sub(0, e).

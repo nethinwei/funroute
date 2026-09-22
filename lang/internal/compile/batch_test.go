@@ -246,6 +246,118 @@ func TestBatchErrorsSurfaceAtTheCall(t *testing.T) {
 	}
 }
 
+func TestBatchPanicsAreContainedAndTyped(t *testing.T) {
+	registry := machine.CoreRegistry()
+	err := machine.Model(registry, "model.panic_v1", machine.Doc{Cost: 1},
+		func(x float64) (float64, error) { return x, nil },
+		func([]float64) ([]float64, error) { panic("batch exploded") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := CompileExpr(`model.panic_v1(x)`, registry, CompileOptions{Args: []ArgSpec{{Name: "x", Type: machine.FloatType}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := machine.NewBatch(runtime, machine.BatchOptions{MaxSize: 1})
+	_, err = batch.Run(context.Background(), []machine.Value{machine.Float(1)})
+	if !errors.Is(err, machine.ErrExtension) || !strings.Contains(err.Error(), "batch exploded") {
+		t.Fatalf("batch panic = %v", err)
+	}
+}
+
+func TestCanceledBatchRequestReturnsPromptly(t *testing.T) {
+	var single, batched atomic.Int64
+	registry := modelRegistry(t, &single, &batched)
+	artifact, err := CompileExpr(`model.embed_v1(features)`, registry, CompileOptions{
+		Args: []ArgSpec{{Name: "features", Type: machine.ArrayOf(machine.FloatType)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := machine.NewBatch(runtime, machine.BatchOptions{MaxSize: 64, MaxWait: time.Second})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	value, _ := machine.ToValue([]float64{1})
+	go func() {
+		_, runErr := batch.Run(ctx, []machine.Value{value})
+		done <- runErr
+	}()
+	time.Sleep(5 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, machine.ErrDeadline) {
+			t.Fatalf("canceled request = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("canceled request stayed queued")
+	}
+	batch.Close()
+	if batched.Load() != 0 {
+		t.Fatalf("canceled request reached model batch %d times", batched.Load())
+	}
+}
+
+func TestPrefetchedCallStillHonorsRequestCancellation(t *testing.T) {
+	registry := machine.CoreRegistry()
+	if err := machine.Model(registry, "model.score_v1", machine.Doc{Cost: 1},
+		func(x float64) (float64, error) { return x, nil },
+		func(xs []float64) ([]float64, error) { return xs, nil }); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := CompileExpr(`model.score_v1(x)`, registry, CompileOptions{Args: []ArgSpec{{Name: "x", Type: machine.FloatType}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sites := machine.PrefetchSites(artifact)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = runtime.RunValues(ctx, []machine.Value{machine.Float(1)}, machine.RunOptions{
+		Prefetched: map[int]machine.Prefetched{sites[0].PC: {Value: machine.Float(1)}},
+	})
+	if !errors.Is(err, machine.ErrDeadline) {
+		t.Fatalf("canceled prefetched call = %v", err)
+	}
+}
+
+func TestDetachedBatchStopsWaitingAtItsTimeout(t *testing.T) {
+	registry := machine.CoreRegistry()
+	release := make(chan struct{})
+	err := machine.Model(registry, "model.stubborn_v1", machine.Doc{Cost: 1, Timeout: 5 * time.Millisecond, Detached: true},
+		func(x float64) (float64, error) { return x, nil },
+		func(xs []float64) ([]float64, error) { <-release; return xs, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := CompileExpr(`model.stubborn_v1(x)`, registry, CompileOptions{Args: []ArgSpec{{Name: "x", Type: machine.FloatType}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := machine.NewBatch(runtime, machine.BatchOptions{MaxSize: 1})
+	started := time.Now()
+	_, err = batch.Run(context.Background(), []machine.Value{machine.Float(1)})
+	close(release)
+	if !errors.Is(err, machine.ErrDeadline) || time.Since(started) > time.Second {
+		t.Fatalf("detached batch = %v after %s", err, time.Since(started))
+	}
+}
+
 // BenchmarkBatchVersusSingle models an engine with a fixed per-call overhead:
 // batching amortises it across the requests of one batch.
 func BenchmarkBatchVersusSingle(b *testing.B) {

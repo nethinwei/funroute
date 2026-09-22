@@ -91,10 +91,11 @@ primary    = integer | float | string | "true" | "false"
 |---|---|---|
 | 1 | `\|\|` | `if(a, true, b)`（短路） |
 | 2 | `&&` | `if(a, b, false)`（短路） |
-| 3 | `==` `!=` `<` `<=` `>` `>=` | `eq` / `if(eq(a,b),false,true)` / `lt` / `le` / `gt` / `ge` |
-| 4 | `+` `-` | `add` / `sub` |
-| 5 | `*` `/` | `mul` / `div` |
-| 6 | `!` `-`（一元） | `if(a,false,true)` / `sub(0,a)` |
+| 3 | `==` `!=` | `eq` / `if(eq(a,b),false,true)` |
+| 4 | `<` `<=` `>` `>=` | `lt` / `le` / `gt` / `ge` |
+| 5 | `+` `-` | `add` / `sub` |
+| 6 | `*` `/` | `mul` / `div` |
+| 7 | `!` `-`（一元） | `if(a,false,true)` / `sub(0,a)` |
 
 二元运算符都是左结合，`(...)` 可覆盖优先级。另外：`//` 行注释、`1_000_000` 数字分隔符、列表尾随逗号——这三项是纯词法糖，不进 AST，所以不会在 ExprJSON 往返中保留。
 
@@ -331,7 +332,7 @@ err := registry.Register(lang.FunctionSpec{
     Cost:   25,
     Eval: func(args []lang.Value) (lang.Value, error) {
         // 这里只应进行确定性的纯计算；动态数据应通过 args 传入。
-        return lang.Float(0.9), nil
+        return lang.Float(0.9)
     },
     Display: lang.FunctionDisplay{
         Label:       "风险评分",
@@ -398,7 +399,7 @@ result, err := batch.Run(ctx, args)   // 任意 goroutine 调用，阻塞到本�
 
 错误是类型化的：`ErrDeadline`（预算耗尽）、`ErrExtension`（函数报错）、`ErrFuel`（程序超出成本上限）用 `errors.Is` 区分。规则层的降级形式 `fallback` 只接前两种，程序自己的问题不该被规则吞掉。
 
-`Batch` 只提升字节码能证明**提前算不改变任何可观察行为**的调用（`PrefetchSites`）：参数直接来自请求参数或常量、不在循环里、没有条件跳转能跳过它。`if`/`switch` 分支里的模型调用仍按需逐条执行，惰性语义不变。被提升的调用在程序里仍扣 fuel，所以预算与运行方式无关；引擎报错记在每个请求上，只在程序真的走到那次调用时抛出。
+`Batch` 只提升字节码能证明**提前算不改变任何可观察行为**的调用（`PrefetchSites`）：参数直接来自请求参数或常量、不在循环里、没有条件跳转能跳过它。`if`/`switch` 分支里的模型调用仍按需逐条执行，惰性语义不变。被提升的调用在程序里仍扣 fuel，所以预算与运行方式无关；引擎报错记在每个请求上，只在程序真的走到那次调用时抛出。排队中的请求取消后会立即返回并在 flush 时被剔除；批实现同样捕获 panic，并遵守 `Timeout` / `Detached`。
 
 ## 包边界
 
@@ -407,6 +408,8 @@ lang/lang.go              唯一的公开接口：类型别名与转发，约 40
 lang/internal/machine/    值、类型、字节码、VM、帧、注册表、目录     ← 不依赖任何上层
 lang/internal/syntax/     词法、语法、AST、ExprJSON                 ← 只依赖 machine
 lang/internal/compile/    推导、编译、常量折叠、契约、导出视图        ← 依赖 syntax + machine
+web/funroute-core.js      无 DOM 的 JS SDK：语言模型、API client、workspace
+web/funroute-designer.js 可选 Web Component，只负责交互与渲染
 ```
 
 依赖严格单向，`go list -deps ./lang/internal/machine` 可验证。宿主需要的只有四样：
@@ -454,7 +457,7 @@ score, _ := runtime.RunValues(ctx, []lang.Value{features}, lang.RunOptions{Fuel:
 value, _ := lang.FromValue[float64](score)
 ```
 
-`Run(map)` 也走同一条路：`map[string]any` 里放的是 `[]float64` 时直接包装；只有 JSON 解码出的 `[]any`、`float64` 当 int 这类形态才逐元素转换。前端要渲染的目录用 `lang.Catalog(registry)` 取 —— 它比 `Registry.Catalog()` 多带每种 ExprJSON 节点的 schema。
+`lang.Float(x)` 返回 `(Value, error)`，和 `ToValue(float64)` 一样在公开边界拒绝 NaN / Infinity。`Run(map)` 也走同一条路：`map[string]any` 里放的是 `[]float64` 时直接包装；只有 JSON 解码出的 `[]any`、`float64` 当 int 这类形态才逐元素转换。前端要渲染的目录用 `lang.Catalog(registry)` 取 —— 它比 `Registry.Catalog()` 多带每种 ExprJSON 节点的 schema 与源码语法描述。
 
 职责划分：
 
@@ -511,11 +514,30 @@ Export(Import(Export(expr))) == Export(expr)
   { "name": "yield", "kind": "expr" } ] }
 ```
 
-前端的 `cleanNode`、空白模板与卡片布局都从它生成，所以新增或修改节点时，Go 与 JS 之间没有第二份要同步的清单。
+前端的 `cleanNode`、空白模板与卡片布局都从它生成。运算符也只在 Go 的 `syntax/operators.go` 定义一次：parser、lexer 和 `/api/catalog.source` 共用同一张表；catalog 下发优先级、结合性以及 canonical ExprJSON 展开模板。JS 只解释这份描述，不再维护另一套 `INFIX` / `PRECEDENCE` / `DERIVED_TEMPLATES`，所以新增或修改语法只有一个权威修改点。
 
 ## 拖拽式 JS 库
 
-`web/funroute-designer.js` 注册原生 Web Component，`web/funroute-source.js` 是它与宿主共用的纯函数模块（表达式打印、格式化、词法分析，不碰 DOM）：
+`web/funroute-core.js` 是公开的无 DOM SDK；`FunRouteLanguage` 消费 Go catalog，`FunRouteClient` 封装 HTTP，`FunRouteWorkspace` 管理文档、契约、编译和运行状态。任何团队都可以在这层之上重建 React/Vue/原生 UI。`web/funroute-designer.js` 只是随仓库提供的一套原生 Web Component 视图，`web/funroute-source.js` 保留为兼容 re-export。
+
+只使用逻辑层：
+
+```js
+import { FunRouteClient, FunRouteWorkspace } from "./funroute-core.js";
+
+const workspace = new FunRouteWorkspace(new FunRouteClient({ baseURL: "" }));
+await workspace.initialize();
+workspace.setContract({ args: [
+  { name: "amount", type: "int" },
+  { name: "healthy", type: "bool" },
+], result: { type: "bool" } });
+await workspace.checkContract();
+await workspace.parseSource("amount > 1000 && healthy");
+const artifact = await workspace.compile();
+const result = await workspace.run({ amount: 1200, healthy: true });
+```
+
+使用随附 UI：
 
 ```html
 <link rel="stylesheet" href="funroute-designer.css">
@@ -523,8 +545,13 @@ Export(Import(Export(expr))) == Export(expr)
 <script type="module">
   import "./funroute-designer.js";
   const designer = document.querySelector("#designer");
-  designer.catalog = await fetch("/api/catalog").then(r => r.json()); // lang.Catalog(registry) 的输出，含 nodes
-  designer.value = {version: 2, expr: {node: "int", int: 1}};
+  const catalog = await fetch("/api/catalog").then(r => r.json());
+  designer.catalog = catalog; // lang.Catalog(registry) 的输出，含 nodes 与 source
+  designer.runtimeContract = await fetch("/api/contract/check", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({contract: {args: [], result: {type: "int"}}}),
+  }).then(r => r.json());
+  designer.value = {version: catalog.source.expr_json_version, expr: {node: "int", int: 1}};
   console.log(designer.value);  // ExprJSON
   console.log(designer.source); // 1
 </script>
@@ -532,6 +559,10 @@ Export(Import(Export(expr))) == Export(expr)
 
 组件支持：
 
+- 默认使用“策略大纲 + 单步编辑”的引导视图，只展开当前步骤；熟练用户可随时切换完整递归树；
+- 组件既可拖拽，也可先点击选中、再点击空槽放入，减少新用户学习成本；
+- 参数节点只能从已检查运行契约的入参或当前位置可见的本地变量中选择；`for`、`reduce`、`let` 的作用域来自 Go AST `binds` 元数据，JS 不另写一套语法规则；
+- 随附 MVP 在每次画布修改后自动编译，并在画布内提示参数作用域和返回类型是否符合运行契约；自定义 UI 可调用 `FunRouteLanguage.scopeAtPath()` 复用同一作用域逻辑；
 - 从函数目录拖入函数卡片；
 - 把变量、整数、浮点数、字符串、布尔值、数组和字典拖入参数槽；
 - 移动、删除和嵌套已有节点；
@@ -540,7 +571,7 @@ Export(Import(Export(expr))) == Export(expr)
 - 函数分类、搜索、说明、签名和参数提示；
 - `value` 双向绑定规范化 ExprJSON，并触发 `funroute-change` 事件。
 
-尺寸行为：面板高度由画布一侧决定，节点越多面板越高，下限是跟随窗口的 `max(360px, 55vh)`；画布只在节点树过宽时出现横向滚动条。函数目录列按外层宽度在 210–340px 之间伸缩，它脱离文档流并在内部滚动，所以目录再长也不会把面板撑高，底部也不会留白。宿主给 `<funroute-designer>` 设 `height` 仍然有效，此时改由画布纵向滚动。
+组件有自己的滚动目录与画布，并在窄屏切成上下布局；宿主可通过外层尺寸控制可视区域。
 
 不依赖 React/Vue、构建工具或第三方包，可以嵌入现有管理后台。
 
@@ -550,15 +581,7 @@ Export(Import(Export(expr))) == Export(expr)
 go run ./cmd/mvp
 ```
 
-打开 `http://127.0.0.1:8080`。页面内置三个模板：
-
-- 支付路由：根据扩展函数 `route.is_healthy_v1` 选择主备渠道；
-- `switch`：按国家选择渠道；
-- `for`：筛选健康渠道数组。
-
-页面自上而下是：工具栏、带语法高亮的表达式编辑器、参数与执行结果、拖拽画布、规范化 ExprJSON。参数和结果紧挨着表达式，改完参数不用滚到页面底部再运行。
-
-编辑器里直接键入表达式再点“生成节点”就解析成节点树（回车等价，Shift+回车换行），“格式化”把超过 40 字符的表达式按参数逐行缩进，“复制”把当前表达式送进剪贴板；拖拽修改节点时编辑器内容同步刷新为格式化后的源码。
+打开 `http://127.0.0.1:8080`。Policy Studio 先定义并检查运行契约，再编写表达式和策略画布；表达式区始终展示可用入参与必须返回的类型。契约检查会返回由 Go 类型系统解析过的入参，因此输入值、试运行按钮、实际返回值和返回类型核对都放在同一个契约工作区里。编译时还会检查表达式实际读取的参数与返回类型是否匹配。窄屏自动改为单列。编辑器用 `⌘/Ctrl + Enter` 应用文本，“复制”会把宿主契约作为注释一并带走。参数输入严格按编译类型解析，`12abc`、模糊布尔值和容器内的错类型不会再被静默截断或转换。
 
 MVP 服务只持有一个注册表，页面上没有权限开关：这个 demo 注册表启用了全部形式。真实部署应按登录身份给不同注册表，少写一个 `EnableForm` 参数就是一档更小的语言。
 
@@ -566,6 +589,7 @@ MVP 提供：
 
 ```text
 GET  /api/catalog  函数目录与展示元数据，内容由服务端注册表决定
+POST /api/contract/check  独立检查运行契约（编译和运行接口要求契约）
 POST /api/parse    源码 → 规范化 ExprJSON（只解析，不做类型推导）
 POST /api/compile  ExprJSON/源码 → 参数、返回类型和 Artifact 摘要
 POST /api/run      编译并执行
@@ -602,7 +626,7 @@ VM 是确定性栈式字节码解释器，**程序执行本身不分配内存**�
 - **操作数零拷贝**：出栈返回栈上视窗而非副本，因此扩展函数收到的 `[]Value` 只在调用期间有效（`EvalFunc` 文档已说明，需要保留就自行复制）。
 - **边界不分配**：`Run(map)` 对每个参数先试精确 Go 类型再走宽松路径，失败用哨兵错误而非 `fmt.Errorf`；`ToValue`/`FromValue` 的标量经指针匹配，不装箱。
 - **紧凑枚举**：`Kind` 与 `OpCode` 是 `uint8`，指令分派走跳表；两者的 JSON 表示仍是原来的名字，因此 Artifact digest 与既有 ExprJSON 不受影响。
-- **panic 防护在激活层**：`recover` 每次激活一次，不在每次扩展调用上。
+- **panic 防护贴着并发边界**：普通调用每次激活只 `recover` 一次；`Detached` 与批调用在自己的 goroutine / batch 边界恢复，panic 不会逃出进程。
 - **不依赖参数的运算不进运行时**：常量折叠在编译期把闭合子表达式算成常量，折成常量的 `let` 绑定连局部槽都不占。编译因此略慢（一次性），运行时更短。
 - **两条调用路径**：`Run(map)` 按名字转换，`RunValues(slice)` 按 ABI 顺序直接传 —— profile 显示名字查找与转换占一次短决策的 22%，所以热路径值得走后者。
 
@@ -623,8 +647,9 @@ VM 是确定性栈式字节码解释器，**程序执行本身不分配内存**�
 ## 验证
 
 ```bash
-make ci     # check-fmt + vet + lint + build + test
-make test   # 只跑测试
+make ci       # Go/JS 语法检查、vet、lint、build 与全部测试
+make test     # 只跑 Go 测试
+make test-js  # 无 DOM JS 核心测试
 go test ./lang/internal/compile -bench . -benchtime 2000x   # VM 基准
 ```
 

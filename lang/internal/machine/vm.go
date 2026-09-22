@@ -270,6 +270,10 @@ func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOption
 			r.releaseFrame(f)
 			return Value{}, fmt.Errorf("argument %q: expected %s, got %s", param.Name, param.Type, args[i].Type())
 		}
+		if err := args[i].validateInvariant(); err != nil {
+			r.releaseFrame(f)
+			return Value{}, fmt.Errorf("argument %q: %w", param.Name, err)
+		}
 		space[i] = args[i]
 	}
 	return r.runFrame(ctx, f, space, options)

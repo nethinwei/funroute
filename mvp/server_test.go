@@ -51,9 +51,54 @@ func TestCatalogAPIIncludesExtensionPresentation(t *testing.T) {
 	}
 }
 
+func TestContractCheckAPIValidatesTheRuntimeABI(t *testing.T) {
+	server := testServer(t)
+	valid := postJSON(t, server, "/api/contract/check", `{
+		"contract":{"args":[{"name":"amount","type":"int"}],"result":{"type":"string"}}
+	}`)
+	if valid.Code != http.StatusOK || !strings.Contains(valid.Body.String(), `"valid":true`) {
+		t.Fatalf("valid status = %d, body = %s", valid.Code, valid.Body.String())
+	}
+	var checked struct {
+		Args   []lang.Parameter `json:"args"`
+		Result lang.Type        `json:"result"`
+	}
+	if err := json.Unmarshal(valid.Body.Bytes(), &checked); err != nil {
+		t.Fatal(err)
+	}
+	if len(checked.Args) != 1 || checked.Args[0].Name != "amount" || !checked.Result.Equal(lang.StringType) {
+		t.Fatalf("checked contract = %#v", checked)
+	}
+	for _, body := range []string{
+		`{"contract":{"args":[],"result":null}}`,
+		`{"contract":{"args":[{"name":"amount","type":"int"},{"name":"amount","type":"int"}],"result":{"type":"int"}}}`,
+		`{"contract":{"args":[{"name":"bad-name","type":"int"}],"result":{"type":"int"}}}`,
+	} {
+		response := postJSON(t, server, "/api/contract/check", body)
+		if response.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestCompileRequiresAndChecksTheRuntimeContract(t *testing.T) {
+	server := testServer(t)
+	missing := postJSON(t, server, "/api/compile", `{"source":"1"}`)
+	if missing.Code != http.StatusUnprocessableEntity || !strings.Contains(missing.Body.String(), "contract is required") {
+		t.Fatalf("missing status = %d, body = %s", missing.Code, missing.Body.String())
+	}
+	mismatch := postJSON(t, server, "/api/compile", `{
+		"source":"amount + 1",
+		"contract":{"args":[{"name":"amount","type":"int"}],"result":{"type":"string"}}
+	}`)
+	if mismatch.Code != http.StatusUnprocessableEntity || !strings.Contains(mismatch.Body.String(), "expression returns") {
+		t.Fatalf("mismatch status = %d, body = %s", mismatch.Code, mismatch.Body.String())
+	}
+}
+
 func TestCompileAndRunAPI(t *testing.T) {
 	server := testServer(t)
-	compileBody := []byte(`{"source":"if(route.is_healthy_v1(health),\"adyen\",\"stripe\")"}`)
+	compileBody := []byte(`{"source":"if(route.is_healthy_v1(health),\"adyen\",\"stripe\")","contract":{"args":[{"name":"health","type":"string"}],"result":{"type":"string"}}}`)
 	compileRequest := httptest.NewRequest(http.MethodPost, "/api/compile", bytes.NewReader(compileBody))
 	compileRequest.Header.Set("Content-Type", "application/json")
 	compileRecorder := httptest.NewRecorder()
@@ -69,7 +114,7 @@ func TestCompileAndRunAPI(t *testing.T) {
 		t.Fatalf("compiled = %#v", compiled)
 	}
 
-	runBody := []byte(`{"source":"if(route.is_healthy_v1(health),\"adyen\",\"stripe\")","args":{"health":"UP"}}`)
+	runBody := []byte(`{"source":"if(route.is_healthy_v1(health),\"adyen\",\"stripe\")","contract":{"args":[{"name":"health","type":"string"}],"result":{"type":"string"}},"args":{"health":"UP"}}`)
 	runRequest := httptest.NewRequest(http.MethodPost, "/api/run", bytes.NewReader(runBody))
 	runRequest.Header.Set("Content-Type", "application/json")
 	runResponse := httptest.NewRecorder()
@@ -93,11 +138,11 @@ func TestRunAPISupportsFunctionalSwitchAndFor(t *testing.T) {
 		want any
 	}{
 		{
-			body: `{"source":"switch(country,\"SG\",\"adyen\",\"stripe\")","args":{"country":"SG"}}`,
+			body: `{"source":"switch(country,\"SG\",\"adyen\",\"stripe\")","contract":{"args":[{"name":"country","type":"string"}],"result":{"type":"string"}},"args":{"country":"SG"}}`,
 			want: "adyen",
 		},
 		{
-			body: `{"source":"[channel for channel in channels if route.is_healthy_v1(channel)]","args":{"channels":["UP","DOWN","UP"]}}`,
+			body: `{"source":"[channel for channel in channels if route.is_healthy_v1(channel)]","contract":{"args":[{"name":"channels","type":"array<string>"}],"result":{"type":"array<string>"}},"args":{"channels":["UP","DOWN","UP"]}}`,
 			want: []any{"UP", "UP"},
 		},
 	} {
@@ -122,8 +167,15 @@ func TestStaticMVPIsEmbedded(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()
 	testServer(t).ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "FunRoute Designer") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "FunRoute Policy Studio") ||
+		!strings.Contains(response.Body.String(), "funroute-designer") {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/funroute-semantic.js", nil)
+	response = httptest.NewRecorder()
+	testServer(t).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "renderSemanticTree") {
+		t.Fatalf("semantic renderer: status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 
@@ -184,12 +236,12 @@ func TestRunAPISupportsReduceAndComprehension(t *testing.T) {
 	}{
 		{
 			name: "reduce",
-			body: `{"source":"reduce(prices,price,total,0,add(total,price))","args":{"prices":[10,20,30]}}`,
+			body: `{"source":"reduce(prices,price,total,0,add(total,price))","contract":{"args":[{"name":"prices","type":"array<int>"}],"result":{"type":"int"}},"args":{"prices":[10,20,30]}}`,
 			want: int64(60),
 		},
 		{
 			name: "comprehension",
-			body: `{"source":"[add(x,1) for x in items if gt(x,1)]","args":{"items":[1,2,3]}}`,
+			body: `{"source":"[add(x,1) for x in items if gt(x,1)]","contract":{"args":[{"name":"items","type":"array<int>"}],"result":{"type":"array<int>"}},"args":{"items":[1,2,3]}}`,
 			want: []any{int64(3), int64(4)},
 		},
 	} {
@@ -218,7 +270,7 @@ func TestServerIsBoundedByItsRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := postJSON(t, server, "/api/run", `{"source":"reduce(x in items, t from 0, add(t,x))","args":{"items":[1]}}`)
+	response := postJSON(t, server, "/api/run", `{"source":"reduce(x in items, t from 0, add(t,x))","contract":{"args":[{"name":"items","type":"array<int>"}],"result":{"type":"int"}},"args":{"items":[1]}}`)
 	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "reduce is not enabled") {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -165,6 +166,13 @@ func decodeArgs(source string) (map[string]any, error) {
 	decoder.UseNumber()
 	var rawArgs map[string]any
 	if err := decoder.Decode(&rawArgs); err != nil {
+		return nil, fmt.Errorf("decode -args: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("decode -args: trailing JSON value")
+		}
 		return nil, fmt.Errorf("decode -args: %w", err)
 	}
 	return rawArgs, nil

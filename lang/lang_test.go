@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -129,6 +130,20 @@ func TestHostCanRenderTheCatalog(t *testing.T) {
 	catalog := lang.Catalog(hostRegistry(t))
 	if len(catalog.Functions) == 0 || len(catalog.SpecialForms) == 0 || len(catalog.Nodes) == 0 {
 		t.Fatalf("catalog = %+v", catalog)
+	}
+	if catalog.Source.ExprJSONVersion != lang.ExprJSONVersion || catalog.ArtifactVersion != lang.ArtifactVersion || len(catalog.Source.Operators) == 0 {
+		t.Fatalf("catalog versions/source = %+v", catalog)
+	}
+}
+
+func TestPublicFloatRejectsNonFiniteValues(t *testing.T) {
+	if _, err := lang.Float(math.NaN()); err == nil {
+		t.Fatal("public Float accepted NaN")
+	}
+	if value, err := lang.Float(0.75); err != nil {
+		t.Fatal(err)
+	} else if number, _ := value.Float(); number != 0.75 {
+		t.Fatalf("float = %v", number)
 	}
 }
 

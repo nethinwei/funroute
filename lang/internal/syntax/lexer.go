@@ -39,17 +39,9 @@ const (
 	tokenAssign
 )
 
-// operatorTokens is scanned longest-first, so "<=" wins over "<" and "=>" over
-// "=".
-var operatorTokens = []struct {
-	text string
-	kind tokenKind
-}{
-	{"<=", tokenLessEq}, {">=", tokenGreaterEq}, {"==", tokenEqEq}, {"!=", tokenBangEq},
-	{"&&", tokenAndAnd}, {"||", tokenOrOr}, {"=>", tokenFatArrow},
-	{"+", tokenPlus}, {"-", tokenMinus}, {"*", tokenStar}, {"/", tokenSlash}, {"=", tokenAssign},
-	{"<", tokenLess}, {">", tokenGreater}, {"!", tokenBang},
-}
+// operatorTokens comes from the parser's sourceOperators table and is scanned
+// longest-first, so "<=" wins over "<" and "=>" over "=".
+var operatorTokens = lexedOperators()
 
 type token struct {
 	kind tokenKind

@@ -3,64 +3,103 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FunRoute Designer</title>
+  <meta name="theme-color" content="#0b1020">
+  <title>FunRoute Policy Studio</title>
   <link rel="stylesheet" href="/funroute-designer.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="app-header">
-    <div class="brand">
-      <div class="brand__mark">FR</div>
-      <div><h1>FunRoute Designer</h1><p>自动类型推导的纯函数策略语言 · Go Runtime</p></div>
+    <a class="brand" href="/" aria-label="FunRoute 首页">
+      <span class="brand__mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><strong>FunRoute</strong><small>Policy Studio</small></span>
+    </a>
+    <div class="header-meta">
+      <span class="live-dot">Local runtime</span>
+      <span id="version-badge" class="version-badge">正在读取版本…</span>
     </div>
-    <div class="header-badge">ExprJSON v2 · Artifact v2</div>
   </header>
-  <main>
-    <section class="toolbar">
-      <div class="toolbar__group">
-        <!-- The example buttons are generated from funroute-examples.js. -->
-        <div id="examples" class="toolbar__examples"></div>
-        <button id="compile" type="button">编译检查</button>
-        <button id="run" class="run" type="button">运行</button>
+
+  <main class="app-shell">
+    <section class="command-deck">
+      <div class="command-deck__intro">
+        <span class="eyebrow">PAYMENT ROUTING WORKSPACE</span>
+        <h1>把路由策略变成<br><em>可验证的程序</em></h1>
+        <p>拖拽构建、强类型编译，并在同一处验证真实输入。语法由 Go parser 统一定义，画布只是可替换的一种界面。</p>
       </div>
-      <div id="status" class="status">正在载入函数目录…</div>
+      <div class="command-deck__controls">
+        <div class="examples-block">
+          <span class="control-label">从示例开始</span>
+          <div id="examples" class="examples" aria-label="示例策略"></div>
+        </div>
+        <div class="status-line">
+          <div id="status" class="status loading" role="status" aria-live="polite">正在载入语言目录…</div>
+          <code id="compile-metrics">等待编译</code>
+        </div>
+      </div>
     </section>
 
-    <!-- The contract is the host's data, edited beside the canvas and sent as
-         its own field; it never becomes part of the expression text. -->
-    <section id="contract" class="contract"></section>
+    <section class="contract-panel" aria-labelledby="contract-title">
+      <div class="section-heading">
+        <div><span class="step">01</span><div><h2 id="contract-title">运行契约</h2><p>先定义可用入参和必须返回的类型，再开始编写策略</p></div></div>
+        <span class="contract-required">REQUIRED</span>
+      </div>
+      <div class="contract-workbench">
+        <div id="contract" class="contract"></div>
+        <section class="contract-runner" aria-labelledby="contract-runner-title">
+          <div class="contract-runner__heading">
+            <div><span>CONTRACT TEST</span><h3 id="contract-runner-title">契约试运行</h3></div>
+            <button id="run" class="button button--run" type="button">
+              <span class="button--run__icon" aria-hidden="true">▶</span>
+              <span class="button--run__label">运行并检查</span>
+            </button>
+          </div>
+          <p class="contract-runner__intro">检查当前表达式；通过后自动同步到画布，并使用下方入参运行、核对返回类型。</p>
+          <div id="args" class="args"><p class="hint">契约检查通过后显示入参。</p></div>
+          <div class="result">
+            <div class="result__heading"><span>RETURN VALUE</span><span>声明类型 <code id="expected-result-type">未定义</code></span></div>
+            <div id="result" class="result__value is-empty">尚未运行</div>
+            <div id="result-check" class="result__check is-pending" aria-live="polite">等待运行结果</div>
+          </div>
+        </section>
+      </div>
+    </section>
 
-    <section class="expression-bar">
-      <label for="expression">表达式（与下方节点双向同步）</label>
-      <div class="expression-bar__row">
+    <section class="source-panel" aria-labelledby="source-title">
+      <div class="section-heading">
+        <div><span class="step">02</span><div><h2 id="source-title">表达式</h2><p>编辑文本；运行检查通过后自动同步到策略画布</p></div></div>
+        <div class="source-toolbar" aria-label="表达式工具">
+          <span class="shortcut">⌘ / Ctrl + Enter 运行</span>
+          <button id="format-expression" class="icon-button" type="button" title="格式化当前表达式">格式化</button>
+          <button id="copy-expression" class="icon-button" type="button" title="复制表达式与契约说明">复制</button>
+        </div>
+      </div>
+      <div id="contract-scope" class="contract-scope" aria-label="当前运行契约摘要"></div>
+      <div class="source-panel__editor">
         <div class="editor">
           <pre class="editor__highlight" aria-hidden="true"><code id="expression-highlight"></code></pre>
-          <textarea id="expression" class="editor__input" rows="1" spellcheck="false" autocomplete="off"
-                    placeholder='if(route.is_healthy_v1(health),"adyen_primary","stripe_backup")'></textarea>
-        </div>
-        <div class="expression-bar__actions">
-          <button id="apply-expression" type="button">生成节点</button>
-          <button id="format-expression" class="secondary" type="button">格式化</button>
-          <button id="copy-expression" class="secondary" type="button">复制</button>
+          <textarea id="expression" class="editor__input" rows="2" spellcheck="false" autocomplete="off"
+                    aria-label="FunRoute 表达式"
+                    placeholder='if(route.is_healthy_v1(health), "adyen", "stripe")'></textarea>
         </div>
       </div>
     </section>
 
-    <article class="panel">
-      <h2>参数与执行结果</h2>
-      <div id="args" class="args"><p class="hint">先编译表达式，系统会根据函数签名自动生成参数输入。</p></div>
-      <div class="result">
-        <div class="hint">结果</div>
-        <div id="result" class="result__value">—</div>
-      </div>
-    </article>
+    <div class="studio-layout">
+      <section class="canvas-panel" aria-labelledby="canvas-title">
+        <div class="section-heading section-heading--canvas">
+          <div><span class="step">03</span><div><h2 id="canvas-title">策略画布</h2><p>先看结构、再聚焦编辑单个步骤；熟练后可切换完整树</p></div></div>
+        </div>
+        <funroute-designer id="designer"></funroute-designer>
+      </section>
 
-    <funroute-designer id="designer"></funroute-designer>
-
-    <article class="panel">
-      <h2>ExprJSON</h2>
-      <pre id="source" class="code"></pre>
-    </article>
+      <aside class="inspector">
+        <details class="inspector-card json-card">
+          <summary>查看 canonical ExprJSON</summary>
+          <pre id="source" class="code">等待表达式…</pre>
+        </details>
+      </aside>
+    </div>
   </main>
   <script type="module" src="/app.js"></script>
 </body>

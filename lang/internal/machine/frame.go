@@ -151,7 +151,7 @@ func (f *frame) guardedRun() (value Value, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			*f.fuel = f.fuelLeft
-			err = fmt.Errorf("extension panicked: %v", recovered)
+			err = fmt.Errorf("%w: extension panicked: %v", ErrExtension, recovered)
 		}
 	}()
 	return f.run()
@@ -352,6 +352,9 @@ func (f *frame) equal() error {
 
 func (f *frame) call(pc int, instruction Instruction) error {
 	function := f.runtime.functions[instruction.A]
+	if f.deadline && f.ctx.Err() != nil {
+		return fmt.Errorf("%s: %w: %v", function.Name, ErrDeadline, f.ctx.Err())
+	}
 	if f.fuelLeft < function.Cost {
 		return fmt.Errorf("%w before %s", ErrFuel, function.Name)
 	}
@@ -368,9 +371,6 @@ func (f *frame) call(pc int, instruction Instruction) error {
 	if ready, ok := f.prefetchedAt(pc); ok {
 		value, err = ready.Value, ready.Err
 	} else if function.Timeout == 0 && !function.Detached {
-		if f.deadline && f.ctx.Err() != nil {
-			return fmt.Errorf("%s: %w: %v", function.Name, ErrDeadline, f.ctx.Err())
-		}
 		value, err = function.Eval(f.ctx, callArgs)
 	} else {
 		value, err = f.invokeBounded(function, callArgs)
@@ -380,6 +380,9 @@ func (f *frame) call(pc int, instruction Instruction) error {
 	}
 	if !value.hasType(*instruction.Type) {
 		return fmt.Errorf("%s returned %s, contract requires %s", function.Name, value.Type(), *instruction.Type)
+	}
+	if err := value.validateInvariant(); err != nil {
+		return fmt.Errorf("%s: %w: invalid result: %v", function.Name, ErrExtension, err)
 	}
 	return f.push(value)
 }
@@ -446,7 +449,7 @@ func callDetached(ctx context.Context, function *RegisteredFunction, args []Valu
 	copy(owned, args)
 	done := make(chan outcome, 1)
 	go func() {
-		value, err := function.Eval(ctx, owned)
+		value, err := callSafely(ctx, function, owned)
 		done <- outcome{value, err}
 	}()
 	select {
@@ -455,6 +458,15 @@ func callDetached(ctx context.Context, function *RegisteredFunction, args []Valu
 	case <-ctx.Done():
 		return Value{}, ctx.Err()
 	}
+}
+
+func callSafely(ctx context.Context, function *RegisteredFunction, args []Value) (value Value, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("extension panicked: %v", recovered)
+		}
+	}()
+	return function.Eval(ctx, args)
 }
 
 func (f *frame) loopInit(pc int, instruction Instruction) (int, error) {

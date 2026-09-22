@@ -251,9 +251,18 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 }
 
 func (c *bytecodeCompiler) compileSwitch(node *syntax.SwitchExpr) error {
+	subjectSlot := -1
+	if node.Value != nil {
+		if err := c.compile(node.Value); err != nil {
+			return err
+		}
+		subjectSlot = c.nextLocal
+		c.nextLocal++
+		c.emit(machine.Instruction{Op: machine.OpStoreLocal, A: subjectSlot})
+	}
 	var endJumps []int
 	for _, item := range node.Cases {
-		hits, misses, err := c.compileBranchTest(node.Value, item.Match)
+		hits, misses, err := c.compileBranchTest(subjectSlot, item.Match)
 		if err != nil {
 			return err
 		}
@@ -274,10 +283,10 @@ func (c *bytecodeCompiler) compileSwitch(node *syntax.SwitchExpr) error {
 // compileBranchTest emits the test for one branch. With a subject each match is
 // compared with eq; without one the matches are conditions. Any match selects
 // the branch, so all but the last jump forward on true.
-func (c *bytecodeCompiler) compileBranchTest(subject syntax.Expr, matches []syntax.Expr) ([]int, []int, error) {
+func (c *bytecodeCompiler) compileBranchTest(subjectSlot int, matches []syntax.Expr) ([]int, []int, error) {
 	var hits, misses []int
 	for i, match := range matches {
-		if err := c.compileMatch(subject, match); err != nil {
+		if err := c.compileMatch(subjectSlot, match); err != nil {
 			return nil, nil, err
 		}
 		if i == len(matches)-1 {
@@ -291,13 +300,11 @@ func (c *bytecodeCompiler) compileBranchTest(subject syntax.Expr, matches []synt
 	return hits, misses, nil
 }
 
-func (c *bytecodeCompiler) compileMatch(subject syntax.Expr, match syntax.Expr) error {
-	if subject == nil {
+func (c *bytecodeCompiler) compileMatch(subjectSlot int, match syntax.Expr) error {
+	if subjectSlot < 0 {
 		return c.compile(match)
 	}
-	if err := c.compile(subject); err != nil {
-		return err
-	}
+	c.emit(machine.Instruction{Op: machine.OpLoadLocal, A: subjectSlot})
 	if err := c.compile(match); err != nil {
 		return err
 	}

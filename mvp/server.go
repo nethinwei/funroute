@@ -28,6 +28,7 @@ func NewServer(registry *lang.Registry) (*Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", server.health)
 	mux.HandleFunc("GET /api/catalog", server.catalog)
+	mux.HandleFunc("POST /api/contract/check", server.checkContract)
 	mux.HandleFunc("POST /api/parse", server.parse)
 	mux.HandleFunc("POST /api/compile", server.compile)
 	mux.HandleFunc("POST /api/run", server.run)
@@ -108,6 +109,43 @@ func (c *contractJSON) compileOptions() (lang.CompileOptions, error) {
 		options.ResultDoc = c.Result.Doc
 	}
 	return options, nil
+}
+
+func (c *contractJSON) checkedOptions() (lang.CompileOptions, error) {
+	if c == nil {
+		return lang.CompileOptions{}, fmt.Errorf("runtime contract is required")
+	}
+	if c.Result == nil || strings.TrimSpace(c.Result.Type) == "" {
+		return lang.CompileOptions{}, fmt.Errorf("result type is required")
+	}
+	options, err := c.compileOptions()
+	if err != nil {
+		return options, err
+	}
+	if err := lang.ValidateContract(options); err != nil {
+		return options, err
+	}
+	return options, nil
+}
+
+func (s *Server) checkContract(response http.ResponseWriter, request *http.Request) {
+	payload, ok := s.decodeRequest(response, request)
+	if !ok {
+		return
+	}
+	options, err := payload.Contract.checkedOptions()
+	if err != nil {
+		writeAPIError(response, http.StatusUnprocessableEntity, "CONTRACT_ERROR", err)
+		return
+	}
+	args := make([]lang.Parameter, len(options.Args))
+	for i, arg := range options.Args {
+		args[i] = lang.Parameter{Name: arg.Name, Type: arg.Type, Doc: arg.Doc}
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"valid": true, "arguments": len(args), "args": args,
+		"result": options.Result, "result_doc": options.ResultDoc,
+	})
 }
 
 type compileResponse struct {
@@ -213,7 +251,7 @@ func (s *Server) compilePayload(payload expressionRequest) (*lang.Artifact, erro
 	if len(payload.ExprJSON) > 0 && strings.TrimSpace(payload.Source) != "" {
 		return nil, fmt.Errorf("provide either source or expr_json, not both")
 	}
-	options, err := payload.Contract.compileOptions()
+	options, err := payload.Contract.checkedOptions()
 	if err != nil {
 		return nil, err
 	}

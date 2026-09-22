@@ -81,14 +81,12 @@ func (o CompileOptions) argDocs() map[string]string {
 	return docs
 }
 
-// validate checks the declared contract on its own and against the names the
-// expression actually reads.
-func (o CompileOptions) validate(used []string) error {
-	if len(o.Args) == 0 {
-		return nil
-	}
-	declared := make(map[string]bool, len(o.Args))
-	for _, arg := range o.Args {
+// ValidateContract checks a host contract without needing an expression. This
+// lets consoles put contract authoring before expression authoring and reject a
+// malformed ABI before an operator starts writing policy logic.
+func ValidateContract(options CompileOptions) error {
+	declared := make(map[string]bool, len(options.Args))
+	for _, arg := range options.Args {
 		if !machine.IsValidVariableName(arg.Name) || machine.IsReservedName(arg.Name) {
 			return fmt.Errorf("invalid argument name %q", arg.Name)
 		}
@@ -100,13 +98,30 @@ func (o CompileOptions) validate(used []string) error {
 		}
 		declared[arg.Name] = true
 	}
+	if options.Result != nil && !options.Result.IsConcrete() {
+		return fmt.Errorf("the declared result type is not concrete: %s", *options.Result)
+	}
+	return nil
+}
+
+// validate checks the declared contract against the names the expression
+// actually reads. An empty argument list still means inference for the library
+// API; products that require a contract validate that policy at their edge.
+func (o CompileOptions) validate(used []string) error {
+	if err := ValidateContract(o); err != nil {
+		return err
+	}
+	if len(o.Args) == 0 {
+		return nil
+	}
+	declared := make(map[string]bool, len(o.Args))
+	for _, arg := range o.Args {
+		declared[arg.Name] = true
+	}
 	for _, name := range used {
 		if !declared[name] {
 			return fmt.Errorf("the expression reads %q but the contract does not declare it", name)
 		}
-	}
-	if o.Result != nil && !o.Result.IsConcrete() {
-		return fmt.Errorf("the declared result type is not concrete: %s", *o.Result)
 	}
 	return nil
 }

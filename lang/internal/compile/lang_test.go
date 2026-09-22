@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"funroute/lang/internal/machine"
 	"funroute/lang/internal/syntax"
@@ -573,13 +574,42 @@ func TestPanickingExtensionIsContained(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = runtime.Run(context.Background(), map[string]any{"n": 1}, machine.RunOptions{Fuel: 100})
-	if err == nil || !strings.Contains(err.Error(), "extension panicked") {
+	if !errors.Is(err, machine.ErrExtension) || !strings.Contains(err.Error(), "extension panicked") {
 		t.Fatalf("panic was not contained: %v", err)
 	}
 	// The runtime stays usable afterwards.
 	if _, err := runtime.Run(context.Background(), map[string]any{"n": 2}, machine.RunOptions{Fuel: 100}); err == nil ||
 		!strings.Contains(err.Error(), "extension panicked") {
 		t.Fatalf("second run: %v", err)
+	}
+}
+
+func TestSwitchEvaluatesItsSubjectOnce(t *testing.T) {
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.SwitchForm); err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	if err := machine.Logic(registry, "probe_v1", machine.Doc{Cost: 1}, func(value int64) (int64, error) {
+		calls++
+		return value, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := CompileExpr(`switch(probe_v1(n), case 1 => "one", case 2 => "two", else "other")`, registry, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.Run(context.Background(), map[string]any{"n": 2}, machine.RunOptions{Fuel: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := result.String(); text != "two" || calls != 1 {
+		t.Fatalf("result = %q, subject calls = %d", text, calls)
 	}
 }
 
@@ -596,5 +626,22 @@ func TestCatalogListsSwitchableAndDerivedForms(t *testing.T) {
 	// Only the known forms can be enabled.
 	if err := machine.CoreRegistry().EnableForm("lambda"); err == nil {
 		t.Fatal("unknown form was accepted")
+	}
+}
+
+func TestCatalogCarriesTheParsersSourceContract(t *testing.T) {
+	catalog := Catalog(consoleRegistry(t))
+	if catalog.Source.ExprJSONVersion != syntax.ExprJSONVersion || catalog.Source.VariableNamePattern == "" {
+		t.Fatalf("source syntax = %+v", catalog.Source)
+	}
+	found := map[string]int{}
+	for _, operator := range catalog.Source.Operators {
+		found[operator.Token] = operator.Precedence
+		if operator.Template.Node == "" {
+			t.Fatalf("operator %q has no canonical template", operator.Token)
+		}
+	}
+	if found["||"] != 1 || found["<"] != 4 || found["+"] != 5 || found["!"] != 7 {
+		t.Fatalf("operator precedences = %v", found)
 	}
 }

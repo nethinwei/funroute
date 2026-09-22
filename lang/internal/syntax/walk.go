@@ -340,7 +340,8 @@ func fieldSchemas(plan *structPlan) []machine.FieldSchema {
 	for i, field := range plan.fields {
 		out[i] = machine.FieldSchema{
 			Name: field.name, Kind: fieldKindNames[field.kind], Optional: field.optional,
-			Role: field.role, Default: field.deflt, Min: field.min,
+			Role: field.role, Binds: append([]string(nil), field.binds...),
+			Default: field.deflt, Min: field.min,
 		}
 		if field.kind == fieldName && field.role == "text" {
 			out[i].Kind = "text"

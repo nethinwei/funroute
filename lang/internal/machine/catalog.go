@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-const CatalogVersion = 1
+const CatalogVersion = 2
 
 // FunctionDisplay contains presentation-only metadata. It never affects type
 // inference, artifact identity or runtime evaluation.
@@ -61,14 +61,49 @@ type ValueTypeDescriptor struct {
 }
 
 type LanguageCatalog struct {
-	Version      int                   `json:"version"`
-	Functions    []FunctionDescriptor  `json:"functions"`
-	SpecialForms []FunctionDescriptor  `json:"special_forms"`
-	ValueTypes   []ValueTypeDescriptor `json:"value_types"`
+	Version         int                   `json:"version"`
+	ArtifactVersion int                   `json:"artifact_version"`
+	Functions       []FunctionDescriptor  `json:"functions"`
+	SpecialForms    []FunctionDescriptor  `json:"special_forms"`
+	ValueTypes      []ValueTypeDescriptor `json:"value_types"`
+	Source          SourceSyntax          `json:"source"`
 	// Nodes describes the shape of every ExprJSON node. The syntax layer fills
 	// it in, from the same definitions its importer reads, so a front end that
 	// builds nodes from it cannot disagree with the compiler.
 	Nodes []NodeSchema `json:"nodes,omitempty"`
+}
+
+// SourceSyntax is the source-language contract a headless editor consumes.
+// It is produced by the parser's own operator definitions, so a browser never
+// needs a second hand-maintained precedence or desugaring table.
+type SourceSyntax struct {
+	ExprJSONVersion     int                        `json:"expr_json_version"`
+	VariableNamePattern string                     `json:"variable_name_pattern"`
+	Keywords            []string                   `json:"keywords"`
+	Operators           []SourceOperatorDescriptor `json:"operators"`
+}
+
+// SourceOperatorDescriptor describes one source spelling and the canonical
+// ExprJSON tree it expands into. Placeholders in Template are named operands.
+type SourceOperatorDescriptor struct {
+	Token         string             `json:"token"`
+	Fixity        string             `json:"fixity"`
+	Associativity string             `json:"associativity,omitempty"`
+	Precedence    int                `json:"precedence"`
+	Form          string             `json:"form,omitempty"`
+	Operands      []string           `json:"operands"`
+	Template      ExpressionTemplate `json:"template"`
+}
+
+// ExpressionTemplate is a small, typed pattern language for canonical
+// ExprJSON. It intentionally covers only operator expansions.
+type ExpressionTemplate struct {
+	Placeholder string               `json:"$,omitempty"`
+	Node        string               `json:"node,omitempty"`
+	Name        string               `json:"name,omitempty"`
+	Args        []ExpressionTemplate `json:"args,omitempty"`
+	Int         *int64               `json:"int,omitempty"`
+	Bool        *bool                `json:"bool,omitempty"`
 }
 
 // NodeSchema is one ExprJSON node as a front end needs to know it: its tag,
@@ -82,12 +117,14 @@ type NodeSchema struct {
 
 // FieldSchema is one field of a node. Kind is expr, exprs, name, text, list,
 // or the literal kinds int, float, string and bool. A list's items have their
-// own Fields.
+// own Fields. Binds exposes the parser's scope rule to headless editors, so a
+// variable picker cannot drift from the compiler's understanding of locals.
 type FieldSchema struct {
 	Name     string        `json:"name"`
 	Kind     string        `json:"kind"`
 	Optional bool          `json:"optional,omitempty"`
 	Role     string        `json:"role,omitempty"`
+	Binds    []string      `json:"binds,omitempty"`
 	Default  string        `json:"default,omitempty"`
 	Min      int           `json:"min,omitempty"`
 	Fields   []FieldSchema `json:"fields,omitempty"`
@@ -140,10 +177,11 @@ func (r *Registry) Catalog() LanguageCatalog {
 	functions := r.visibleFunctions()
 	sortFunctionDescriptors(functions)
 	return LanguageCatalog{
-		Version:      CatalogVersion,
-		Functions:    functions,
-		SpecialForms: r.specialForms(),
-		ValueTypes:   append(coreValueTypes(), r.handleValueTypes()...),
+		Version:         CatalogVersion,
+		ArtifactVersion: ArtifactVersion,
+		Functions:       functions,
+		SpecialForms:    r.specialForms(),
+		ValueTypes:      append(coreValueTypes(), r.handleValueTypes()...),
 	}
 }
 

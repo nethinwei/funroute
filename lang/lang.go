@@ -36,12 +36,15 @@ type (
 // that already holds a Go container uses ToValue and keeps its backing.
 var (
 	Int    = machine.Int
-	Float  = machine.Float
 	String = machine.String
 	Bool   = machine.Bool
 	Array  = machine.Array
 	Dict   = machine.Dict
 )
+
+// Float rejects NaN and infinities at the public boundary. Returning an error
+// keeps invalid host data from entering a Runtime through RunValues.
+func Float(value float64) (Value, error) { return machine.CheckedFloat(value) }
 
 // The host boundary is free of conversion. ToValue wraps a Go value — a
 // []float64 becomes an array<float> holding that very slice — and FromValue
@@ -162,8 +165,9 @@ type (
 const ArtifactVersion = machine.ArtifactVersion
 
 var (
-	CompileExpr = compile.CompileExpr
-	CompileJSON = compile.CompileJSON
+	CompileExpr      = compile.CompileExpr
+	CompileJSON      = compile.CompileJSON
+	ValidateContract = compile.ValidateContract
 )
 
 // Running an artifact. Instantiate rejects an artifact whose registry has
@@ -193,6 +197,9 @@ type (
 	LanguageCatalog     = machine.LanguageCatalog
 	FunctionDescriptor  = machine.FunctionDescriptor
 	ValueTypeDescriptor = machine.ValueTypeDescriptor
+	SourceSyntax        = machine.SourceSyntax
+	SourceOperator      = machine.SourceOperatorDescriptor
+	ExpressionTemplate  = machine.ExpressionTemplate
 	NodeSchema          = machine.NodeSchema
 	FieldSchema         = machine.FieldSchema
 )

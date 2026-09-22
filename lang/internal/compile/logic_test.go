@@ -179,6 +179,27 @@ func TestDetachedCallsStopWaitingAtTheDeadline(t *testing.T) {
 	}
 }
 
+func TestDetachedPanicsAreContainedAndTyped(t *testing.T) {
+	registry := machine.CoreRegistry()
+	if err := machine.Logic(registry, "engine.panic_v1", machine.Doc{Cost: 1, Detached: true}, func(float64) (float64, error) {
+		panic("detached exploded")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := CompileExpr(`engine.panic_v1(x)`, registry, CompileOptions{Args: []ArgSpec{{Name: "x", Type: machine.FloatType}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runtime.RunValues(context.Background(), []machine.Value{machine.Float(1)}, machine.RunOptions{Fuel: 100})
+	if !errors.Is(err, machine.ErrExtension) || !strings.Contains(err.Error(), "detached exploded") {
+		t.Fatalf("detached panic = %v", err)
+	}
+}
+
 // BenchmarkLogicCall is the price of reflection at the boundary, next to the
 // kernel's typed add in BenchmarkCall.
 func BenchmarkLogicCall(b *testing.B) {

@@ -71,6 +71,9 @@ func Array(elem Type, values []Value) (Value, error) {
 		if !value.hasType(elem) {
 			return Value{}, fmt.Errorf("array item %d has type %s, want %s", i, value.Type(), elem)
 		}
+		if err := value.validateInvariant(); err != nil {
+			return Value{}, fmt.Errorf("array item %d: %w", i, err)
+		}
 		builder.add(value)
 	}
 	return builder.finish(), nil
@@ -84,6 +87,9 @@ func Dict(elem Type, entries map[string]Value) (Value, error) {
 	for key, value := range entries {
 		if !value.hasType(elem) {
 			return Value{}, fmt.Errorf("dictionary entry %q has type %s, want %s", key, value.Type(), elem)
+		}
+		if err := value.validateInvariant(); err != nil {
+			return Value{}, fmt.Errorf("dictionary entry %q: %w", key, err)
 		}
 	}
 	return packDict(elem, entries), nil
@@ -301,6 +307,35 @@ func CheckedFloat(value float64) (Value, error) {
 		return Value{}, fmt.Errorf("non-finite floats are not supported")
 	}
 	return Float(value), nil
+}
+
+func (v Value) validateInvariant() error {
+	switch box := v.box.(type) {
+	case []float64:
+		return checkFloats(box)
+	case map[string]float64:
+		for key, value := range box {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return fmt.Errorf("entry %q: non-finite floats are not supported", key)
+			}
+		}
+	case *nestedArray:
+		for i, value := range box.items {
+			if err := value.validateInvariant(); err != nil {
+				return fmt.Errorf("item %d: %w", i, err)
+			}
+		}
+	case *nestedDict:
+		for key, value := range box.entries {
+			if err := value.validateInvariant(); err != nil {
+				return fmt.Errorf("entry %q: %w", key, err)
+			}
+		}
+	}
+	if v.kind == FloatKind && (math.IsNaN(v.f) || math.IsInf(v.f, 0)) {
+		return fmt.Errorf("non-finite floats are not supported")
+	}
+	return nil
 }
 
 func sortedKeys[T any](entries map[string]T) []string {

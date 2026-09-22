@@ -12,5 +12,6 @@ import (
 func Catalog(registry *machine.Registry) machine.LanguageCatalog {
 	catalog := registry.Catalog()
 	catalog.Nodes = syntax.NodeSchemas()
+	catalog.Source = syntax.SourceSyntax()
 	return catalog
 }

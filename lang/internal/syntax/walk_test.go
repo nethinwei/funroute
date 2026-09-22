@@ -85,14 +85,16 @@ func TestNodeSchemasMirrorTheDefinitions(t *testing.T) {
 		}
 	}
 	variable := NodeSchemas()[forNode].Fields[1]
-	if variable.Name != "variable" || variable.Kind != "name" || variable.Role != "local" || variable.Default != "item" {
+	if variable.Name != "variable" || variable.Kind != "name" || variable.Role != "local" || variable.Default != "item" ||
+		strings.Join(variable.Binds, ",") != "where,yield" {
 		t.Fatalf("for.variable = %+v", variable)
 	}
 	if NodeSchemas()[forNode].Form != "for" {
 		t.Fatalf("for.form = %q", NodeSchemas()[forNode].Form)
 	}
 	bindings := NodeSchemas()[letNode].Fields[0]
-	if bindings.Kind != "list" || bindings.Min != 1 || len(bindings.Fields) != 2 || bindings.Fields[1].Kind != "expr" {
+	if bindings.Kind != "list" || bindings.Min != 1 || len(bindings.Fields) != 2 || bindings.Fields[1].Kind != "expr" ||
+		strings.Join(bindings.Fields[0].Binds, ",") != "@rest,body" {
 		t.Fatalf("let.bindings = %+v", bindings)
 	}
 }
