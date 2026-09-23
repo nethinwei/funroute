@@ -1,6 +1,7 @@
-// Command lint enforces the repository style budget: file length, function
-// length and nesting depth. It uses only the standard library so the project
-// keeps zero third-party dependencies.
+// Command lint enforces the repository style budget — file length, function
+// length and nesting depth — and, in _test.go files, the testing package's
+// current idioms (see checkTestFile). It uses only the standard library so the
+// project keeps zero third-party dependencies.
 package main
 
 import (
@@ -127,6 +128,10 @@ func checkGoFunctions(path string, source []byte) ([]violation, error) {
 		}
 		position := fileSet.Position(function.Pos())
 		violations = append(violations, checkFunction(path, position, fileSet, function)...)
+	}
+	if strings.HasSuffix(path, "_test.go") {
+		violations = append(violations, checkTestPairing(path)...)
+		violations = append(violations, checkTestFile(path, fileSet, file)...)
 	}
 	return violations, nil
 }

@@ -1,152 +1,16 @@
 package compile
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"funroute/lang/internal/machine"
 )
 
-func TestCompileAndContractErrorsAreTyped(t *testing.T) {
-	registry := machine.CoreRegistry()
-	if _, err := CompileExpr(`if(`, registry, CompileOptions{}); !errors.Is(err, machine.ErrCompile) {
-		t.Fatalf("parse error = %v", err)
-	}
-	if _, err := CompileExpr(`x`, registry, CompileOptions{
-		Args: []ArgSpec{{Name: "y", Type: machine.IntType}},
-	}); !errors.Is(err, machine.ErrContract) || errors.Is(err, machine.ErrCompile) {
-		t.Fatalf("contract error = %v", err)
-	}
-	if err := ValidateContract(CompileOptions{
-		Args: []ArgSpec{{Name: "x", Type: machine.IntType}, {Name: "x", Type: machine.IntType}},
-	}); !errors.Is(err, machine.ErrContract) {
-		t.Fatalf("standalone contract error = %v", err)
-	}
-}
-
-func TestFallbackCatchesOnlyExtensionAndDeadline(t *testing.T) {
-	registry := machine.CoreRegistry()
-	if err := machine.Logic(registry, "fail_v1", machine.Doc{}, func(value int64) (int64, error) {
-		return 0, errors.New("engine unavailable")
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := machine.Logic(registry, "panic_v1", machine.Doc{}, func(value int64) (int64, error) {
-		panic("engine panic")
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := machine.Logic(registry, "slow_v1", machine.Doc{Timeout: time.Millisecond}, func(ctx context.Context, value int64) (int64, error) {
-		<-ctx.Done()
-		return 0, ctx.Err()
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, source := range []string{
-		`fallback(fail_v1(x), 7)`,
-		`fallback(panic_v1(x), 7)`,
-		`fallback(slow_v1(x), x + 4)`,
-	} {
-		value, err := compileAndRunInt(t, source, registry, 100)
-		if err != nil || value != 7 {
-			t.Fatalf("%s = %d, %v", source, value, err)
-		}
-	}
-
-	_, err := compileAndRunInt(t, `fallback(x / 0, 7)`, registry, 100)
-	if err == nil || errors.Is(err, machine.ErrExtension) || errors.Is(err, machine.ErrDeadline) {
-		t.Fatalf("kernel error was made catchable: %v", err)
-	}
-	_, err = compileAndRunInt(t, `fallback(fail_v1(x), x / 0, 7)`, registry, 100)
-	if err == nil || errors.Is(err, machine.ErrExtension) || errors.Is(err, machine.ErrDeadline) {
-		t.Fatalf("middle kernel error was made catchable: %v", err)
-	}
-	_, err = compileAndRunInt(t, `fallback(fail_v1(x), 7)`, registry, 1)
-	if !errors.Is(err, machine.ErrFuel) {
-		t.Fatalf("fuel error was caught: %v", err)
-	}
-}
-
-func TestFallbackIsLazyOnSuccess(t *testing.T) {
-	registry := machine.CoreRegistry()
-	called := 0
-	if err := machine.Logic(registry, "default_v1", machine.Doc{}, func(value int64) (int64, error) {
-		called++
-		return 9, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	value, err := compileAndRunInt(t, `fallback(x, default_v1(x))`, registry, 100)
-	if err != nil || value != 3 || called != 0 {
-		t.Fatalf("result = %d, calls = %d, err = %v", value, called, err)
-	}
-}
-
-func TestFallbackTriesAnyNumberOfCandidatesInOrder(t *testing.T) {
-	registry := machine.CoreRegistry()
-	var calls []string
-	register := func(name string, succeed bool) {
-		err := machine.Logic(registry, name, machine.Doc{}, func(value int64) (int64, error) {
-			calls = append(calls, name)
-			if !succeed {
-				return 0, errors.New("provider unavailable")
-			}
-			return value + 10, nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	register("first_v1", false)
-	register("second_v1", false)
-	register("third_v1", true)
-	register("unused_v1", true)
-	value, err := compileAndRunInt(t, `fallback(first_v1(x),second_v1(x),third_v1(x),unused_v1(x))`, registry, 100)
-	if err != nil || value != 13 || strings.Join(calls, ",") != "first_v1,second_v1,third_v1" {
-		t.Fatalf("result = %d, calls = %v, err = %v", value, calls, err)
-	}
-	calls = nil
-	value, err = compileAndRunInt(t, `fallback(first_v1(x),second_v1(x),x + 9)`, registry, 100)
-	if err != nil || value != 12 || strings.Join(calls, ",") != "first_v1,second_v1" {
-		t.Fatalf("final result = %d, calls = %v, err = %v", value, calls, err)
-	}
-	if _, err := compileAndRunInt(t, `fallback(first_v1(x),second_v1(x))`, registry, 100); !errors.Is(err, machine.ErrExtension) {
-		t.Fatalf("last candidate error = %v", err)
-	}
-	if _, err := CompileExpr(`fallback(x)`, registry, CompileOptions{}); err == nil || !strings.Contains(err.Error(), "at least 2") {
-		t.Fatalf("single candidate error = %v", err)
-	}
-	if _, err := CompileExpr(`fallback(x,"bad",7)`, registry, CompileOptions{}); err == nil {
-		t.Fatal("fallback accepted candidates with different types")
-	}
-}
-
-func compileAndRunInt(t *testing.T, source string, registry *machine.Registry, fuel uint64) (int64, error) {
-	t.Helper()
-	artifact, err := CompileExpr(source, registry, CompileOptions{
-		Args: []ArgSpec{{Name: "x", Type: machine.IntType}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime, err := machine.Instantiate(artifact, registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, err := runtime.Run(context.Background(), map[string]any{"x": int64(3)}, machine.RunOptions{Fuel: fuel})
-	if err != nil {
-		return 0, err
-	}
-	result, _ := value.Int()
-	return result, nil
-}
-
 func TestEnumContractAndExhaustiveSwitch(t *testing.T) {
+	t.Parallel()
 	channel, registry := enumFixture(t)
 	result := channel
 	options := CompileOptions{
@@ -158,7 +22,7 @@ func TestEnumContractAndExhaustiveSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !artifact.Result.Equal(channel) || !artifact.Args[0].Type.Equal(channel) {
-		t.Fatalf("artifact contract = %s -> %s", artifact.Args[0].Type, artifact.Result)
+		t.Fatalf("artifact contract = %s -> %s, want %s -> %s", artifact.Args[0].Type, artifact.Result, channel, channel)
 	}
 	again, err := CompileJSON(artifact.ExprJSON, registry, options)
 	if err != nil {
@@ -171,11 +35,11 @@ func TestEnumContractAndExhaustiveSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(context.Background(), map[string]any{"channel": "adyen"}, machine.RunOptions{Fuel: 100})
+	value, err := runtime.Run(t.Context(), map[string]any{"channel": "adyen"}, machine.RunOptions{Fuel: 100})
 	if text, _ := value.String(); err != nil || text != "stripe" {
-		t.Fatalf("run = %q, %v", text, err)
+		t.Fatalf("Run(channel=adyen) = %q, %v, want \"stripe\"", text, err)
 	}
-	if _, err := runtime.Run(context.Background(), map[string]any{"channel": "other"}, machine.RunOptions{Fuel: 100}); err == nil {
+	if _, err := runtime.Run(t.Context(), map[string]any{"channel": "other"}, machine.RunOptions{Fuel: 100}); err == nil {
 		t.Fatal("runtime accepted a string outside the enum")
 	} else if !errors.Is(err, machine.ErrContract) {
 		t.Fatalf("runtime enum error is not a contract error: %v", err)
@@ -202,17 +66,27 @@ func assertEnumCompileErrors(t *testing.T, registry *machine.Registry, options C
 		{`candidate`, "returns string"},
 		{`reduce(item in channels, acc = channel, candidate)`, "accumulator type"},
 	} {
-		testOptions := options
-		if strings.Contains(test.source, "candidate") {
-			testOptions.Args = append(testOptions.Args, ArgSpec{Name: "candidate", Type: machine.StringType})
-		}
-		if strings.HasPrefix(test.source, "reduce") {
-			testOptions.Args = append(testOptions.Args, ArgSpec{Name: "channels", Type: channels})
-		}
-		_, err := CompileExpr(test.source, registry, testOptions)
-		if !errors.Is(err, machine.ErrCompile) || !strings.Contains(err.Error(), test.want) {
-			t.Errorf("%s: %v", test.source, err)
-		}
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			testOptions := options
+			if strings.Contains(test.source, "candidate") {
+				testOptions.Args = append(testOptions.Args, ArgSpec{Name: "candidate", Type: machine.StringType})
+			}
+			if strings.HasPrefix(test.source, "reduce") {
+				testOptions.Args = append(testOptions.Args, ArgSpec{Name: "channels", Type: channels})
+			}
+			assertCompileErrorContains(t, registry, test.source, testOptions, test.want)
+		})
+	}
+}
+
+// assertCompileErrorContains checks that source fails to compile with an
+// ErrCompile whose message contains want.
+func assertCompileErrorContains(t *testing.T, registry *machine.Registry, source string, options CompileOptions, want string) {
+	t.Helper()
+	_, err := CompileExpr(source, registry, options)
+	if !errors.Is(err, machine.ErrCompile) || !strings.Contains(err.Error(), want) {
+		t.Errorf("CompileExpr(%q) error = %v, want ErrCompile containing %q", source, err, want)
 	}
 }
 
@@ -220,7 +94,7 @@ func enumFixture(t *testing.T) (machine.Type, *machine.Registry) {
 	t.Helper()
 	channel, err := machine.ParseType(`enum<channel>{stripe,adyen}`)
 	if err != nil || channel.String() != `enum<channel>{adyen,stripe}` {
-		t.Fatalf("enum = %s, %v", channel, err)
+		t.Fatalf("ParseType(enum<channel>{stripe,adyen}) = %s, %v, want enum<channel>{adyen,stripe}", channel, err)
 	}
 	registry := machine.CoreRegistry()
 	if err := registry.EnableForm(machine.SwitchForm); err != nil {
@@ -232,6 +106,7 @@ func enumFixture(t *testing.T) (machine.Type, *machine.Registry) {
 // A member reference is resolved in the contract's enum namespace, so it is
 // typed wherever it appears — no surrounding type context needed.
 func TestEnumMembersResolveThroughTheContract(t *testing.T) {
+	t.Parallel()
 	channel, registry := enumFixture(t)
 	backup, err := machine.ParseType(`enum<backup>{adyen,paypal}`)
 	if err != nil {
@@ -247,14 +122,14 @@ func TestEnumMembersResolveThroughTheContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(context.Background(), map[string]any{"channel": "adyen"}, machine.RunOptions{Fuel: 100})
+	value, err := runtime.Run(t.Context(), map[string]any{"channel": "adyen"}, machine.RunOptions{Fuel: 100})
 	if got, _ := value.String(); err != nil || got != "switched" {
-		t.Fatalf("run = %q, %v", got, err)
+		t.Fatalf("Run(channel=adyen) = %q, %v, want \"switched\"", got, err)
 	}
 	again, err := CompileJSON(artifact.ExprJSON, registry,
 		CompileOptions{Args: []ArgSpec{{Name: "channel", Type: channel}}, Result: &text})
 	if err != nil || again.Digest != artifact.Digest {
-		t.Fatalf("enum member ExprJSON round trip = %q, %v", again.Digest, err)
+		t.Fatalf("enum member ExprJSON round trip = %q, %v, want %q", again.Digest, err, artifact.Digest)
 	}
 	assertEnumReferenceErrors(t, registry, channel, backup)
 }
@@ -271,25 +146,26 @@ func assertEnumReferenceErrors(t *testing.T, registry *machine.Registry, channel
 		{`@tier.gold`, `the contract declares no enum named "tier"`},
 		{`@unknown`, "is not a member of any enum in this contract"},
 	} {
-		_, err := CompileExpr(test.source, registry, both)
-		if !errors.Is(err, machine.ErrCompile) || !strings.Contains(err.Error(), test.want) {
-			t.Errorf("%s: %v", test.source, err)
-		}
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			assertCompileErrorContains(t, registry, test.source, both, test.want)
+		})
 	}
 	qualified, err := CompileExpr(`@channel.adyen`, registry, both)
 	if err != nil || !qualified.Result.Equal(channel) {
-		t.Fatalf("qualified member = %v, %v", qualified, err)
+		t.Fatalf("CompileExpr(@channel.adyen) = %v, %v, want a program returning %s", qualified, err, channel)
 	}
 }
 
 // An enum is nominal: it never stands in for a string, so the only way across
 // is the string(enum) conversion.
 func TestEnumConvertsToStringOnlyExplicitly(t *testing.T) {
+	t.Parallel()
 	channel, registry := enumFixture(t)
 	text := machine.StringType
 	options := CompileOptions{Args: []ArgSpec{{Name: "channel", Type: channel}}, Result: &text}
 	if _, err := CompileExpr(`channel + ":settled"`, registry, options); !errors.Is(err, machine.ErrCompile) {
-		t.Fatalf("implicit enum concatenation error = %v", err)
+		t.Fatalf("implicit enum concatenation error = %v, want ErrCompile", err)
 	}
 	artifact, err := CompileExpr(`string(channel) + ":settled"`, registry, options)
 	if err != nil {
@@ -299,15 +175,16 @@ func TestEnumConvertsToStringOnlyExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(context.Background(), map[string]any{"channel": "adyen"}, machine.RunOptions{Fuel: 100})
+	value, err := runtime.Run(t.Context(), map[string]any{"channel": "adyen"}, machine.RunOptions{Fuel: 100})
 	if got, _ := value.String(); err != nil || got != "adyen:settled" {
-		t.Fatalf("run = %q, %v", got, err)
+		t.Fatalf("Run(channel=adyen) = %q, %v, want \"adyen:settled\"", got, err)
 	}
 }
 
 // A contract may declare hundreds of members; an error message shows a sample
 // and a count, while the type text itself stays complete and re-parsable.
 func TestLargeEnumIsSummarizedInMessagesOnly(t *testing.T) {
+	t.Parallel()
 	members := make([]string, 212)
 	for i := range members {
 		members[i] = fmt.Sprintf("c%03d", i)
@@ -321,20 +198,21 @@ func TestLargeEnumIsSummarizedInMessagesOnly(t *testing.T) {
 		t.Fatalf("type text must parse back: %v", err)
 	}
 	summary := country.Summary()
-	if summary != "enum<country>{c000,c001,c002,c003,c004,c005… 共 212 个}" {
-		t.Fatalf("summary = %s", summary)
+	if want := "enum<country>{c000,c001,c002,c003,c004,c005… 共 212 个}"; summary != want {
+		t.Fatalf("summary = %s, want %s", summary, want)
 	}
 	if nested := machine.ArrayOf(country).Summary(); nested != "array<"+summary+">" {
-		t.Fatalf("nested summary = %s", nested)
+		t.Fatalf("nested summary = %s, want array<%s>", nested, summary)
 	}
 	registry := machine.CoreRegistry()
 	_, err = CompileExpr(`@zz`, registry, CompileOptions{Args: []ArgSpec{{Name: "c", Type: country}}, Result: &country})
 	if err == nil || strings.Contains(err.Error(), "c100") || !strings.Contains(err.Error(), "共 212 个") {
-		t.Fatalf("unknown member error = %v", err)
+		t.Fatalf("unknown member error = %v, want a summary with 共 212 个 and no c100", err)
 	}
 }
 
 func TestEnumTypeRejectsMalformedDeclarations(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{
 		`enum<channel>{}`,
 		`enum<channel>{a,a}`,
@@ -342,13 +220,17 @@ func TestEnumTypeRejectsMalformedDeclarations(t *testing.T) {
 		`enum<channel>{1a}`,
 		`enum<channel>{case}`,
 	} {
-		if _, err := machine.ParseType(source); err == nil {
-			t.Fatalf("accepted %s", source)
-		}
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if got, err := machine.ParseType(source); err == nil {
+				t.Fatalf("ParseType(%q) = %s, want an error", source, got)
+			}
+		})
 	}
 }
 
 func TestEnumMembersInsideContainersAreChecked(t *testing.T) {
+	t.Parallel()
 	channel, registry := enumFixture(t)
 	result := machine.ArrayOf(channel)
 	artifact, err := CompileExpr(`[@adyen, @stripe]`, registry, CompileOptions{Result: &result})
@@ -359,13 +241,13 @@ func TestEnumMembersInsideContainersAreChecked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(context.Background(), nil, machine.RunOptions{Fuel: 100})
+	value, err := runtime.Run(t.Context(), nil, machine.RunOptions{Fuel: 100})
 	items, ok := value.Array()
 	if err != nil || !ok || len(items) != 2 {
-		t.Fatalf("enum array = %#v, %v", value.Any(), err)
+		t.Fatalf("enum array = %#v, %v, want two members", value.Any(), err)
 	}
 	if _, err := CompileExpr(`[@adyen, @other]`, registry, CompileOptions{Result: &result}); !errors.Is(err, machine.ErrCompile) {
-		t.Fatalf("invalid enum array error = %v", err)
+		t.Fatalf("invalid enum array error = %v, want ErrCompile", err)
 	}
 	artifact, err = CompileExpr(`channels`, registry, CompileOptions{
 		Args:   []ArgSpec{{Name: "channels", Type: result}},
@@ -378,7 +260,7 @@ func TestEnumMembersInsideContainersAreChecked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.Run(context.Background(), map[string]any{
+	if _, err := runtime.Run(t.Context(), map[string]any{
 		"channels": []string{"adyen", "stripe"},
 	}, machine.RunOptions{Fuel: 100}); err != nil {
 		t.Fatalf("native enum array input = %v", err)
@@ -389,6 +271,7 @@ func TestEnumMembersInsideContainersAreChecked(t *testing.T) {
 // comprehension yields them as values, and a multi-clause one splices the
 // inner list into the outer.
 func TestComprehensionsCanReturnEnums(t *testing.T) {
+	t.Parallel()
 	channel, registry := enumFixture(t)
 	if err := registry.EnableForm(machine.ForForm); err != nil {
 		t.Fatal(err)
@@ -399,9 +282,12 @@ func TestComprehensionsCanReturnEnums(t *testing.T) {
 		`[c for c in channels for k in keys]`:       machine.ArrayOf(channel),
 		`[@stripe for c in channels for k in keys]`: machine.ArrayOf(channel),
 	} {
-		if _, err := CompileExpr(source, registry, CompileOptions{Args: args, Result: &result}); err != nil {
-			t.Errorf("%s -> %s: %v", source, result, err)
-		}
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if _, err := CompileExpr(source, registry, CompileOptions{Args: args, Result: &result}); err != nil {
+				t.Errorf("%s -> %s: %v", source, result, err)
+			}
+		})
 	}
 }
 
@@ -413,6 +299,7 @@ func TestComprehensionsCanReturnEnums(t *testing.T) {
 // these, so the namespace saw an enum in array<enum> but not in
 // record{channel: enum}.
 func TestEnumsAreCollectedFromAnyDepthOfTheContract(t *testing.T) {
+	t.Parallel()
 	channel, registry := enumFixture(t)
 	nested := machine.RecordOf(machine.Field{
 		Name: "inner",
@@ -429,6 +316,7 @@ func TestEnumsAreCollectedFromAnyDepthOfTheContract(t *testing.T) {
 		{"record 里的枚举数组", machine.RecordOf(machine.Field{Name: "channels", Type: machine.ArrayOf(channel)}), `@adyen in order.channels`},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
 			if _, err := CompileExpr(shape.source, registry, CompileOptions{
 				Args: []ArgSpec{{Name: "order", Type: shape.typ}},
 			}); err != nil {
@@ -446,6 +334,6 @@ func TestEnumsAreCollectedFromAnyDepthOfTheContract(t *testing.T) {
 	}
 	_, err := CompileExpr(`switch(order.channel, case @adyen => 1)`, registry, CompileOptions{Args: args})
 	if err == nil || !strings.Contains(err.Error(), "missing stripe") {
-		t.Fatalf("a switch missing a member compiled: %v", err)
+		t.Fatalf("a switch missing a member compiled: %v, want an error naming missing stripe", err)
 	}
 }

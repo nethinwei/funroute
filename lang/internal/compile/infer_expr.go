@@ -2,10 +2,12 @@ package compile
 
 import (
 	"fmt"
-	"funroute/lang/internal/machine"
-	"funroute/lang/internal/syntax"
+	"maps"
 	"slices"
 	"strings"
+
+	"funroute/lang/internal/machine"
+	"funroute/lang/internal/syntax"
 )
 
 // record stamps the inferred type of expr into every candidate state.
@@ -374,9 +376,7 @@ func withLoopLocals(context inferContext, key, value string, elem typeTerm) infe
 func withLocal(context inferContext, name string, term typeTerm) inferContext {
 	local := context
 	local.args = make(map[string]typeTerm, len(context.args)+1)
-	for key, typ := range context.args {
-		local.args[key] = typ
-	}
+	maps.Copy(local.args, context.args)
 	local.args[name] = term
 	return local
 }

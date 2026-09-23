@@ -1,4 +1,4 @@
-package compile
+package machine_test
 
 import (
 	"context"
@@ -7,22 +7,42 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"funroute/lang/internal/compile"
 	"funroute/lang/internal/machine"
 )
 
-// scoreIn carries an argument the program never reads, so the batch has to
-// run arguments with an empty slot.
-type scoreIn struct {
-	Features []float64 `funroute:"features"`
-	Amount   int64     `funroute:"amount"`
+type scalarIn struct {
+	Country string `funroute:"country"`
+	Amount  int64  `funroute:"amount"`
+}
+
+func bindProgram[In, Out any](t *testing.T, registry *machine.Registry, source string) *machine.Program[In, Out] {
+	t.Helper()
+	binding, err := compile.Bind[In, Out](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return program
 }
 
 // failures collects what RunBatch reports, by request.
 func failures() (map[int]error, func(int, error)) {
 	failed := map[int]error{}
 	return failed, func(i int, err error) { failed[i] = err }
+}
+
+// scoreIn carries an argument the program never reads, so the batch has to
+// run arguments with an empty slot.
+type scoreIn struct {
+	Features []float64 `funroute:"features"`
+	Amount   int64     `funroute:"amount"`
 }
 
 func scoreProgram(t *testing.T, single, batched *atomic.Int64) *machine.Program[scoreIn, float64] {
@@ -34,6 +54,7 @@ func scoreProgram(t *testing.T, single, batched *atomic.Int64) *machine.Program[
 // The host's N requests share one call of each batchable model, and a request
 // that fails fails alone.
 func TestRunBatchCallsEachModelOnce(t *testing.T) {
+	t.Parallel()
 	var single, batched atomic.Int64
 	program := scoreProgram(t, &single, &batched)
 	requests := make([]scoreIn, 8)
@@ -42,90 +63,107 @@ func TestRunBatchCallsEachModelOnce(t *testing.T) {
 	}
 	requests[3].Features = []float64{math.NaN()}
 	errs, failed := failures()
-	outs := program.RunBatch(context.Background(), requests, machine.RunOptions{}, failed)
+	outs := program.RunBatch(t.Context(), requests, machine.RunOptions{}, failed)
 	if len(errs) != 1 || !errors.Is(errs[3], machine.ErrContract) {
-		t.Fatalf("errs = %v", errs)
+		t.Fatalf("errs = %v, want one ErrContract at 3", errs)
 	}
 	for i, out := range outs {
 		if i != 3 && out != float64(i)*2 {
-			t.Fatalf("request %d = %v", i, out)
+			t.Fatalf("request %d = %v, want %v", i, out, float64(i)*2)
 		}
 	}
 	if batched.Load() != 1 || single.Load() != 7 {
-		t.Fatalf("batched = %d, single = %d", batched.Load(), single.Load())
+		t.Fatalf("batched = %d, single = %d, want 1 and 7", batched.Load(), single.Load())
 	}
 	errs, failed = failures()
-	if program.RunBatch(context.Background(), requests[:3], machine.RunOptions{}, failed); len(errs) != 0 {
+	if program.RunBatch(t.Context(), requests[:3], machine.RunOptions{}, failed); len(errs) != 0 {
 		t.Fatalf("a batch that succeeded reported errors: %v", errs)
 	}
 }
 
 func TestRunBatchHonorsItsContext(t *testing.T) {
+	t.Parallel()
 	var single, batched atomic.Int64
 	program := scoreProgram(t, &single, &batched)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	errs, failed := failures()
 	program.RunBatch(ctx, []scoreIn{{Features: []float64{1}}}, machine.RunOptions{}, failed)
 	if len(errs) != 1 || !errors.Is(errs[0], machine.ErrDeadline) {
-		t.Fatalf("errs = %v", errs)
+		t.Fatalf("errs = %v, want one ErrDeadline at 0", errs)
 	}
 }
 
-// Goroutines that each hold one request share the model call too.
+// Goroutines that each hold one request share the model call too. The batch
+// runs on synctest's clock, so it fills before its MaxWait however slowly the
+// goroutines start.
 func TestProgramBatchRunsConcurrentRequestsTogether(t *testing.T) {
-	var single, batched atomic.Int64
-	program := scoreProgram(t, &single, &batched)
-	const requests = 8
-	batch := program.Batch(machine.BatchOptions{MaxSize: requests, MaxWait: time.Second})
-	defer batch.Close()
-	if batch.Sites() != 1 {
-		t.Fatalf("sites = %d", batch.Sites())
-	}
+	synctest.Test(t, func(t *testing.T) {
+		var single, batched atomic.Int64
+		program := scoreProgram(t, &single, &batched)
+		const requests = 8
+		batch := program.Batch(machine.BatchOptions{MaxSize: requests, MaxWait: time.Second})
+		defer batch.Close()
+		if batch.Sites() != 1 {
+			t.Fatalf("sites = %d, want 1", batch.Sites())
+		}
+		results := scoreConcurrently(t, batch, requests)
+		for i, result := range results {
+			if result != float64(i)*2 {
+				t.Fatalf("request %d = %v, want %v", i, result, float64(i)*2)
+			}
+		}
+		if batched.Load() != 1 {
+			t.Fatalf("batched = %d, want 1", batched.Load())
+		}
+	})
+}
+
+// scoreConcurrently submits requests to batch from a goroutine each, request
+// i with features [i], and returns the results by request.
+func scoreConcurrently(t *testing.T, batch *machine.ProgramBatch[scoreIn, float64], requests int) []float64 {
+	t.Helper()
+	ctx := t.Context()
 	results := make([]float64, requests)
 	var wg sync.WaitGroup
-	for i := 0; i < requests; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+	for i := range requests {
+		wg.Go(func() {
 			in := scoreIn{Features: []float64{float64(i)}}
-			out, err := batch.Run(context.Background(), &in)
+			out, err := batch.Run(ctx, &in)
 			if err != nil {
 				t.Error(err)
 			}
 			results[i] = out
-		}(i)
+		})
 	}
 	wg.Wait()
-	for i, result := range results {
-		if result != float64(i)*2 {
-			t.Fatalf("request %d = %v", i, result)
-		}
-	}
-	if batched.Load() != 1 {
-		t.Fatalf("batched = %d", batched.Load())
-	}
+	return results
 }
 
 // Without somewhere to report a failure, a failed request would pass for a
 // zero result; every batch entry refuses to run that way, and says which
 // entry was called.
 func TestRunBatchRequiresAFailureCallback(t *testing.T) {
+	t.Parallel()
 	var single, batched atomic.Int64
 	program := scoreProgram(t, &single, &batched)
 	in := []scoreIn{{Features: []float64{1}}}
 	out := []*float64{new(float64)}
+	ctx := t.Context()
 	for method, call := range map[string]func(){
-		"RunBatch":     func() { program.RunBatch(context.Background(), in, machine.RunOptions{}, nil) },
-		"RunBatchInto": func() { program.RunBatchInto(context.Background(), in, out, machine.RunOptions{}, nil) },
+		"RunBatch":     func() { program.RunBatch(ctx, in, machine.RunOptions{}, nil) },
+		"RunBatchInto": func() { program.RunBatchInto(ctx, in, out, machine.RunOptions{}, nil) },
 		"RunBatchFunc": func() {
-			program.RunBatchFunc(context.Background(), 1, func(int) *scoreIn { return &in[0] },
+			program.RunBatchFunc(ctx, 1, func(int) *scoreIn { return &in[0] },
 				func(int) *float64 { return out[0] }, machine.RunOptions{}, nil)
 		},
 	} {
-		if got := panicOf(call); got != method+": failed must not be nil" {
-			t.Errorf("%s panicked with %v", method, got)
-		}
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			if got, want := panicOf(call), method+": failed must not be nil"; got != want {
+				t.Errorf("%s panicked with %v, want %q", method, got, want)
+			}
+		})
 	}
 }
 
@@ -140,6 +178,7 @@ func panicOf(call func()) (recovered any) {
 // It runs after every program has finished and every frame is back in the
 // pool, so the panic leaves nothing half done and the program runs on.
 func TestRunBatchLetsTheCallbackPanicThrough(t *testing.T) {
+	t.Parallel()
 	var single, batched atomic.Int64
 	program := scoreProgram(t, &single, &batched)
 	requests := []scoreIn{{Features: []float64{math.NaN()}}, {Features: []float64{1}}}
@@ -149,12 +188,12 @@ func TestRunBatchLetsTheCallbackPanicThrough(t *testing.T) {
 				t.Fatal("the callback's panic did not reach the caller")
 			}
 		}()
-		program.RunBatch(context.Background(), requests, machine.RunOptions{}, func(int, error) { panic("host bug") })
+		program.RunBatch(t.Context(), requests, machine.RunOptions{}, func(int, error) { panic("host bug") })
 	}()
 	errs, failed := failures()
-	outs := program.RunBatch(context.Background(), requests, machine.RunOptions{}, failed)
+	outs := program.RunBatch(t.Context(), requests, machine.RunOptions{}, failed)
 	if len(errs) != 1 || outs[1] != 2 {
-		t.Fatalf("after a panic: outs = %v, errs = %v", outs, errs)
+		t.Fatalf("after a panic: outs = %v, errs = %v, want outs[1] = 2 and one error", outs, errs)
 	}
 }
 
@@ -162,6 +201,7 @@ func TestRunBatchLetsTheCallbackPanicThrough(t *testing.T) {
 // models are still called once for the batch, and a request that fails — bad
 // data, nowhere to put the result — fails alone, its destination zeroed.
 func TestRunBatchIntoWritesWhereTheHostSays(t *testing.T) {
+	t.Parallel()
 	var single, batched atomic.Int64
 	program := scoreProgram(t, &single, &batched)
 	in := make([]scoreIn, 5)
@@ -174,15 +214,15 @@ func TestRunBatchIntoWritesWhereTheHostSays(t *testing.T) {
 	in[1].Features = []float64{math.NaN()}
 	out[2] = nil
 	errs, failed := failures()
-	program.RunBatchInto(context.Background(), in, out, machine.RunOptions{}, failed)
+	program.RunBatchInto(t.Context(), in, out, machine.RunOptions{}, failed)
 	if len(errs) != 2 || !errors.Is(errs[1], machine.ErrContract) || !errors.Is(errs[2], machine.ErrContract) {
-		t.Fatalf("errs = %v", errs)
+		t.Fatalf("errs = %v, want ErrContract at 1 and 2", errs)
 	}
 	if *out[0] != 0 || *out[1] != 0 || *out[3] != 6 || *out[4] != 8 {
-		t.Fatalf("out = %v %v %v %v", *out[0], *out[1], *out[3], *out[4])
+		t.Fatalf("out = %v %v %v %v, want 0 0 6 8", *out[0], *out[1], *out[3], *out[4])
 	}
 	if batched.Load() != 1 {
-		t.Fatalf("batched = %d", batched.Load())
+		t.Fatalf("batched = %d, want 1", batched.Load())
 	}
 }
 
@@ -199,12 +239,13 @@ type scoreResponse struct {
 // The accessor shape reaches fields of larger objects, and one index names the
 // request, its result and its failure. A nil request fails alone.
 func TestRunBatchFuncReachesFieldsOfLargerObjects(t *testing.T) {
+	t.Parallel()
 	var single, batched atomic.Int64
 	program := scoreProgram(t, &single, &batched)
 	requests := []*scoreRequest{{ID: "a", Score: scoreIn{Features: []float64{1}}}, nil, {ID: "c", Score: scoreIn{Features: []float64{3}}}}
 	responses := make([]scoreResponse, len(requests))
 	errs, failed := failures()
-	program.RunBatchFunc(context.Background(), len(requests),
+	program.RunBatchFunc(t.Context(), len(requests),
 		func(i int) *scoreIn {
 			if requests[i] == nil {
 				return nil
@@ -214,14 +255,15 @@ func TestRunBatchFuncReachesFieldsOfLargerObjects(t *testing.T) {
 		func(i int) *float64 { return &responses[i].Value },
 		machine.RunOptions{}, failed)
 	if len(errs) != 1 || !errors.Is(errs[1], machine.ErrContract) {
-		t.Fatalf("errs = %v", errs)
+		t.Fatalf("errs = %v, want one ErrContract at 1", errs)
 	}
 	if responses[0].Value != 2 || responses[1].Value != 0 || responses[2].Value != 6 {
-		t.Fatalf("responses = %+v", responses)
+		t.Fatalf("responses = %+v, want values 2, 0, 6", responses)
 	}
 }
 
 func TestRunBatchIntoRequiresOneResultPerRequest(t *testing.T) {
+	t.Parallel()
 	var single, batched atomic.Int64
 	program := scoreProgram(t, &single, &batched)
 	defer func() {
@@ -230,7 +272,7 @@ func TestRunBatchIntoRequiresOneResultPerRequest(t *testing.T) {
 		}
 	}()
 	_, failed := failures()
-	program.RunBatchInto(context.Background(), make([]scoreIn, 2), make([]*float64, 1), machine.RunOptions{}, failed)
+	program.RunBatchInto(t.Context(), make([]scoreIn, 2), make([]*float64, 1), machine.RunOptions{}, failed)
 }
 
 type traceKey struct{}
@@ -238,6 +280,7 @@ type traceKey struct{}
 // A synchronous batch runs its model calls under the host's own context, so
 // what the host put there — a trace, a tenant — reaches the engine.
 func TestRunBatchHandsTheEngineTheHostsContext(t *testing.T) {
+	t.Parallel()
 	registry := machine.CoreRegistry()
 	var seen any
 	err := machine.Model(registry, "model.echo_v1", machine.Doc{Cost: 1},
@@ -253,13 +296,13 @@ func TestRunBatchHandsTheEngineTheHostsContext(t *testing.T) {
 		X float64 `funroute:"x"`
 	}
 	program := bindProgram[echoIn, float64](t, registry, `model.echo_v1(x)`)
-	ctx := context.WithValue(context.Background(), traceKey{}, "trace-1")
+	ctx := context.WithValue(t.Context(), traceKey{}, "trace-1")
 	_, failed := failures()
 	if outs := program.RunBatch(ctx, []echoIn{{X: 1}, {X: 2}}, machine.RunOptions{}, failed); outs[1] != 2 {
-		t.Fatalf("outs = %v", outs)
+		t.Fatalf("outs = %v, want outs[1] = 2", outs)
 	}
 	if seen != "trace-1" {
-		t.Fatalf("the engine saw %v", seen)
+		t.Fatalf("the engine saw %v, want trace-1", seen)
 	}
 }
 
@@ -272,8 +315,9 @@ type pairOut struct {
 // fewer fields than the Out has leaves the others zero, as Run would, not what
 // the previous rule wrote there.
 func TestRunBatchIntoLeavesNothingFromTheLastRule(t *testing.T) {
+	t.Parallel()
 	registry := machine.CoreRegistry()
-	binding, err := Bind[scalarIn, pairOut](registry)
+	binding, err := compile.Bind[scalarIn, pairOut](registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,8 +325,8 @@ func TestRunBatchIntoLeavesNothingFromTheLastRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	netOnly, err := CompileExpr(`{net: amount}`, registry, CompileOptions{
-		Args:   []ArgSpec{{Name: "amount", Type: machine.IntType}},
+	netOnly, err := compile.CompileExpr(`{net: amount}`, registry, compile.CompileOptions{
+		Args:   []compile.ArgSpec{{Name: "amount", Type: machine.IntType}},
 		Result: &machine.Type{Kind: machine.RecordKind, Fields: []machine.Field{{Name: "net", Type: machine.IntType}}},
 	})
 	if err != nil {
@@ -295,24 +339,25 @@ func TestRunBatchIntoLeavesNothingFromTheLastRule(t *testing.T) {
 	in := []scalarIn{{Country: "SG", Amount: 1}}
 	out := []*pairOut{{}}
 	_, failed := failures()
-	both.RunBatchInto(context.Background(), in, out, machine.RunOptions{}, failed)
-	narrow.RunBatchInto(context.Background(), in, out, machine.RunOptions{}, failed)
+	both.RunBatchInto(t.Context(), in, out, machine.RunOptions{}, failed)
+	narrow.RunBatchInto(t.Context(), in, out, machine.RunOptions{}, failed)
 	if *out[0] != (pairOut{Net: 1}) {
-		t.Fatalf("out = %+v", *out[0])
+		t.Fatalf("out = %+v, want %+v", *out[0], pairOut{Net: 1})
 	}
 }
 
 // A request that failed on its own is reported for why it failed, even when
 // it also has nowhere to put a result.
 func TestRunBatchFuncReportsTheRequestsOwnError(t *testing.T) {
+	t.Parallel()
 	var single, batched atomic.Int64
 	program := scoreProgram(t, &single, &batched)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	errs, failed := failures()
 	in := scoreIn{Features: []float64{1}}
 	program.RunBatchFunc(ctx, 1, func(int) *scoreIn { return &in }, func(int) *float64 { return nil }, machine.RunOptions{}, failed)
 	if !errors.Is(errs[0], machine.ErrDeadline) {
-		t.Fatalf("errs = %v", errs)
+		t.Fatalf("errs = %v, want ErrDeadline at 0", errs)
 	}
 }

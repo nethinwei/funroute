@@ -2,11 +2,13 @@ package compile
 
 import (
 	"fmt"
-	"funroute/lang/internal/machine"
-	"funroute/lang/internal/syntax"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
+
+	"funroute/lang/internal/machine"
+	"funroute/lang/internal/syntax"
 )
 
 type typeTerm struct {
@@ -47,15 +49,9 @@ func (s *inferState) clone() *inferState {
 		nodeTypes:  make(map[int]typeTerm, len(s.nodeTypes)),
 		selections: make(map[int]string, len(s.selections)),
 	}
-	for key, value := range s.subst {
-		out.subst[key] = value
-	}
-	for key, value := range s.nodeTypes {
-		out.nodeTypes[key] = value
-	}
-	for key, value := range s.selections {
-		out.selections[key] = value
-	}
+	maps.Copy(out.subst, s.subst)
+	maps.Copy(out.nodeTypes, s.nodeTypes)
+	maps.Copy(out.selections, s.selections)
 	return out
 }
 

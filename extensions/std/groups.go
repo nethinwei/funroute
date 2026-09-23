@@ -3,6 +3,7 @@ package std
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	"funroute/lang"
@@ -81,7 +82,7 @@ func groupByKeys(_ context.Context, args []lang.Value) (lang.Value, error) {
 // with ties sharing a rank and the next rank skipping past them.
 func rankOf[T int64 | float64 | string](keys []T) ([]int64, error) {
 	sorted := append([]T(nil), keys...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	slices.Sort(sorted)
 	out := make([]int64, len(keys))
 	for i, key := range keys {
 		out[i] = int64(sort.Search(len(sorted), func(j int) bool { return !(sorted[j] < key) }) + 1)

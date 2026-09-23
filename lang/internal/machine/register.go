@@ -81,7 +81,7 @@ func Model(registry *Registry, name string, doc Doc, fn, batch any) error {
 		Doc:  doc,
 	}
 	if batch != nil {
-		batched, err := reflectBatch(registry, batch, single)
+		batched, err := reflectBatch(batch, single)
 		if err != nil {
 			return fmt.Errorf("function %s batch: %w", name, err)
 		}
@@ -103,8 +103,8 @@ type reflected struct {
 }
 
 var (
-	contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
-	errorType   = reflect.TypeOf((*error)(nil)).Elem()
+	contextType = reflect.TypeFor[context.Context]()
+	errorType   = reflect.TypeFor[error]()
 )
 
 func reflectSignature(registry *Registry, fn any) (*reflected, error) {
@@ -141,8 +141,9 @@ func reflectSignature(registry *Registry, fn any) (*reflected, error) {
 }
 
 // reflectBatch checks that batch is fn with every parameter and the result
-// turned into a slice, and shares fn's converters element-wise.
-func reflectBatch(registry *Registry, batch any, single *reflected) (*reflected, error) {
+// turned into a slice, and shares fn's converters element-wise. It needs no
+// registry: those converters were resolved against it already, with fn.
+func reflectBatch(batch any, single *reflected) (*reflected, error) {
 	value := reflect.ValueOf(batch)
 	typ := value.Type()
 	if typ.Kind() != reflect.Func || typ.NumOut() != 2 || typ.Out(1) != errorType {
@@ -182,7 +183,7 @@ func (r *reflected) call(ctx context.Context, args []Value) (Value, error) {
 		in = append(in, converted)
 	}
 	results := r.fn.Call(in)
-	if err, _ := results[1].Interface().(error); err != nil {
+	if err, _ := reflect.TypeAssert[error](results[1]); err != nil {
 		return Value{}, err
 	}
 	return r.outOf(results[0])
@@ -206,7 +207,7 @@ func (r *reflected) callBatch(ctx context.Context, calls [][]Value) ([]Value, er
 		in = append(in, column)
 	}
 	results := r.fn.Call(in)
-	if err, _ := results[1].Interface().(error); err != nil {
+	if err, _ := reflect.TypeAssert[error](results[1]); err != nil {
 		return nil, err
 	}
 	list := results[0]

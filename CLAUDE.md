@@ -9,7 +9,7 @@ FunRoute：面向支付路由的强类型纯表达式语言。module `funroute`�
 ### 包边界（先看这条）
 
 ```text
-lang/lang.go              唯一的公开接口：类型别名与转发
+lang/*.go                 唯一的公开接口：只有类型别名与转发，按宿主的用途分文件（lang.go 是包注释与值/类型，另有 registry/compile/runtime/batch/bind/manifest/errors）
 lang/lsp/                 语言服务：LSP 协议层 + stdio 传输；在 lang/ 下，直接用 internal 的语义入口
 extensions/std/           标准扩展包（聚合/字符串/数组/数值/选择/分组），只用公开 API
 examples/payment/         示例宿主：领域函数的组装范例，也是工作台编进 wasm 的注册表
@@ -21,7 +21,7 @@ web/src/  web/wasm/       工作台前端（TS，按组件打包到 web/dist/）
 
 依赖严格单向，`go list -deps` 可验证。**硬约束**：`Value` 的容器 backing 是私有字段，VM 的循环/索引/构造直接在上面操作，所以 value/container/convert/vm/frame 必须同包 —— 拆开就只能走公开 accessor。跨层要用 machine 的内部件时，导出一个**语义明确的入口**（`EvaluateClosed`、`IsLazyIf`、`Resolve`、`FormOf`），不要导出零件。
 
-AST 类型**故意不公开**：宿主通过 ExprJSON 交换程序。`lang/lang_test.go` 是 `package lang_test`，只能用公开 API，所以它同时守着这条边界。
+AST 类型**故意不公开**：宿主通过 ExprJSON 交换程序。`lang` 的测试都是 `package lang_test`，只能用公开 API，所以它们同时守着这条边界；`lang_test.go` 开头的 `var ( _ lang.Value … )` 块把每个公开类型写一遍，少了哪个别名就编译不过。
 
 ### 值的容器是原生 Go 值，边界零转换零拷贝
 
@@ -53,7 +53,7 @@ AST 类型**故意不公开**：宿主通过 ExprJSON 交换程序。`lang/lang_
 
 ### 工作台：文本是唯一来源，结构视图是投影
 
-前端只通过 LSP（`lang/lsp`）拿语言事实：语义标记、诊断、补全、悬停、签名提示、格式化，加 `funroute/setContract`（通知）、`funroute/syntaxTree`、`funroute/arguments`、`funroute/catalog`（请求）与 `funroute.run`/`funroute.render`（命令）。结构视图按 `funroute/syntaxTree` 画：`switch`/`for`/`reduce`/`let` 与惰性调用（`if`/`fallback`，由目录的 `special` 字段识别，不写死）是卡片，其余是一行源码；**每处修改都是对原文某个区间的替换**，下一棵树由服务端给出，前端从不理解 ExprJSON。包块的片段（`web/src/projection.ts` 的 `BLOCKS`）是前端的输入辅助，不是语言规则。语言服务同一份代码两种传输：`funroute lsp`（stdio，`Content-Length` 分帧）与 `web/wasm`（Worker 里 `send`/回调；`js.FuncOf` 回调里不能阻塞，所以入站走保序队列）。
+语言服务的每个请求与通知都经 `Server.guarded`：持锁运行处理函数，处理函数的 panic（语言自身的 bug，不是客户端的错）只让这一条消息失败，请求回 `-32603 InternalError`，语言服务与其他打开的文档不受影响。`Lexemes` 的 `pieces` 保证每一步至少前进一个字节，`readsOf` 只细化 parser 在名字 token（`Pos`，不是可能从括号开始的 `Span.Start`）上留下的标记。前端只通过 LSP（`lang/lsp`）拿语言事实：语义标记、诊断、补全、悬停、签名提示、格式化，加 `funroute/setContract`（通知）、`funroute/syntaxTree`、`funroute/arguments`、`funroute/catalog`（请求）与 `funroute.run`/`funroute.render`（命令）。结构视图按 `funroute/syntaxTree` 画：`switch`/`for`/`reduce`/`let` 与惰性调用（`if`/`fallback`，由目录的 `special` 字段识别，不写死）是卡片，其余是一行源码；**每处修改都是对原文某个区间的替换**，下一棵树由服务端给出，前端从不理解 ExprJSON。包块的片段（`web/src/projection.ts` 的 `BLOCKS`）是前端的输入辅助，不是语言规则。语言服务同一份代码两种传输：`funroute lsp`（stdio，`Content-Length` 分帧）与 `web/wasm`（Worker 里 `send`/回调；`js.FuncOf` 回调里不能阻塞，所以入站走保序队列）。
 
 ### 契约在宿主，不在语言里
 
@@ -93,7 +93,7 @@ syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile
 - `SwitchExpr.Value` 可为 nil（条件形态），`SwitchCaseExpr.Match` 是列表（多值分支）。改这里只动 `syntax/ast.go`（tag 决定 JSON、作用域、语法树）加 `compile/infer_expr.go`、`compile/compiler.go` 的语义，以及 `syntax/print.go`/`format.go` 的打印。
 - ExprJSON 文档只有 `{version, expr}`。前端不读也不写它：工作台只和文本打交道。
 - 编译错误带位置：`syntax.At`（一个位置）、`syntax.Around(node, …)`（一个节点：指向它的位置、覆盖它的 `Span`）与 parser/lexer 内部的 `over`（一个 token）是**仅有**的产生方式，错误本身携带 byte offset 与区间（`PosError.Start/End`，LSP 诊断用它），`lang.LineColumn(err, source)` 由宿主换算成行列 —— 语言层不持有源码文本，ExprJSON 编译的程序根本没有文本。新增错误路径必须走它们，否则位置就丢了；推导里的错误一律 `Around(node)`，读了未声明参数也指向那次读取（`syntax.FirstReads`）；`compileError` 用两个 `%w` 包装，所以 `errors.Is` 找类别、`errors.As` 找位置都成立。
-- 中缀与关键字糖全部在 parser 层脱糖，**AST 不新增任何节点类型**：`a+b` 就是 `add(a,b)`，`a&&b` 就是 `if(a,b,false)`，`[e for x in xs if c]` 就是 `ForExpr`。多层推导 `[e for x in xs for y in ys]` 也一样：`nestClauses` 把子句从内往外串成嵌套 `ForExpr`，除最内层外都置 `Flatten`，编译时发 `OpLoopSpread` 把内层产出的数组拼接进外层（`arrayBuilder.addAll`）。字典推导只接一个子句。新增糖要同时给打印器一条反向读法：运算符的反向读取是 `operators.go` 的 `operatorSpec.read`，与 parser 的 `expandOperator` 一一对应、放在同一张表旁边；`specificity` 决定一个节点有多种读法时选哪个（`sub(0,x)` 是 `-x` 不是 `0 - x`，`!=` 先于 `!`）。**格式化结果必须解析回同一 ExprJSON**，`print_test.go` 的往返测试守着。运算符表（`syntax/operators.go`）支持三种 fixity：`infix`（符号 `%`，或单词 `in` —— 后者按 token 文本匹配，因为它的 kind 就是 identifier）、`prefix`、`index`（后缀 `xs[i]`，parser 在 primary 结束处读，前端按 fixity 打印回方括号）。
+- 中缀与关键字糖全部在 parser 层脱糖，**AST 不新增任何节点类型**：`a+b` 就是 `add(a,b)`，`a&&b` 就是 `if(a,b,false)`，`[e for x in xs if c]` 就是 `ForExpr`。多层推导 `[e for x in xs for y in ys]` 也一样：`nestClauses` 把子句从内往外串成嵌套 `ForExpr`，除最内层外都置 `Flatten`，编译时发 `OpLoopSpread` 把内层产出的数组拼接进外层（`arrayBuilder.addAll`）。字典推导只接一个子句。新增糖要同时给打印器一条反向读法：运算符的反向读取是 `operators.go` 的 `operatorSpec.read`，与 parser 的 `expandOperator` 一一对应、放在同一张表旁边；`specificity` 决定一个节点有多种读法时选哪个（`sub(0,x)` 是 `-x` 不是 `0 - x`，`!=` 先于 `!`）。**格式化结果必须解析回同一 ExprJSON**，`print_test.go` 的往返测试与 `format_test.go` 的 `FuzzFormatRoundTrip` 模糊测试守着。打印器要替词法器着想：`postfixBase` 给数字和枚举成员加括号（`(1).x`、`(@a).b`，否则词法器会一路读进去），零参数调用没有 `args[1:]`（`operatorSpec.read` 先查元数再切片）。词法器把名字和其中的点读成一个 token，所以点号之后的 `a.b` 与 `order.a.b` 一样是连续的字段读取（`parseFieldRead` 按点拆开）；空白只认 ASCII（源码按字节读，单个 0x85/0xA0 字节不是空白）；字符串字面量必须是合法 UTF-8 —— 原文里的无效字节会被 `strconv.Unquote` 悄悄换成 U+FFFD，`\200` 这类转义则会在 ExprJSON 里被换掉，两者都在 `parser.unquote` 拒绝。运算符表（`syntax/operators.go`）支持三种 fixity：`infix`（符号 `%`，或单词 `in` —— 后者按 token 文本匹配，因为它的 kind 就是 identifier）、`prefix`、`index`（后缀 `xs[i]`，parser 在 primary 结束处读，前端按 fixity 打印回方括号）。
 - `and`/`or`/`not`/`ne` 是**派生形式**——展开为 `if`，不进注册表。它们的说明在 `machine/catalog.go` 的 `alwaysForms`（目录的 `special_forms`，只有名字、可解析的写法与 Doc，没有伪签名），打印靠 `operatorSpec.read`；两处都不在前端。
 - 扩展函数按不可信纯函数对待：`recover` 在激活层兜住 panic。**值不拷贝**——容器 backing 直接交出，安全性来自只读约定（见上），任何新增的包外取值入口都必须保持"交出 backing、文档写明只读"。
 - 出栈返回的是栈上视窗，不是副本：`EvalFunc` 收到的 `[]Value` 只在调用期间有效。
@@ -110,7 +110,7 @@ syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile
 - `Kind` 加值 → `kindNames` 同步；若它有运行时表示，`Value.hasType`/`Type()`/`Any()`、`compile/infer.go` 的 `typeTerm`（含 `name`）、`implicitTypeScore`、`ParseType`、`validateTypePattern` 都要认识它（`HandleKind` 是现成范例）。
 - 新增 ExprJSON 节点 → 在 `syntax/ast.go` 定义带 tag 的 struct（含 `kind()`、嵌入 `Span`，需要时 `check()`/`Form()`）并加进 `nodeTypes`；导入、导出、作用域、语法树全部自动生效。仍要手写的是语义：`compile/infer_expr.go`、`compile/compiler.go` 的 case，`syntax/print.go` 的 `inline`/`compoundSource` 与 `format.go` 的 `splitNode`（打印器按节点分派，是语言自己的唯一一份），parser 的 `stamp` 覆盖。**按节点类型分派的另一处是 `compile/enum.go` 的 `validateConstrainedReturn`**（枚举出参要逐条返回路径证明）：漏了它不会不安全（default 走 `validateKnownType`，要求整体类型相等，是保守的），但能表达的程序会变少。`walk_test.go` 的 `NodeKinds` 测试会要求列出新节点，`lang/lsp/examples_test.go` 会要求示例用到它。
 - `reflectType`/`fromGo` 新增 Go 类型 → `machine/plan.go` 的 `newCodecFor` 分类与 `access.go` 的读写也要认识它，否则 `Bind` 能推出类型、`Program.Run` 却走错形状。
-- 新增公开 API → `lang/lang.go` 加别名或转发，并在 `lang/lang_test.go` 以宿主视角用一次；能不加就不加。
+- 新增公开 API → 在 `lang/` 对应主题的文件里加别名或转发（新类型也进 `lang_test.go` 的类型断言块），并在对应的 `_test.go` 以宿主视角用一次；能不加就不加。
 - 新增例子 → 只改 `web/funroute-examples.json`（**源码 + 契约 + 入参 + 期望值**），`lang/lsp/examples_test.go` 通过语言服务逐条运行，并要求示例合起来覆盖示例注册表的全部函数与形式、`syntax.Operators()` 与 `syntax.NodeKinds()`。
 - 新增颜色 → 不要写字面量。`web/tokens.css` 是**唯一**的调色板（`styles.css` 只是工作台页面自己的布局），每个 token 用 `light-dark(浅, 深)` 同时给出两套值，主题切换只改 `color-scheme`（`data-theme` 缺省即跟随系统）。组件样式（Lit 的 `static styles`、编辑器的 `EditorView.theme`）只消费这些 token 且自带，不依赖 `styles.css`；语义标记的样式是 `.fr-tok-<LSP token type>`，写在 `editor.ts` 的主题里。
 - 新增前端代码 → 写在 `web/src/*.ts`（`erasableSyntaxOnly`，`node --test` 直接跑 `*.test.ts`；纯逻辑放无 DOM 的模块里测），`make web` 用 esbuild 按组件多入口拆分打包到 `web/dist/`（`app`/`lsp`/`editor`/`contract`/`runner`/`canvas` + 共享 chunk，chunk 与入口同目录，所以 `lsp.ts` 里相对 `import.meta.url` 的 worker 路径仍然成立）；产物**不提交**（`.gitignore` 忽略整个 `web/dist/`），谁要服务工作台谁先构建：`make site` 依赖 `web` 与 `wasm`，Pages 工作流装 Node 后跑同一个目标。Go 侧的构建与测试不需要 Node。组件可按需单独引用：注册一律经 `ui.ts` 的 `define`（已注册就跳过），新组件照做并加进 `package.json` 的入口列表。`make check-web` 只做类型检查并确认能构建。补全顺序由服务端的 `sortText` 决定（类型→名称），`lsp.ts` 的 `rankedCompletion` 关掉 CodeMirror 的模糊打分以保住它。编辑器不用 `basicSetup`：`web/src/setup.ts` 把它拆开重组——行为向 VS Code 看齐，按键是 Emacs（`@replit/codemirror-emacs` 排在最前；它按 `event.code` 认标点，所以 `M-;`/`M-<`/`M->` 由 CodeMirror 的 keymap 补上），只绑定服务端真正回答的能力的键。组件共用 `web/src/ui.ts`（`define`、填充风格的 `fieldStyles`、`labelStyles`），代码字体是 `--mono` token。位置一律按 UTF-16 数（客户端不协商编码），`editor.ts` 的 `offsetAt` 是编辑器侧唯一的换算。结构视图的编辑事件带上它读取区间时的原文，编辑器文本已变就丢弃。契约的返回部分在试运行面板里编辑，`app.ts` 的 `sendContract` 把两个面板合成一份推给服务端。运行时依赖只有 Lit、实际导入的 `@codemirror/*` 子包（含 `lsp-client`）及其 Emacs 键位，`package.json` 按导入逐个声明，只在前端；Go 仍零依赖。前端**只**通过 LSP 拿语言事实，不理解 ExprJSON、不写任何语法规则。
@@ -120,17 +120,18 @@ syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile
 ## 命令
 
 ```bash
-make ci                                                # 提交前必须全过：check-fmt check-js check-web vet vet-wasm lint build wasm test test-js
+make ci                                                # 提交前必须全过：check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize lint build wasm test test-js
+make staticcheck | make modernize | make check-imports # 严格检查：工具按固定版本装进 .tools/<版本>/（首次需联网），不进 go.mod
 make test | make lint | make vet | make fmt
 make wasm                                              # 浏览器用的语言服务 web/dist/funroute.wasm
 make web                                               # 前端产物 web/dist/*.js（先在 web/ 里 npm install；两者都不提交）
 make site                                              # 组装发布目录 site/（make run 与 Pages 共用）
 make run                                               # web + site，然后 cmd/mvp 静态服务 site/ 于 http://127.0.0.1:8080
 go test ./lang/internal/compile -run TestIfIsLazyAndFuelIsEnforced -v      # 单个测试
-go test ./lang/internal/compile -bench . -benchtime 2000x                 # VM 基准
-go test ./lang/internal/compile -bench RunPaths -cpuprofile /tmp/cpu.out  # 热路径 profile
-go test ./lang/internal/compile -bench Vector -benchtime 1s                # 向量透传：三个尺寸的 ns/op 必须相同（分配来自 Logic 的 reflect.Call，与 n 无关）
-go test ./lang/internal/compile -bench BatchVersus -benchtime 2000x        # 批处理对比：合批摊薄引擎开销
+go test ./lang/internal/machine -bench . -benchtime 2000x                 # VM 基准（编译基准 BenchmarkCompile 在 compile）
+go test ./lang/internal/machine -bench RunPaths -cpuprofile /tmp/cpu.out  # 热路径 profile
+go test ./lang/internal/machine -bench Vector -benchtime 1s                # 向量透传：三个尺寸的 ns/op 必须相同（分配来自 Logic 的 reflect.Call，与 n 无关）
+go test ./lang/internal/machine -bench BatchVersus -benchtime 2000x        # 批处理对比：合批摊薄引擎开销
 go list -deps ./lang/internal/machine | grep funroute                     # 验证依赖方向
 go run ./cmd/funroute inspect -expr 'if(a,b,add(1,1))'
 go run ./cmd/funroute fmt -expr 'let(a=1,a+2)'                            # 格式化：结果必须解析回同一程序
@@ -146,3 +147,26 @@ go run ./cmd/funroute run -expr 'let(bps = 250, amount * bps / 10000)' \
 - 嵌套不超过 **3 层**（if/for/switch/select/函数字面量各计一层，`else if` 不额外计）。
 - 单个文件不超过 **800 行**（`.go`、`.js` 与 `.ts`；`dist`、`node_modules` 跳过）。
 - 超限时拆函数或拆文件，不要放宽阈值；`tools/lint` 只用标准库，保持零依赖。
+
+另外三项由固定版本的外部工具检查（Makefile 顶部的 `STATICCHECK_VERSION`/`X_TOOLS_VERSION`；工具不是依赖，`go.mod` 保持为空）：
+
+- **staticcheck 全部检查**（`staticcheck.conf` 的 `checks = ["all"]`，含默认关闭的风格项）：每个包有包注释（internal 包写在 `doc.go`），导出标识符的注释以它的名字开头，声明里不写能推断出的类型。要断言"某个类型写得出名字"时，用包级的 `var _ T`（Go 的编译期断言惯用法），不用 `var v T = …`（ST1023）或显式类型参数（gopls 的 `infertypeargs` 会报多余）。确属有意的例外用 `//lint:ignore <检查> <原因>` 就地说明（`access.go` 的 `contentSink` 是范例），不在配置里整体关掉。
+- **modernize**：当前 Go 有更直接写法的地方用新写法（`reflect.TypeFor`、`maps.Copy`、`slices.Sort`、`min`/`max`、`range n`、`errors.AsType` 等）。
+- **import 分组**：标准库一组、空一行、本模块（`funroute/…`）一组，组内按字母序（`goimports -local funroute`）。
+- `js/wasm` 入口 `web/wasm` 在 `GOOS=js GOARCH=wasm` 下另跑一遍 staticcheck 与 modernize，同 `vet-wasm`。
+
+## 测试规范
+
+`tools/lint` 在 `*_test.go` 里强制前四条（`tools/lint/tests.go`），其余靠评审：
+
+- 测试的 ctx 用 `t.Context()`（基准 `b.Context()`），测试结束即取消；`context.Background()` 只在没有测试值的地方用（`Example*`）。
+- 不睡：依赖定时器的测试（`Batch` 的 `MaxWait`、`Doc.Timeout`、`Detached`）跑在 `testing/synctest` 的假时钟上。
+- 基准写 `for b.Loop()`，不在 `b.N` 上循环、不 `ResetTimer`：`b.Loop` 本身就把循环前的准备排除在计时外。
+- 接收 `*testing.T/B/F` 或 `testing.TB` 的辅助函数第一句 `t.Helper()`，失败报在调用它的那一行。
+- 表驱动测试每个用例一个 `t.Run` 子测试，名字取用例的键或 name，失败时看得出是哪一条，也能 `-run` 单跑。
+- 相互独立的测试与子测试第一句 `t.Parallel()`。例外：`testing.AllocsPerRun`（全局计数，会被并行测试污染）、synctest 气泡、共享可变状态、对计时敏感的测试。
+- 失败信息写出输入、实际与期望：`CompileExpr(%q) error = %v, want ErrContract`。
+- **每个 `foo_test.go` 对应同目录的 `foo.go`，测的就是它的代码**（`tools/lint` 强制）。唯一例外是 Go 官方惯例 `example_test.go` 与 `export_test.go`。没有 `helpers_test.go`：共用辅助放进它主要服务的测试文件。归位按测试**真正测的代码**：测 machine 的行为而要先编译出 artifact 的测试，写成 `lang/internal/machine` 下的外部测试包 `package machine_test`（它可以 import compile），需要的内部件经 `export_test.go` 暴露。
+- 公开包 `lang` 的用法有带 `// Output:` 的 `Example*`（`lang/example_test.go`），go test 校验输出，也是 godoc 上的示例。
+- 解析与格式化有模糊测试（`lang/internal/syntax` 的 `format_test.go` 与 `json_ast_test.go`）：能解析的程序格式化后解析回同一 ExprJSON，任意字节导入 ExprJSON 不 panic。平时 `go test` 只跑种子；改语法后跑 `go test ./lang/internal/syntax -run XXX -fuzz FuzzFormatRoundTrip -fuzztime 60s`。
+- `lint` 把函数字面量算一层嵌套：`for` + `t.Run(…, func…)` 已占两层，子测试体里只能再有一层，要更深就抽一个带 `t.Helper()` 的检查函数。

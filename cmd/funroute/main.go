@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"funroute/extensions/std"
 	"io"
 	"os"
 	"strings"
 
+	"funroute/extensions/std"
 	"funroute/lang"
 	"funroute/lang/lsp"
 )

@@ -3,7 +3,7 @@ package std
 import (
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 
 	"funroute/lang"
 )
@@ -127,7 +127,7 @@ func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) 
 		return 0, fmt.Errorf("a percentile is a ratio between 0 and 1, got %v", ratio)
 	}
 	sorted := append([]T(nil), items...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	slices.Sort(sorted)
 	position := ratio * float64(len(sorted)-1)
 	lower := int(math.Floor(position))
 	upper := int(math.Ceil(position))
@@ -184,7 +184,7 @@ func medianOf[T int64 | float64](items []T) (float64, error) {
 		return 0, fmt.Errorf("median of an empty array")
 	}
 	sorted := append([]T(nil), items...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	slices.Sort(sorted)
 	middle := len(sorted) / 2
 	if len(sorted)%2 == 1 {
 		return float64(sorted[middle]), nil
@@ -224,7 +224,7 @@ func powInt(base, exponent int64) (int64, error) {
 		return 0, fmt.Errorf("a negative exponent has no integer result; use floats for that")
 	}
 	result := int64(1)
-	for i := int64(0); i < exponent; i++ {
+	for range exponent {
 		product, err := multiplyInts(result, base)
 		if err != nil {
 			return 0, err

@@ -7,6 +7,8 @@ package machine
 // type is stated once. What a program can ask a container (at, in, len) is a
 // different question, and lives in builtins_container.go.
 
+import "maps"
+
 // length is the item count of an array or the entry count of a dictionary.
 func (v Value) length() int {
 	switch box := v.box.(type) {
@@ -199,9 +201,7 @@ func packDict(elem Type, entries map[string]Value) Value {
 		return Value{kind: DictKind, box: mapEntries(entries, func(v Value) string { return v.s })}
 	default:
 		copied := make(map[string]Value, len(entries))
-		for key, value := range entries {
-			copied[key] = value
-		}
+		maps.Copy(copied, entries)
 		return Value{kind: DictKind, box: &nestedDict{elem: CloneType(elem), entries: copied}}
 	}
 }

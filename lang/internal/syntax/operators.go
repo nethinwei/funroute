@@ -1,8 +1,9 @@
 package syntax
 
 import (
-	"funroute/lang/internal/machine"
 	"sort"
+
+	"funroute/lang/internal/machine"
 )
 
 type operatorExpansion uint8
@@ -121,7 +122,11 @@ func (s operatorSpec) read(expr Expr) ([]Expr, bool) {
 	case expandCall:
 		return args, call.Name == s.function && len(args) == s.arity
 	case expandNegate:
-		return args[1:], call.Name == "sub" && len(args) == 2 && isInt(args[0], 0) && !isNumber(args[1])
+		// The arity is checked before the slice: f() has no args[1:].
+		if call.Name != "sub" || len(args) != 2 {
+			return nil, false
+		}
+		return args[1:], isInt(args[0], 0) && !isNumber(args[1])
 	}
 	if call.Name != "if" || len(args) != 3 {
 		return nil, false

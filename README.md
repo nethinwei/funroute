@@ -63,7 +63,7 @@ CLI 的子命令：`inspect`（签名与指令数）、`run`（执行）、`comp
 | `bool` | `true` | |
 | `int` | `42`、`1_000_000` | 有符号 64 位，溢出报错 |
 | `float` | `0.25` | float64，拒绝 NaN / Infinity |
-| `string` | `"SGD"` | UTF-8，JSON 风格转义 |
+| `string` | `"SGD"` | 必须是合法 UTF-8（原文与转义结果都查），JSON 风格转义 |
 | `array<T>` | `[1, 2, 3]` | 元素同型 |
 | `dict<T>` | `{"primary": 1}` | 键是字符串，值同型 |
 | `record{…}` | `{amount: 1200, currency: "SGD"}` | 字段固定、各有类型，见[记录](#记录) |
@@ -663,7 +663,7 @@ make run        # 构建前端与 wasm，组装 site/，然后启动静态服务
 
 VM 是栈式字节码解释器，**执行本身不分配内存**，只有程序构造的数据（比如推导式产出的数组）才分配。
 
-Apple M5，`go test ./lang/internal/compile -bench . -benchtime 1s -count 5`，取中位数：
+Apple M5，`go test ./lang/internal/machine ./lang/internal/compile -bench . -benchtime 1s -count 5`，取中位数（VM 与边界的基准在 machine，编译基准在 compile）：
 
 | 场景 | 耗时 | 分配 |
 |---|---|---|
@@ -702,7 +702,7 @@ make web       # 前端产物：web/dist/*.js（需要先在 web/ 里 npm instal
 make test-js   # 前端纯逻辑与 wasm 会话测试（node --test）
 make site      # 组装发布目录 site/（make run 与 Pages 都用它）
 make run       # 启动工作台
-go test ./lang/internal/compile -bench . -benchtime 2000x   # VM 基准
+go test ./lang/internal/machine -bench . -benchtime 2000x   # VM 基准
 ```
 
 `make lint` 强制三条预算：函数不超过 50 行、嵌套不超过 3 层、文件不超过 800 行。

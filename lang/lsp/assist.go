@@ -307,8 +307,7 @@ func signatureOf(function *machine.RegisteredFunction) signatureInformation {
 // field) says nothing about where the call is.
 func enclosingCall(text string, lexemes []syntax.Lexeme, offset int) (string, int, bool) {
 	depth, commas := 0, 0
-	for i := len(lexemes) - 1; i >= 0; i-- {
-		lexeme := lexemes[i]
+	for i, lexeme := range slices.Backward(lexemes) {
 		if lexeme.End > offset || lexeme.Class != syntax.ClassPunctuation {
 			continue
 		}

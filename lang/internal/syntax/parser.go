@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"funroute/lang/internal/machine"
 )
@@ -210,15 +211,25 @@ func (p *parser) parseFieldRead(base Expr) (Expr, error) {
 	dot := p.peek()
 	p.index++
 	name := p.peek()
-	if name.kind != tokenIdentifier || strings.Contains(name.text, ".") {
+	if name.kind != tokenIdentifier {
 		return nil, p.errorf(name, "expected a field name after '.'")
 	}
 	p.index++
-	p.mark(name, RoleField)
-	if err := validName(name.text, "text"); err != nil {
-		return nil, p.errorf(name, "%v", err)
+	// The lexer keeps a name and the dots in it together, so f(x).a.b arrives
+	// as one name "a.b": it is two reads, as order.a.b is.
+	start, at, expr := base.Extent().Start, dot.pos, base
+	for field := range strings.SplitSeq(name.text, ".") {
+		if err := validName(field, "text"); err != nil {
+			return nil, p.errorf(name, "%v", err)
+		}
+		p.markSpan(at+1, at+1+len(field), RoleField)
+		node, err := p.node(dot, &FieldExpr{ID: p.id(), Pos: at, Span: Span{start, at + 1 + len(field)}, Value: expr, Field: field})
+		if err != nil {
+			return nil, err
+		}
+		at, expr = at+1+len(field), node
 	}
-	return p.node(dot, &FieldExpr{ID: p.id(), Pos: dot.pos, Value: base, Field: name.text})
+	return expr, nil
 }
 
 // negate keeps -42 a literal and turns -e into sub(0, e).
@@ -338,9 +349,9 @@ func (p *parser) primary() (Expr, error) {
 	case tokenString:
 		p.index++
 		p.mark(tok, RoleLiteral)
-		value, err := strconv.Unquote(tok.text)
+		value, err := p.unquote(tok, "invalid string escape")
 		if err != nil {
-			return nil, p.errorf(tok, "invalid string escape: %v", err)
+			return nil, err
 		}
 		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.String(value)}, nil
 	case tokenEnum:
@@ -394,7 +405,10 @@ func (p *parser) variableWithFields(tok token) (Expr, error) {
 		if i == 0 {
 			role = RoleVariable
 		}
-		p.markSpan(offset, offset+len(parts[i]), role)
+		// An empty part (a..b) is no name to mark; validName refuses it below.
+		if parts[i] != "" {
+			p.markSpan(offset, offset+len(parts[i]), role)
+		}
 		offset += len(parts[i]) + 1
 	}
 	if err := validName(parts[0], "var"); err != nil {
@@ -721,6 +735,24 @@ func (p *parser) peekN(offset int) token {
 		return token{kind: tokenEOF}
 	}
 	return p.tokens[index]
+}
+
+// unquote reads a string token's text. Text is UTF-8: a byte that is not,
+// escaped as \200, would be replaced on the way through ExprJSON, and the
+// program would not read back as itself; written raw, strconv.Unquote would
+// quietly replace it already. Both are refused.
+func (p *parser) unquote(tok token, invalid string) (string, error) {
+	if !utf8.ValidString(tok.text) {
+		return "", p.errorf(tok, "string is not valid UTF-8")
+	}
+	value, err := strconv.Unquote(tok.text)
+	if err != nil {
+		return "", p.errorf(tok, "%s: %v", invalid, err)
+	}
+	if !utf8.ValidString(value) {
+		return "", p.errorf(tok, "string is not valid UTF-8")
+	}
+	return value, nil
 }
 
 func (p *parser) errorf(tok token, format string, args ...any) error {

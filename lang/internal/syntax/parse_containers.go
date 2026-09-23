@@ -1,7 +1,7 @@
 package syntax
 
 import (
-	"strconv"
+	"slices"
 
 	"funroute/lang/internal/machine"
 )
@@ -109,8 +109,7 @@ func (p *parser) loopClauses(start token) ([]loopClause, error) {
 // every clause outside it splices what the one inside yielded.
 func (p *parser) nestClauses(start token, clauses []loopClause, yieldKey, yield Expr) (Expr, error) {
 	node := yield
-	for i := len(clauses) - 1; i >= 0; i-- {
-		clause := clauses[i]
+	for i, clause := range slices.Backward(clauses) {
 		innermost := i == len(clauses)-1
 		var key Expr
 		if innermost {
@@ -163,9 +162,9 @@ func (p *parser) dictLiteral(start token, firstKey string, firstValue Expr) (Exp
 		}
 		p.index++
 		p.mark(keyToken, RoleLiteral)
-		key, err := strconv.Unquote(keyToken.text)
+		key, err := p.unquote(keyToken, "invalid dictionary key")
 		if err != nil {
-			return nil, p.errorf(keyToken, "invalid dictionary key")
+			return nil, err
 		}
 		if err := p.expect(tokenColon, "':' after the dictionary key"); err != nil {
 			return nil, err

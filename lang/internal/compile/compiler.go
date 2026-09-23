@@ -2,9 +2,10 @@ package compile
 
 import (
 	"fmt"
+	"sort"
+
 	"funroute/lang/internal/machine"
 	"funroute/lang/internal/syntax"
-	"sort"
 )
 
 func CompileExpr(source string, registry *machine.Registry, options CompileOptions) (*machine.Artifact, error) {

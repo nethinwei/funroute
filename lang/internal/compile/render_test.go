@@ -1,12 +1,14 @@
 package compile
 
 import (
+	"testing"
+
 	"funroute/lang/internal/machine"
 	"funroute/lang/internal/syntax"
-	"testing"
 )
 
 func TestRenderWithContract(t *testing.T) {
+	t.Parallel()
 	args := []ArgSpec{
 		{Name: "amount", Type: machine.IntType, Doc: "订单金额，单位：分"},
 		{Name: "country", Type: machine.StringType},

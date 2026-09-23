@@ -1,17 +1,35 @@
-package compile
+package machine_test
 
 import (
-	"context"
 	"testing"
 
+	"funroute/lang/internal/compile"
 	"funroute/lang/internal/machine"
 )
+
+func compileAndRun(t *testing.T, source string, registry *machine.Registry, args map[string]any, options machine.RunOptions) (machine.Value, *machine.Runtime) {
+	t.Helper()
+	artifact, err := compile.CompileExpr(source, registry, compile.CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile %s: %v", source, err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatalf("instantiate %s: %v", source, err)
+	}
+	value, err := runtime.Run(t.Context(), args, options)
+	if err != nil {
+		t.Fatalf("run %s: %v", source, err)
+	}
+	return value, runtime
+}
 
 // A string is a whole container or none of one. len() always counted its
 // characters, but at() and in refused it — so "the first digit of the BIN" had
 // to go through slice(), and "does this reason code mention timeout" through
 // contains(), while the operators that mean exactly those things were errors.
 func TestStringIsAContainerLikeTheOthers(t *testing.T) {
+	t.Parallel()
 	registry := machine.CoreRegistry()
 	for _, test := range []struct {
 		name, source, arg, input string
@@ -24,6 +42,7 @@ func TestStringIsAContainerLikeTheOthers(t *testing.T) {
 		{"不含子串", `"fraud" in reason`, "reason", "gateway_timeout", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			value, _ := compileAndRun(t, test.source, registry,
 				map[string]any{test.arg: test.input}, machine.RunOptions{Fuel: 1000})
 			if value.Any() != test.want {
@@ -32,8 +51,8 @@ func TestStringIsAContainerLikeTheOthers(t *testing.T) {
 		})
 	}
 	// Out of range is an error, the same as it is for an array.
-	artifact, err := CompileExpr(`card[9]`, registry, CompileOptions{
-		Args: []ArgSpec{{Name: "card", Type: machine.StringType}},
+	artifact, err := compile.CompileExpr(`card[9]`, registry, compile.CompileOptions{
+		Args: []compile.ArgSpec{{Name: "card", Type: machine.StringType}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +61,7 @@ func TestStringIsAContainerLikeTheOthers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.Run(context.Background(), map[string]any{"card": "411"}, machine.RunOptions{Fuel: 100}); err == nil {
+	if _, err := runtime.Run(t.Context(), map[string]any{"card": "411"}, machine.RunOptions{Fuel: 100}); err == nil {
 		t.Fatal("an index past the end of a string was accepted")
 	}
 }

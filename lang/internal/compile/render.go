@@ -2,15 +2,16 @@ package compile
 
 import (
 	"fmt"
-	"funroute/lang/internal/machine"
 	"strings"
+
+	"funroute/lang/internal/machine"
 )
 
+// RenderWithContract writes the contract as comments above the expression.
 // A contract lives in the host, so an expression on its own does not say what
 // its inputs mean. That matters the moment a rule leaves the console — pasted
 // into a ticket, an RFC or a chat, where "amount" could be cents or yuan.
 //
-// RenderWithContract writes the contract as comments above the expression.
 // Comments are not syntax: the text parses to the same program with or without
 // them, and re-parsing does not carry them back. The host record stays the
 // single authority; this is a view of it.

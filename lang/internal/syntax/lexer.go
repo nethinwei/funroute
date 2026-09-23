@@ -3,7 +3,6 @@ package syntax
 import (
 	"errors"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -90,6 +89,17 @@ func (l *lexer) tokens() ([]token, error) {
 	}
 }
 
+// isSpace is ASCII whitespace. The source is read byte by byte, and a byte
+// above 0x7F is part of a multi-byte character, never a space on its own —
+// unicode.IsSpace would take a lone 0x85 or 0xA0 for one.
+func isSpace(ch byte) bool {
+	switch ch {
+	case ' ', '\t', '\n', '\r', '\v', '\f':
+		return true
+	}
+	return false
+}
+
 const spreadText = "..."
 
 var singleCharTokens = map[byte]tokenKind{
@@ -111,7 +121,7 @@ var singleCharTokens = map[byte]tokenKind{
 // aside, because what the source says is not only what the parser reads.
 func (l *lexer) skipSpace() {
 	for l.pos < len(l.source) {
-		if unicode.IsSpace(rune(l.source[l.pos])) {
+		if isSpace(l.source[l.pos]) {
 			l.pos++
 			continue
 		}
@@ -136,8 +146,7 @@ func (l *lexer) next() (token, error) {
 	tok, err := l.lexeme(start)
 	if err != nil {
 		bad := l.invalid(start)
-		var positioned *PosError
-		if errors.As(err, &positioned) {
+		if positioned, ok := errors.AsType[*PosError](err); ok {
 			positioned.End = bad.end
 		}
 		return bad, err

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"reflect"
+	"slices"
 	"strconv"
 
 	"funroute/lang/internal/machine"
@@ -151,18 +153,9 @@ func exportList(buf *bytes.Buffer, list reflect.Value, field fieldPlan) error {
 
 // ImportExprJSON validates and imports a canonical expression document.
 func ImportExprJSON(data []byte) (Expr, error) {
-	var document exprJSONDocument
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&document); err != nil {
-		return nil, fmt.Errorf("decode expression JSON: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return nil, fmt.Errorf("decode expression JSON: trailing JSON value")
-		}
-		return nil, fmt.Errorf("decode expression JSON: %w", err)
+	document, err := decodeDocument(data)
+	if err != nil {
+		return nil, err
 	}
 	if document.Version != ExprJSONVersion {
 		return nil, fmt.Errorf("unsupported expression JSON version %d", document.Version)
@@ -172,6 +165,38 @@ func ImportExprJSON(data []byte) (Expr, error) {
 	}
 	importer := &importer{nextID: 1}
 	return importer.node(document.Expr)
+}
+
+// decodeDocument reads the {version, expr} document, one JSON value and
+// nothing after it. Its keys are matched exactly, as a node's are:
+// encoding/json matches a struct's fields regardless of case, and would let
+// "VERSION" through.
+func decodeDocument(data []byte) (exprJSONDocument, error) {
+	var document exprJSONDocument
+	var fields map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&fields); err != nil {
+		return document, fmt.Errorf("decode expression JSON: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return document, fmt.Errorf("decode expression JSON: trailing JSON value")
+		}
+		return document, fmt.Errorf("decode expression JSON: %w", err)
+	}
+	for _, key := range slices.Sorted(maps.Keys(fields)) {
+		if key != "version" && key != "expr" {
+			return document, fmt.Errorf("decode expression JSON: unknown field %q", key)
+		}
+	}
+	if version, ok := fields["version"]; ok {
+		if err := json.Unmarshal(version, &document.Version); err != nil {
+			return document, fmt.Errorf("decode expression JSON: version: %w", err)
+		}
+	}
+	document.Expr = fields["expr"]
+	return document, nil
 }
 
 type importer struct {
@@ -220,7 +245,7 @@ func (m *importer) node(raw json.RawMessage) (Expr, error) {
 	}
 	id := m.nextID
 	m.nextID++
-	if typ == reflect.TypeOf(LiteralExpr{}) {
+	if typ == reflect.TypeFor[LiteralExpr]() {
 		return importLiteral(kind, id, fields)
 	}
 	node := reflect.New(typ)

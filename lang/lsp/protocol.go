@@ -41,6 +41,7 @@ const (
 	codeParseError     = -32700
 	codeInvalidParams  = -32602
 	codeMethodNotFound = -32601
+	codeInternalError  = -32603
 	codeRequestFailed  = -32803
 )
 

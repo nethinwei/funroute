@@ -5,6 +5,9 @@
 # 本地代码索引
 /.codegraph/
 
+# make ci 按固定版本安装的检查工具（staticcheck、modernize、goimports），不提交
+/.tools/
+
 # macOS
 .DS_Store
 

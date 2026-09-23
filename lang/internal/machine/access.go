@@ -346,7 +346,7 @@ func (c *codec) storeSlice(p unsafe.Pointer, v Value) error {
 	n := v.length()
 	items := reflect.MakeSlice(c.goType, n, n)
 	data := items.UnsafePointer()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if err := c.elem.store(unsafe.Add(data, uintptr(i)*c.stride), v.at(i)); err != nil {
 			return fmt.Errorf("item %d: %w", i, err)
 		}

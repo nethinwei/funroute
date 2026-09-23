@@ -142,14 +142,7 @@ func (f *frame) release() {
 // stackUsed is how much of the inline stack array may hold a value: the
 // compiler's figure, or how far an activation actually pushed past it.
 func (f *frame) stackUsed() int {
-	used := f.reserved
-	if f.overflow > used {
-		used = f.overflow
-	}
-	if used > len(f.stackArray) {
-		used = len(f.stackArray)
-	}
-	return used
+	return min(max(f.overflow, f.reserved), len(f.stackArray))
 }
 
 func clearValues(values []Value) {

@@ -1,10 +1,48 @@
 GO ?= go
 NODE ?= node
 
-.PHONY: ci build test test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt run clean
+.PHONY: ci build test test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize run clean
 
 # ci must pass before any commit.
-ci: check-fmt check-js check-web vet vet-wasm lint build wasm test test-js
+ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize lint build wasm test test-js
+
+# The linters are tools, not dependencies: go.mod stays empty. Each is
+# installed once, at the pinned version, into .tools/<version>/ — built for
+# this machine, so it can then analyse the js/wasm entry with GOOS set — and a
+# new version pin installs afresh rather than reusing an old binary.
+STATICCHECK_VERSION := v0.8.1
+X_TOOLS_VERSION     := v0.50.0
+TOOLS       := $(CURDIR)/.tools
+STATICCHECK := $(TOOLS)/staticcheck-$(STATICCHECK_VERSION)/staticcheck
+MODERNIZE   := $(TOOLS)/x-tools-$(X_TOOLS_VERSION)/modernize
+GOIMPORTS   := $(TOOLS)/x-tools-$(X_TOOLS_VERSION)/goimports
+
+$(STATICCHECK):
+	GOBIN=$(dir $@) $(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
+
+$(MODERNIZE):
+	GOBIN=$(dir $@) $(GO) install golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@$(X_TOOLS_VERSION)
+
+$(GOIMPORTS):
+	GOBIN=$(dir $@) $(GO) install golang.org/x/tools/cmd/goimports@$(X_TOOLS_VERSION)
+
+# staticcheck.conf enables every check. The browser entry builds only for
+# js/wasm, so it is checked there, as vet-wasm does.
+staticcheck: $(STATICCHECK)
+	$(STATICCHECK) ./...
+	GOOS=js GOARCH=wasm $(STATICCHECK) ./web/wasm
+
+# modernize reports code the current Go has a plainer spelling for.
+modernize: $(MODERNIZE)
+	$(MODERNIZE) ./...
+	GOOS=js GOARCH=wasm $(MODERNIZE) ./web/wasm
+
+# Imports come in two groups: the standard library, then this module.
+check-imports: $(GOIMPORTS)
+	@unsorted=$$($(GOIMPORTS) -local funroute -l . | grep -v node_modules); \
+	if [ -n "$$unsorted" ]; then \
+		echo "goimports -local funroute required for:"; echo "$$unsorted"; exit 1; \
+	fi
 
 # The front end is TypeScript bundled by esbuild into web/dist: one module per
 # component (app, lsp, editor, contract, runner, canvas) and the chunks they

@@ -8,6 +8,7 @@ import (
 )
 
 func TestAnalyzeKnowsEachNode(t *testing.T) {
+	t.Parallel()
 	source := `let(rate = fee * 2, [rate + x for x in xs if x > 0.5])`
 	options := CompileOptions{Args: []ArgSpec{{Name: "fee", Type: machine.IntType}, {Name: "xs", Type: machine.ArrayOf(machine.FloatType)}}}
 	registry := machine.CoreRegistry()
@@ -47,6 +48,7 @@ func TestAnalyzeKnowsEachNode(t *testing.T) {
 
 // A program that type-checks but fails later still says what was inferred.
 func TestAnalyzeKeepsWhatWasLearnt(t *testing.T) {
+	t.Parallel()
 	analysis, err := Analyze(`n + 1 / 0`, machine.CoreRegistry(), CompileOptions{Args: []ArgSpec{{Name: "n", Type: machine.IntType}}})
 	if err == nil || analysis == nil || len(analysis.Nodes) == 0 {
 		t.Fatalf("analysis %v, error %v", analysis, err)

@@ -137,7 +137,7 @@ func DefineHandle[T any](registry *Registry, name string) error {
 	if !IsValidFunctionName(name) {
 		return fmt.Errorf("invalid handle name %q", name)
 	}
-	typ := reflect.TypeOf((*T)(nil)).Elem()
+	typ := reflect.TypeFor[T]()
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	if existing, ok := registry.handles[typ]; ok && existing != name {

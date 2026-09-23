@@ -2,6 +2,7 @@ package compile
 
 import (
 	"fmt"
+
 	"funroute/lang/internal/machine"
 	"funroute/lang/internal/syntax"
 )

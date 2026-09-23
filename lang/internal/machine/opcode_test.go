@@ -9,6 +9,7 @@ import (
 // test is what makes that pair safe: a new row with no case, or a case with no
 // row, fails here instead of at run time in a customer's routing decision.
 func TestEveryOpcodeIsExecutableAndNamed(t *testing.T) {
+	t.Parallel()
 	seen := map[string]bool{}
 	for code := 1; code < len(opcodes); code++ {
 		op := OpCode(code)
@@ -25,35 +26,11 @@ func TestEveryOpcodeIsExecutableAndNamed(t *testing.T) {
 		// stores it.
 		var decoded OpCode
 		if err := decoded.UnmarshalText([]byte(spec.name)); err != nil || decoded != op {
-			t.Fatalf("%s did not round trip: %v, got %v", spec.name, err, decoded)
+			t.Fatalf("UnmarshalText(%q) = %v, %v, want %v, nil", spec.name, decoded, err, op)
 		}
 
 		if !stepHandles(op) {
 			t.Fatalf("%s has a table row but no case in step", spec.name)
-		}
-	}
-}
-
-// Instructions that carry no operands must still be rejected when they are
-// malformed, and the table is where that check now lives.
-func TestInstructionValidationUsesTheTable(t *testing.T) {
-	artifact := &Artifact{Instructions: make([]Instruction, 3)}
-	for _, test := range []struct {
-		name        string
-		instruction Instruction
-		wantError   bool
-	}{
-		{"unknown opcode", Instruction{Op: OpCode(200)}, true},
-		{"invalid opcode", Instruction{Op: OpInvalid}, true},
-		{"constant out of range", Instruction{Op: OpConstant, A: 7}, true},
-		{"jump past the end", Instruction{Op: OpJump, A: 99}, true},
-		{"fallback handler past the end", Instruction{Op: OpBeginFallback, A: 99}, true},
-		{"jump to the end is the normal exit", Instruction{Op: OpJump, A: 3}, false},
-		{"equal takes no operands", Instruction{Op: OpEqual}, false},
-	} {
-		err := validateInstruction(0, test.instruction, artifact)
-		if (err != nil) != test.wantError {
-			t.Fatalf("%s: err = %v, want error = %v", test.name, err, test.wantError)
 		}
 	}
 }

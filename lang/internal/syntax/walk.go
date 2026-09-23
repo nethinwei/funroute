@@ -3,6 +3,7 @@ package syntax
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,7 +53,7 @@ type structPlan struct {
 var (
 	plans   = map[reflect.Type]*structPlan{}
 	byKind  = map[string]reflect.Type{}
-	exprTyp = reflect.TypeOf((*Expr)(nil)).Elem()
+	exprTyp = reflect.TypeFor[Expr]()
 )
 
 func init() {
@@ -262,20 +263,11 @@ func walkList(list reflect.Value, plan *structPlan, bound scope, visit func(Expr
 func itemBinds(item reflect.Value, plan *structPlan, target string) []string {
 	var names []string
 	for _, field := range plan.fields {
-		if field.kind == fieldName && contains(field.binds, target) {
+		if field.kind == fieldName && slices.Contains(field.binds, target) {
 			names = append(names, item.Field(field.index).String())
 		}
 	}
 	return names
-}
-
-func contains(list []string, want string) bool {
-	for _, item := range list {
-		if item == want {
-			return true
-		}
-	}
-	return false
 }
 
 func visitExpr(field reflect.Value, bound scope, visit func(Expr, scope)) {

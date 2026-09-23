@@ -50,10 +50,7 @@ func LineColumn(err error, source string) (line, column int, ok bool) {
 	if !errors.As(err, &positioned) || positioned.Pos < 0 {
 		return 0, 0, false
 	}
-	pos := positioned.Pos
-	if pos > len(source) {
-		pos = len(source)
-	}
+	pos := min(positioned.Pos, len(source))
 	line, column = 1, 1
 	for _, char := range source[:pos] {
 		if char == '\n' {

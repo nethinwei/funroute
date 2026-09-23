@@ -3,6 +3,7 @@ package std
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"funroute/lang"
 )
@@ -53,11 +54,7 @@ func evalMerge(_ context.Context, args []lang.Value) (lang.Value, error) {
 		return lang.Value{}, fmt.Errorf("merge needs two dictionaries")
 	}
 	out := make(map[string]lang.Value, len(base)+len(overrides))
-	for key, value := range base {
-		out[key] = value
-	}
-	for key, value := range overrides {
-		out[key] = value
-	}
+	maps.Copy(out, base)
+	maps.Copy(out, overrides)
 	return lang.Dict(elementType(args[0]), out)
 }

@@ -84,8 +84,7 @@ func (s *Server) Handle(message []byte) {
 		// A notification has no reply to carry its failure, so the server
 		// says it in the client's log rather than dropping it.
 		if handle, ok := notifications[in.Method]; ok {
-			var err error
-			s.lock(func() { err = handle(s, in.Params) })
+			err := s.guarded(func() error { return handle(s, in.Params) })
 			if err != nil {
 				s.notify("window/logMessage", map[string]any{"type": 1, "message": in.Method + ": " + err.Error()})
 			}
@@ -98,8 +97,10 @@ func (s *Server) Handle(message []byte) {
 		return
 	}
 	var result any
-	var err error
-	s.lock(func() { result, err = handle(s, in.Params) })
+	err := s.guarded(func() (err error) {
+		result, err = handle(s, in.Params)
+		return err
+	})
 	if err != nil {
 		s.write(failure{JSONRPC: "2.0", ID: in.ID, Error: responseError{errorCode(err), err.Error()}})
 		return
@@ -114,10 +115,19 @@ func (s *Server) Exited() bool {
 	return s.exited
 }
 
-func (s *Server) lock(run func()) {
+// guarded runs one handler under the server's lock. A handler that panics —
+// a bug in the language it asked, never something the client did — fails that
+// one message with an internal error instead of taking the server down, and
+// with it every document open in the editor.
+func (s *Server) guarded(run func() error) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	run()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("%w: %v", errInternal, recovered)
+		}
+	}()
+	return run()
 }
 
 func (s *Server) write(message any) {
@@ -132,12 +142,19 @@ func (s *Server) notify(method string, params any) {
 	s.write(notification{JSONRPC: "2.0", Method: method, Params: params})
 }
 
-// errInvalidParams marks a request the server could not read.
-var errInvalidParams = errors.New("invalid params")
+// errInvalidParams marks a request the server could not read; errInternal, a
+// handler that panicked.
+var (
+	errInvalidParams = errors.New("invalid params")
+	errInternal      = errors.New("internal error")
+)
 
 func errorCode(err error) int {
-	if errors.Is(err, errInvalidParams) {
+	switch {
+	case errors.Is(err, errInvalidParams):
 		return codeInvalidParams
+	case errors.Is(err, errInternal):
+		return codeInternalError
 	}
 	return codeRequestFailed
 }

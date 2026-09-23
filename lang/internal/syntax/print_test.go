@@ -7,6 +7,9 @@ import "testing"
 // front of a number, a chain long enough to be broken across lines.
 var printCorpus = []string{
 	`if(a, b, add(1, 1))`,
+	// A call without arguments, fields read off a field, and a field read off
+	// an enum member — each once printed as something that did not read back.
+	`f()`, `route.now_v1()`, `f(x).a.b`, `xs[0].a.b`, `{a: {b: 1}}.a.b`, `(@A).A`, `(@A).a.b`,
 	`amount * bps / 10000 + fixed`,
 	`a - (b - c)`, `(a - b) - c`, `a - b - c`, `-(a * b)`, `-a * b`, `a - -b`, `--x`,
 	`!(a && b)`, `!a == b`, `a != b`, `!(a != b)`, `a || b && c`, `(a || b) && c`,
@@ -35,23 +38,34 @@ var printCorpus = []string{
 // line and laid out. That is the property a canvas relies on when it shows a
 // subtree as source and takes the edited text back.
 func TestPrintedSourceParsesBack(t *testing.T) {
+	t.Parallel()
 	for _, source := range printCorpus {
-		expr := mustParse(t, source)
-		want := mustExport(t, expr)
-		for layout, text := range map[string]string{"inline": Inline(expr), "format": Format(expr)} {
-			back, err := Parse(text)
-			if err != nil {
-				t.Errorf("%s of %q does not parse: %v\n%s", layout, source, err, text)
-				continue
-			}
-			if got := mustExport(t, back); got != want {
-				t.Errorf("%s of %q parses to another program:\n%s\n%s", layout, source, text, got)
-			}
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			checkPrintedParsesBack(t, source)
+		})
+	}
+}
+
+// checkPrintedParsesBack prints source both ways and reads each printing back.
+func checkPrintedParsesBack(t *testing.T, source string) {
+	t.Helper()
+	expr := mustParse(t, source)
+	want := mustExport(t, expr)
+	for layout, text := range map[string]string{"inline": Inline(expr), "format": Format(expr)} {
+		back, err := Parse(text)
+		if err != nil {
+			t.Errorf("%s of %q does not parse: %v\n%s", layout, source, err, text)
+			continue
+		}
+		if got := mustExport(t, back); got != want {
+			t.Errorf("%s of %q = %q parses to %s, want %s", layout, source, text, got, want)
 		}
 	}
 }
 
 func TestPrintSpellsOperatorsTheWayTheyAreWritten(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		`-x`:                        `-x`,
 		`-(a).x`:                    `-a.x`,
@@ -69,85 +83,11 @@ func TestPrintSpellsOperatorsTheWayTheyAreWritten(t *testing.T) {
 		`(1).x`:                     `(1).x`,
 	}
 	for source, want := range cases {
-		expr, err := Parse(source)
-		if err != nil {
-			t.Fatalf("%q: %v", source, err)
-		}
-		if got := Inline(expr); got != want {
-			t.Errorf("%q prints as %q, want %q", source, got, want)
-		}
-	}
-}
-
-func TestFormatBreaksWhatDoesNotFit(t *testing.T) {
-	cases := map[string]string{
-		`switch(case amount > 10_000 && route.is_healthy_v1(primary_channel_status) => "manual_review", case risk > 0.8 => "reject", else "auto")`: `switch(
-  case amount > 10000 && route.is_healthy_v1(primary_channel_status) => "manual_review",
-  case risk > 0.8 => "reject",
-  else "auto"
-)`,
-		`route.is_healthy_v1(primary_channel_status) && route.is_healthy_v1(secondary_channel_status) && amount > 1000`: `route.is_healthy_v1(primary_channel_status)
-  && route.is_healthy_v1(secondary_channel_status)
-  && amount > 1000`,
-		`[{channel: c, currency: k, fee: route.fee_v1(c, k)} for c in channels if healthy(c) for k in currencies]`: `[
-  {channel: c, currency: k, fee: route.fee_v1(c, k)}
-  for c in channels
-  if healthy(c)
-  for k in currencies
-]`,
-		`let(bps = 250, base = 3 * 100 + 50, total = bps * 2, amount * total / 10000 + base)`: `let(
-  bps = 250,
-  base = 3 * 100 + 50,
-  total = bps * 2,
-  amount * total / 10000 + base
-)`,
-		`{...order, amount: order.amount - route.fee_v1(order.channel, order.currency), currency: route.settlement_currency_v1(order.channel)}`: `{
-  ...order,
-  amount: order.amount - route.fee_v1(order.channel, order.currency),
-  currency: route.settlement_currency_v1(order.channel)
-}`,
-		`a + b`: `a + b`,
-	}
-	for source, want := range cases {
-		if got := Format(mustParse(t, source)); got != want {
-			t.Errorf("format of %q:\n%s\nwant:\n%s", source, got, want)
-		}
-	}
-}
-
-func mustParse(t *testing.T, source string) Expr {
-	t.Helper()
-	expr, err := Parse(source)
-	if err != nil {
-		t.Fatalf("%q: %v", source, err)
-	}
-	return expr
-}
-
-func mustExport(t *testing.T, expr Expr) string {
-	t.Helper()
-	encoded, err := ExportExprJSON(expr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(encoded)
-}
-
-func TestFormatSourceNeverLosesAComment(t *testing.T) {
-	cases := map[string]string{
-		"// amount: int\n\namount*2": "// amount: int\n\namount * 2",
-		"a+b // why\n":               "a + b // why\n",
-		"  f( x )  ":                 "f(x)",
-		"// only\n// header\nf(x,y)": "// only\n// header\nf(x, y)",
-	}
-	for source, want := range cases {
-		if got, err := FormatSource(source); err != nil || got != want {
-			t.Errorf("%q formats to %q (%v), want %q", source, got, err, want)
-		}
-	}
-	for _, source := range []string{"f(a, // why\n b)", "let(x = 1, // c\n x)", "f(a,"} {
-		if got, err := FormatSource(source); err == nil {
-			t.Errorf("%q was formatted to %q", source, got)
-		}
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if got := Inline(mustParse(t, source)); got != want {
+				t.Errorf("Inline(%q) = %q, want %q", source, got, want)
+			}
+		})
 	}
 }

@@ -90,8 +90,8 @@ var AnyEnumType = Type{Kind: EnumKind}
 // IsAnyEnum reports whether t is that wildcard rather than a declared enum.
 func IsAnyEnum(t Type) bool { return t.Kind == EnumKind && t.Name == "" && len(t.Values) == 0 }
 
-func ArrayOf(elem Type) Type { return Type{Kind: ArrayKind, Elem: typePtr(elem)} }
-func DictOf(elem Type) Type  { return Type{Kind: DictKind, Elem: typePtr(elem)} }
+func ArrayOf(elem Type) Type { return Type{Kind: ArrayKind, Elem: new(elem)} }
+func DictOf(elem Type) Type  { return Type{Kind: DictKind, Elem: new(elem)} }
 
 // RecordOf builds a record type from fields in the order they are given.
 func RecordOf(fields ...Field) Type {
@@ -115,10 +115,8 @@ func EnumOf(name string, values ...string) Type {
 	return Type{Kind: EnumKind, Name: name, Values: members}
 }
 
-func typePtr(t Type) *Type { return &t }
-
-// Clone deep-copies a type, so a caller that stores one cannot reach into the
-// element type of another.
+// CloneType deep-copies a type, so a caller that stores one cannot reach into
+// the element type of another.
 func CloneType(t Type) Type {
 	out := t
 	if t.Elem != nil {

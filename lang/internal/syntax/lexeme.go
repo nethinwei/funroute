@@ -73,15 +73,21 @@ func Lexemes(source string) ([]Lexeme, error) {
 }
 
 // readsOf tells, for a program that parsed, which names read are locals and
-// which are its arguments, by the scope rule FreeVariables follows.
+// which are its arguments, by the scope rule FreeVariables follows. The mark
+// to refine is the one the parser left on the name itself, at Pos — the span
+// of a parenthesised name starts at its parenthesis — and a read the parser
+// marked nothing for gets no mark here either.
 func readsOf(root Expr, roles map[int]roleMark) {
 	eachVariable(root, func(variable *VariableExpr, local bool) {
-		mark := roles[variable.Span.Start]
+		mark, ok := roles[variable.Pos]
+		if !ok {
+			return
+		}
 		mark.role = RoleArgument
 		if local {
 			mark.role = RoleLocalRead
 		}
-		roles[variable.Span.Start] = mark
+		roles[variable.Pos] = mark
 	})
 }
 
@@ -100,8 +106,11 @@ func pieces(tok token, roles map[int]roleMark) []Lexeme {
 			at++
 			continue
 		}
-		out = append(out, Lexeme{Start: at, End: mark.end, Class: class, Role: mark.role})
-		at = mark.end
+		// A mark always covers at least one byte ahead of it, so the walk
+		// through the token always moves on.
+		end := min(max(mark.end, at+1), tok.end)
+		out = append(out, Lexeme{Start: at, End: end, Class: class, Role: mark.role})
+		at = end
 	}
 	return out
 }

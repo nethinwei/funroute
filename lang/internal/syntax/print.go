@@ -124,8 +124,11 @@ func operatorSource(match operatorMatch, parent int) string {
 
 // postfixBase writes what an index or a field read applies to. A number is
 // parenthesised too, since 1.x would lex as the start of a float.
+// postfixBase prints what a subscript or a field read applies to. A number
+// and an enum member are parenthesised because the lexer would read on into
+// them: (1).x is not 1.x, and (@a).b is not the qualified member @a.b.
 func postfixBase(expr Expr) string {
-	if isNumber(expr) {
+	if _, isEnum := expr.(*EnumExpr); isNumber(expr) || isEnum {
 		return "(" + inline(expr, 0) + ")"
 	}
 	return inline(expr, postfixPrecedence)
