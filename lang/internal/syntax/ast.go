@@ -194,9 +194,11 @@ func (e *RecordExpr) NodeID() int   { return e.ID }
 func (e *RecordExpr) Position() int { return e.Pos }
 func (*RecordExpr) kind() string    { return "record" }
 
-func (e *RecordExpr) check() error {
-	seen := make(map[string]bool, len(e.Fields))
-	for _, field := range e.Fields {
+func (e *RecordExpr) check() error { return checkRecordFields(e.Fields) }
+
+func checkRecordFields(fields []RecordFieldExpr) error {
+	seen := make(map[string]bool, len(fields))
+	for _, field := range fields {
 		if !machine.IsValidFieldName(field.Name) {
 			return fmt.Errorf("invalid record field name %q", field.Name)
 		}
@@ -207,6 +209,25 @@ func (e *RecordExpr) check() error {
 	}
 	return nil
 }
+
+// RecordUpdateExpr is {...order, amount: 1}: the record Base with some of its
+// fields replaced. It cannot be sugar for a record literal, because which
+// fields Base has is known only once its type is. The result has Base's type:
+// every field named must be one of Base's, with a value of that field's type.
+// A nested field is replaced by nesting: {...b, customer: {...b.customer, amount: 1}}.
+type RecordUpdateExpr struct {
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
+	Base   Expr              `json:"base"`
+	Fields []RecordFieldExpr `json:"fields" min:"1"`
+}
+
+func (*RecordUpdateExpr) exprNode()       {}
+func (e *RecordUpdateExpr) NodeID() int   { return e.ID }
+func (e *RecordUpdateExpr) Position() int { return e.Pos }
+func (*RecordUpdateExpr) kind() string    { return "record_update" }
+func (e *RecordUpdateExpr) check() error  { return checkRecordFields(e.Fields) }
 
 // FieldExpr is r.field. The field name is resolved to a position in the
 // record's type at compile time, so nothing is looked up while the rule runs.
@@ -379,4 +400,5 @@ func distinctNames(names ...string) error {
 var nodeTypes = []Expr{
 	&LiteralExpr{}, &VariableExpr{}, &EnumExpr{}, &ArrayExpr{}, &DictExpr{}, &CallExpr{},
 	&RecordExpr{}, &FieldExpr{}, &SwitchExpr{}, &ForExpr{}, &ReduceExpr{}, &LetExpr{},
+	&RecordUpdateExpr{},
 }

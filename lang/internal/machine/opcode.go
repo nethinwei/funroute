@@ -109,6 +109,14 @@ var opcodes = [...]opcodeSpec{
 		validate: validateJumpTarget,
 	},
 	OpEndFallback: {name: "end_fallback"},
+	// Pops a record and one value per name in Keys, and pushes the record with
+	// those fields replaced — a copy, since values are immutable. The names are
+	// resolved to indexes when the artifact is loaded (Runtime.updates).
+	OpRecordWith: {
+		name:     "record_with",
+		effect:   func(in Instruction) int { return -len(in.Keys) },
+		validate: validateRecordWith,
+	},
 }
 
 func pushes(n int) func(Instruction) int {

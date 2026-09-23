@@ -94,7 +94,7 @@ func BenchmarkCall(b *testing.B) {
 
 func BenchmarkCompile(b *testing.B) {
 	registry := benchRegistry(b)
-	source := `switch(country,"SG",reduce(p in prices, t = 0, add(t,p)),"MY",reduce(p in prices, t = 1, mul(t,p)),0)`
+	source := `switch(country, case "SG" => reduce(p in prices, t = 0, add(t,p)), case "MY" => reduce(p in prices, t = 1, mul(t,p)), else 0)`
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

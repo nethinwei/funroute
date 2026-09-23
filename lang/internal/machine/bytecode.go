@@ -38,6 +38,7 @@ const (
 	OpBeginFallback
 	OpEndFallback
 	OpLoopSpread
+	OpRecordWith
 )
 
 type Parameter struct {

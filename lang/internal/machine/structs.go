@@ -3,6 +3,7 @@ package machine
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -28,7 +29,18 @@ import (
 // by being generous about the extras.
 
 // structFields describes one Go struct as record fields, in declaration order.
+// A record has at least one field, so a struct that tags none is refused.
 func structFields(registry *Registry, typ reflect.Type) ([]Field, []int, error) {
+	fields, indexes, err := taggedFields(registry, typ)
+	if err == nil && len(fields) == 0 {
+		return nil, nil, fmt.Errorf(`struct %s declares no record fields: tag the ones the language may read with `+"`funroute:\"name\"`", typ)
+	}
+	return fields, indexes, err
+}
+
+// taggedFields is structFields without the lower bound, for a struct that is
+// a program's arguments: a rule may take none.
+func taggedFields(registry *Registry, typ reflect.Type) ([]Field, []int, error) {
 	var fields []Field
 	var indexes []int
 	for i := 0; i < typ.NumField(); i++ {
@@ -43,15 +55,17 @@ func structFields(registry *Registry, typ reflect.Type) ([]Field, []int, error) 
 		if !mapped {
 			continue
 		}
+		// A record's field names are its keys; two fields cannot share one.
+		if at := slices.IndexFunc(fields, func(field Field) bool { return field.Name == name }); at >= 0 {
+			return nil, nil, fmt.Errorf("fields %s and %s of %s are both tagged %q",
+				typ.Field(indexes[at]).Name, structField.Name, typ, name)
+		}
 		fieldType, err := reflectType(registry, structField.Type)
 		if err != nil {
 			return nil, nil, fmt.Errorf("field %s: %w", structField.Name, err)
 		}
 		fields = append(fields, Field{Name: name, Type: fieldType})
 		indexes = append(indexes, i)
-	}
-	if len(fields) == 0 {
-		return nil, nil, fmt.Errorf(`struct %s declares no record fields: tag the ones the language may read with `+"`funroute:\"name\"`", typ)
 	}
 	return fields, indexes, nil
 }

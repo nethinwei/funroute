@@ -70,7 +70,7 @@ func TestImportEnforcesTheNodeDefinitions(t *testing.T) {
 
 // Every node the walker knows is listed, the literal kinds included.
 func TestNodeKindsListEveryNode(t *testing.T) {
-	want := "int float string bool var enum array dict call record field switch for reduce let"
+	want := "int float string bool var enum array dict call record field switch for reduce let record_update"
 	if got := strings.Join(NodeKinds(), " "); got != want {
 		t.Fatalf("node kinds = %s", got)
 	}

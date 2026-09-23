@@ -50,6 +50,84 @@ func BenchmarkRunPaths(b *testing.B) {
 			}
 		}
 	})
+
+	b.Run("Program/typed", func(b *testing.B) { benchTyped(b, registry, artifact) })
+}
+
+// benchTyped is the same artifact through a Program: the host's struct in,
+// an int64 out.
+func benchTyped(b *testing.B, registry *machine.Registry, artifact *machine.Artifact) {
+	binding, err := Bind[scalarIn, int64](registry)
+	if err != nil {
+		b.Fatal(err)
+	}
+	program, err := binding.Load(artifact)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		in := scalarIn{Country: "SG", Amount: 1000}
+		if _, err := program.Run(context.Background(), &in, machine.RunOptions{Fuel: 1000}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+type benchOrder struct {
+	Amount   int64   `funroute:"amount"`
+	Currency string  `funroute:"currency"`
+	Risk     float64 `funroute:"risk"`
+	Country  string  `funroute:"country"`
+}
+
+type benchIn struct {
+	Order benchOrder `funroute:"order"`
+}
+
+type benchDecision struct {
+	Channel string `funroute:"channel"`
+	Net     int64  `funroute:"net"`
+}
+
+// BenchmarkRecordBoundary is where the typed path pays off: a struct in and a
+// struct out. The untyped path reflects over both structs on every call.
+func BenchmarkRecordBoundary(b *testing.B) {
+	registry := benchRegistry(b)
+	binding, err := Bind[benchIn, benchDecision](registry)
+	if err != nil {
+		b.Fatal(err)
+	}
+	program, err := binding.Compile(`{channel: if(order.risk < 0.5, order.currency, "manual"), net: order.amount - 30}`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	in := benchIn{Order: benchOrder{Amount: 1000, Currency: "SGD", Risk: 0.2, Country: "SG"}}
+	b.Run("RunValues+FromValue", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			order, err := machine.ToValue(in.Order)
+			if err != nil {
+				b.Fatal(err)
+			}
+			value, err := program.Runtime().RunValues(context.Background(), []machine.Value{order}, machine.RunOptions{})
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := machine.FromValue[benchDecision](value); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("Program", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if _, err := program.Run(context.Background(), &in, machine.RunOptions{}); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // BenchmarkVectorPassThrough is the deep-learning shape: a feature vector goes

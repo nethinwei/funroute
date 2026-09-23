@@ -41,12 +41,7 @@ func fromGo(input any) (Value, error) {
 	case map[string]bool, map[string]int64, map[string]string:
 		return Value{kind: DictKind, box: x}, nil
 	case map[string]float64:
-		for key, value := range x {
-			if math.IsNaN(value) || math.IsInf(value, 0) {
-				return Value{}, fmt.Errorf("entry %q: non-finite floats are not supported", key)
-			}
-		}
-		return Value{kind: DictKind, box: x}, nil
+		return Value{kind: DictKind, box: x}, checkFloatMap(x)
 	default:
 		return structFromGo(input)
 	}
@@ -75,6 +70,16 @@ func checkFloats(values []float64) error {
 	for i, value := range values {
 		if math.IsNaN(value) || math.IsInf(value, 0) {
 			return fmt.Errorf("item %d: non-finite floats are not supported", i)
+		}
+	}
+	return nil
+}
+
+// checkFloatMap is checkFloats for a dictionary's backing.
+func checkFloatMap(entries map[string]float64) error {
+	for key, value := range entries {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("entry %q: non-finite floats are not supported", key)
 		}
 	}
 	return nil

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 )
 
 // The reflective half of the boundary: any Go type built from the scalars,
@@ -146,7 +147,8 @@ func intoMap(registry *Registry, value Value, typ reflect.Type) (reflect.Value, 
 		if err != nil {
 			return reflect.Value{}, fmt.Errorf("entry %q: %w", key, err)
 		}
-		out.SetMapIndex(reflect.ValueOf(key), item)
+		// A named key type (map[Code]T) takes the key converted, not as a string.
+		out.SetMapIndex(reflect.ValueOf(key).Convert(typ.Key()), item)
 	}
 	return out, nil
 }
@@ -170,6 +172,11 @@ func outOfGo(registry *Registry, value reflect.Value, typ Type) (Value, error) {
 	case FloatKind:
 		return CheckedFloat(value.Float())
 	case StringKind:
+		return String(value.String()), nil
+	case EnumKind:
+		if !slices.Contains(typ.Values, value.String()) {
+			return Value{}, fmt.Errorf("%q is not a member of %s", value.String(), typ.Summary())
+		}
 		return String(value.String()), nil
 	case HandleKind:
 		return NewHandle(typ.Name, value.Interface()), nil

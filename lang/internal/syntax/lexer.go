@@ -40,6 +40,8 @@ const (
 	tokenBang
 	tokenFatArrow
 	tokenAssign
+	// tokenSpread is the "..." that opens a record update, {...r, a: 1}.
+	tokenSpread
 	// tokenEnum is @member or @enum.member: an enum member reference. The "@"
 	// keeps it apart from a string and keeps "." out of expression syntax.
 	tokenEnum
@@ -87,6 +89,8 @@ func (l *lexer) tokens() ([]token, error) {
 		}
 	}
 }
+
+const spreadText = "..."
 
 var singleCharTokens = map[byte]tokenKind{
 	'(': tokenLeftParen,
@@ -144,6 +148,11 @@ func (l *lexer) next() (token, error) {
 
 func (l *lexer) lexeme(start int) (token, error) {
 	ch := l.source[l.pos]
+	// Ahead of the single characters, which would read it as three dots.
+	if strings.HasPrefix(l.source[l.pos:], spreadText) {
+		l.pos += len(spreadText)
+		return token{kind: tokenSpread, text: spreadText, pos: start}, nil
+	}
 	if kind, ok := singleCharTokens[ch]; ok {
 		l.pos++
 		return token{kind: kind, text: string(ch), pos: start}, nil

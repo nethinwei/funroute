@@ -44,10 +44,25 @@ type batchSite struct {
 	function *RegisteredFunction
 }
 
+// batchRequest is one program run inside a batch. A request that someone is
+// waiting on has a done channel; one from a synchronous RunBatch has none, and
+// its result is simply left in place.
 type batchRequest struct {
-	ctx  context.Context
-	args []Value
-	done chan batchResult
+	ctx    context.Context
+	args   []Value
+	done   chan batchResult
+	result batchResult
+	// typed says a codec produced args: typed by construction, with the slots
+	// the program never reads left empty (see Runtime.runTyped).
+	typed bool
+}
+
+func (r *batchRequest) finish(result batchResult) {
+	if r.done == nil {
+		r.result = result
+		return
+	}
+	r.done <- result
 }
 
 type batchResult struct {
@@ -85,13 +100,17 @@ func (b *Batch) Run(ctx context.Context, args []Value) (Value, error) {
 	if len(args) != len(b.runtime.artifact.Args) {
 		return Value{}, fmt.Errorf("%w: expected %d arguments, got %d", ErrContract, len(b.runtime.artifact.Args), len(args))
 	}
+	return b.submit(ctx, args, false)
+}
+
+func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, err)
 	}
-	request := &batchRequest{ctx: ctx, args: args, done: make(chan batchResult, 1)}
+	request := &batchRequest{ctx: ctx, args: args, done: make(chan batchResult, 1), typed: typed}
 	if err := b.enqueue(request); err != nil {
 		return Value{}, err
 	}
@@ -113,7 +132,7 @@ func (b *Batch) enqueue(request *batchRequest) error {
 	if len(b.pending) >= b.options.MaxSize {
 		requests := b.take()
 		b.mu.Unlock()
-		go b.execute(requests)
+		go b.execute(nil, requests, b.options.Run)
 		return nil
 	}
 	if len(b.pending) == 1 {
@@ -139,7 +158,7 @@ func (b *Batch) flush() {
 	requests := b.take()
 	b.mu.Unlock()
 	if len(requests) > 0 {
-		b.execute(requests)
+		b.execute(nil, requests, b.options.Run)
 	}
 }
 
@@ -151,31 +170,45 @@ func (b *Batch) Close() {
 	b.flush()
 }
 
-// execute is one batch: every hoisted call once, then every program.
-func (b *Batch) execute(requests []*batchRequest) {
+// execute is one batch: every hoisted call once, then every program. shared
+// is the one context every request carries, when they all carry the same —
+// a synchronous batch — and the engine calls then run under it directly,
+// with its values. Otherwise they run under the earliest of the requests'
+// deadlines, which has to be a context of its own.
+func (b *Batch) execute(shared context.Context, requests []*batchRequest, options RunOptions) {
 	active := b.rejectCanceled(requests)
 	if len(active) == 0 {
 		return
 	}
 	prefetched := make([]map[int]Prefetched, len(active))
-	ctx, cancel := earliestDeadline(active)
+	ctx, cancel := shared, context.CancelFunc(func() {})
+	if shared == nil {
+		ctx, cancel = earliestDeadline(active)
+	}
 	defer cancel()
 	for _, site := range b.sites {
 		b.prefetch(ctx, site, active, prefetched)
 	}
-	options := b.options.Run
 	for i, request := range active {
 		options.Prefetched = prefetched[i]
-		value, err := b.runtime.RunValues(request.ctx, request.args, options)
-		request.done <- batchResult{value: value, err: err}
+		request.finish(b.run(request, options))
 	}
+}
+
+func (b *Batch) run(request *batchRequest, options RunOptions) batchResult {
+	if request.typed {
+		value, err := b.runtime.runTyped(request.ctx, request.args, options)
+		return batchResult{value: value, err: err}
+	}
+	value, err := b.runtime.RunValues(request.ctx, request.args, options)
+	return batchResult{value: value, err: err}
 }
 
 func (b *Batch) rejectCanceled(requests []*batchRequest) []*batchRequest {
 	active := make([]*batchRequest, 0, len(requests))
 	for _, request := range requests {
 		if err := request.ctx.Err(); err != nil {
-			request.done <- batchResult{err: fmt.Errorf("%w: %v", ErrDeadline, err)}
+			request.finish(batchResult{err: fmt.Errorf("%w: %v", ErrDeadline, err)})
 			continue
 		}
 		active = append(active, request)

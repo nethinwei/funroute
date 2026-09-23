@@ -173,6 +173,8 @@ func (c *bytecodeCompiler) compile(expr syntax.Expr) error {
 		return c.compileRecord(node)
 	case *syntax.FieldExpr:
 		return c.compileField(node)
+	case *syntax.RecordUpdateExpr:
+		return c.compileRecordUpdate(node)
 	case *syntax.CallExpr:
 		return c.compileCall(node)
 	default:

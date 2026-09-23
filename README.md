@@ -204,7 +204,7 @@ reduce(name, weight in weights, total = 0.0, total + weight)            // 遍�
 - **靠写法区分字典和记录**：`{"k": v}` 是字典，`{k: v}` 是记录。
 - **相等逐字段比较**，`==`、`in`、`switch` 都适用。
 - 可以随意组合：`[o.amount for o in orders]`、`order.tags[0]`、`dict<record{…}>` 都成立。
-- 暂不支持字段更新（`{...order, amount: 1}`），改一个字段需要把字段重写一遍。
+- **字段更新**写作 `{...order, amount: order.amount - fee}`：复制一份记录，替换写出的字段，其余原样保留。结果的类型就是原记录的类型，所以 `Order` 进、`Order` 出。只能替换已有字段、新值必须是该字段的类型，字段名不存在或类型不同都是编译错误。`...` 只能出现一次、必须写在最前，后面至少跟一个字段。嵌套字段靠嵌套来改：`{...b, customer: {...b.customer, amount: 1}}`。
 
 Go struct 可以直接当 record 用，只有带 `funroute` tag 的导出字段会进入记录，顺序就是声明顺序：
 
@@ -234,6 +234,7 @@ primary    = integer | float | string | "true" | "false"
            | "[" expression loop { loop } "]"       // 列表推导
            | "{" [ string ":" expression { "," string ":" expression } [ "," ] ] "}"          // 字典
            | "{" identifier ":" expression { "," identifier ":" expression } [ "," ] "}"      // 记录
+           | "{" "..." expression "," identifier ":" expression { "," identifier ":" expression } [ "," ] "}"  // 字段更新
            | "{" expression ":" expression loop "}" // 字典推导
            | "(" expression ")"
            | primary "[" expression "]"             // 索引
@@ -423,6 +424,30 @@ result, _ = runtime.RunValues(ctx, []lang.Value{lang.Bool(false), lang.Int(9)}, 
 
 `lang/lang.go` 是唯一的公开包。AST 类型刻意不公开，程序一律用 ExprJSON 交换。
 
+### 类型化绑定：契约就是两个 Go 类型
+
+宿主本来就有请求 struct 和结果 struct，契约可以直接从它们读出来。`lang.Bind[In, Out]` 反射**一次**：`In` 里带 `funroute:"name"` tag 的导出字段是参数，**声明顺序即 ABI**（规则与[记录](#记录)相同，没有 tag 的字段不在契约里；一个都没有，比如 `struct{}`，就是不带参数的规则）；`Out` 是返回类型。得到的 `Binding` 是只接受这套契约的编译器：
+
+```go
+type RouteIn struct {
+    Country string    `funroute:"country"`
+    Amount  int64     `funroute:"amount"`
+    Order   Order     `funroute:"order"`   // struct 字段是 record 参数
+    Scores  []float64 `funroute:"scores"`  // 原样透传，不复制
+}
+
+binding, _ := lang.Bind[RouteIn, Decision](registry)
+program, _ := binding.Compile(source)          // 返回类型参与推导，不是 Decision 就编译失败
+program, _ = binding.Load(storedArtifact)       // 库里存的 artifact：按名字匹配，见下文
+decision, _ := program.Run(ctx, &request, lang.RunOptions{})
+```
+
+`binding.Options()` 给出推出的 `CompileOptions`，控制台展示契约、语言服务检查程序都用它。`Program.Run` 不查名字、不反射、不拼 map 或 `[]Value`：参数按绑定时算好的偏移直接从 struct 读进参数区，结果按下标写回 `Out`；程序**没读的参数不做任何转换**，所以一个宿主 struct 可以服务多条规则。代价是没读的参数也不做检查：enum 成员资格、NaN 检查只对程序读到的参数生效，而 `Run(map)` 会检查全部声明的参数。规则看不到没读的值，结果不受影响。
+
+剩下的分配都有名目：标量与字符串 0 次；每个切片/映射参数 1 次（装箱它的头，元素不复制，`[]float64` 仍做一遍 NaN 检查）；每个 record 参数 2 次（字段与 record 本身）。结果里的容器是程序的 backing，只读。三条路径的取舍：表单与 JSON 用 `Run(map)`；向量预先检查好、要反复复用的用 `RunValues`；服务的热路径用 `Program`。`program.Artifact()` 交出编译好的 artifact，用来存库和发布。
+
+`Load` 载入别处编译的 artifact 时**按名字匹配**，规则和 `Run(map)` 的边界一样：artifact 声明的每个参数必须是 `In` 里同名的字段，顺序以 artifact 为准；record 声明的每个字段必须在 struct 的 tag 字段里；类型必须完全相同，不做数值加宽。`In`、`Out` 多出来的字段一律忽略，`Out` 里没被结果覆盖的字段留零值。所以控制台只声明规则读到的参数和字段，照样能载入。唯一的例外是枚举：Go 的 `string` 字段可以承载契约里的 enum，读入时检查成员资格，不是成员就报 `ErrContract`。不匹配的地方在载入时就报 `ErrContract`，并写明是哪个参数、哪个字段。`Bind` 自己推出的契约里没有枚举（Go 类型表达不了），需要枚举的契约由控制台编译后 `Load`。
+
 ### 注册扩展函数
 
 最常用的方式是按 Go 函数签名注册，签名用反射读取：
@@ -478,6 +503,26 @@ lang.Model(registry, "model.fraud_v3", lang.Doc{Cost: 20, Timeout: 8 * time.Mill
 batch := lang.NewBatch(runtime, lang.BatchOptions{MaxSize: 256, MaxWait: 2 * time.Millisecond})
 result, err := batch.Run(ctx, args)   // 可在任意 goroutine 调用，阻塞到本批完成
 ```
+
+类型化绑定（见[类型化绑定](#类型化绑定契约就是两个-go-类型)）有两种批处理。宿主手里已经有 N 条请求时用同步的 `RunBatch`：每个可合批的模型只调一次，结果按下标对应。一条失败不影响其他条：失败的那条结果是零值，并按下标顺序回调 `failed(i, err)`（必填，所以失败不会被零值悄悄吞掉），全部成功时不为错误分配任何东西。多个 goroutine 各自提交时用 `program.Batch`：
+
+```go
+outs := program.RunBatch(ctx, requests, lang.RunOptions{}, func(i int, err error) {
+    log.Printf("request %d: %v", i, err)
+})                                                                  // requests []RouteIn，整批共用 ctx
+
+batch := program.Batch(lang.BatchOptions{MaxSize: 256, MaxWait: 2 * time.Millisecond})
+defer batch.Close()
+decision, err := batch.Run(ctx, &request)
+```
+
+三种形状共用一条规则：**一个下标同时指请求、结果和失败**——`out[i]` 对应 `in[i]`，`failed(i, err)` 说的就是 `in[i]`。
+
+- `RunBatch(ctx, in []In, opts, failed) []Out`：结果新分配。
+- `RunBatchInto(ctx, in []In, out []*Out, opts, failed)`：结果直接写进宿主已有的对象（比如每个请求自己的响应），不为结果分配也不复制；`in` 与 `out` 必须等长。
+- `RunBatchFunc(ctx, n, in func(i int) *In, out func(i int) *Out, opts, failed)`：其余一切形状——`In`/`Out` 是更大对象里的字段、请求分散在堆上、结果缓冲区跨批复用。`in(i)` 在运行前调用一次，`out(i)` 在该条跑完后调用一次；返回 nil 只让那一条失败（`ErrContract`）。
+
+写回的 `Out` 每次都是完整的结果：先清零再写，artifact 没声明的字段也是零，和 `Run` 返回的一样，所以跨规则复用的缓冲区不会残留上一条规则写的值；失败那条保持零值，不会写一半。所以宿主自己的数据不要和规则的结果放在同一个 `Out` 里。整批在宿主传入的 `ctx` 下运行，模型调用也是，所以 deadline 和 ctx 里的值（trace 等）都能到达引擎。三者的全部参数共用一次分配；`program.Batch` 每条请求多分配一次参数切片，因为请求要排队。两者和 `Program.Run` 一样，只转换程序读到的参数。
 
 只有"提前算也不改变结果"的调用才会被合批：参数直接来自入参或常量，且不在循环或条件分支里。`if`、`switch`、`fallback` 里的调用仍按需逐条执行。
 
@@ -618,30 +663,32 @@ make run        # 构建前端与 wasm，组装 site/，然后启动静态服务
 
 VM 是栈式字节码解释器，**执行本身不分配内存**，只有程序构造的数据（比如推导式产出的数组）才分配。
 
-Apple M5，`go test ./lang/internal/compile -bench . -benchtime 1s`：
+Apple M5，`go test ./lang/internal/compile -bench . -benchtime 1s -count 5`，取中位数：
 
 | 场景 | 耗时 | 分配 |
 |---|---|---|
-| 简单表达式 `RunValues` | 139 ns | 0 |
-| 简单表达式 `Run(map)` | 165 ns | 0 |
-| 200 层嵌套算术 | 4.5 µs | 0 |
-| 500 元素 `reduce` | 35 µs | 2 次 |
-| 500 元素推导式映射 | 36 µs | 5 次 / 8 KB |
-| 500 元素嵌套推导式 | 64 µs | 8 次 / 12 KB |
-| 向量透传，n = 16 / 1024 / 65536 | 256 / 270 / 257 ns | 4 次 |
-| `Logic` 注册的函数调用 vs 内核 `add` | 300 ns vs 166 ns | 6 次 vs 0 |
-| 编译（含推导与常量折叠） | 35 µs | — |
-| 模型调用（模拟 20 µs 引擎开销）：单条 vs 64 条一批 | 28.6 µs vs 1.35 µs / 请求 | — |
+| 简单表达式 `RunValues` | 179 ns | 0 |
+| 简单表达式 `Run(map)` | 216 ns | 0 |
+| 简单表达式 `Program.Run`（从宿主 struct 读参数） | 212 ns | 0 |
+| record 进、record 出：`ToValue` + `RunValues` + `FromValue` vs `Program.Run` | 2.77 µs vs 0.76 µs | 20 次 vs 5 次 |
+| 200 层嵌套算术 | 5.7 µs | 0 |
+| 500 元素 `reduce` | 44 µs | 2 次 / 4 KB |
+| 500 元素推导式映射 | 44 µs | 5 次 / 8 KB |
+| 500 元素嵌套推导式 | 77 µs | 8 次 / 12 KB |
+| 向量透传，n = 16 / 1024 / 65536 | 271 / 271 / 271 ns | 4 次 |
+| `Logic` 注册的函数调用 vs 内核 `add` | 329 ns vs 189 ns | 6 次 vs 0 |
+| 编译（含推导与常量折叠） | 43 µs | 625 次 / 93 KB |
+| 模型调用（模拟 20 µs 引擎开销）：单条 vs 64 条一批 | 27.6 µs vs 1.03 µs / 请求 | — |
 
 向量透传的耗时与长度无关，说明容器从宿主到扩展函数全程没有拷贝。
 
-与通用求值器 `expr` v1.17.8 同机对照：一次算术求值 FunRoute 168 ns / 0 次分配，expr 48 ns / 3 次分配；64 元素 filter+sum，FunRoute 5.8 µs / 7 次分配，expr 3.1 µs / 174 次分配。单次延迟 expr 快 2–6 倍，主要差在调用协议（它把 `a * b` 编成一条内联指令，我们编成一次函数调用）。提速方案见 [`docs/roadmap.md`](docs/roadmap.md) 阶段 5。
+与通用求值器 `expr` v1.17.8 同机对照（与上表同一时段测量，`expr` 用 struct 环境，复现方法见 [`docs/roadmap.md`](docs/roadmap.md)「执行性能基线」）：算术 `amount * bps / 10000 + fixed`，FunRoute 161 ns / 0 次分配（`Program.Run` 从宿主 struct 读参数时 205 ns / 0 次），expr 70 ns / 5 次分配；64 元素 filter+sum，FunRoute 6.0 µs / 8 次分配，expr 3.4 µs / 168 次分配。单次延迟 expr 快 1.7–2.3 倍，主要差在调用协议（它把 `a * b` 编成一条内联指令，我们编成一次函数调用）。提速方案见 [`docs/roadmap.md`](docs/roadmap.md) 阶段 5。
 
 ## 现状
 
 已完成：解析、宿主契约、类型推导与重载、编译期求值、字节码 VM、Artifact digest、record、nominal 枚举与穷尽检查、推导式与 `reduce`、句柄与模型批处理、超时与 `fallback`、类型化错误、标准库、格式化器、签名清单、语言服务（stdio 与 WebAssembly）和工作台。
 
-用于真实支付前还缺：`money` 类型、显式业务错误、决策 trace、record 字段更新。语言服务还缺错误恢复（写到一半的程序目前只能给出词法层面的事实）和对表达式内部注释的格式化。详细计划与取舍见 [`docs/roadmap.md`](docs/roadmap.md)。
+用于真实支付前还缺：`money` 类型、显式业务错误、决策 trace。语言服务还缺错误恢复（写到一半的程序目前只能给出词法层面的事实）和对表达式内部注释的格式化。详细计划与取舍见 [`docs/roadmap.md`](docs/roadmap.md)。
 
 为什么语言必然终止、最坏延迟为什么有多项式上界、以及"如果要图灵完备该怎么加"，见 [`docs/termination.md`](docs/termination.md)。
 

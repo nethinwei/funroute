@@ -495,11 +495,7 @@ func (v Value) validateInvariant() error {
 	case []float64:
 		return checkFloats(box)
 	case map[string]float64:
-		for key, value := range box {
-			if math.IsNaN(value) || math.IsInf(value, 0) {
-				return fmt.Errorf("entry %q: non-finite floats are not supported", key)
-			}
-		}
+		return checkFloatMap(box)
 	case *recordValue:
 		for i, value := range box.fields {
 			if err := value.validateInvariant(); err != nil {

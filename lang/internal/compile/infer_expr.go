@@ -38,6 +38,8 @@ func inferExpr(expr syntax.Expr, state *inferState, context inferContext) ([]inf
 		return inferRecord(node, state, context)
 	case *syntax.FieldExpr:
 		return inferField(node, state, context)
+	case *syntax.RecordUpdateExpr:
+		return inferRecordUpdate(node, state, context)
 	case *syntax.LetExpr:
 		return inferLet(node, state, context)
 	case *syntax.CallExpr:

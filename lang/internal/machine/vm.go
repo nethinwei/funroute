@@ -12,7 +12,10 @@ type Runtime struct {
 	registry  *Registry
 	constants []Value
 	functions []*RegisteredFunction
-	frames    sync.Pool
+	// updates holds, for each record_with, the indexes of the fields it
+	// replaces, by program counter; nil when the program has none.
+	updates [][]int
+	frames  sync.Pool
 }
 
 type RunOptions struct {
@@ -45,7 +48,30 @@ func Instantiate(artifact *Artifact, registry *Registry) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Runtime{artifact: snapshot, registry: registry, constants: constants, functions: functions}, nil
+	return &Runtime{artifact: snapshot, registry: registry, constants: constants, functions: functions, updates: resolveUpdates(snapshot)}, nil
+}
+
+// resolveUpdates turns each record_with's field names into the indexes the
+// frame writes by, once, at load. The names stay in the instruction rather
+// than an index list of its own because the interpreter copies an Instruction
+// on every step: one more slice header in it made every program 7% slower,
+// record updates or not.
+func resolveUpdates(artifact *Artifact) [][]int {
+	var updates [][]int
+	for pc, instruction := range artifact.Instructions {
+		if instruction.Op != OpRecordWith {
+			continue
+		}
+		if updates == nil {
+			updates = make([][]int, len(artifact.Instructions))
+		}
+		indexes := make([]int, len(instruction.Keys))
+		for i, name := range instruction.Keys {
+			indexes[i] = instruction.Type.FieldIndex(name)
+		}
+		updates[pc] = indexes
+	}
+	return updates
 }
 
 // EvaluateClosed runs an artifact that takes no arguments and returns its
@@ -73,7 +99,7 @@ func EvaluateClosed(artifact *Artifact, registry *Registry, fuel uint64, maxStac
 	if err != nil {
 		return Value{}, err
 	}
-	runtime := &Runtime{artifact: artifact, registry: registry, constants: constants, functions: functions}
+	runtime := &Runtime{artifact: artifact, registry: registry, constants: constants, functions: functions, updates: resolveUpdates(artifact)}
 	return runtime.execute(ctx, nil, &fuel, maxStack)
 }
 
@@ -197,6 +223,23 @@ func validateFieldInstruction(instruction Instruction, _ *Artifact, fail failFun
 	return nil
 }
 
+// validateRecordWith requires distinct fields of the record type, so the
+// indexes resolveUpdates finds for them can be used unchecked.
+func validateRecordWith(instruction Instruction, _ *Artifact, fail failFunc) error {
+	if instruction.Type == nil || instruction.Type.Kind != RecordKind || len(instruction.Keys) == 0 {
+		return fail("malformed record update")
+	}
+	seen := make([]bool, len(instruction.Type.Fields))
+	for _, name := range instruction.Keys {
+		index := instruction.Type.FieldIndex(name)
+		if index < 0 || seen[index] {
+			return fail("record update field %q", name)
+		}
+		seen[index] = true
+	}
+	return nil
+}
+
 func validateCallInstruction(instruction Instruction, artifact *Artifact, fail failFunc) error {
 	if instruction.A < 0 || instruction.A >= len(artifact.Calls) || instruction.B < 0 || instruction.Type == nil {
 		return fail("malformed call")
@@ -273,6 +316,8 @@ func (r *Runtime) Run(ctx context.Context, rawArgs map[string]any, options RunOp
 	f := r.acquireFrame()
 	args := f.argSpace(len(r.artifact.Args))
 	if err := r.bindArgs(args, rawArgs); err != nil {
+		// Nothing ran, so the frame would not clear what was bound.
+		clearValues(args)
 		r.releaseFrame(f)
 		return Value{}, fmt.Errorf("%w: %v", ErrContract, err)
 	}
@@ -290,6 +335,7 @@ func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOption
 	space := f.argSpace(len(args))
 	for i, param := range r.artifact.Args {
 		if !args[i].hasType(param.Type) {
+			clearValues(space)
 			r.releaseFrame(f)
 			return Value{}, fmt.Errorf("%w: argument %q: expected %s, got %s", ErrContract, param.Name, param.Type.Summary(), args[i].Type().Summary())
 		}
@@ -303,6 +349,16 @@ func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOption
 		// as well after this line.
 		space[i] = args[i]
 	}
+	return r.runFrame(ctx, f, space, options)
+}
+
+// runTyped runs arguments a Codec produced. They are typed by construction,
+// and the ones the program never reads are left empty — which RunValues would
+// rightly refuse from a host, so the check is not repeated here.
+func (r *Runtime) runTyped(ctx context.Context, args []Value, options RunOptions) (Value, error) {
+	f := r.acquireFrame()
+	space := f.argSpace(len(args))
+	copy(space, args)
 	return r.runFrame(ctx, f, space, options)
 }
 

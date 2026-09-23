@@ -24,6 +24,8 @@ var printCorpus = []string{
 	`reduce(name, weight in weights, sum = 0.0, sum + weight)`,
 	`let(bps = 250, base_fee = 3 * 100 + 50, total_bps = bps * 2, amount * total_bps / 10000 + base_fee)`,
 	`{"primary": 1, "backup": 2}`, `{net: order.amount - fee, currency: order.currency}`, `[]`, `{}`,
+	`{...order, amount: order.amount - fee}`, `{...b, customer: {...b.customer, amount: 1}}`, `{...orders[0], fee: 0}.fee`,
+	`{...order, amount: order.amount - route.fee_v1(order.channel, order.currency), currency: route.settlement_currency_v1(order.channel)}`,
 	`fallback(primary.quote_v1(order), secondary.quote_v1(order), 0.0)`,
 	`route.is_healthy_v1(primary_channel_status) && route.is_healthy_v1(secondary_channel_status) && amount > 1000`,
 	`let(emb = model.embed_v2(features), switch(case model.fraud_v3(emb) > 0.9 => "reject", else "accept"))`,
@@ -99,6 +101,11 @@ func TestFormatBreaksWhatDoesNotFit(t *testing.T) {
   total = bps * 2,
   amount * total / 10000 + base
 )`,
+		`{...order, amount: order.amount - route.fee_v1(order.channel, order.currency), currency: route.settlement_currency_v1(order.channel)}`: `{
+  ...order,
+  amount: order.amount - route.fee_v1(order.channel, order.currency),
+  currency: route.settlement_currency_v1(order.channel)
+}`,
 		`a + b`: `a + b`,
 	}
 	for source, want := range cases {

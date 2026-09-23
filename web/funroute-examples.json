@@ -599,6 +599,44 @@
       ]
     },
     {
+      "label": "改几个字段",
+      "category": "基础语法",
+      "description": "{...order, 字段: 新值} 复制一份记录、替换其中几个字段，类型不变：Order 进，Order 出",
+      "source": "{...order, amount: order.amount - order.fee, fee: 0}",
+      "contract": {
+        "types": {
+          "Order": "record{amount: int, fee: int, currency: string}"
+        },
+        "args": [
+          {
+            "name": "order",
+            "type": "Order",
+            "doc": "订单，金额单位：分"
+          }
+        ],
+        "result": {
+          "type": "Order",
+          "doc": "扣掉手续费后的订单"
+        }
+      },
+      "args": {
+        "order": {
+          "amount": 1200,
+          "fee": 30,
+          "currency": "SGD"
+        }
+      },
+      "expected": {
+        "amount": 1170,
+        "fee": 0,
+        "currency": "SGD"
+      },
+      "covers": [],
+      "operators": [
+        "infix:-"
+      ]
+    },
+    {
       "label": "成员判断",
       "category": "基础语法",
       "description": "x in xs 问数组里有没有这个元素，\"k\" in d 问字典里有没有这个键",

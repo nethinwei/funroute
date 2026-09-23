@@ -1,6 +1,10 @@
 package syntax
 
-import "sort"
+import (
+	"slices"
+	"sort"
+	"strings"
+)
 
 // What a position in a program can see, by the rule FreeVariables follows: a
 // form's binds tags, walked by walkChildren (and, for every variable read,
@@ -46,4 +50,39 @@ func LocalReferences(root Expr) map[int]bool {
 	out := map[int]bool{}
 	eachVariable(root, func(variable *VariableExpr, local bool) { out[variable.ID] = local })
 	return out
+}
+
+// UpdatedRecordAt finds the record update a field name is being typed into.
+// A language server puts a placeholder name at the cursor so the text parses;
+// this is the innermost update around offset with a field whose name ends in
+// that placeholder — it ends in it because whatever was typed of the name
+// comes first. It answers where the base and the whole update are, and the
+// fields already written besides that one.
+func UpdatedRecordAt(root Expr, offset int, placeholder string) (base, update Span, written []string, ok bool) {
+	var found *RecordUpdateExpr
+	var visit func(Expr)
+	visit = func(expr Expr) {
+		if node, isUpdate := expr.(*RecordUpdateExpr); isUpdate && node.Extent().HoldsCursor(offset) && typedInto(node, placeholder) {
+			found = node
+		}
+		for _, child := range Children(expr) {
+			visit(child)
+		}
+	}
+	visit(root)
+	if found == nil {
+		return Span{}, Span{}, nil, false
+	}
+	for _, field := range found.Fields {
+		if !strings.HasSuffix(field.Name, placeholder) {
+			written = append(written, field.Name)
+		}
+	}
+	return found.Base.Extent(), found.Extent(), written, true
+}
+
+func typedInto(node *RecordUpdateExpr, placeholder string) bool {
+	return slices.ContainsFunc(node.Fields, func(field RecordFieldExpr) bool {
+		return strings.HasSuffix(field.Name, placeholder)
+	})
 }

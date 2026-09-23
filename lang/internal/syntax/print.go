@@ -83,6 +83,10 @@ func compoundSource(expr Expr) string {
 		return "{" + joinParts(len(node.Fields), func(i int) string {
 			return node.Fields[i].Name + ": " + inline(node.Fields[i].Value, 0)
 		}) + "}"
+	case *RecordUpdateExpr:
+		return "{..." + inline(node.Base, 0) + ", " + joinParts(len(node.Fields), func(i int) string {
+			return node.Fields[i].Name + ": " + inline(node.Fields[i].Value, 0)
+		}) + "}"
 	case *SwitchExpr:
 		return switchSource(node)
 	case *ForExpr:

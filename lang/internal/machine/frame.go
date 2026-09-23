@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // NoAccumulator marks a loop instruction as a mapping rather than a fold, and
@@ -211,6 +212,8 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 		return pc + 1, f.makeRecord(instruction)
 	case OpField:
 		return pc + 1, f.field(instruction)
+	case OpRecordWith:
+		return pc + 1, f.recordWith(pc, instruction)
 	case OpEqual:
 		return pc + 1, f.equal()
 	case OpCall:
@@ -228,19 +231,27 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 	case OpJump:
 		return instruction.A, nil
 	case OpBeginFallback:
-		f.fallbacks = append(f.fallbacks, fallbackFrame{
-			target: instruction.A, stack: len(f.stack), loops: len(f.loops),
-		})
-		return pc + 1, nil
+		return f.beginFallback(pc, instruction)
 	case OpEndFallback:
-		if len(f.fallbacks) == 0 {
-			return 0, fmt.Errorf("fallback stack underflow")
-		}
-		f.fallbacks = f.fallbacks[:len(f.fallbacks)-1]
-		return pc + 1, nil
+		return f.endFallback(pc)
 	default:
 		return 0, fmt.Errorf("unknown opcode %q", instruction.Op)
 	}
+}
+
+func (f *frame) beginFallback(pc int, instruction Instruction) (int, error) {
+	f.fallbacks = append(f.fallbacks, fallbackFrame{
+		target: instruction.A, stack: len(f.stack), loops: len(f.loops),
+	})
+	return pc + 1, nil
+}
+
+func (f *frame) endFallback(pc int) (int, error) {
+	if len(f.fallbacks) == 0 {
+		return 0, fmt.Errorf("fallback stack underflow")
+	}
+	f.fallbacks = f.fallbacks[:len(f.fallbacks)-1]
+	return pc + 1, nil
 }
 
 func (f *frame) catchFallback(err error) (int, bool) {
@@ -408,6 +419,36 @@ func (f *frame) field(instruction Instruction) error {
 		return fmt.Errorf("field access needs a record")
 	}
 	return f.push(record.Field(instruction.A))
+}
+
+// recordWith copies the record's fields once and replaces the ones named. The
+// copy shares the record's type: the type does not change, so neither does it.
+func (f *frame) recordWith(pc int, instruction Instruction) error {
+	indexes := f.runtime.updates[pc]
+	values, err := f.popN(len(indexes))
+	if err != nil {
+		return err
+	}
+	base, err := f.pop1()
+	if err != nil {
+		return err
+	}
+	// The loader checked the indexes against the instruction's type and the
+	// compiler typed the base, so the shape is all there is left to confirm —
+	// a full type comparison here would be paid by every item of a loop.
+	record, ok := base.box.(*recordValue)
+	if !ok || len(record.fields) != len(instruction.Type.Fields) {
+		return fmt.Errorf("record update needs %s, got %s", instruction.Type.Summary(), base.Type().Summary())
+	}
+	fields := slices.Clone(record.fields)
+	for i, index := range indexes {
+		if !values[i].hasType(record.typ.Fields[index].Type) {
+			return fmt.Errorf("field %q takes %s, got %s", record.typ.Fields[index].Name,
+				record.typ.Fields[index].Type.Summary(), values[i].Type().Summary())
+		}
+		fields[index] = values[i]
+	}
+	return f.push(Value{kind: RecordKind, box: &recordValue{typ: record.typ, fields: fields}})
 }
 
 func (f *frame) equal() error {

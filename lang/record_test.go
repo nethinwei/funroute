@@ -329,3 +329,25 @@ func mustParseType(t *testing.T, text string) lang.Type {
 	}
 	return typ
 }
+
+// Two fields tagged with one name are refused where the tags are read, naming
+// both, by every path a struct takes into the language.
+func TestTwoFieldsCannotShareATag(t *testing.T) {
+	type twice struct {
+		A int64 `funroute:"a"`
+		B int64 `funroute:"a"`
+	}
+	const want = `fields A and B of lang_test.twice are both tagged "a"`
+	if _, err := lang.ToValue(twice{}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("ToValue: %v", err)
+	}
+	if err := lang.Logic(lang.CoreRegistry(), "f.g_v1", lang.Doc{}, func(twice) (int64, error) { return 0, nil }); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Logic: %v", err)
+	}
+	type in struct {
+		R twice `funroute:"r"`
+	}
+	if _, err := lang.Bind[in, int64](lang.CoreRegistry()); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Bind: %v", err)
+	}
+}

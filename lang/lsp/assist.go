@@ -105,6 +105,11 @@ func (s *Server) completion(params json.RawMessage) (any, error) {
 	if offset > 0 && doc.text[offset-1] == '@' {
 		return s.enumMembers(), nil
 	}
+	// Where only a field of the record being updated can be named, only
+	// fields are offered.
+	if fields, ok := s.updateFields(doc, offset); ok {
+		return fields, nil
+	}
 	items := []completionItem{}
 	for _, arg := range s.arguments(doc) {
 		items = append(items, completionItem{Label: arg.Name, Kind: kindVariable, SortText: "1" + arg.Name, Detail: arg.Type.String(), Documentation: markdown(arg.Doc)})

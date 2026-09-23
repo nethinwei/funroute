@@ -154,6 +154,12 @@ func braceSplit(expr Expr) (split, bool) {
 			parts[i] = headedPart{field.Name + ": ", field.Value}
 		}
 		return listSplit("{", "}", parts), true
+	case *RecordUpdateExpr:
+		parts := []part{headedPart{"...", node.Base}}
+		for _, field := range node.Fields {
+			parts = append(parts, headedPart{field.Name + ": ", field.Value})
+		}
+		return listSplit("{", "}", parts), true
 	default:
 		return split{}, false
 	}

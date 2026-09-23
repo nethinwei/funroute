@@ -402,3 +402,44 @@ func TestInferredArgumentsAreOfferedAndListed(t *testing.T) {
 		t.Errorf("completion without a contract offers %v", got)
 	}
 }
+
+// In a record update, where a field name goes, the fields of the record being
+// updated are offered — the base's, whether it is an argument or a local —
+// without the ones already written.
+func TestCompletionOffersTheFieldsOfARecordBeingUpdated(t *testing.T) {
+	cases := map[string]string{
+		"{...order, ":                    "amount fee currency",
+		"{...order, fee: 0, ":            "amount currency",
+		"{...order, cu":                  "amount fee currency",
+		"let(o = order, {...o, ":         "amount fee currency",
+		"{...order, amount: order.fee, ": "fee currency",
+	}
+	for text, want := range cases {
+		s := newSession(t, standard(t), `{}`)
+		s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
+			{"name": "order", "type": "record{amount: int, fee: int, currency: string}"},
+		}}})
+		s.open("file:///a.fr", text)
+		if got := strings.Join(labels(s.request("textDocument/completion", position("file:///a.fr", 0, len(text)))), " "); got != want {
+			t.Errorf("%q: completion is %q, want %q", text, got, want)
+		}
+	}
+	// A declared result the half-written program does not return yet does not
+	// hide the base's fields.
+	s := newSession(t, standard(t), `{}`)
+	s.notify("funroute/setContract", map[string]any{"contract": map[string]any{
+		"args":   []map[string]string{{"name": "order", "type": "record{amount: int, fee: int}"}},
+		"result": map[string]string{"type": "int"},
+	}})
+	s.open("file:///a.fr", "{...order, ")
+	if got := strings.Join(labels(s.request("textDocument/completion", position("file:///a.fr", 0, 11))), " "); got != "amount fee" {
+		t.Errorf("with a declared result the completion is %q", got)
+	}
+	// Anywhere else in an update the usual names are offered.
+	s = newSession(t, standard(t), `{}`)
+	s.notify("funroute/setContract", contract("fee:int"))
+	s.open("file:///a.fr", "{...order, amount: ")
+	if got := labels(s.request("textDocument/completion", position("file:///a.fr", 0, 19))); !slices.Contains(got, "fee") {
+		t.Errorf("a field's value is offered %v", got)
+	}
+}
