@@ -137,6 +137,9 @@ var (
 	ErrFuel      = machine.ErrFuel
 	ErrDeadline  = machine.ErrDeadline
 	ErrExtension = machine.ErrExtension
+	// ErrUnavailable is an ErrExtension from a function this registry knows
+	// only by its signature, from a Manifest.
+	ErrUnavailable = machine.ErrUnavailable
 )
 
 // The contract — which arguments, in which order, with which types and prose,
@@ -150,6 +153,11 @@ type ArgSpec = compile.ArgSpec
 // document a front end renders, and the two Compile functions take text or
 // that document.
 var ParseToJSON = compile.ParseToJSON
+
+// Format lays a program's text out the way the language prints it, keeping
+// the comments around the expression; it refuses a comment inside one rather
+// than drop it. The result parses to the same program.
+var Format = syntax.FormatSource
 
 // RenderWithContract writes the contract as comments above the expression, for
 // a rule that leaves the console — a ticket, an RFC, a chat. Comments are not
@@ -194,6 +202,13 @@ type (
 
 var Instantiate = machine.Instantiate
 
+// DecodeArgs reads a program's arguments from a JSON object, keeping every
+// digit of an integer; DefaultFuel is the budget to give a run when nobody
+// named one. A CLI, a language server and a console decode alike through it.
+var DecodeArgs = machine.DecodeArgs
+
+const DefaultFuel = machine.DefaultFuel
+
 // A Batch runs one artifact for many requests and calls each model once per
 // batch: the calls the bytecode proves hoistable (arguments straight from the
 // request, not in a loop, not behind a condition) go through the function's
@@ -205,18 +220,34 @@ type (
 
 var NewBatch = machine.NewBatch
 
-// The catalog is what a front end renders: every function and form a registry
-// offers with its presentation metadata, and the shape of every ExprJSON node
-// so the canvas builds exactly what the compiler accepts.
+// The catalog is what a registry offers — its functions and its forms, with
+// what the host and the language say about each — for a tool that lists
+// them. Registry.Catalog builds it.
 type (
-	LanguageCatalog     = machine.LanguageCatalog
-	FunctionDescriptor  = machine.FunctionDescriptor
-	ValueTypeDescriptor = machine.ValueTypeDescriptor
-	SourceSyntax        = machine.SourceSyntax
-	SourceOperator      = machine.SourceOperatorDescriptor
-	ExpressionTemplate  = machine.ExpressionTemplate
-	NodeSchema          = machine.NodeSchema
-	FieldSchema         = machine.FieldSchema
+	LanguageCatalog    = machine.LanguageCatalog
+	FunctionDescriptor = machine.FunctionDescriptor
+	FormDescriptor     = machine.FormDescriptor
 )
 
-var Catalog = compile.Catalog
+// A Manifest is a registry without its implementations, for a tool that has
+// to type-check, explain and complete a program where the host's functions
+// cannot run — a language server, an editor in the browser. Registry.Manifest
+// writes one; Apply adds what it describes to a registry that holds the
+// kernel and the standard library, each missing function as its signature
+// alone, and TrackUnavailable says which of those a run called.
+type (
+	Manifest         = machine.Manifest
+	ManifestFunction = machine.ManifestFunction
+)
+
+const ManifestVersion = machine.ManifestVersion
+
+var TrackUnavailable = machine.TrackUnavailable
+
+// TextContract is a contract written down as data — types as text, record
+// types named once — and Options is its one reading into CompileOptions.
+type (
+	TextContract = compile.TextContract
+	TextArg      = compile.TextArg
+	TextResult   = compile.TextResult
+)

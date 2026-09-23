@@ -11,17 +11,36 @@ import (
 // caller still holds — a program that arrived as ExprJSON has no text at all.
 // So the error carries the offset and the host decides how to show it, rather
 // than the compiler formatting a location nobody can use.
+//
+// Pos is where the message points; Start and End are the source it is about,
+// which is more than one character for a node — `1 + "a"`, not just its "+".
+// When nothing larger is known, the range is Pos itself.
 type PosError struct {
-	Pos     int
-	Message string
+	Pos        int
+	Start, End int
+	Message    string
 }
 
 func (e *PosError) Error() string { return e.Message }
 
 // At builds a positioned error. Every message the lexer, the parser and type
-// inference produce goes through here, so a host can always ask where.
+// inference produce goes through here or through Around, so a host can always
+// ask where.
 func At(pos int, format string, args ...any) error {
-	return &PosError{Pos: pos, Message: fmt.Sprintf(format, args...)}
+	return &PosError{Pos: pos, Start: pos, End: pos, Message: fmt.Sprintf(format, args...)}
+}
+
+// Around builds an error about a node: it points where the node's position
+// is and covers the source the node was read from.
+func Around(expr Expr, format string, args ...any) error {
+	extent := expr.Extent()
+	return &PosError{Pos: expr.Position(), Start: extent.Start, End: extent.End, Message: fmt.Sprintf(format, args...)}
+}
+
+// over builds an error about a stretch of source: a token, or what a lexeme
+// the lexer gave up on consumed.
+func over(start, end int, format string, args ...any) error {
+	return &PosError{Pos: start, Start: start, End: end, Message: fmt.Sprintf(format, args...)}
 }
 
 // LineColumn finds err's position in source, counting lines from 1 and columns

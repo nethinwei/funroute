@@ -1,0 +1,83 @@
+/* FunRoute's palette: the one place colours are defined, for the workbench
+   and for any page that uses its components. One palette, two themes:
+   light-dark() reads the element's color-scheme, so switching themes only
+   changes color-scheme — there is no second copy of these rules to keep in
+   step. With no explicit choice the scheme is "light dark", which is
+   whatever the system asks for. */
+:root {
+  color-scheme: light dark;
+
+  /* the code font, for the editor and every input that holds code */
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* surfaces */
+  --bg: light-dark(#f3f4f7, #0d1017);
+  --bg-glow: light-dark(#ebe7ff, #191634);
+  --surface: light-dark(#ffffff, #151a26);
+  --surface-2: light-dark(#fafbfc, #11161f);
+  --surface-veil: light-dark(rgba(255, 255, 255, .94), rgba(21, 26, 38, .94));
+  --field: light-dark(#f1f2f6, #1a202d);        /* the fill of an input or code box */
+  --field-hover: light-dark(#ebedf2, #1e2533);
+
+  /* text */
+  --ink: light-dark(#12182a, #e8ecf5);
+  --ink-2: light-dark(#333c50, #ccd3e2);
+  --ink-3: light-dark(#596276, #a5aec1);
+  --muted: light-dark(#858d9c, #7e879a);
+  --muted-2: light-dark(#aeb4c0, #5d6779);
+  --on-accent: light-dark(#ffffff, #f5f7ff);   /* text on a coloured badge */
+  --on-ink: light-dark(#ffffff, #0d1017);      /* text on the ink-filled button */
+
+  /* lines */
+  --line: light-dark(#dfe2e9, #2a3244);
+  --line-2: light-dark(#e7e9ee, #232a39);
+  --line-3: light-dark(#eceef2, #1e2532);
+  --line-dash: light-dark(#bcc2ce, #39425a);
+
+  /* brand */
+  --violet: light-dark(#7057e8, #8b74ff);
+  --violet-strong: light-dark(#5940d6, #a08fff);
+  --violet-ink: light-dark(#5b46ce, #b0a1ff);
+  --violet-soft: light-dark(#f3f0ff, #221f3d);
+  --violet-line: light-dark(#d7d0fb, #3b3466);
+  --violet-edge: light-dark(#8a78e9, #6f5fd0);
+  --violet-ghost: light-dark(#7057e814, #8b74ff22);
+  --violet-glow: light-dark(#5f4cd955, #00000066);
+  --ring: light-dark(#7057e82b, #8b74ff40);
+  --blue-ink: light-dark(#1d4ed8, #7aa2ff);
+  --slate: light-dark(#64748b, #7c8aa3);
+
+  /* state */
+  --green: light-dark(#14a57a, #2bb98c);
+  --green-ghost: light-dark(#14a57a1a, #2bb98c26);
+  --live: light-dark(#2dd4a0, #37e0a8);
+  --live-ghost: light-dark(#2dd4a018, #37e0a81f);
+  --danger: light-dark(#e34d5b, #ef5f6c);
+  --danger-ink: light-dark(#b63845, #ff8f99);
+  --danger-ghost: light-dark(#e34d5b16, #ef5f6c26);
+  --amber: light-dark(#e0a62b, #e8b44a);
+
+  /* code block */
+  --code-bg: light-dark(#111728, #0b0f18);
+  --code-line: light-dark(#252d40, #1e2634);
+  --code-ink: light-dark(#d7def0, #cdd7ec);
+
+  /* shadows are colours here: the offsets stay in the rules */
+  --shadow-card: light-dark(rgba(27, 33, 48, .055), rgba(0, 0, 0, .45));
+  --shadow-node: light-dark(rgba(21, 27, 43, .075), rgba(0, 0, 0, .4));
+  --shadow-soft: light-dark(#20283a0b, rgba(0, 0, 0, .35));
+
+  /* Token colours are spread around the hue circle so no two token kinds read
+     as the same thing: names stay neutral, structure is purple, calls are
+     blue, literals are cool and enum members are warm. */
+  --tok-var: light-dark(#111827, #e8ecf5);
+  --tok-form: light-dark(#7e22ce, #c792ea);
+  --tok-enum: light-dark(#c2410c, #ffab70);
+  --tok-string: light-dark(#15803d, #7ee787);
+  --tok-number: light-dark(#0e7490, #56d4dd);
+  --tok-op: light-dark(#be185d, #ff9ec7);
+  --tok-comment: light-dark(#94a3b8, #6b7486);
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }

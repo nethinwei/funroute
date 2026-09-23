@@ -75,12 +75,12 @@ func run(root string) ([]violation, error) {
 }
 
 func skipDir(name string) bool {
-	return strings.HasPrefix(name, ".") || name == "testdata"
+	return strings.HasPrefix(name, ".") || name == "testdata" || name == "dist" || name == "node_modules"
 }
 
 func checkFile(path string) ([]violation, error) {
 	extension := filepath.Ext(path)
-	if extension != ".go" && extension != ".js" {
+	if extension != ".go" && extension != ".js" && extension != ".ts" {
 		return nil, nil
 	}
 	source, err := os.ReadFile(path)

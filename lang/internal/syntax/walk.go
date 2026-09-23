@@ -35,7 +35,6 @@ type fieldPlan struct {
 	optional bool
 	role     string
 	binds    []string
-	deflt    string
 	min      int
 	sortKey  string
 	item     *structPlan
@@ -91,7 +90,6 @@ func planField(index int, name string, field reflect.StructField) fieldPlan {
 		name:     name,
 		optional: strings.Contains(field.Tag.Get("json"), "omitempty"),
 		role:     field.Tag.Get("role"),
-		deflt:    field.Tag.Get("default"),
 		sortKey:  field.Tag.Get("sort"),
 	}
 	if binds := field.Tag.Get("binds"); binds != "" {
@@ -298,66 +296,52 @@ func visitExprs(field reflect.Value, bound scope, visit func(Expr, scope)) {
 // contract. Locals bound by let, for and reduce are not free, so a name used
 // only inside a comprehension never becomes an argument.
 func FreeVariables(expr Expr) []string {
-	collector := &variableCollector{seen: map[string]bool{}}
-	collector.visit(expr, scope{})
-	return collector.out
+	reads := FirstReads(expr)
+	names := make([]string, len(reads))
+	for i, read := range reads {
+		names[i] = read.Name
+	}
+	return names
 }
 
-type variableCollector struct {
-	seen map[string]bool
-	out  []string
-}
-
-func (c *variableCollector) visit(current Expr, bound scope) {
-	if variable, ok := current.(*VariableExpr); ok {
-		if !bound[variable.Name] && !c.seen[variable.Name] {
-			c.seen[variable.Name] = true
-			c.out = append(c.out, variable.Name)
+// FirstReads is where each free variable is first read, in that order: the
+// node a message about the argument points at.
+func FirstReads(expr Expr) []*VariableExpr {
+	seen := map[string]bool{}
+	var out []*VariableExpr
+	eachVariable(expr, func(variable *VariableExpr, local bool) {
+		if !local && !seen[variable.Name] {
+			seen[variable.Name] = true
+			out = append(out, variable)
 		}
-		return
-	}
-	walkChildren(current, bound, c.visit)
+	})
+	return out
 }
 
-// NodeSchemas describes every node for a front end: which fields it has, which
-// hold expressions, names or lists, and what a fresh one looks like. It is
-// derived from the same plans that import and export use, so the canvas and
-// the compiler cannot disagree about a node's shape.
-func NodeSchemas() []machine.NodeSchema {
-	out := make([]machine.NodeSchema, 0, len(nodeTypes)+3)
-	for _, kind := range []string{"int", "float", "string", "bool"} {
-		out = append(out, machine.NodeSchema{Node: kind, Fields: []machine.FieldSchema{{Name: kind, Kind: kind}}})
+// eachVariable visits every variable read in root, in source order, saying
+// whether a form binds its name there. It is the one walk of the scope rule:
+// free variables, the locals the language server colours and the reads
+// Lexemes marks are all this walk.
+func eachVariable(root Expr, visit func(variable *VariableExpr, local bool)) {
+	var walk func(Expr, scope)
+	walk = func(expr Expr, bound scope) {
+		if variable, ok := expr.(*VariableExpr); ok {
+			visit(variable, bound[variable.Name])
+			return
+		}
+		walkChildren(expr, bound, walk)
 	}
+	walk(root, scope{})
+}
+
+// NodeKinds lists every node's ExprJSON tag: the four literal kinds and one
+// per node type.
+func NodeKinds() []string {
+	out := []string{"int", "float", "string", "bool"}
 	for _, node := range nodeTypes[1:] {
-		schema := machine.NodeSchema{Node: node.kind(), Fields: fieldSchemas(planOf(node))}
-		if form, ok := node.(former); ok {
-			schema.Form = string(form.Form())
-		}
-		out = append(out, schema)
+		out = append(out, node.kind())
 	}
 	return out
-}
-
-func fieldSchemas(plan *structPlan) []machine.FieldSchema {
-	out := make([]machine.FieldSchema, len(plan.fields))
-	for i, field := range plan.fields {
-		out[i] = machine.FieldSchema{
-			Name: field.name, Kind: fieldKindNames[field.kind], Optional: field.optional,
-			Role: field.role, Binds: append([]string(nil), field.binds...),
-			Default: field.deflt, Min: field.min,
-		}
-		if field.kind == fieldName && field.role == "text" {
-			out[i].Kind = "text"
-		}
-		if field.item != nil {
-			out[i].Fields = fieldSchemas(field.item)
-		}
-	}
-	return out
-}
-
-var fieldKindNames = [...]string{
-	fieldExpr: "expr", fieldExprs: "exprs", fieldName: "name", fieldList: "list", fieldFlag: "bool",
 }
 
 // FormOf reports the lazy form a node belongs to, for nodes a registry can

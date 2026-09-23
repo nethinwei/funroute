@@ -38,7 +38,7 @@ func TestDocOnlyCarriesWhatAHostMustSay(t *testing.T) {
 		t.Fatal(err)
 	}
 	var settle lang.FunctionDescriptor
-	for _, function := range lang.Catalog(registry).Functions {
+	for _, function := range registry.Catalog().Functions {
 		if function.Name == "payout.settle_v1" {
 			settle = function
 		}
@@ -196,16 +196,21 @@ func TestHostCanRoundTripAProgramThroughJSON(t *testing.T) {
 	if rendered.Digest != artifact.Digest {
 		t.Fatal("the rendered view is not the same program")
 	}
+	// Formatting keeps the contract comments and is still the same program.
+	formatted, err := lang.Format(text)
+	if err != nil || !strings.HasPrefix(formatted, "// health:") {
+		t.Fatalf("formatted view = %s (%v)", formatted, err)
+	}
+	if again, err := lang.CompileExpr(formatted, registry, hostContract()); err != nil || again.Digest != artifact.Digest {
+		t.Fatalf("formatting changed the program: %v", err)
+	}
 }
 
-// The catalog is what a front end renders.
-func TestHostCanRenderTheCatalog(t *testing.T) {
-	catalog := lang.Catalog(hostRegistry(t))
-	if len(catalog.Functions) == 0 || len(catalog.SpecialForms) == 0 || len(catalog.Nodes) == 0 {
+// The catalog lists what a registry offers.
+func TestHostCanListTheCatalog(t *testing.T) {
+	catalog := hostRegistry(t).Catalog()
+	if len(catalog.Functions) == 0 || len(catalog.SpecialForms) == 0 || catalog.ArtifactVersion != lang.ArtifactVersion {
 		t.Fatalf("catalog = %+v", catalog)
-	}
-	if catalog.Source.ExprJSONVersion != lang.ExprJSONVersion || catalog.ArtifactVersion != lang.ArtifactVersion || len(catalog.Source.Operators) == 0 {
-		t.Fatalf("catalog versions/source = %+v", catalog)
 	}
 }
 
@@ -340,8 +345,8 @@ func TestHostBatchesModelCallsAcrossRequests(t *testing.T) {
 	if _, err := runtime.RunValues(expired, []lang.Value{features}, lang.RunOptions{}); !errors.Is(err, lang.ErrDeadline) {
 		t.Fatalf("expired error = %v", err)
 	}
-	if catalog := lang.Catalog(registry); catalog.ValueTypes[len(catalog.ValueTypes)-1].Type.String() != "handle<engine.tensor>" {
-		t.Fatalf("value types = %+v", catalog.ValueTypes)
+	if handles := registry.Handles(); len(handles) != 1 || handles[0].String() != "handle<engine.tensor>" {
+		t.Fatalf("handles = %+v", handles)
 	}
 }
 
@@ -437,22 +442,11 @@ func TestHostNamesTheRegistryAndArtifactTypes(t *testing.T) {
 }
 
 func TestHostNamesTheCatalogTypes(t *testing.T) {
-	registry := lang.CoreRegistry()
-	catalog := lang.Catalog(registry)
-	var source lang.SourceSyntax = catalog.Source
-	var operator lang.SourceOperator = source.Operators[0]
-	var template lang.ExpressionTemplate = operator.Template
-	var valueType lang.ValueTypeDescriptor = catalog.ValueTypes[0]
-	var node lang.NodeSchema = catalog.Nodes[0]
-	var field lang.FieldSchema = node.Fields[0]
-	if source.ExprJSONVersion != lang.ExprJSONVersion {
-		t.Fatalf("catalog reports ExprJSON v%d, the package says v%d", source.ExprJSONVersion, lang.ExprJSONVersion)
-	}
-	if operator.Token == "" || template.Node == "" && template.Placeholder == "" {
-		t.Fatalf("operator %q has no expansion", operator.Token)
-	}
-	if valueType.Label == "" || node.Node == "" || field.Name == "" {
-		t.Fatalf("catalog entry is unlabelled: %+v %+v", valueType, node)
+	var catalog lang.LanguageCatalog = lang.CoreRegistry().Catalog()
+	var function lang.FunctionDescriptor = catalog.Functions[0]
+	var form lang.FormDescriptor = catalog.SpecialForms[0]
+	if function.Signature == "" || form.Syntax == "" || form.Doc.Label == "" {
+		t.Fatalf("catalog entries are unlabelled: %+v %+v", function, form)
 	}
 }
 
@@ -494,5 +488,68 @@ func TestHostLocatesACompileError(t *testing.T) {
 	}
 	if !errors.Is(err, lang.ErrCompile) {
 		t.Fatal("a positioned error is still a compile error")
+	}
+}
+
+// The pieces a host reaches for around a compile, used the way a console
+// would: a contract written as data, arguments decoded from what was typed,
+// the artifact's own description of what it takes and calls, and the budget.
+func TestAHostDrivesARuleFromDataToResult(t *testing.T) {
+	contract := &lang.TextContract{
+		Types:  map[string]string{"Order": "record{amount: int}"},
+		Args:   []lang.TextArg{{Name: "order", Type: "Order", Doc: "订单"}},
+		Result: &lang.TextResult{Type: "int", Doc: "手续费"},
+	}
+	options, err := contract.Options()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := lang.CoreRegistry()
+	artifact, err := lang.CompileExpr(`order.amount * 25 / 10000`, registry, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var params []lang.Parameter = artifact.Args
+	var calls []lang.CallReference = artifact.Calls
+	if len(params) != 1 || params[0].Name != "order" || len(calls) == 0 {
+		t.Fatalf("the artifact takes %v and calls %v", params, calls)
+	}
+	args, err := lang.DecodeArgs([]byte(`{"order": {"amount": 9007199254740993}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lang.DecodeArgs([]byte(`{} {}`)); !errors.Is(err, lang.ErrContract) {
+		t.Fatalf("trailing data must be refused: %v", err)
+	}
+	runtime, err := lang.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Run(context.Background(), args, lang.RunOptions{Fuel: lang.DefaultFuel}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Run(context.Background(), args, lang.RunOptions{Fuel: 1}); !errors.Is(err, lang.ErrFuel) {
+		t.Fatalf("a run past its budget is ErrFuel: %v", err)
+	}
+}
+
+// What a host exchanges besides text: the ExprJSON document names its
+// version, a handle carries an engine's value by name, and a manifest lists
+// each signature.
+func TestTheDocumentsAHostExchanges(t *testing.T) {
+	encoded, err := lang.ParseToJSON(`1 + 2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct{ Version int }
+	if err := json.Unmarshal(encoded, &document); err != nil || document.Version != lang.ExprJSONVersion {
+		t.Fatalf("the document is version %d, want %d (%v)", document.Version, lang.ExprJSONVersion, err)
+	}
+	if handle := lang.NewHandle("onnx.tensor", []float32{1}); handle.Type().String() != "handle<onnx.tensor>" {
+		t.Fatalf("a handle is %s", handle.Type())
+	}
+	var functions []lang.ManifestFunction = lang.CoreRegistry().Manifest().Functions
+	if len(functions) == 0 || functions[0].Name == "" {
+		t.Fatalf("the manifest lists %v", functions)
 	}
 }

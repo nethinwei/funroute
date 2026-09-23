@@ -25,7 +25,7 @@ func inferExpr(expr syntax.Expr, state *inferState, context inferContext) ([]inf
 	case *syntax.EnumExpr:
 		return inferEnum(node, state, context)
 	case *syntax.ArrayExpr:
-		return inferHomogeneous(node, node.Items, machine.ArrayKind, node.Pos, "array elements must have one type", state, context)
+		return inferHomogeneous(node, node.Items, machine.ArrayKind, "array elements must have one type", state, context)
 	case *syntax.DictExpr:
 		return inferDict(node, state, context)
 	case *syntax.SwitchExpr:
@@ -70,12 +70,12 @@ func inferDict(node *syntax.DictExpr, state *inferState, context inferContext) (
 	for i, entry := range node.Entries {
 		values[i] = entry.Value
 	}
-	return inferHomogeneous(node, values, machine.DictKind, node.Pos, "dictionary values must have one type", state, context)
+	return inferHomogeneous(node, values, machine.DictKind, "dictionary values must have one type", state, context)
 }
 
 // inferHomogeneous infers an array or dictionary node, whose elements all share
 // one element type.
-func inferHomogeneous(node syntax.Expr, items []syntax.Expr, kind machine.Kind, pos int, message string, state *inferState, context inferContext) ([]inferResult, error) {
+func inferHomogeneous(node syntax.Expr, items []syntax.Expr, kind machine.Kind, message string, state *inferState, context inferContext) ([]inferResult, error) {
 	elem := state.fresh()
 	states := []*inferState{state}
 	for _, item := range items {
@@ -84,7 +84,7 @@ func inferHomogeneous(node syntax.Expr, items []syntax.Expr, kind machine.Kind, 
 			return nil, err
 		}
 		if len(next) == 0 {
-			return nil, syntax.At(pos, "type error: %s", message)
+			return nil, syntax.Around(node, "type error: %s", message)
 		}
 		states = next
 	}
@@ -133,8 +133,8 @@ func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContex
 			return nil, err
 		}
 		if len(next) == 0 {
-			return nil, fmt.Errorf("type error at byte %d: switch branches must match the subject and return one type%s",
-				node.Pos, memberWrittenAsString(item, context.enums))
+			return nil, syntax.Around(item.Result, "type error: switch branches must match the subject and return one type%s",
+				memberWrittenAsString(item, context.enums))
 		}
 		partials = next
 	}
@@ -153,7 +153,7 @@ func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContex
 		return nil, err
 	}
 	if len(out) == 0 {
-		return nil, syntax.At(node.Pos, "type error: switch default must match the branch result type")
+		return nil, syntax.Around(node, "type error: switch default must match the branch result type")
 	}
 	return record(node, out), nil
 }
@@ -184,7 +184,7 @@ func validateEnumSwitch(node *syntax.SwitchExpr, partials []partialSwitch) error
 		typ, ok := partial.state.publicType(partial.subject)
 		if !ok || typ.Kind != machine.EnumKind {
 			if node.Default == nil {
-				return syntax.At(node.Pos, "type error: switch without else requires a declared enum subject")
+				return syntax.Around(node, "type error: switch without else requires a declared enum subject")
 			}
 			continue
 		}
@@ -213,23 +213,23 @@ func validateEnumCases(node *syntax.SwitchExpr, enum machine.Type) error {
 			missing = append(missing, value)
 		}
 	}
-	return syntax.At(node.Pos, "type error: enum switch is not exhaustive; missing %s", strings.Join(missing, ", "))
+	return syntax.Around(node, "type error: enum switch is not exhaustive; missing %s", strings.Join(missing, ", "))
 }
 
 func recordEnumMatch(node *syntax.SwitchExpr, enum machine.Type, match syntax.Expr, seen map[string]bool) error {
 	member, ok := match.(*syntax.EnumExpr)
 	if !ok {
 		if node.Default == nil {
-			return syntax.At(match.Position(), "type error: an exhaustive enum switch matches enum members, such as @%s", enum.Values[0])
+			return syntax.Around(match, "type error: an exhaustive enum switch matches enum members, such as @%s", enum.Values[0])
 		}
 		return nil
 	}
 	value := member.Member
 	if !slices.Contains(enum.Values, value) {
-		return syntax.At(match.Position(), "type error: %q is not a member of %s", value, enum.Summary())
+		return syntax.Around(match, "type error: %q is not a member of %s", value, enum.Summary())
 	}
 	if seen[value] {
-		return syntax.At(match.Position(), "type error: enum member %q is matched more than once", value)
+		return syntax.Around(match, "type error: enum member %q is matched more than once", value)
 	}
 	seen[value] = true
 	return nil
@@ -321,7 +321,7 @@ func inferFor(node *syntax.ForExpr, state *inferState, context inferContext) ([]
 		out = append(out, yielded...)
 	}
 	if len(out) == 0 {
-		return nil, syntax.At(node.Pos, "type error: %s, the condition must be bool and a dictionary comprehension needs a string key", loopSourceHint(node.KeyVariable))
+		return nil, syntax.Around(node, "type error: %s, the condition must be bool and a dictionary comprehension needs a string key", loopSourceHint(node.KeyVariable))
 	}
 	return record(node, out), nil
 }
@@ -453,7 +453,7 @@ func inferRecord(node *syntax.RecordExpr, state *inferState, context inferContex
 		results = next
 	}
 	if len(results) == 0 {
-		return nil, syntax.At(node.Pos, "type error: every record field needs a type of its own")
+		return nil, syntax.Around(node, "type error: every record field needs a type of its own")
 	}
 	return record(node, results), nil
 }
@@ -495,12 +495,12 @@ func inferField(node *syntax.FieldExpr, state *inferState, context inferContext)
 		}
 		index := typ.FieldIndex(node.Field)
 		if index < 0 {
-			return nil, syntax.At(node.Pos, "type error: %s has no field %q", typ.Summary(), node.Field)
+			return nil, syntax.Around(node, "type error: %s has no field %q", typ.Summary(), node.Field)
 		}
 		out = append(out, inferResult{typ: concreteTerm(typ.Fields[index].Type), state: value.state})
 	}
 	if len(out) == 0 {
-		return nil, syntax.At(node.Pos, "type error: %q is read off something that is not a record with a known type", node.Field)
+		return nil, syntax.Around(node, "type error: %q is read off something that is not a record with a known type", node.Field)
 	}
 	return record(node, out), nil
 }
@@ -519,7 +519,7 @@ func inferReduce(node *syntax.ReduceExpr, state *inferState, context inferContex
 		out = append(out, folded...)
 	}
 	if len(out) == 0 {
-		return nil, syntax.At(node.Pos, "type error: %s, the condition must be bool and the body must return the accumulator type", loopSourceHint(node.KeyVariable))
+		return nil, syntax.Around(node, "type error: %s, the condition must be bool and the body must return the accumulator type", loopSourceHint(node.KeyVariable))
 	}
 	return record(node, out), nil
 }
@@ -616,7 +616,7 @@ func inferLet(node *syntax.LetExpr, state *inferState, context inferContext) ([]
 		if dropped != nil {
 			return nil, dropped
 		}
-		return nil, syntax.At(node.Pos, "type error: the let body is not typeable")
+		return nil, syntax.Around(node, "type error: the let body is not typeable")
 	}
 	return record(node, out), nil
 }
@@ -644,7 +644,7 @@ func inferLetBindings(node *syntax.LetExpr, state *inferState, context inferCont
 			if dropped != nil {
 				return nil, dropped
 			}
-			return nil, syntax.At(node.Pos, "type error: let binding %q is not typeable", binding.Name)
+			return nil, syntax.Around(node, "type error: let binding %q is not typeable", binding.Name)
 		}
 		scopes = next
 	}

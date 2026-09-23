@@ -457,7 +457,7 @@ func TestDictionaryDefaultsAndLayers(t *testing.T) {
 // registration that went missing.
 func TestNamesCoverEveryElementTypeTheyClaim(t *testing.T) {
 	overloads := map[string]int{}
-	for _, function := range lang.Catalog(registry(t)).Functions {
+	for _, function := range registry(t).Catalog().Functions {
 		overloads[function.Name]++
 	}
 	for _, expected := range []struct {

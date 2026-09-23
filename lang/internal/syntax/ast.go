@@ -10,25 +10,48 @@ import (
 // There are no statements, mutation, member access or implicit host access.
 //
 // Each node type below is the single description of that node. Its struct tags
-// say how it is exchanged as ExprJSON, which names it binds and where they are
-// visible, and what a front end needs to build one. The walker in walk.go
-// reads the tags, so importing, exporting, collecting free variables and
-// describing the node to a front end all follow from the definition — there is
-// no second list to keep in step.
+// say how it is exchanged as ExprJSON and which names it binds and where they
+// are visible. The walker in walk.go reads the tags, so importing, exporting,
+// collecting free variables, scope and the syntax tree all follow from the
+// definition — there is no second list to keep in step.
 //
 //	json:"name"        the ExprJSON field, with omitempty for an optional one
 //	role:"..."         what a string field holds: var, fn, local or text
 //	binds:"a,b"        the fields (of this node) in which a local name is visible;
 //	                   "@rest" means the later items of the list it belongs to
-//	default:"item"     the value a front end puts in a fresh node
 //	min:"1"            the fewest items a list may hold
+//	sort:"key"         a list kept in key order, so one dictionary has one form
 type Expr interface {
 	exprNode()
 	NodeID() int
 	Position() int
+	// Extent is the source the node was read from.
+	Extent() Span
+	setExtent(Span)
 	// kind is the ExprJSON node tag.
 	kind() string
 }
+
+// Span is the source a node was read from: bytes Start up to End, the
+// parentheses around it included. Position is where a message about the node
+// points; the span is all of it. A node imported from ExprJSON has no source,
+// and its span is empty. Every node embeds one, untagged, so ExprJSON and the
+// digest never see it.
+type Span struct {
+	Start, End int
+}
+
+func (s Span) Extent() Span { return s }
+
+// HoldsCharacter reports whether the character starting at offset is in the
+// span, as a hover asks: the span's end is the first byte after it.
+func (s Span) HoldsCharacter(offset int) bool { return s.Start <= offset && offset < s.End }
+
+// HoldsCursor reports whether a cursor at offset is in the span, as scope and
+// completion ask: a cursor right after the last character is still in it.
+func (s Span) HoldsCursor(offset int) bool { return s.Start <= offset && offset <= s.End }
+
+func (s *Span) setExtent(extent Span) { *s = extent }
 
 // checker is implemented by a node that has rules its tags cannot say; the
 // parser and the importer both call it, so source and JSON obey the same ones.
@@ -46,8 +69,9 @@ type former interface {
 // tag is the value's kind and the field carries the value, so it is the one
 // node the walker does not describe from tags.
 type LiteralExpr struct {
-	ID    int
-	Pos   int
+	ID  int
+	Pos int
+	Span
 	Value machine.Value
 }
 
@@ -57,9 +81,10 @@ func (e *LiteralExpr) Position() int { return e.Pos }
 func (e *LiteralExpr) kind() string  { return e.Value.Kind().String() }
 
 type VariableExpr struct {
-	ID   int    `json:"-"`
-	Pos  int    `json:"-"`
-	Name string `json:"name" role:"var" default:"value"`
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
+	Name string `json:"name" role:"var"`
 }
 
 func (*VariableExpr) exprNode()       {}
@@ -72,10 +97,11 @@ func (*VariableExpr) kind() string    { return "var" }
 // in the contract, so the node carries names only; the compiler resolves which
 // enum it belongs to and emits the member string as a constant.
 type EnumExpr struct {
-	ID     int    `json:"-"`
-	Pos    int    `json:"-"`
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
 	Enum   string `json:"enum,omitempty" role:"text"`
-	Member string `json:"member" role:"text" default:"member"`
+	Member string `json:"member" role:"text"`
 }
 
 func (*EnumExpr) exprNode()       {}
@@ -102,8 +128,9 @@ func (e *EnumExpr) check() error {
 }
 
 type ArrayExpr struct {
-	ID    int    `json:"-"`
-	Pos   int    `json:"-"`
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
 	Items []Expr `json:"items,omitempty"`
 }
 
@@ -113,7 +140,7 @@ func (e *ArrayExpr) Position() int { return e.Pos }
 func (*ArrayExpr) kind() string    { return "array" }
 
 type DictEntryExpr struct {
-	Key   string `json:"key" role:"text" default:"key"`
+	Key   string `json:"key" role:"text"`
 	Value Expr   `json:"value"`
 }
 
@@ -121,8 +148,9 @@ type DictEntryExpr struct {
 // language semantics and the canonical JSON must not depend on how the
 // program was written.
 type DictExpr struct {
-	ID      int             `json:"-"`
-	Pos     int             `json:"-"`
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
 	Entries []DictEntryExpr `json:"entries,omitempty" sort:"key"`
 }
 
@@ -146,7 +174,7 @@ func (e *DictExpr) check() error {
 // the name is an identifier, and unlike a dictionary the order is kept: it is
 // part of the record's type.
 type RecordFieldExpr struct {
-	Name  string `json:"name" role:"text" default:"field"`
+	Name  string `json:"name" role:"text"`
 	Value Expr   `json:"value"`
 }
 
@@ -155,8 +183,9 @@ type RecordFieldExpr struct {
 // ({"a": 1}) and every value shares one type; a record writes them as names
 // and every field has its own.
 type RecordExpr struct {
-	ID     int               `json:"-"`
-	Pos    int               `json:"-"`
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
 	Fields []RecordFieldExpr `json:"fields" min:"1"`
 }
 
@@ -182,10 +211,11 @@ func (e *RecordExpr) check() error {
 // FieldExpr is r.field. The field name is resolved to a position in the
 // record's type at compile time, so nothing is looked up while the rule runs.
 type FieldExpr struct {
-	ID    int    `json:"-"`
-	Pos   int    `json:"-"`
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
 	Value Expr   `json:"value"`
-	Field string `json:"field" role:"text" default:"field"`
+	Field string `json:"field" role:"text"`
 }
 
 func (e *FieldExpr) check() error {
@@ -201,8 +231,9 @@ func (e *FieldExpr) Position() int { return e.Pos }
 func (*FieldExpr) kind() string    { return "field" }
 
 type CallExpr struct {
-	ID   int    `json:"-"`
-	Pos  int    `json:"-"`
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
 	Name string `json:"name" role:"fn"`
 	Args []Expr `json:"args,omitempty"`
 }
@@ -223,8 +254,9 @@ type SwitchCaseExpr struct {
 // SwitchExpr is switch(...). A nil Value is the subjectless form: each branch's
 // Match entries are boolean conditions, which replaces a chain of nested ifs.
 type SwitchExpr struct {
-	ID      int              `json:"-"`
-	Pos     int              `json:"-"`
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
 	Value   Expr             `json:"value,omitempty"`
 	Cases   []SwitchCaseExpr `json:"cases" min:"1"`
 	Default Expr             `json:"default,omitempty"`
@@ -242,10 +274,11 @@ func (*SwitchExpr) Form() machine.Form { return machine.SwitchForm }
 // KeyVariable is set for a dictionary walk ([e for k, v in d]) and empty for
 // an array.
 type ForExpr struct {
-	ID          int    `json:"-"`
-	Pos         int    `json:"-"`
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
 	Source      Expr   `json:"source"`
-	Variable    string `json:"variable" role:"local" binds:"where,yield_key,yield" default:"item"`
+	Variable    string `json:"variable" role:"local" binds:"where,yield_key,yield"`
 	KeyVariable string `json:"key_variable,omitempty" role:"local" binds:"where,yield_key,yield"`
 	Where       Expr   `json:"where,omitempty"`
 	// YieldKey turns the comprehension into a dictionary one: with it the
@@ -273,13 +306,14 @@ func (e *ForExpr) check() error { return distinctNames(e.KeyVariable, e.Variable
 // sees the loop variables but not the accumulator, because an item is filtered
 // before it is folded.
 type ReduceExpr struct {
-	ID          int    `json:"-"`
-	Pos         int    `json:"-"`
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
 	Source      Expr   `json:"source"`
-	Variable    string `json:"variable" role:"local" binds:"where,body" default:"item"`
+	Variable    string `json:"variable" role:"local" binds:"where,body"`
 	KeyVariable string `json:"key_variable,omitempty" role:"local" binds:"where,body"`
 	Where       Expr   `json:"where,omitempty"`
-	Accumulator string `json:"accumulator" role:"local" binds:"body" default:"acc"`
+	Accumulator string `json:"accumulator" role:"local" binds:"body"`
 	Init        Expr   `json:"init"`
 	Body        Expr   `json:"body"`
 }
@@ -297,15 +331,16 @@ func (e *ReduceExpr) check() error {
 // LetBinding is one name = value pair. The name is visible to the bindings
 // after it and to the body, like Scheme's let*.
 type LetBinding struct {
-	Name  string `json:"name" role:"local" binds:"@rest,body" default:"x"`
+	Name  string `json:"name" role:"local" binds:"@rest,body"`
 	Value Expr   `json:"value"`
 }
 
 // LetExpr is let(x = e1, y = e2, body). The names are local and never become
 // program arguments.
 type LetExpr struct {
-	ID       int          `json:"-"`
-	Pos      int          `json:"-"`
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
 	Bindings []LetBinding `json:"bindings" min:"1"`
 	Body     Expr         `json:"body"`
 }

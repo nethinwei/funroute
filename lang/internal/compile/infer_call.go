@@ -56,7 +56,7 @@ func inferArgs(args []syntax.Expr, state *inferState, context inferContext) ([]p
 func inferCall(node *syntax.CallExpr, state *inferState, context inferContext) ([]inferResult, error) {
 	functions := context.registry.Overloads(node.Name)
 	if len(functions) == 0 {
-		return nil, syntax.At(node.Pos, "unknown function %q", node.Name)
+		return nil, syntax.Around(node, "unknown function %q", node.Name)
 	}
 	if functions[0].IsLazyFallback() {
 		return inferFallback(node, state, context, functions[0])
@@ -77,7 +77,7 @@ func inferCall(node *syntax.CallExpr, state *inferState, context inferContext) (
 
 func inferFallback(node *syntax.CallExpr, state *inferState, context inferContext, function *machine.RegisteredFunction) ([]inferResult, error) {
 	if len(node.Args) < 2 {
-		return nil, syntax.At(node.Pos, "fallback requires at least 2 arguments")
+		return nil, syntax.Around(node, "fallback requires at least 2 arguments")
 	}
 	partials, err := inferArgs(node.Args, state, context)
 	if err != nil {
@@ -154,7 +154,7 @@ func noOverloadError(node *syntax.CallExpr, partials []partialArgs) error {
 	if hint := overloadHint(node.Name, actual); hint != "" {
 		message += "；" + hint
 	}
-	return syntax.At(node.Pos, "%s", message)
+	return syntax.Around(node, "%s", message)
 }
 
 // overloadHint names what the writer probably wanted. `+` joins strings, so

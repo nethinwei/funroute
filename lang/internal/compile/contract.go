@@ -1,7 +1,9 @@
 package compile
 
 import (
+	"fmt"
 	"funroute/lang/internal/machine"
+	"funroute/lang/internal/syntax"
 )
 
 // The contract — which arguments a program takes, in which order, with which
@@ -106,7 +108,7 @@ func ValidateContract(options CompileOptions) error {
 // validate checks the declared contract against the names the expression
 // actually reads. An empty argument list still means inference for the library
 // API; products that require a contract validate that policy at their edge.
-func (o CompileOptions) validate(used []string) error {
+func (o CompileOptions) validate(expr syntax.Expr) error {
 	if err := ValidateContract(o); err != nil {
 		return err
 	}
@@ -117,9 +119,10 @@ func (o CompileOptions) validate(used []string) error {
 	for _, arg := range o.Args {
 		declared[arg.Name] = true
 	}
-	for _, name := range used {
-		if !declared[name] {
-			return contractErrorf("the expression reads %q but the contract does not declare it", name)
+	for _, read := range syntax.FirstReads(expr) {
+		if !declared[read.Name] {
+			return fmt.Errorf("%w: %w", machine.ErrContract,
+				syntax.Around(read, "the expression reads %q but the contract does not declare it", read.Name))
 		}
 	}
 	return nil

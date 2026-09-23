@@ -24,6 +24,15 @@ func collectEnums(dst map[string]machine.Type, hints map[string]machine.Type, re
 	return collectEnum(dst, *ret)
 }
 
+// Enums is the contract's enum namespace, by name: what an @member in a
+// program under it resolves in. A contract ValidateContract accepted has no
+// two enums under one name, so there is no conflict to report here.
+func (o CompileOptions) Enums() map[string]machine.Type {
+	enums := map[string]machine.Type{}
+	_ = collectEnums(enums, o.argTypes(), o.Result)
+	return enums
+}
+
 // collectEnum registers every enum the type holds, at any depth — an element,
 // a record field, a field of a field. A host that passes the whole order in
 // declares its channel enum there, not as a separate argument.
@@ -58,22 +67,22 @@ func resolveEnumReference(node *syntax.EnumExpr, enums map[string]machine.Type) 
 	case 1:
 		return enums[found[0]], nil
 	case 0:
-		return machine.Type{}, fmt.Errorf("type error at byte %d: %s is not a member of any enum in this contract%s",
-			node.Pos, node.Source(), declaredEnums(enums))
+		return machine.Type{}, syntax.Around(node, "type error: %s is not a member of any enum in this contract%s",
+			node.Source(), declaredEnums(enums))
 	default:
-		return machine.Type{}, fmt.Errorf("type error at byte %d: %s is ambiguous; it is a member of %s, so write @%s.%s",
-			node.Pos, node.Source(), strings.Join(found, " and "), found[0], node.Member)
+		return machine.Type{}, syntax.Around(node, "type error: %s is ambiguous; it is a member of %s, so write @%s.%s",
+			node.Source(), strings.Join(found, " and "), found[0], node.Member)
 	}
 }
 
 func resolveQualifiedEnum(node *syntax.EnumExpr, enums map[string]machine.Type) (machine.Type, error) {
 	typ, ok := enums[node.Enum]
 	if !ok {
-		return machine.Type{}, fmt.Errorf("type error at byte %d: the contract declares no enum named %q%s",
-			node.Pos, node.Enum, declaredEnums(enums))
+		return machine.Type{}, syntax.Around(node, "type error: the contract declares no enum named %q%s",
+			node.Enum, declaredEnums(enums))
 	}
 	if !slices.Contains(typ.Values, node.Member) {
-		return machine.Type{}, syntax.At(node.Pos, "type error: %q is not a member of %s", node.Member, typ.Summary())
+		return machine.Type{}, syntax.Around(node, "type error: %q is not a member of %s", node.Member, typ.Summary())
 	}
 	return typ, nil
 }
@@ -178,7 +187,7 @@ func validateConstrainedSwitch(node *syntax.SwitchExpr, expected machine.Type, i
 
 func validateConstrainedArray(node *syntax.ArrayExpr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
 	if expected.Kind != machine.ArrayKind || expected.Elem == nil {
-		return enumReturnError(node.Pos, expected)
+		return enumReturnError(node, expected)
 	}
 	for _, item := range node.Items {
 		if err := validateConstrainedReturn(item, *expected.Elem, inferred, registry); err != nil {
@@ -191,7 +200,7 @@ func validateConstrainedArray(node *syntax.ArrayExpr, expected machine.Type, inf
 
 func validateConstrainedDict(node *syntax.DictExpr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
 	if expected.Kind != machine.DictKind || expected.Elem == nil {
-		return enumReturnError(node.Pos, expected)
+		return enumReturnError(node, expected)
 	}
 	for _, entry := range node.Entries {
 		if err := validateConstrainedReturn(entry.Value, *expected.Elem, inferred, registry); err != nil {
@@ -202,11 +211,28 @@ func validateConstrainedDict(node *syntax.DictExpr, expected machine.Type, infer
 	return nil
 }
 
+// validateConstrainedFor proves each shape a comprehension takes: a list
+// yields elements, a dictionary comprehension yields values under its keys,
+// and an outer clause of [e for x in xs for y in ys] yields the inner list,
+// which is spliced in — so that one is held to the whole expected type. The
+// comprehension itself has the container type, not its element's.
 func validateConstrainedFor(node *syntax.ForExpr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
-	if expected.Kind != machine.ArrayKind || expected.Elem == nil {
-		return enumReturnError(node.Pos, expected)
+	want := machine.ArrayKind
+	if node.YieldKey != nil {
+		want = machine.DictKind
 	}
-	return validateAndSet(node, node.Yield, *expected.Elem, inferred, registry)
+	if expected.Kind != want || expected.Elem == nil {
+		return enumReturnError(node, expected)
+	}
+	yield := *expected.Elem
+	if node.Flatten {
+		yield = expected
+	}
+	if err := validateConstrainedReturn(node.Yield, yield, inferred, registry); err != nil {
+		return err
+	}
+	inferred.NodeTypes[node.ID] = machine.CloneType(expected)
+	return nil
 }
 
 func validateAndSet(parent, child syntax.Expr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
@@ -221,9 +247,9 @@ func validateKnownType(expr syntax.Expr, expected machine.Type, inferred *infere
 	if typ, ok := inferred.NodeTypes[expr.NodeID()]; ok && typ.Equal(expected) {
 		return nil
 	}
-	return enumReturnError(expr.Position(), expected)
+	return enumReturnError(expr, expected)
 }
 
-func enumReturnError(pos int, expected machine.Type) error {
-	return syntax.At(pos, "type error: cannot prove the expression returns %s", expected.Summary())
+func enumReturnError(expr syntax.Expr, expected machine.Type) error {
+	return syntax.Around(expr, "type error: cannot prove the expression returns %s", expected.Summary())
 }

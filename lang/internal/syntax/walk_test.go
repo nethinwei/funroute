@@ -56,6 +56,9 @@ func TestImportEnforcesTheNodeDefinitions(t *testing.T) {
 		{`{"version":1,"expr":{"node":"reduce","source":{"node":"var","name":"xs"},"variable":"x","accumulator":"x","init":{"node":"int","int":0},"body":{"node":"var","name":"x"}}}`, `"x" is bound twice`},
 		{`{"version":1,"expr":{"node":"for","source":{"node":"var","name":"xs"},"variable":"in","yield":{"node":"var","name":"x"}}}`, `invalid local variable name "in"`},
 		{`{"version":1,"expr":{"node":"float","float":"nan"}}`, "non-finite floats"},
+		// A reserved word would print as syntax and read back as something else.
+		{`{"version":1,"expr":{"node":"var","name":"case"}}`, `invalid variable name "case"`},
+		{`{"version":1,"expr":{"node":"call","name":"let","args":[]}}`, `invalid function name "let"`},
 		{`{"version":1,"expr":{"node":"loop"}}`, `unknown expression node "loop"`},
 	} {
 		_, err := ImportExprJSON([]byte(test.document))
@@ -65,36 +68,10 @@ func TestImportEnforcesTheNodeDefinitions(t *testing.T) {
 	}
 }
 
-// Every node the walker knows is described to the front end, with the tags it
-// was declared with.
-func TestNodeSchemasMirrorTheDefinitions(t *testing.T) {
-	schemas := map[string]bool{}
-	var forNode, letNode int
-	for i, schema := range NodeSchemas() {
-		schemas[schema.Node] = true
-		switch schema.Node {
-		case "for":
-			forNode = i
-		case "let":
-			letNode = i
-		}
-	}
-	for _, want := range []string{"int", "float", "string", "bool", "var", "array", "dict", "record", "field", "call", "switch", "for", "reduce", "let"} {
-		if !schemas[want] {
-			t.Errorf("schema for %s is missing", want)
-		}
-	}
-	variable := NodeSchemas()[forNode].Fields[1]
-	if variable.Name != "variable" || variable.Kind != "name" || variable.Role != "local" || variable.Default != "item" ||
-		strings.Join(variable.Binds, ",") != "where,yield_key,yield" {
-		t.Fatalf("for.variable = %+v", variable)
-	}
-	if NodeSchemas()[forNode].Form != "for" {
-		t.Fatalf("for.form = %q", NodeSchemas()[forNode].Form)
-	}
-	bindings := NodeSchemas()[letNode].Fields[0]
-	if bindings.Kind != "list" || bindings.Min != 1 || len(bindings.Fields) != 2 || bindings.Fields[1].Kind != "expr" ||
-		strings.Join(bindings.Fields[0].Binds, ",") != "@rest,body" {
-		t.Fatalf("let.bindings = %+v", bindings)
+// Every node the walker knows is listed, the literal kinds included.
+func TestNodeKindsListEveryNode(t *testing.T) {
+	want := "int float string bool var enum array dict call record field switch for reduce let"
+	if got := strings.Join(NodeKinds(), " "); got != want {
+		t.Fatalf("node kinds = %s", got)
 	}
 }

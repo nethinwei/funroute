@@ -24,6 +24,19 @@ const (
 	specialFallback
 )
 
+// String is the lazy function's name, the one the catalog and the manifest
+// both write; an ordinary function has none.
+func (f specialForm) String() string {
+	return [...]string{specialNone: "", specialIf: "if", specialFallback: "fallback"}[f]
+}
+
+// cloneDoc copies a Doc so a description handed out cannot reach the
+// registry's own through its slice.
+func cloneDoc(doc Doc) Doc {
+	doc.Params = append([]string(nil), doc.Params...)
+	return doc
+}
+
 // BatchEvalFunc evaluates one function for many argument lists at once — one
 // engine call for a whole batch of requests. calls[i] is the i-th request's
 // arguments; the result has one value per request, in the same order.
@@ -199,13 +212,7 @@ func (r *Registry) FormEnabled(form Form) bool {
 func (r *Registry) EnabledForms() []Form {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]Form, 0, len(r.forms))
-	for _, form := range knownForms {
-		if r.forms[form] {
-			out = append(out, form)
-		}
-	}
-	return out
+	return r.enabledFormsLocked()
 }
 
 // The shape of a name and the list of names the language keeps for itself are
@@ -246,14 +253,14 @@ func IsReservedName(name string) bool {
 // type parser, the source parser and the ExprJSON importer alike: a plain
 // name, and not one the syntax has taken.
 func IsValidFieldName(name string) bool {
-	return IsValidVariableName(name) && !IsReservedName(name) && name != "true" && name != "false"
+	return IsValidVariableName(name) && !IsReservedName(name)
 }
 
 func (r *Registry) Register(spec FunctionSpec) error {
-	if !functionNamePattern.MatchString(spec.Name) {
+	if !IsValidFunctionName(spec.Name) {
 		return fmt.Errorf("invalid function name %q", spec.Name)
 	}
-	if reservedNames[spec.Name] {
+	if IsReservedName(spec.Name) {
 		return fmt.Errorf("function name %q is reserved", spec.Name)
 	}
 	if spec.Doc.Cost == 0 {

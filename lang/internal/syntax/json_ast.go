@@ -351,11 +351,13 @@ func validName(name, role string) error {
 	case "text":
 		return nil
 	case "fn":
-		if !machine.IsValidFunctionName(name) {
+		// A call named let or switch would print as that form, which is a
+		// different program: the names the syntax has taken are nobody's.
+		if !machine.IsValidFunctionName(name) || machine.IsReservedName(name) {
 			return fmt.Errorf("invalid function name %q", name)
 		}
 	case "var":
-		if !machine.IsValidVariableName(name) || name == "true" || name == "false" {
+		if !machine.IsValidVariableName(name) || machine.IsReservedName(name) {
 			return fmt.Errorf("invalid variable name %q", name)
 		}
 	default:

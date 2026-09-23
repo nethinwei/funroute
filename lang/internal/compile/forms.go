@@ -1,7 +1,6 @@
 package compile
 
 import (
-	"fmt"
 	"funroute/lang/internal/machine"
 	"funroute/lang/internal/syntax"
 )
@@ -14,7 +13,7 @@ import (
 // the walk is the generic one, so a new form needs nothing here.
 func validateForms(expr syntax.Expr, registry *machine.Registry) error {
 	if form, ok := syntax.FormOf(expr); ok && !registry.FormEnabled(form) {
-		return fmt.Errorf("%s is not enabled in this registry", string(form))
+		return syntax.Around(expr, "%s is not enabled in this registry", string(form))
 	}
 	for _, child := range syntax.Children(expr) {
 		if err := validateForms(child, registry); err != nil {

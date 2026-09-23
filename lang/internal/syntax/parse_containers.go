@@ -1,6 +1,10 @@
 package syntax
 
-import "strconv"
+import (
+	"strconv"
+
+	"funroute/lang/internal/machine"
+)
 
 // Containers and comprehensions share one corner of the grammar: brackets
 // build an array or map over one, and braces build a dictionary, a record, or
@@ -23,6 +27,11 @@ func (p *parser) parseBrace() (Expr, error) {
 	if p.peek().kind == tokenRightBrace {
 		p.index++
 		return &DictExpr{ID: p.id(), Pos: start.pos}, nil
+	}
+	// The first key of a record is read as an expression, which would take a
+	// reserved word for a bad variable name; it is a bad field name.
+	if first := p.peek(); first.kind == tokenIdentifier && p.tokens[p.index+1].kind == tokenColon && machine.IsReservedName(first.text) {
+		return nil, p.errorf(first, "invalid field name %q", first.text)
 	}
 	key, err := p.parseExpr()
 	if err != nil {
@@ -70,12 +79,12 @@ type loopClause struct {
 func (p *parser) loopClauses(start token) ([]loopClause, error) {
 	var clauses []loopClause
 	for {
-		p.index++ // for
+		p.takeKeyword() // for
 		key, variable, err := p.loopVariables(start)
 		if err != nil {
 			return nil, err
 		}
-		p.index++ // in
+		p.takeKeyword() // in
 		source, err := p.parseExpr()
 		if err != nil {
 			return nil, err
@@ -111,7 +120,8 @@ func (p *parser) nestClauses(start token, clauses []loopClause, yieldKey, yield 
 		if err != nil {
 			return nil, err
 		}
-		node = expr
+		// Every clause is part of the one comprehension that was written.
+		node = p.stamp(start.pos, expr)
 	}
 	return node, nil
 }
@@ -130,6 +140,8 @@ func (p *parser) parseBraceLiteral(start token, key, value Expr) (Expr, error) {
 	if !ok {
 		return nil, p.errorf(start, "a record field is written as name: value")
 	}
+	// It was read as an expression before the brace said what it is.
+	p.markSpan(name.Pos, name.Pos+len(name.Name), RoleField)
 	return p.recordLiteral(start, name.Name, value)
 }
 
@@ -146,6 +158,7 @@ func (p *parser) dictLiteral(start token, firstKey string, firstValue Expr) (Exp
 			return nil, p.errorf(keyToken, "dictionary keys must be strings")
 		}
 		p.index++
+		p.mark(keyToken, RoleLiteral)
 		key, err := strconv.Unquote(keyToken.text)
 		if err != nil {
 			return nil, p.errorf(keyToken, "invalid dictionary key")
@@ -174,6 +187,7 @@ func (p *parser) recordLiteral(start token, firstName string, firstValue Expr) (
 			return nil, p.errorf(name, "record fields are written as name: value")
 		}
 		p.index++
+		p.mark(name, RoleField)
 		if err := p.expect(tokenColon, "':' after the field name"); err != nil {
 			return nil, err
 		}
@@ -222,7 +236,7 @@ func (p *parser) loopFilter() (Expr, error) {
 	if !p.keyword("if") {
 		return nil, nil
 	}
-	p.index++
+	p.takeKeyword()
 	return p.parseExpr()
 }
 

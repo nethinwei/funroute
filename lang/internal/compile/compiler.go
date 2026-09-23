@@ -41,38 +41,49 @@ func ParseToJSON(source string) ([]byte, error) {
 // CompileAST is the single compile path: source and ExprJSON both reach it, so
 // there is no way for one to be accepted while the other is refused.
 func CompileAST(expr syntax.Expr, registry *machine.Registry, options CompileOptions) (*machine.Artifact, error) {
-	if registry == nil {
-		return nil, compileError(fmt.Errorf("registry is required"))
-	}
-	if err := validateForms(expr, registry); err != nil {
-		return nil, compileError(err)
-	}
-	if err := options.validate(syntax.FreeVariables(expr)); err != nil {
+	inferred, compiler, err := build(expr, registry, options)
+	if err != nil {
 		return nil, err
 	}
-	inferred, err := inferProgram(expr, registry, options.argTypes(), options.argOrder(), options.Result)
-	if err != nil {
-		return nil, compileError(err)
-	}
-	attachDocs(inferred.Params, options.argDocs())
-	inferred.ResultDoc = options.ResultDoc
 	exprJSON, err := syntax.ExportExprJSON(expr)
 	if err != nil {
 		return nil, compileError(err)
 	}
+	artifact, err := sealArtifact(exprJSON, inferred, compiler)
+	return artifact, compileError(err)
+}
+
+// build checks, infers and compiles expr: every step CompileAST takes before
+// it seals an artifact, and every step Analyze takes. When inference got
+// through, its result comes back even if a later step failed.
+func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions) (*inference, *bytecodeCompiler, error) {
+	if registry == nil {
+		return nil, nil, compileError(fmt.Errorf("registry is required"))
+	}
+	if err := validateForms(expr, registry); err != nil {
+		return nil, nil, compileError(err)
+	}
+	if err := options.validate(expr); err != nil {
+		return nil, nil, err
+	}
+	inferred, err := inferProgram(expr, registry, options.argTypes(), options.argOrder(), options.Result)
+	if err != nil {
+		return nil, nil, compileError(err)
+	}
+	attachDocs(inferred.Params, options.argDocs())
+	inferred.ResultDoc = options.ResultDoc
 	compiler := newBytecodeCompiler(registry, inferred)
 	if err := compiler.compile(expr); err != nil {
-		return nil, compileError(err)
+		return inferred, nil, compileError(err)
 	}
 	limit := options.MaxInstructions
 	if limit == 0 {
 		limit = 10_000
 	}
 	if len(compiler.instructions) > limit {
-		return nil, compileError(fmt.Errorf("compiled program has %d instructions, limit is %d", len(compiler.instructions), limit))
+		return inferred, nil, compileError(fmt.Errorf("compiled program has %d instructions, limit is %d", len(compiler.instructions), limit))
 	}
-	artifact, err := sealArtifact(exprJSON, inferred, compiler)
-	return artifact, compileError(err)
+	return inferred, compiler, nil
 }
 
 func newBytecodeCompiler(registry *machine.Registry, inferred *inference) *bytecodeCompiler {
@@ -254,13 +265,12 @@ func (c *bytecodeCompiler) compileRecord(node *syntax.RecordExpr) error {
 }
 
 func (c *bytecodeCompiler) compileField(node *syntax.FieldExpr) error {
+	// Inference reports a read of a field the record lacks, with its place,
+	// so a field that does not resolve here is the compiler's own mistake.
 	sourceType, ok := c.inferred.NodeTypes[node.Value.NodeID()]
-	if !ok || sourceType.Kind != machine.RecordKind {
-		return fmt.Errorf("cannot compile field access on a non-record")
-	}
 	index := sourceType.FieldIndex(node.Field)
-	if index < 0 {
-		return fmt.Errorf("%s has no field %q", sourceType.Summary(), node.Field)
+	if !ok || sourceType.Kind != machine.RecordKind || index < 0 {
+		return fmt.Errorf("internal error: field %q was not resolved by inference", node.Field)
 	}
 	if err := c.compile(node.Value); err != nil {
 		return err
@@ -347,7 +357,7 @@ func (c *bytecodeCompiler) requireBoundedArgs(node *syntax.CallExpr) error {
 		if c.boundedExpr(arg) {
 			continue
 		}
-		return fmt.Errorf(
+		return syntax.Around(arg,
 			"%s needs arguments whose size the inputs already bound: a literal, len(...) of a container, or those combined by arithmetic — argument %d is neither",
 			node.Name, i+1)
 	}

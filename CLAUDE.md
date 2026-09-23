@@ -9,12 +9,14 @@ FunRoute：面向支付路由的强类型纯表达式语言。module `funroute`�
 ### 包边界（先看这条）
 
 ```text
-lang/lang.go              唯一的公开接口：类型别名与转发，约 40 个标识符
+lang/lang.go              唯一的公开接口：类型别名与转发
+lang/lsp/                 语言服务：LSP 协议层 + stdio 传输；在 lang/ 下，直接用 internal 的语义入口
 extensions/std/           标准扩展包（聚合/字符串/数组/数值/选择/分组），只用公开 API
-examples/payment/         示例宿主：领域函数与控制台的组装范例，不是交付物
-lang/internal/machine/    值、类型、字节码、VM、帧、注册表、目录     ← 不依赖任何上层
-lang/internal/syntax/     词法、语法、AST、ExprJSON                 ← 只依赖 machine
-lang/internal/compile/    推导、编译、常量折叠、契约、导出视图        ← 依赖 syntax + machine
+examples/payment/         示例宿主：领域函数的组装范例，也是工作台编进 wasm 的注册表
+lang/internal/machine/    值、类型、字节码、VM、帧、注册表、目录、签名清单  ← 不依赖任何上层
+lang/internal/syntax/     词法、语法、AST、ExprJSON、词法段、格式化、语法树  ← 只依赖 machine
+lang/internal/compile/    推导、编译、常量折叠、契约、导出视图、Analyze   ← 依赖 syntax + machine
+web/src/  web/wasm/       工作台前端（TS，按组件打包到 web/dist/）与浏览器用的语言服务入口（js/wasm）
 ```
 
 依赖严格单向，`go list -deps` 可验证。**硬约束**：`Value` 的容器 backing 是私有字段，VM 的循环/索引/构造直接在上面操作，所以 value/container/convert/vm/frame 必须同包 —— 拆开就只能走公开 accessor。跨层要用 machine 的内部件时，导出一个**语义明确的入口**（`EvaluateClosed`、`IsLazyIf`、`Resolve`、`FormOf`），不要导出零件。
@@ -43,13 +45,13 @@ AST 类型**故意不公开**：宿主通过 ExprJSON 交换程序。`lang/lang_
 
 ### 语法节点只在一处定义
 
-`syntax/ast.go` 的每个节点 struct 就是它的全部描述：`json:"..."` 是 ExprJSON 字段（`omitempty` = 可选），字段类型决定它在 walk 里的角色（`Expr`/`[]Expr`/`string`/`[]struct`/`bool` —— 最后一种是节点的模式开关如 `ForExpr.Flatten`，没有子节点也不绑定名字），`role:"var|fn|local|text"` 决定名字校验规则，`binds:"a,b"` 说明这个局部名在哪些字段里可见（`@rest` = 同一列表里后面的项），`default`/`min` 给前端。`syntax/walk.go` 用反射把 tag 读成 plan，导入、导出、`FreeVariables`、`Children`、`FormOf`、`NodeSchemas` 全部由 plan 驱动，**不按节点类型分派**。节点自己的规则（重名、重复键）写在 `check()` 里，parser 的 `p.node()` 与导入器的 `finish()` 都调它 —— 源码和 JSON 一套规则。反射只在编译期跑，不在执行路径上。
+`syntax/ast.go` 的每个节点 struct 就是它的全部描述：`json:"..."` 是 ExprJSON 字段（`omitempty` = 可选），字段类型决定它在 walk 里的角色（`Expr`/`[]Expr`/`string`/`[]struct`/`bool` —— 最后一种是节点的模式开关如 `ForExpr.Flatten`，没有子节点也不绑定名字），`role:"var|fn|local|text"` 决定名字校验规则，`binds:"a,b"` 说明这个局部名在哪些字段里可见（`@rest` = 同一列表里后面的项），`min` 给导入器的列表下限。`syntax/walk.go` 用反射把 tag 读成 plan，导入、导出、`FreeVariables`、`Children`、`FormOf`、作用域查询 `ScopeAt`、语法树 `SyntaxTree` 全部由 plan 驱动，**不按节点类型分派**。节点自己的规则（重名、重复键）写在 `check()` 里，parser 的 `p.node()` 与导入器的 `finish()` 都调它 —— 源码和 JSON 一套规则。反射只在编译期跑，不在执行路径上。
 
-前端拿到的目录（`lang.Catalog(registry)`，不是 `Registry.Catalog()`）带 `nodes`：`web/funroute-core.js` 的 `cleanNode`/`blankNode` 与 `web/funroute-designer.js` 的卡片布局都从它生成，JS 里没有节点字段清单，只有 `funroute-core.js` 的文案表 `FIELD_TEXT`。端到端验证：10 个例子经 `cleanNode` 得到的 JSON 与服务端 `/api/parse` 的规范 JSON 逐字节相同。
+语言事实都从语言本身长出来，不为任何前端另写一份：词法器与解析器在消费 token 时就做了判断（关键字、局部名定义、函数/形式名、变量、字段……），`Lexemes` 只是**把这些判断留下来**（`parser.mark`，`Parse` 不记录所以零开销），程序能解析时再按 `binds` 规则把变量细分成参数与局部名引用。节点带 `Span`（匿名嵌入、无 tag，ExprJSON 与 digest 看不见），`parsePrimary`/后缀/运算符处统一 `stamp`。**Go 不输出颜色、布局、控件、文案**——那是客户端的事。
 
-### 画布只有控制块与表达式
+### 工作台：文本是唯一来源，结构视图是投影
 
-一条规则贯穿画布：**控制块是卡片，其余一切是一行文本**。控制块 = 有自己 ExprJSON 节点的特殊形式（`switch`/`for`/`reduce`/`let`）加惰性调用（`if`/`fallback`），这个集合由 `controlBlocksOf(catalog)` 从目录推导，前端不写死；`&&`/`||`/`!` 底层是 `if` 但按运算符处理，所以留在文本里。表达式槽就地编辑，提交时走 `/api/parse`，**通过才替换子树**，失败原地报错且文档不动。每个表达式位置都是放置目标：块放到已占位置时，原表达式收进新块的第一个空槽（`firstEmptySlot`），节点不能拖进自己的子树。语言层面任何位置都能放任何表达式（`switch` 主体放 `let`、`case` 匹配值放 `switch` 都合法），所以画布不设位置限制。
+前端只通过 LSP（`lang/lsp`）拿语言事实：语义标记、诊断、补全、悬停、签名提示、格式化，加 `funroute/setContract`（通知）、`funroute/syntaxTree`、`funroute/arguments`、`funroute/catalog`（请求）与 `funroute.run`/`funroute.render`（命令）。结构视图按 `funroute/syntaxTree` 画：`switch`/`for`/`reduce`/`let` 与惰性调用（`if`/`fallback`，由目录的 `special` 字段识别，不写死）是卡片，其余是一行源码；**每处修改都是对原文某个区间的替换**，下一棵树由服务端给出，前端从不理解 ExprJSON。包块的片段（`web/src/projection.ts` 的 `BLOCKS`）是前端的输入辅助，不是语言规则。语言服务同一份代码两种传输：`funroute lsp`（stdio，`Content-Length` 分帧）与 `web/wasm`（Worker 里 `send`/回调；`js.FuncOf` 回调里不能阻塞，所以入站走保序队列）。
 
 ### 契约在宿主，不在语言里
 
@@ -59,7 +61,7 @@ AST 类型**故意不公开**：宿主通过 ExprJSON 交换程序。`lang/lang_
 - 声明了可以不用（调用方 ABI 稳定），用了必须声明（`CompileOptions.validate`）。
 - `Result` 参与 unify 而非事后比对，所以它能定死 `[]` 的元素类型、能在重载里选签名。
 - `Doc`/`ResultDoc` 是唯一不进 digest 的东西（`ArtifactDigest` 清它们）。改文案不该让已部署的 artifact 失效。
-- 类型别名只是**文本契约的拼写**：`ParseTypeWith(text, aliases)` 在解析时就地展开，`CompileOptions` 上没有别名字段，所以编译器与 digest 根本看不见它。别名不嵌套（一个声明不能引用另一个），入口三处：CLI `-alias`、API 契约的 `types`、契约面板的类型行。正因为展开在前，artifact 与运行结果只认识完整的 record —— 前端要显示写下的那个名字，就得拿 `/api/contract/check` 回传的 `types`（已解析的结构化类型）去反查（`aliasOf`），这是唯一的对应方式，拿操作员键入的文本去比是另一回事。复杂类型在契约里**一律声明成别名**：参数与返回处只写名字，完整结构在类型行里展开成多行（`formatTypeText`，parser 接受换行），例子数据也按这条组织。
+- 类型别名只是**文本契约的拼写**：`ParseTypeWith(text, aliases)` 在解析时就地展开，`CompileOptions` 上没有别名字段，所以编译器与 digest 根本看不见它。别名不嵌套（一个声明不能引用另一个），入口两处：CLI `-alias` 与文本契约 `compile.TextContract` 的 `types`（LSP 的 `funroute/setContract` 与工作台契约面板都走它）。正因为展开在前，artifact 与运行结果只认识完整的 record —— 复杂类型在契约里**一律声明成别名**：参数与返回处只写名字，完整结构写在类型声明里（类型文本接受换行），例子数据也按这条组织。
 - 函数名可以带点（命名空间与版本：`route.score_v1`），变量名不能带点，`.` 留给将来的字段访问（`IsValidVariableName`）。
 
 ### 管线（单向，每步产物不可变）
@@ -86,11 +88,11 @@ syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile
 - 类型推导是多候选分叉 + `implicitTypeScore` 打分选最优，同分报歧义；混合数值签名额外吃 `mixedPenalty`，所以 `risk < 0.5` 会把 `risk` 推成 float。
 - 枚举是 nominal 且只从契约进入程序：`EnumExpr`（`@member` / `@enum.member`）的所属枚举由 `compile/enum.go` 的 `collectEnums`/`resolveEnumReference` 在**契约的枚举命名空间**里解析，不靠上下文类型；命名空间收的是契约类型里**任意深度**的枚举（元素、record 字段、字段的字段），走 `machine.WalkTypes`——「这个类型里有没有 X」只有这一个入口，手写的 `Elem` 递归会漏掉 record 字段，这正是它被建立的原因；`enum` 与 `string` 不 unify，编译成字符串常量，运行时值仍是成员名。
 - **record 的字段顺序就是它的类型**：`RecordKind` 的 `Type.Fields` 有序，值（`recordValue`）按同一顺序紧凑存放，`FieldExpr` 在编译期解析成下标发 `OpField`，运行时不查名字。推导里 record 作为**整体** unify（`typeTerm.record`），因为它出现的地方字段都已具体 —— 来自契约或来自字段值有类型的字面量。边界按名字匹配：契约声明的字段**必须**都有（缺了就是另一个类型，没有 null 可以顶替，拼错的名字也落在这一侧），源数据多带的字段忽略（一个宿主对象服务多条规则），字段值按无损方向加宽（`1 → float` 可以，`1.7 → int` 不行），Go 与 JSON 两条路径同一套规则。**Go struct 就是 record**：`reflectType`/`intoGo`/`outOfGo`/`fromGo`/`FromValue` 都走 `machine/structs.go` 的一套映射 —— 导出字段按**声明顺序**（顺序即类型），**只有带 `funroute:"name"` tag 的导出字段在 record 里**，没有从 Go 名推断这回事（推断会让 Go 侧重命名悄悄改掉契约）；漏标不是静默的 —— 读它的表达式编译期就报 `has no field`。一个 tag 都没有的 struct 直接拒绝。字段名规则只有一条（`IsValidFieldName`），类型文本、源码与 ExprJSON 三个入口都用它。record 的 JSON 由 `Value.MarshalJSON` 按字段顺序写（`Any()` 交出的 Go map 不保序，要保序就 `json.Marshal(value)`）。还没有的是字段更新（`{...r, a: 1}`）。
-- `SwitchExpr.Value` 可为 nil（条件形态），`SwitchCaseExpr.Match` 是列表（多值分支）。改这里只动 `syntax/ast.go`（tag 决定 JSON、作用域、前端布局）加 `compile/infer_expr.go`、`compile/compiler.go` 的语义，以及 `web/funroute-core.js` 的打印。
-- ExprJSON 文档只有 `{version, expr}`。版本号前端不写死：`FunRouteLanguage` 从 `catalog.source.expr_json_version` 读，所以这里没有同步点。
-- 编译错误带位置：`syntax.At(pos, …)` 是**唯一**的产生方式（lexer、parser、推导都用它），错误本身携带 byte offset，`lang.LineColumn(err, source)` 由宿主换算成行列 —— 语言层不持有源码文本，ExprJSON 编译的程序根本没有文本。新增错误路径必须走 `At`，否则位置就丢了；`compileError` 用两个 `%w` 包装，所以 `errors.Is` 找类别、`errors.As` 找位置都成立。
-- 中缀与关键字糖全部在 parser 层脱糖，**AST 不新增任何节点类型**：`a+b` 就是 `add(a,b)`，`a&&b` 就是 `if(a,b,false)`，`[e for x in xs if c]` 就是 `ForExpr`。多层推导 `[e for x in xs for y in ys]` 也一样：`nestClauses` 把子句从内往外串成嵌套 `ForExpr`，除最内层外都置 `Flatten`，编译时发 `OpLoopSpread` 把内层产出的数组拼接进外层（`arrayBuilder.addAll`）。字典推导只接一个子句。新增糖必须同时更新 `web/funroute-core.js` 的 `sugarFromIf`/`forHead` 反向打印（优先级与模板从目录来，JS 不另存一份 `INFIX`）。运算符表（`syntax/operators.go`）支持三种 fixity：`infix`（符号 `%`，或单词 `in` —— 后者按 token 文本匹配，因为它的 kind 就是 identifier）、`prefix`、`index`（后缀 `xs[i]`，parser 在 primary 结束处读，前端按 fixity 打印回方括号）。
-- `and`/`or`/`not`/`ne` 是**派生形式**——展开为 `if`，不进注册表。两个同步点：`machine/catalog.go` 的 `derivedForms`（目录描述）与 `web/funroute-core.js` 的 `sugarFromIf`/`logicalForm`（识别与打印）；卡片模板由 `createForm` 从目录的运算符模板实例化，前端不再存一份。
+- `SwitchExpr.Value` 可为 nil（条件形态），`SwitchCaseExpr.Match` 是列表（多值分支）。改这里只动 `syntax/ast.go`（tag 决定 JSON、作用域、语法树）加 `compile/infer_expr.go`、`compile/compiler.go` 的语义，以及 `syntax/print.go`/`format.go` 的打印。
+- ExprJSON 文档只有 `{version, expr}`。前端不读也不写它：工作台只和文本打交道。
+- 编译错误带位置：`syntax.At`（一个位置）、`syntax.Around(node, …)`（一个节点：指向它的位置、覆盖它的 `Span`）与 parser/lexer 内部的 `over`（一个 token）是**仅有**的产生方式，错误本身携带 byte offset 与区间（`PosError.Start/End`，LSP 诊断用它），`lang.LineColumn(err, source)` 由宿主换算成行列 —— 语言层不持有源码文本，ExprJSON 编译的程序根本没有文本。新增错误路径必须走它们，否则位置就丢了；推导里的错误一律 `Around(node)`，读了未声明参数也指向那次读取（`syntax.FirstReads`）；`compileError` 用两个 `%w` 包装，所以 `errors.Is` 找类别、`errors.As` 找位置都成立。
+- 中缀与关键字糖全部在 parser 层脱糖，**AST 不新增任何节点类型**：`a+b` 就是 `add(a,b)`，`a&&b` 就是 `if(a,b,false)`，`[e for x in xs if c]` 就是 `ForExpr`。多层推导 `[e for x in xs for y in ys]` 也一样：`nestClauses` 把子句从内往外串成嵌套 `ForExpr`，除最内层外都置 `Flatten`，编译时发 `OpLoopSpread` 把内层产出的数组拼接进外层（`arrayBuilder.addAll`）。字典推导只接一个子句。新增糖要同时给打印器一条反向读法：运算符的反向读取是 `operators.go` 的 `operatorSpec.read`，与 parser 的 `expandOperator` 一一对应、放在同一张表旁边；`specificity` 决定一个节点有多种读法时选哪个（`sub(0,x)` 是 `-x` 不是 `0 - x`，`!=` 先于 `!`）。**格式化结果必须解析回同一 ExprJSON**，`print_test.go` 的往返测试守着。运算符表（`syntax/operators.go`）支持三种 fixity：`infix`（符号 `%`，或单词 `in` —— 后者按 token 文本匹配，因为它的 kind 就是 identifier）、`prefix`、`index`（后缀 `xs[i]`，parser 在 primary 结束处读，前端按 fixity 打印回方括号）。
+- `and`/`or`/`not`/`ne` 是**派生形式**——展开为 `if`，不进注册表。它们的说明在 `machine/catalog.go` 的 `alwaysForms`（目录的 `special_forms`，只有名字、可解析的写法与 Doc，没有伪签名），打印靠 `operatorSpec.read`；两处都不在前端。
 - 扩展函数按不可信纯函数对待：`recover` 在激活层兜住 panic。**值不拷贝**——容器 backing 直接交出，安全性来自只读约定（见上），任何新增的包外取值入口都必须保持"交出 backing、文档写明只读"。
 - 出栈返回的是栈上视窗，不是副本：`EvalFunc` 收到的 `[]Value` 只在调用期间有效。
 - 没有递归就没有嵌套激活：每次 `Run` 只建一个帧（来自 `sync.Pool`）。新增任何能重入程序的构造都会推翻 `docs/termination.md` 的定理 A 与 B。
@@ -102,20 +104,25 @@ syntax/parser.go syntax/json_ast.go  syntax/walk.go   compile/infer*.go  compile
 - 新增惰性形式 → `machine/registry.go` 的 `knownForms` + 节点的 `Form()` 方法（`compile/forms.go` 靠它和 `Children` 通用校验）+ `machine/catalog.go` 的 `formDescriptors`。
 - 新增**纯函数** → `Doc.Constexpr = true`，折叠就能在编译期算掉它（`std` 全包如此，`upper("adyen")`、`sum(range(4))` 都编译成一条载入指令）。模型、时钟、远程调用**不要**标。
 - 新增**凭空造容器**的函数 → `Doc.BoundedArgs = true`，编译器的 `requireBoundedArgs` 要求每个实参的规模已被输入界定：字面量、`len(容器)`、或两者的算术组合（`boundedCall` 认这几种）。这正是 `docs/termination.md` 定理 B 需要的条件 —— 要求实参是**常量**比它更强，会把 `range(len(fees))` 这种安全写法一起误伤。只给"结果规模由参数决定"的函数用（`range` 是唯一一个），理由写在 `docs/termination.md` 定理 B 之后。
-- 新增函数 → 只注册带 `Display` 的 `FunctionSpec`，目录与拖拽面板自动生效；要 ABI 版本就写进名字（`route.score_v1`）。`Doc` 是**唯一**的函数元数据结构：`FunctionSpec.Doc`、`Logic`/`Model` 的入参、目录 JSON 的 `doc` 字段都是它，没有平行的 Display/Parameter/Result 结构。只写机器算不出来的（标签、说明、成本、参数标签）：签名来自反射，分类缺省取命名空间，顺序按名字，**颜色/图标只在 `web/funroute-display.js`**。按 Go 签名注册用 `Logic`（反射读签名，任意元数与嵌套，首参数可选 `context.Context`），模型函数用 `Model` 同时给单条与批量实现；引擎类型先 `DefineHandle[T]`。一个名字要服务多种元素类型时（语言没有类型类，`int`/`float`/`string` 就是三次注册）走 `extensions/std` 的 `eachType`，并在 `TestNamesCoverEveryElementTypeTheyClaim` 加一行 —— 漏注册一个类型不会让任何东西失败，直到规则在生产里撞上那个类型。
-- `Kind` 加值 → `kindNames` 同步；若它有运行时表示，`Value.hasType`/`Type()`/`Any()`、`compile/infer.go` 的 `typeTerm`（含 `name`）、`implicitTypeScore`、`ParseType`、`validateTypePattern` 与前端 `typeName` 都要认识它（`HandleKind` 是现成范例）。
-- 新增 ExprJSON 节点 → 在 `syntax/ast.go` 定义带 tag 的 struct（含 `kind()`，需要时 `check()`/`Form()`）并加进 `nodeTypes`；导入、导出、作用域、schema、前端 `cleanNode`/空白模板/卡片全部自动生效。仍要手写的是语义：`compile/infer_expr.go`、`compile/compiler.go` 的 case，`web/funroute-core.js` 的 `expressionSource`/`_splitNode` 打印，以及可选的 `FIELD_TEXT` 文案。**按节点类型分派的第三处是 `compile/enum.go` 的 `validateConstrainedReturn`**（枚举出参要逐条返回路径证明）：漏了它不会不安全（default 走 `validateKnownType`，要求整体类型相等，是保守的），但能表达的程序会变少。`walk_test.go` 的 schema 测试会要求列出新节点。
+- 新增函数 → 只注册 `FunctionSpec`（或 `Logic`/`Model`），目录、LSP 的悬停与补全自动生效；要 ABI 版本就写进名字（`route.score_v1`）。`Doc` 是**唯一**的函数元数据结构：`FunctionSpec.Doc`、`Logic`/`Model` 的入参、目录 JSON 的 `doc` 字段、签名清单都是它，没有平行的 Display/Parameter/Result 结构。只写机器算不出来的（标签、说明、成本、参数标签）：签名来自反射，分类缺省取命名空间，顺序按名字。按 Go 签名注册用 `Logic`（反射读签名，任意元数与嵌套，首参数可选 `context.Context`），模型函数用 `Model` 同时给单条与批量实现；引擎类型先 `DefineHandle[T]`。一个名字要服务多种元素类型时（语言没有类型类，`int`/`float`/`string` 就是三次注册）走 `extensions/std` 的 `eachType`，并在 `TestNamesCoverEveryElementTypeTheyClaim` 加一行 —— 漏注册一个类型不会让任何东西失败，直到规则在生产里撞上那个类型。
+- `Kind` 加值 → `kindNames` 同步；若它有运行时表示，`Value.hasType`/`Type()`/`Any()`、`compile/infer.go` 的 `typeTerm`（含 `name`）、`implicitTypeScore`、`ParseType`、`validateTypePattern` 都要认识它（`HandleKind` 是现成范例）。
+- 新增 ExprJSON 节点 → 在 `syntax/ast.go` 定义带 tag 的 struct（含 `kind()`、嵌入 `Span`，需要时 `check()`/`Form()`）并加进 `nodeTypes`；导入、导出、作用域、语法树全部自动生效。仍要手写的是语义：`compile/infer_expr.go`、`compile/compiler.go` 的 case，`syntax/print.go` 的 `inline`/`compoundSource` 与 `format.go` 的 `splitNode`（打印器按节点分派，是语言自己的唯一一份），parser 的 `stamp` 覆盖。**按节点类型分派的另一处是 `compile/enum.go` 的 `validateConstrainedReturn`**（枚举出参要逐条返回路径证明）：漏了它不会不安全（default 走 `validateKnownType`，要求整体类型相等，是保守的），但能表达的程序会变少。`walk_test.go` 的 `NodeKinds` 测试会要求列出新节点，`lang/lsp/examples_test.go` 会要求示例用到它。
 - 新增公开 API → `lang/lang.go` 加别名或转发，并在 `lang/lang_test.go` 以宿主视角用一次；能不加就不加。
-- 新增前端例子 → 只改 `web/funroute-examples.js`（例子是**源码 + 契约**两部分，点按钮走 `/api/parse`，按钮由 `renderExamples` 生成）。别手写 ExprJSON 模板。
-- 新增颜色 → 不要写字面量。`web/styles.css` 的 `:root` 是**唯一**的调色板，每个 token 用 `light-dark(浅, 深)` 同时给出两套值，主题切换只改 `color-scheme`（`data-theme` 缺省即跟随系统）。`funroute-designer.css` 只消费这些 token，自己不定义颜色；彩底上的文字用 `--on-accent`，ink 填充按钮上的文字用 `--on-ink`，两者不会随主题翻转成不可读。
-- 新增前端文件 → 加进 `web/embed.go` 的 `//go:embed` 列表（`make check-js` 按 `web/*.js` 通配，不用再列一遍）。前端依赖严格单向、`funroute-core.js` 零 import（`node --test` 就能跑它），分层每个文件只做一件事：`funroute-core.js`（**语言**，无 DOM 也无网络：schema 驱动的 `cleanNode`/`blankNode`、打印/格式化/词法、`FunRouteLanguage`，以及类型协议 `typeName`/`equalType`/`aliasOf`/`formatTypeText`/`formatValue`）、`funroute-workspace.js`（**一次会话**：契约模型 `emptyContract`/`contractPayload`/`typeRows`、`FunRouteClient`、`FunRouteWorkspace`；同样无 DOM，所以 `node --test` 能跑完整的编辑—编译—运行）、`funroute-display.js`（缩略类型文本与配色，**所有颜色图标只在这里**；`typeName`/`equalType` 是协议，留在 core）、`funroute-fields.js`（输入控件与“文本→值”解析：表达式行、枚举选择、值编辑、`parseInputValue`）、`funroute-dnd.js`（放置规则，注释里写明全部情形）、`funroute-palette.js`（控制块面板）、`funroute-reference.js`（语法说明，从目录生成）、`funroute-designer.js`（画布 Web Component）、`funroute-contract.js`（契约面板）、`funroute-examples.js`（例子加载）、`app.js`（MVP 外壳）。**契约面板与画布之间没有同步点**：前者是宿主数据，后者是表达式，各自提交。
-- 新增 API 字段 → 改 `mvp/server.go` 的 `expressionRequest`（`DisallowUnknownFields` 会拒绝未声明字段）；CSP 是 `script-src 'self'`，前端保持无框架无构建。
+- 新增例子 → 只改 `web/funroute-examples.json`（**源码 + 契约 + 入参 + 期望值**），`lang/lsp/examples_test.go` 通过语言服务逐条运行，并要求示例合起来覆盖示例注册表的全部函数与形式、`syntax.Operators()` 与 `syntax.NodeKinds()`。
+- 新增颜色 → 不要写字面量。`web/tokens.css` 是**唯一**的调色板（`styles.css` 只是工作台页面自己的布局），每个 token 用 `light-dark(浅, 深)` 同时给出两套值，主题切换只改 `color-scheme`（`data-theme` 缺省即跟随系统）。组件样式（Lit 的 `static styles`、编辑器的 `EditorView.theme`）只消费这些 token 且自带，不依赖 `styles.css`；语义标记的样式是 `.fr-tok-<LSP token type>`，写在 `editor.ts` 的主题里。
+- 新增前端代码 → 写在 `web/src/*.ts`（`erasableSyntaxOnly`，`node --test` 直接跑 `*.test.ts`；纯逻辑放无 DOM 的模块里测），`make web` 用 esbuild 按组件多入口拆分打包到 `web/dist/`（`app`/`lsp`/`editor`/`contract`/`runner`/`canvas` + 共享 chunk，chunk 与入口同目录，所以 `lsp.ts` 里相对 `import.meta.url` 的 worker 路径仍然成立）；产物**不提交**（`.gitignore` 忽略整个 `web/dist/`），谁要服务工作台谁先构建：`make site` 依赖 `web` 与 `wasm`，Pages 工作流装 Node 后跑同一个目标。Go 侧的构建与测试不需要 Node。组件可按需单独引用：注册一律经 `ui.ts` 的 `define`（已注册就跳过），新组件照做并加进 `package.json` 的入口列表。`make check-web` 只做类型检查并确认能构建。补全顺序由服务端的 `sortText` 决定（类型→名称），`lsp.ts` 的 `rankedCompletion` 关掉 CodeMirror 的模糊打分以保住它。编辑器不用 `basicSetup`：`web/src/setup.ts` 把它拆开重组——行为向 VS Code 看齐，按键是 Emacs（`@replit/codemirror-emacs` 排在最前；它按 `event.code` 认标点，所以 `M-;`/`M-<`/`M->` 由 CodeMirror 的 keymap 补上），只绑定服务端真正回答的能力的键。组件共用 `web/src/ui.ts`（`define`、填充风格的 `fieldStyles`、`labelStyles`），代码字体是 `--mono` token。位置一律按 UTF-16 数（客户端不协商编码），`editor.ts` 的 `offsetAt` 是编辑器侧唯一的换算。结构视图的编辑事件带上它读取区间时的原文，编辑器文本已变就丢弃。契约的返回部分在试运行面板里编辑，`app.ts` 的 `sendContract` 把两个面板合成一份推给服务端。运行时依赖只有 Lit、实际导入的 `@codemirror/*` 子包（含 `lsp-client`）及其 Emacs 键位，`package.json` 按导入逐个声明，只在前端；Go 仍零依赖。前端**只**通过 LSP 拿语言事实，不理解 ExprJSON、不写任何语法规则。
+- 新增语言服务能力 → `lang/lsp`：标准 LSP 方法优先，FunRoute 专有的用 `funroute/*` 请求/通知或 `workspace/executeCommand` 命令；结果只放语言事实与区间。浏览器入口 `web/wasm` 只是传输，`make vet-wasm` 在 js/wasm 下检查它。CSP 写在 `web/index.html` 的 `<meta>`（`'wasm-unsafe-eval'`，本地与 GitHub Pages 一致）。
+- 宿主函数在语言服务里 → 用签名清单：`Registry.Manifest()` 导出，`Manifest.Apply(base)` 把缺实现的函数登记为签名（调用得 `ErrUnavailable`，同时是 `ErrExtension`）。改 `Doc` 里影响编译的字段（`Constexpr`、`BoundedArgs`）时同步 `machine/manifest.go` 的 `ManifestFunction`。部署用 artifact 由宿主用真实注册表编译。
 
 ## 命令
 
 ```bash
-make ci                                                # 提交前必须全过：check-fmt vet lint build test
-make test | make lint | make vet | make fmt | make run
+make ci                                                # 提交前必须全过：check-fmt check-js check-web vet vet-wasm lint build wasm test test-js
+make test | make lint | make vet | make fmt
+make wasm                                              # 浏览器用的语言服务 web/dist/funroute.wasm
+make web                                               # 前端产物 web/dist/*.js（先在 web/ 里 npm install；两者都不提交）
+make site                                              # 组装发布目录 site/（make run 与 Pages 共用）
+make run                                               # web + site，然后 cmd/mvp 静态服务 site/ 于 http://127.0.0.1:8080
 go test ./lang/internal/compile -run TestIfIsLazyAndFuelIsEnforced -v      # 单个测试
 go test ./lang/internal/compile -bench . -benchtime 2000x                 # VM 基准
 go test ./lang/internal/compile -bench RunPaths -cpuprofile /tmp/cpu.out  # 热路径 profile
@@ -123,6 +130,8 @@ go test ./lang/internal/compile -bench Vector -benchtime 1s                # 向
 go test ./lang/internal/compile -bench BatchVersus -benchtime 2000x        # 批处理对比：合批摊薄引擎开销
 go list -deps ./lang/internal/machine | grep funroute                     # 验证依赖方向
 go run ./cmd/funroute inspect -expr 'if(a,b,add(1,1))'
+go run ./cmd/funroute fmt -expr 'let(a=1,a+2)'                            # 格式化：结果必须解析回同一程序
+go run ./cmd/funroute lsp -manifest registry.json                          # 语言服务（stdio）
 go run ./cmd/funroute run -expr 'reduce(x in items, total = 0, total + x)' -args '{"items":[1,2,3]}'
 go run ./cmd/funroute run -expr 'let(bps = 250, amount * bps / 10000)' \
   -types 'amount=int' -args '{"amount":100000}'          # 契约由 -types 给出
@@ -132,5 +141,5 @@ go run ./cmd/funroute run -expr 'let(bps = 250, amount * bps / 10000)' \
 
 - 单个方法不超过 **50 行**（含签名与右大括号）。
 - 嵌套不超过 **3 层**（if/for/switch/select/函数字面量各计一层，`else if` 不额外计）。
-- 单个文件不超过 **800 行**（`.go` 与 `.js`）。
+- 单个文件不超过 **800 行**（`.go`、`.js` 与 `.ts`；`dist`、`node_modules` 跳过）。
 - 超限时拆函数或拆文件，不要放宽阈值；`tools/lint` 只用标准库，保持零依赖。

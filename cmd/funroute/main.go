@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"funroute/lang"
+	"funroute/lang/lsp"
 )
 
 func main() {
@@ -29,6 +30,10 @@ func main() {
 		err = compile(os.Args[2:])
 	case "run":
 		err = run(os.Args[2:])
+	case "fmt":
+		err = formatSource(os.Args[2:])
+	case "lsp":
+		err = serveLanguage(os.Args[2:])
 	default:
 		usage()
 		err = fmt.Errorf("unknown command %q", os.Args[1])
@@ -57,6 +62,8 @@ Commands:
   export  -expr 'if(a,b,add(1,1))'
   compile -expr 'if(a,b,add(1,1))'
   run     -expr 'if(a,b,add(1,1))' -args '{"a":true,"b":7}'
+  fmt     -expr 'let(a=1,a+2)'        (or the program on standard input)
+  lsp     [-manifest registry.json]   the language server, on stdin and stdout
 
 The contract is the host's: -types 'a=bool,b=int' declares the arguments and
 their order. Without it both are inferred. -alias names a type so a record
@@ -112,14 +119,66 @@ func exportExpr(args []string) error {
 	if err != nil {
 		return locate(err, *common.expr)
 	}
-	if err != nil {
-		return err
-	}
 	var pretty bytes.Buffer
 	if err := json.Indent(&pretty, encoded, "", "  "); err != nil {
 		return err
 	}
 	fmt.Println(pretty.String())
+	return nil
+}
+
+// serveLanguage runs the language server on stdin and stdout. The registry is
+// the kernel and the standard library; a manifest adds a host's functions by
+// their signatures, which is all the server needs to check and explain them.
+func serveLanguage(args []string) error {
+	set := flag.NewFlagSet("lsp", flag.ContinueOnError)
+	manifestPath := set.String("manifest", "", "a registry manifest (Registry.Manifest as JSON) to serve")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	registry, err := newRegistry()
+	if err != nil {
+		return err
+	}
+	if *manifestPath != "" {
+		if err := applyManifest(registry, *manifestPath); err != nil {
+			return err
+		}
+	}
+	return lsp.Serve(os.Stdin, os.Stdout, registry)
+}
+
+func applyManifest(registry *lang.Registry, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var manifest lang.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return fmt.Errorf("manifest %s: %w", path, err)
+	}
+	return manifest.Apply(registry)
+}
+
+// formatSource prints a program laid out the way the language prints it.
+func formatSource(args []string) error {
+	common := flags("fmt")
+	if err := common.set.Parse(args); err != nil {
+		return err
+	}
+	source := *common.expr
+	if source == "" {
+		input, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		source = string(input)
+	}
+	formatted, err := lang.Format(source)
+	if err != nil {
+		return locate(err, source)
+	}
+	fmt.Println(formatted)
 	return nil
 }
 
@@ -143,7 +202,7 @@ func compile(args []string) error {
 func run(args []string) error {
 	common := flags("run")
 	argsSource := common.set.String("args", "{}", "JSON object containing argument values")
-	fuel := common.set.Uint64("fuel", 10_000, "execution fuel")
+	fuel := common.set.Uint64("fuel", lang.DefaultFuel, "execution fuel")
 	if err := common.set.Parse(args); err != nil {
 		return err
 	}
@@ -159,7 +218,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	rawArgs, err := decodeArgs(*argsSource)
+	rawArgs, err := lang.DecodeArgs([]byte(*argsSource))
 	if err != nil {
 		return err
 	}
@@ -179,32 +238,15 @@ func run(args []string) error {
 	return nil
 }
 
-func decodeArgs(source string) (map[string]any, error) {
-	decoder := json.NewDecoder(strings.NewReader(source))
-	decoder.UseNumber()
-	var rawArgs map[string]any
-	if err := decoder.Decode(&rawArgs); err != nil {
-		return nil, fmt.Errorf("decode -args: %w", err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return nil, fmt.Errorf("decode -args: trailing JSON value")
-		}
-		return nil, fmt.Errorf("decode -args: %w", err)
-	}
-	return rawArgs, nil
-}
-
 func compileSource(common commonFlags) (*lang.Artifact, error) {
 	if *common.expr == "" {
 		return nil, fmt.Errorf("-expr is required")
 	}
-	aliases, err := parseAliases(*common.aliases)
+	contract, err := textContract(*common.aliases, *common.types)
 	if err != nil {
 		return nil, err
 	}
-	contract, err := parseContract(*common.types, aliases)
+	options, err := contract.Options()
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +254,7 @@ func compileSource(common commonFlags) (*lang.Artifact, error) {
 	if err != nil {
 		return nil, err
 	}
-	artifact, err := lang.CompileExpr(*common.expr, registry, lang.CompileOptions{Args: contract})
+	artifact, err := lang.CompileExpr(*common.expr, registry, options)
 	if err != nil {
 		return nil, locate(err, *common.expr)
 	}
@@ -234,55 +276,48 @@ func newRegistry() (*lang.Registry, error) {
 	return registry, nil
 }
 
-// parseAliases reads -alias 'Order=record{...}'. An alias is spelling only: it
-// is expanded where it is named, so nothing about it reaches the artifact.
-func parseAliases(source string) (map[string]lang.Type, error) {
-	if strings.TrimSpace(source) == "" {
-		return nil, nil
+// textContract reads -alias 'Order=record{...}' and -types 'a=bool,b=int'
+// into the contract they spell, which lang.TextContract then reads the one way
+// every host does. An alias is spelling only: it is expanded where it is named,
+// so nothing about it reaches the artifact. The -types text is ordered, and
+// that order is the artifact's ABI.
+func textContract(aliases, types string) (*lang.TextContract, error) {
+	contract := &lang.TextContract{}
+	declared, err := declarations(aliases)
+	if err != nil {
+		return nil, err
 	}
-	aliases := map[string]lang.Type{}
-	for _, part := range splitTopLevel(source) {
-		name, text, err := splitDeclaration(part)
-		if err != nil {
-			return nil, err
+	for _, pair := range declared {
+		if contract.Types == nil {
+			contract.Types = map[string]string{}
 		}
-		typ, err := lang.ParseType(text)
-		if err != nil {
-			return nil, fmt.Errorf("type %s: %w", name, err)
-		}
-		aliases[name] = typ
+		contract.Types[pair[0]] = pair[1]
 	}
-	return aliases, nil
-}
-
-// splitDeclaration cuts "name=type" at the first =, which no type text uses.
-func splitDeclaration(part string) (string, string, error) {
-	pair := strings.SplitN(strings.TrimSpace(part), "=", 2)
-	if len(pair) != 2 || strings.TrimSpace(pair[0]) == "" {
-		return "", "", fmt.Errorf("invalid declaration %q, expected name=type", part)
+	args, err := declarations(types)
+	if err != nil {
+		return nil, err
 	}
-	return strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1]), nil
-}
-
-// parseContract reads -types 'a=bool,b=int'. The text is ordered, so the
-// contract it produces is ordered too, and that order is the artifact's ABI.
-func parseContract(source string, aliases map[string]lang.Type) ([]lang.ArgSpec, error) {
-	if strings.TrimSpace(source) == "" {
-		return nil, nil
-	}
-	var contract []lang.ArgSpec
-	for _, part := range splitTopLevel(source) {
-		name, text, err := splitDeclaration(part)
-		if err != nil {
-			return nil, err
-		}
-		typ, err := lang.ParseTypeWith(text, aliases)
-		if err != nil {
-			return nil, fmt.Errorf("type hint %s: %w", name, err)
-		}
-		contract = append(contract, lang.ArgSpec{Name: name, Type: typ})
+	for _, pair := range args {
+		contract.Args = append(contract.Args, lang.TextArg{Name: pair[0], Type: pair[1]})
 	}
 	return contract, nil
+}
+
+// declarations cuts "a=t1,b=t2" into its name=type pairs, in order. A type's
+// own commas are inside <> or {}, so only the top-level ones separate.
+func declarations(source string) ([][2]string, error) {
+	if strings.TrimSpace(source) == "" {
+		return nil, nil
+	}
+	var out [][2]string
+	for _, part := range splitTopLevel(source) {
+		pair := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(pair) != 2 || strings.TrimSpace(pair[0]) == "" {
+			return nil, fmt.Errorf("invalid declaration %q, expected name=type", part)
+		}
+		out = append(out, [2]string{strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])})
+	}
+	return out, nil
 }
 
 func splitTopLevel(source string) []string {

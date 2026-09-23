@@ -385,6 +385,26 @@ func TestEnumMembersInsideContainersAreChecked(t *testing.T) {
 	}
 }
 
+// A comprehension can return enums in each of its shapes: a dictionary
+// comprehension yields them as values, and a multi-clause one splices the
+// inner list into the outer.
+func TestComprehensionsCanReturnEnums(t *testing.T) {
+	channel, registry := enumFixture(t)
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	args := []ArgSpec{{Name: "channels", Type: machine.ArrayOf(channel)}, {Name: "keys", Type: machine.ArrayOf(machine.StringType)}}
+	for source, result := range map[string]machine.Type{
+		`{k: @adyen for k in keys}`:                 machine.DictOf(channel),
+		`[c for c in channels for k in keys]`:       machine.ArrayOf(channel),
+		`[@stripe for c in channels for k in keys]`: machine.ArrayOf(channel),
+	} {
+		if _, err := CompileExpr(source, registry, CompileOptions{Args: args, Result: &result}); err != nil {
+			t.Errorf("%s -> %s: %v", source, result, err)
+		}
+	}
+}
+
 // An enum reaches the contract's namespace from wherever it sits in a type,
 // not just from the top of an argument. A host that passes the whole order in
 // declares its channel enum as a field of that record — which is the shape a

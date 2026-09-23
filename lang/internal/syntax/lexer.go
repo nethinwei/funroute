@@ -1,8 +1,10 @@
 package syntax
 
 import (
+	"errors"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 type tokenKind uint8
@@ -41,33 +43,47 @@ const (
 	// tokenEnum is @member or @enum.member: an enum member reference. The "@"
 	// keeps it apart from a string and keeps "." out of expression syntax.
 	tokenEnum
+	// tokenInvalid is text the lexer could not read. It is produced only so
+	// the lexing can go on past it; the error that goes with it is reported.
+	tokenInvalid
+	// tokenComment is a // line comment. It never reaches the parser.
+	tokenComment
 )
 
 // operatorTokens comes from the parser's sourceOperators table and is scanned
 // longest-first, so "<=" wins over "<" and "=>" over "=".
 var operatorTokens = lexedOperators()
 
+// token is one lexeme: its kind, its text as the parser reads it (a number
+// without its _ separators, an enum reference without its @) and the bytes of
+// source it covers, from pos up to end.
 type token struct {
 	kind tokenKind
 	text string
 	pos  int
+	end  int
 }
 
 type lexer struct {
-	source string
-	pos    int
+	source   string
+	pos      int
+	comments []token
 }
 
+// tokens lexes the whole source. A lexeme it cannot read becomes an invalid
+// token and the lexing goes on, so everything after it is still known; the
+// first such error is the one returned.
 func (l *lexer) tokens() ([]token, error) {
 	var out []token
+	var first error
 	for {
 		tok, err := l.next()
-		if err != nil {
-			return nil, err
+		if err != nil && first == nil {
+			first = err
 		}
 		out = append(out, tok)
 		if tok.kind == tokenEOF {
-			return out, nil
+			return out, first
 		}
 	}
 }
@@ -87,7 +103,8 @@ var singleCharTokens = map[byte]tokenKind{
 }
 
 // skipSpace also eats // line comments. Comments are lexical only: they never
-// reach the AST, so they do not survive an ExprJSON round trip.
+// reach the AST, so they do not survive an ExprJSON round trip. They are kept
+// aside, because what the source says is not only what the parser reads.
 func (l *lexer) skipSpace() {
 	for l.pos < len(l.source) {
 		if unicode.IsSpace(rune(l.source[l.pos])) {
@@ -95,9 +112,11 @@ func (l *lexer) skipSpace() {
 			continue
 		}
 		if strings.HasPrefix(l.source[l.pos:], "//") {
+			start := l.pos
 			for l.pos < len(l.source) && l.source[l.pos] != '\n' {
 				l.pos++
 			}
+			l.comments = append(l.comments, token{kind: tokenComment, text: l.source[start:l.pos], pos: start, end: l.pos})
 			continue
 		}
 		return
@@ -107,9 +126,23 @@ func (l *lexer) skipSpace() {
 func (l *lexer) next() (token, error) {
 	l.skipSpace()
 	if l.pos >= len(l.source) {
-		return token{kind: tokenEOF, pos: l.pos}, nil
+		return token{kind: tokenEOF, pos: l.pos, end: l.pos}, nil
 	}
 	start := l.pos
+	tok, err := l.lexeme(start)
+	if err != nil {
+		bad := l.invalid(start)
+		var positioned *PosError
+		if errors.As(err, &positioned) {
+			positioned.End = bad.end
+		}
+		return bad, err
+	}
+	tok.end = l.pos
+	return tok, nil
+}
+
+func (l *lexer) lexeme(start int) (token, error) {
 	ch := l.source[l.pos]
 	if kind, ok := singleCharTokens[ch]; ok {
 		l.pos++
@@ -130,6 +163,16 @@ func (l *lexer) next() (token, error) {
 	default:
 		return token{}, At(start, "syntax error: unexpected %q", ch)
 	}
+}
+
+// invalid covers what a failed lexeme consumed, at least one character, so
+// the lexer always moves forward.
+func (l *lexer) invalid(start int) token {
+	if l.pos <= start {
+		_, size := utf8.DecodeRuneInString(l.source[start:])
+		l.pos = start + size
+	}
+	return token{kind: tokenInvalid, text: l.source[start:l.pos], pos: start, end: l.pos}
 }
 
 func (l *lexer) operator(start int) (token, bool) {

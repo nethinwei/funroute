@@ -428,14 +428,19 @@ func TestCoreCatalogIsMinimalAndCarriesDisplayMetadata(t *testing.T) {
 	assertLabelCountIsChecked(t, registry)
 }
 
-// A special form's signature is the one hand-written string in the catalog:
-// it is a syntax shape, not a type signature, so it cannot be generated. It
-// can at least be checked for naming the form it describes.
+// A form's syntax is the one hand-written string in the catalog: it is how
+// the form is spelled, not a type signature, so it cannot be generated. It
+// can at least be checked to parse, which is what makes it true.
 func assertSignaturesNameTheirForm(t *testing.T, catalog machine.LanguageCatalog) {
 	t.Helper()
-	for _, form := range append(append([]machine.FunctionDescriptor(nil), catalog.SpecialForms...), catalog.Functions...) {
-		if !strings.HasPrefix(form.Signature, form.Name+"(") && !strings.Contains(form.Signature, form.Name) {
-			t.Fatalf("signature %q does not name %q", form.Signature, form.Name)
+	for _, function := range catalog.Functions {
+		if !strings.HasPrefix(function.Signature, function.Name+"(") {
+			t.Fatalf("signature %q does not name %q", function.Signature, function.Name)
+		}
+	}
+	for _, form := range catalog.SpecialForms {
+		if _, err := syntax.Parse(form.Syntax); err != nil {
+			t.Fatalf("the syntax of %s does not parse: %q: %v", form.Name, form.Syntax, err)
 		}
 	}
 }
@@ -690,23 +695,6 @@ func TestCatalogListsSwitchableAndDerivedForms(t *testing.T) {
 	// Only the known forms can be enabled.
 	if err := machine.CoreRegistry().EnableForm("lambda"); err == nil {
 		t.Fatal("unknown form was accepted")
-	}
-}
-
-func TestCatalogCarriesTheParsersSourceContract(t *testing.T) {
-	catalog := Catalog(consoleRegistry(t))
-	if catalog.Source.ExprJSONVersion != syntax.ExprJSONVersion || catalog.Source.VariableNamePattern == "" {
-		t.Fatalf("source syntax = %+v", catalog.Source)
-	}
-	found := map[string]int{}
-	for _, operator := range catalog.Source.Operators {
-		found[operator.Token] = operator.Precedence
-		if operator.Template.Node == "" {
-			t.Fatalf("operator %q has no canonical template", operator.Token)
-		}
-	}
-	if found["||"] != 1 || found["<"] != 4 || found["+"] != 5 || found["!"] != 7 {
-		t.Fatalf("operator precedences = %v", found)
 	}
 }
 

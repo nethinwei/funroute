@@ -7,3 +7,10 @@
 
 # macOS
 .DS_Store
+
+# 前端产物与浏览器用的语言服务都是构建出来的（make web / make wasm），不提交
+/web/dist/
+/web/node_modules/
+
+# make site 组装的发布目录（make run 与 Pages 都用它），不提交
+/site/

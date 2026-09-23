@@ -12,22 +12,52 @@ type parser struct {
 	tokens []token
 	index  int
 	nextID int
+	// roles records what the parser took each token to be, keyed by where
+	// it starts. Only Lexemes asks for it; Parse leaves it nil and pays nothing.
+	roles map[int]roleMark
 }
 
-// tokenize turns source into the token slice the parser walks.
-func tokenize(source string) ([]token, error) {
+// reading is one pass over a source: the lexer (which keeps the comments),
+// the parser (which, when asked, keeps the role of each token) and the
+// expression they made. Parse, Lexemes, SyntaxTree and FormatSource are all a
+// reading and differ only in what they take from it.
+type reading struct {
+	lex    *lexer
+	parser *parser
+	tokens []token
+	expr   Expr
+	err    error
+}
+
+// read lexes and parses source. The lexer carries on past a bad character, so
+// the parser always has tokens to read; the error is the lexer's if it had
+// one, else the parser's.
+func read(source string, roles bool) reading {
 	lex := &lexer{source: source}
-	return lex.tokens()
+	tokens, err := lex.tokens()
+	p := &parser{tokens: tokens, nextID: 1}
+	if roles {
+		p.roles = map[int]roleMark{}
+	}
+	expr, parseErr := p.program()
+	if err == nil {
+		err = parseErr
+	}
+	return reading{lex: lex, parser: p, tokens: tokens, expr: expr, err: err}
 }
 
 // Parse reads an expression. A program is only an expression: the contract it
 // runs under is the host's, and arrives through CompileOptions.
 func Parse(source string) (Expr, error) {
-	tokens, err := tokenize(source)
-	if err != nil {
-		return nil, err
+	r := read(source, false)
+	if r.err != nil {
+		return nil, r.err
 	}
-	p := &parser{tokens: tokens, nextID: 1}
+	return r.expr, nil
+}
+
+// program reads the one expression a source is, and nothing after it.
+func (p *parser) program() (Expr, error) {
 	expr, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -42,9 +72,6 @@ func (p *parser) parseExpr() (Expr, error) {
 	return p.parseBinary(1)
 }
 
-// node finishes a constructed node: the same normalisation and checks the
-// importer applies, so a rule is written once in ast.go. Errors are placed at
-// the node's opening token.
 // enumReference splits @member and @enum.member; which enum a bare member
 // belongs to is decided by the contract at compile time, not here.
 func enumReference(id int, tok token) Expr {
@@ -55,6 +82,9 @@ func enumReference(id int, tok token) Expr {
 	return &EnumExpr{ID: id, Pos: tok.pos, Enum: enum, Member: member}
 }
 
+// node finishes a constructed node: the same normalisation and checks the
+// importer applies, so a rule is written once in ast.go. Errors are placed at
+// the node's opening token.
 func (p *parser) node(at token, expr Expr) (Expr, error) {
 	finished, err := finish(expr)
 	if err != nil {
@@ -76,11 +106,12 @@ func (p *parser) parseBinary(min int) (Expr, error) {
 			return left, nil
 		}
 		p.index++
+		p.mark(operator, RoleOperator)
 		right, err := p.parseBinary(spec.precedence + 1)
 		if err != nil {
 			return nil, err
 		}
-		left = p.expandOperator(operator, spec, left, right)
+		left = p.stamp(left.Extent().Start, p.expandOperator(operator, spec, left, right))
 	}
 }
 
@@ -99,7 +130,8 @@ func (p *parser) expandOperator(operator token, spec operatorSpec, operands ...E
 	switch spec.expansion {
 	case expandNotEqual:
 		left, right := operands[0], operands[1]
-		return p.pick(operator, p.call(operator, "eq", left, right), p.boolean(operator, false), p.boolean(operator, true))
+		equal := p.stamp(left.Extent().Start, p.call(operator, "eq", left, right))
+		return p.pick(operator, equal, p.boolean(operator, false), p.boolean(operator, true))
 	case expandAnd:
 		// Short circuits, because if is lazy.
 		return p.pick(operator, operands[0], operands[1], p.boolean(operator, false))
@@ -123,14 +155,16 @@ func (p *parser) parseUnary() (Expr, error) {
 		return p.parsePostfix(primary)
 	}
 	p.index++
+	p.mark(operator, RoleOperator)
 	if spec.expansion == expandNegate {
-		return p.negate(operator)
+		negated, err := p.negate(operator)
+		return p.stamp(operator.pos, negated), err
 	}
 	operand, err := p.parseUnary()
 	if err != nil {
 		return nil, err
 	}
-	return p.expandOperator(operator, spec, operand), nil
+	return p.stamp(operator.pos, p.expandOperator(operator, spec, operand)), nil
 }
 
 // parsePostfix reads what can follow a primary: subscripts and field reads.
@@ -138,6 +172,7 @@ func (p *parser) parseUnary() (Expr, error) {
 // a spelling; .field is the same FieldExpr a dotted name produces, which is
 // why orders[0].amount and order.amount mean the same thing.
 func (p *parser) parsePostfix(base Expr) (Expr, error) {
+	start := base.Extent().Start
 	for {
 		switch p.peek().kind {
 		case tokenLeftBracket:
@@ -145,13 +180,13 @@ func (p *parser) parsePostfix(base Expr) (Expr, error) {
 			if err != nil {
 				return nil, err
 			}
-			base = indexed
+			base = p.stamp(start, indexed)
 		case tokenDot:
 			field, err := p.parseFieldRead(base)
 			if err != nil {
 				return nil, err
 			}
-			base = field
+			base = p.stamp(start, field)
 		default:
 			return base, nil
 		}
@@ -179,6 +214,7 @@ func (p *parser) parseFieldRead(base Expr) (Expr, error) {
 		return nil, p.errorf(name, "expected a field name after '.'")
 	}
 	p.index++
+	p.mark(name, RoleField)
 	if err := validName(name.text, "text"); err != nil {
 		return nil, p.errorf(name, "%v", err)
 	}
@@ -195,11 +231,12 @@ func (p *parser) negate(operator token) (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	zero := &LiteralExpr{ID: p.id(), Pos: operator.pos, Value: machine.Int(0)}
+	zero := &LiteralExpr{ID: p.id(), Pos: operator.pos, Span: tokenSpan(operator), Value: machine.Int(0)}
 	return p.call(operator, "sub", zero, operand), nil
 }
 
 func (p *parser) numberLiteral(tok token, negative bool) (Expr, error) {
+	p.mark(tok, RoleLiteral)
 	text := tok.text
 	if negative {
 		text = "-" + text
@@ -222,8 +259,10 @@ func (p *parser) numberLiteral(tok token, negative bool) (Expr, error) {
 	return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: checked}, nil
 }
 
+// call and boolean build the nodes an operator expands into. What has no
+// source of its own — the false in a && b — covers the operator.
 func (p *parser) call(at token, name string, args ...Expr) Expr {
-	return &CallExpr{ID: p.id(), Pos: at.pos, Name: name, Args: args}
+	return &CallExpr{ID: p.id(), Pos: at.pos, Span: tokenSpan(at), Name: name, Args: args}
 }
 
 func (p *parser) pick(at token, condition, whenTrue, whenFalse Expr) Expr {
@@ -231,11 +270,44 @@ func (p *parser) pick(at token, condition, whenTrue, whenFalse Expr) Expr {
 }
 
 func (p *parser) boolean(at token, value bool) Expr {
-	return &LiteralExpr{ID: p.id(), Pos: at.pos, Value: machine.Bool(value)}
+	return &LiteralExpr{ID: p.id(), Pos: at.pos, Span: tokenSpan(at), Value: machine.Bool(value)}
+}
+
+func tokenSpan(tok token) Span { return Span{Start: tok.pos, End: tok.end} }
+
+// stamp records that expr was read from start up to the last token consumed.
+func (p *parser) stamp(start int, expr Expr) Expr {
+	if expr != nil {
+		expr.setExtent(Span{Start: start, End: p.lastEnd()})
+	}
+	return expr
+}
+
+func (p *parser) lastEnd() int {
+	consumed := min(p.index, len(p.tokens))
+	if consumed == 0 {
+		return 0
+	}
+	return p.tokens[consumed-1].end
 }
 
 func (p *parser) keyword(word string) bool {
 	return p.peek().kind == tokenIdentifier && p.peek().text == word
+}
+
+// takeKeyword consumes the keyword keyword() just saw.
+func (p *parser) takeKeyword() {
+	p.mark(p.peek(), RoleKeyword)
+	p.index++
+}
+
+// mark records what the parser took tok to be.
+func (p *parser) mark(tok token, role Role) { p.markSpan(tok.pos, tok.end, role) }
+
+func (p *parser) markSpan(start, end int, role Role) {
+	if p.roles != nil {
+		p.roles[start] = roleMark{end: end, role: role}
+	}
 }
 
 func (p *parser) expect(kind tokenKind, what string) error {
@@ -246,7 +318,18 @@ func (p *parser) expect(kind tokenKind, what string) error {
 	return nil
 }
 
+// parsePrimary reads one primary and stamps it with all it was read from:
+// (a + b) covers its parentheses.
 func (p *parser) parsePrimary() (Expr, error) {
+	start := p.peek().pos
+	expr, err := p.primary()
+	if err != nil {
+		return nil, err
+	}
+	return p.stamp(start, expr), nil
+}
+
+func (p *parser) primary() (Expr, error) {
 	tok := p.peek()
 	switch tok.kind {
 	case tokenInt, tokenFloat:
@@ -254,6 +337,7 @@ func (p *parser) parsePrimary() (Expr, error) {
 		return p.numberLiteral(tok, false)
 	case tokenString:
 		p.index++
+		p.mark(tok, RoleLiteral)
 		value, err := strconv.Unquote(tok.text)
 		if err != nil {
 			return nil, p.errorf(tok, "invalid string escape: %v", err)
@@ -261,10 +345,12 @@ func (p *parser) parsePrimary() (Expr, error) {
 		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.String(value)}, nil
 	case tokenEnum:
 		p.index++
+		p.mark(tok, RoleEnumMember)
 		return p.node(tok, enumReference(p.id(), tok))
 	case tokenIdentifier:
 		p.index++
 		if tok.text == "true" || tok.text == "false" {
+			p.mark(tok, RoleLiteral)
 			return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.Bool(tok.text == "true")}, nil
 		}
 		if p.peek().kind == tokenLeftParen {
@@ -303,15 +389,25 @@ func (p *parser) parseGroup() (Expr, error) {
 // accesses on it, checking each part is a usable name.
 func (p *parser) variableWithFields(tok token) (Expr, error) {
 	parts := strings.Split(tok.text, ".")
+	for i, offset := 0, tok.pos; i < len(parts); i++ {
+		role := RoleField
+		if i == 0 {
+			role = RoleVariable
+		}
+		p.markSpan(offset, offset+len(parts[i]), role)
+		offset += len(parts[i]) + 1
+	}
 	if err := validName(parts[0], "var"); err != nil {
 		return nil, p.errorf(tok, "%v", err)
 	}
-	var expr Expr = &VariableExpr{ID: p.id(), Pos: tok.pos, Name: parts[0]}
+	end := tok.pos + len(parts[0])
+	var expr Expr = &VariableExpr{ID: p.id(), Pos: tok.pos, Span: Span{tok.pos, end}, Name: parts[0]}
 	for _, field := range parts[1:] {
 		if err := validName(field, "text"); err != nil {
 			return nil, p.errorf(tok, "%v", err)
 		}
-		node, err := p.node(tok, &FieldExpr{ID: p.id(), Pos: tok.pos, Value: expr, Field: field})
+		end += 1 + len(field)
+		node, err := p.node(tok, &FieldExpr{ID: p.id(), Pos: tok.pos, Span: Span{tok.pos, end}, Value: expr, Field: field})
 		if err != nil {
 			return nil, err
 		}
@@ -322,6 +418,10 @@ func (p *parser) variableWithFields(tok token) (Expr, error) {
 
 func (p *parser) parseCall(name token) (Expr, error) {
 	p.index++ // (
+	p.mark(name, RoleFunction)
+	if name.text == "reduce" || name.text == "switch" || name.text == "let" {
+		p.mark(name, RoleForm)
+	}
 	if name.text == "reduce" {
 		return p.parseReduceCall(name)
 	}
@@ -395,7 +495,7 @@ func (p *parser) parseReduceCall(name token) (Expr, error) {
 	if err != nil {
 		return nil, p.errorf(name, "reduce starts with its element name: reduce(item in source, acc = init, body)")
 	}
-	p.index++ // loopVariables has already checked the "in"
+	p.takeKeyword() // loopVariables has already checked the "in"
 	return p.reduceKeywordForm(name, key, value)
 }
 
@@ -477,7 +577,7 @@ func (p *parser) parseSwitchCall(name token) (Expr, error) {
 func (p *parser) switchBranches(name token, subject Expr) (Expr, error) {
 	var cases []SwitchCaseExpr
 	for p.keyword("case") {
-		p.index++
+		p.takeKeyword()
 		matches, err := p.caseMatches()
 		if err != nil {
 			return nil, err
@@ -498,7 +598,7 @@ func (p *parser) switchBranches(name token, subject Expr) (Expr, error) {
 		return nil, p.errorf(name, "switch needs at least one case")
 	}
 	if p.keyword("else") {
-		p.index++
+		p.takeKeyword()
 		// A branch reads "case m => r", so "else => r" is what a hand writes
 		// next; both spellings mean the same thing and the printer picks one.
 		if p.peek().kind == tokenFatArrow {
@@ -566,6 +666,7 @@ func (p *parser) localIdentifier() (string, error) {
 		return "", p.errorf(tok, "expected a local variable name")
 	}
 	p.index++
+	p.mark(tok, RoleLocal)
 	return tok.text, nil
 }
 
@@ -623,5 +724,5 @@ func (p *parser) peekN(offset int) token {
 }
 
 func (p *parser) errorf(tok token, format string, args ...any) error {
-	return At(tok.pos, "syntax error: %s", fmt.Sprintf(format, args...))
+	return over(tok.pos, tok.end, "syntax error: %s", fmt.Sprintf(format, args...))
 }

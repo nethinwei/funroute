@@ -263,9 +263,6 @@ func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string
 	if order != nil {
 		names = order
 	}
-	if err := validateHints(hints, names); err != nil {
-		return nil, err
-	}
 	initial := newInferState()
 	context := newInferContext(initial, names, registry)
 	if err := collectEnums(context.enums, hints, ret); err != nil {
@@ -278,7 +275,7 @@ func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string
 	if err != nil {
 		return nil, err
 	}
-	results, err = applyResultType(results, ret)
+	results, err = applyResultType(expr, results, ret)
 	if err != nil {
 		return nil, err
 	}
@@ -295,9 +292,9 @@ func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string
 }
 
 // applyResultType keeps the candidates whose result unifies with the declared
-// type. Dropping the rest before scoring is what makes @ret disambiguating
-// rather than merely checking.
-func applyResultType(results []inferResult, ret *machine.Type) ([]inferResult, error) {
+// type. Dropping the rest before scoring is what makes the contract's result
+// disambiguating rather than merely checking.
+func applyResultType(expr syntax.Expr, results []inferResult, ret *machine.Type) ([]inferResult, error) {
 	if ret == nil {
 		return results, nil
 	}
@@ -316,25 +313,9 @@ func applyResultType(results []inferResult, ret *machine.Type) ([]inferResult, e
 		if rejected == "" {
 			rejected = "nothing"
 		}
-		return nil, fmt.Errorf("@ret declares %s but the expression returns %s", ret, rejected)
+		return nil, syntax.Around(expr, "type error: the contract returns %s but the expression returns %s", ret, rejected)
 	}
 	return kept, nil
-}
-
-func validateHints(hints map[string]machine.Type, names []string) error {
-	known := make(map[string]bool, len(names))
-	for _, name := range names {
-		known[name] = true
-	}
-	for name := range hints {
-		if !known[name] {
-			return fmt.Errorf("type hint provided for unknown argument %q", name)
-		}
-		if !hints[name].IsConcrete() {
-			return fmt.Errorf("type hint for %q is not concrete: %s", name, hints[name])
-		}
-	}
-	return nil
 }
 
 // newInferContext allocates one type variable per free variable, in the order
