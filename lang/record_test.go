@@ -16,7 +16,8 @@ type Order struct {
 	CurrencyCode string   `funroute:"currency_code"`
 	Tags         []string `funroute:"tags"`
 	UpdatedAt    string   // untagged: the language never sees it
-	internal     int      //nolint:unused // unexported: invisible either way
+	//lint:ignore U1000 unexported: invisible either way, which is what this field is here to show
+	internal int
 }
 
 type Decision struct {

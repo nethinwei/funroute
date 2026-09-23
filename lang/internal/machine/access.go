@@ -197,6 +197,7 @@ func (c *codec) box(p unsafe.Pointer) any {
 // contentSink and neverTrue exist for leakContents: the store is never made,
 // but the compiler cannot know that, so what p points to escapes to the heap.
 var (
+	//lint:ignore U1000 written only on the branch that never runs; the write is the point, see leakContents
 	contentSink unsafe.Pointer
 	neverTrue   bool
 )

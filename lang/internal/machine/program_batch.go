@@ -74,7 +74,7 @@ func (p *Program[In, Out]) runBatchFunc(ctx context.Context, n int, in func(i in
 	}
 	requests, active := p.encodeBatch(ctx, n, in)
 	if len(active) > 0 {
-		p.hoisted.execute(ctx, active, options)
+		p.hoisted.executeShared(ctx, active, options)
 	}
 	for i := range requests {
 		if err := p.decodeInPlace(requests[i].result, out(i)); err != nil {

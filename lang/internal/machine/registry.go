@@ -141,7 +141,7 @@ func DefineHandle[T any](registry *Registry, name string) error {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	if existing, ok := registry.handles[typ]; ok && existing != name {
-		return fmt.Errorf("Go type %s is already handle<%s>", typ, existing)
+		return fmt.Errorf("type %s is already handle<%s>", typ, existing)
 	}
 	if existing, ok := registry.byHandle[name]; ok && existing != typ {
 		return fmt.Errorf("handle<%s> is already Go type %s", name, existing)

@@ -85,7 +85,7 @@ func newCodecFor(registry *Registry, typ reflect.Type, want Type) (*codec, error
 }
 
 func (c *codec) mismatch() error {
-	return fmt.Errorf("Go type %s cannot carry %s", c.goType, c.typ.Summary())
+	return fmt.Errorf("type %s cannot carry %s", c.goType, c.typ.Summary())
 }
 
 // planScalar accepts the scalar reflectType gives the Go type, or an enum

@@ -132,7 +132,7 @@ func (b *Batch) enqueue(request *batchRequest) error {
 	if len(b.pending) >= b.options.MaxSize {
 		requests := b.take()
 		b.mu.Unlock()
-		go b.execute(nil, requests, b.options.Run)
+		go b.execute(requests, b.options.Run)
 		return nil
 	}
 	if len(b.pending) == 1 {
@@ -158,7 +158,7 @@ func (b *Batch) flush() {
 	requests := b.take()
 	b.mu.Unlock()
 	if len(requests) > 0 {
-		b.execute(nil, requests, b.options.Run)
+		b.execute(requests, b.options.Run)
 	}
 }
 
@@ -170,22 +170,33 @@ func (b *Batch) Close() {
 	b.flush()
 }
 
-// execute is one batch: every hoisted call once, then every program. shared
-// is the one context every request carries, when they all carry the same —
-// a synchronous batch — and the engine calls then run under it directly,
-// with its values. Otherwise they run under the earliest of the requests'
-// deadlines, which has to be a context of its own.
-func (b *Batch) execute(shared context.Context, requests []*batchRequest, options RunOptions) {
+// execute is one batch from the queue. Its requests carry contexts of their
+// own, so the engine calls run under the earliest of their deadlines, which
+// has to be a context of its own.
+func (b *Batch) execute(requests []*batchRequest, options RunOptions) {
 	active := b.rejectCanceled(requests)
 	if len(active) == 0 {
 		return
 	}
-	prefetched := make([]map[int]Prefetched, len(active))
-	ctx, cancel := shared, context.CancelFunc(func() {})
-	if shared == nil {
-		ctx, cancel = earliestDeadline(active)
-	}
+	ctx, cancel := earliestDeadline(active)
 	defer cancel()
+	b.executeUnder(ctx, active, options)
+}
+
+// executeShared is one batch whose requests all carry ctx — a synchronous
+// batch — so the engine calls run under it directly, with its values.
+func (b *Batch) executeShared(ctx context.Context, requests []*batchRequest, options RunOptions) {
+	active := b.rejectCanceled(requests)
+	if len(active) == 0 {
+		return
+	}
+	b.executeUnder(ctx, active, options)
+}
+
+// executeUnder is one batch: every hoisted call once under ctx, then every
+// program under its request's own.
+func (b *Batch) executeUnder(ctx context.Context, active []*batchRequest, options RunOptions) {
+	prefetched := make([]map[int]Prefetched, len(active))
 	for _, site := range b.sites {
 		b.prefetch(ctx, site, active, prefetched)
 	}
