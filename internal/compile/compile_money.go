@@ -6,8 +6,8 @@ package compile
 
 import (
 	"fmt"
-	"slices"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 	"github.com/nethinwei/funroute/internal/syntax"
@@ -111,18 +111,14 @@ func EnumNamespace(options CompileOptions, registry *machine.Registry) map[strin
 // result must be bound by an argument — or the run could not say which
 // currency the result is in.
 func validateMoneyContract(options CompileOptions, registry *machine.Registry) error {
-	types := slices.Collect(func(yield func(machine.Type) bool) {
-		for _, arg := range options.Args {
-			yield(arg.Type)
-		}
-		if options.Result != nil {
-			yield(*options.Result)
-		}
-	})
+	types := kit.Map(options.Args, func(arg ArgSpec) machine.Type { return arg.Type })
+	if options.Result != nil {
+		types = append(types, *options.Result)
+	}
 	_, declared := registry.Money()
 	for _, typ := range types {
 		if err := validateMoneyType(typ, declared); err != nil {
-			return contractErrorf("%v", err)
+			return kit.Errorf(machine.ErrContract, "%v", err)
 		}
 	}
 	return nil

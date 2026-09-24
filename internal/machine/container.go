@@ -12,6 +12,7 @@ import (
 	"maps"
 	"reflect"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
 )
 
@@ -194,17 +195,17 @@ func (v Value) eachPart(ordered bool, check func(Value) error) error {
 func (v Value) keys() []string {
 	switch box := v.box.(type) {
 	case map[string]bool:
-		return sortedKeys(box)
+		return kit.SortedKeys(box)
 	case map[string]int64:
-		return sortedKeys(box)
+		return kit.SortedKeys(box)
 	case map[string]float64:
-		return sortedKeys(box)
+		return kit.SortedKeys(box)
 	case map[string]string:
-		return sortedKeys(box)
+		return kit.SortedKeys(box)
 	case map[string]money.Money:
-		return sortedKeys(box)
+		return kit.SortedKeys(box)
 	case *nestedDict:
-		return sortedKeys(box.entries)
+		return kit.SortedKeys(box.entries)
 	default:
 		return nil
 	}

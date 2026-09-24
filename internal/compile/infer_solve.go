@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -262,10 +263,7 @@ func (s *inferState) cost(c *choice, function *machine.RegisteredFunction) int {
 }
 
 func ambiguityError(c *choice) error {
-	keys := make([]string, len(c.open))
-	for i, function := range c.open {
-		keys[i] = function.Key()
-	}
+	keys := kit.Map(c.open, (*machine.RegisteredFunction).Key)
 	return syntax.Around(c.node, "type error: %s is ambiguous here (%s); use int(...), float(...), string(...), bool(...), or provide a type hint",
 		c.node.Name, strings.Join(keys, " | "))
 }
@@ -344,10 +342,7 @@ func (s *inferState) scoreTerm(term typeTerm) int {
 // noOverloadError says which call no signature fits, with the arguments as
 // inference sees them and a pointer where one is known.
 func noOverloadError(node *syntax.CallExpr, s *inferState, args []typeTerm) error {
-	actual := make([]string, len(args))
-	for i, arg := range args {
-		actual[i] = s.describe(arg)
-	}
+	actual := kit.Map(args, s.describe)
 	message := fmt.Sprintf("type error: no overload %s(%s)", node.Name, strings.Join(actual, ", "))
 	if hint := overloadHint(node.Name, actual); hint != "" {
 		message += "；" + hint

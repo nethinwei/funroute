@@ -9,6 +9,8 @@ import (
 	"math/bits"
 	"strconv"
 	"strings"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // Ratio is an exact ratio: 2.9% is a ratio, so are 1.01, -0.5 and a third. A
@@ -147,7 +149,7 @@ func (r *Ratio) UnmarshalJSON(data []byte) error {
 func ParseRatio(text string) (Ratio, error) {
 	r, err := parseRatio(text)
 	if err != nil {
-		return Ratio{}, errConversion("ratio %q: %v", text, err)
+		return Ratio{}, kit.Errorf(ErrArithmetic, "ratio %q: %v", text, err)
 	}
 	return r, nil
 }
@@ -155,10 +157,7 @@ func ParseRatio(text string) (Ratio, error) {
 // parseRatio reads what String writes: an optional sign, then a plain
 // decimal or a fraction of plain integers.
 func parseRatio(text string) (Ratio, error) {
-	body, negative := strings.CutPrefix(text, "-")
-	if !negative {
-		body = strings.TrimPrefix(body, "+")
-	}
+	body, negative := cutSign(text)
 	var r Ratio
 	var err error
 	if top, bottom, fraction := strings.Cut(body, "/"); fraction {
@@ -211,7 +210,7 @@ func parsePlainDecimal(text string) (Ratio, error) {
 
 // parseDigits reads plain digits into an int64: no sign, no separators.
 func parseDigits(text string) (int64, error) {
-	if text == "" || strings.Trim(text, "0123456789") != "" {
+	if text == "" || !kit.IsDigits(text) {
 		return 0, errors.New("is not a decimal or a fraction of integers")
 	}
 	n, err := strconv.ParseInt(text, 10, 64)
@@ -229,10 +228,15 @@ func ParseRatioIn(value string, scale int) (Ratio, error) {
 		return Ratio{}, err
 	}
 	if scale < -18 || scale > 18 {
-		return Ratio{}, errConversion("ratio %s: a unit of 10^%d does not fit", value, -scale)
+		return Ratio{}, kit.Errorf(ErrArithmetic, "ratio %s: a unit of 10^%d does not fit", value, -scale)
 	}
-	unit := Ratio{num: pow10(abs(scale)), den: 1}
-	if scale < 0 {
+	return r.scaleTen(-scale)
+}
+
+// scaleTen is r × 10^n, n from -18 to 18, exactly.
+func (r Ratio) scaleTen(n int) (Ratio, error) {
+	unit := Ratio{num: pow10(abs(n)), den: 1}
+	if n >= 0 {
 		return r.Mul(unit)
 	}
 	return r.Div(unit)

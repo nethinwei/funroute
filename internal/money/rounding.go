@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"slices"
 )
 
 // Fixed-point arithmetic for money. Every product and quotient is
@@ -39,7 +40,7 @@ var roundingNames = [...]string{"", "half_even", "half_up", "half_down", "down",
 
 // RoundingModes lists every mode by name, in declaration order: the members
 // of the rounding enum.
-func RoundingModes() []string { return append([]string(nil), roundingNames[1:]...) }
+func RoundingModes() []string { return slices.Clone(roundingNames[1:]) }
 
 func (r Rounding) String() string { return nameOf(roundingNames[:], r) }
 

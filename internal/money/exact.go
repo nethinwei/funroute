@@ -107,10 +107,7 @@ func (c *Currencies) ConvertExact(m ExactMoney, fx FxRate) (ExactMoney, error) {
 
 // convertExactAt is m converted at fx, whose currencies are declared.
 func (c *Currencies) convertExactAt(m ExactMoney, fx FxRate) (ExactMoney, error) {
-	if m.currency != "" && m.currency != fx.pair.Base {
-		return ExactMoney{}, fmt.Errorf("%w: %s converted at %s→%s", ErrCurrency, m.currency, fx.pair.Base, fx.pair.Quote)
-	}
-	factor, err := c.factor(fx.pair.Base, fx.pair.Quote, fx.rate)
+	factor, err := c.rateFactor(m.currency, fx)
 	if err != nil {
 		return ExactMoney{}, err
 	}

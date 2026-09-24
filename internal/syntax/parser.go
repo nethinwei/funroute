@@ -525,12 +525,7 @@ func (p *parser) parseLetCall(name token) (Expr, error) {
 func (p *parser) letBindings(name token) ([]LetBinding, error) {
 	var bindings []LetBinding
 	for p.startsBinding() {
-		local, err := p.localIdentifier()
-		if err != nil {
-			return nil, err
-		}
-		p.index++ // =
-		value, err := p.exprThen(tokenComma, "',' after a let binding")
+		local, value, err := p.binding("',' after a let binding")
 		if err != nil {
 			return nil, err
 		}
@@ -589,16 +584,22 @@ func (p *parser) parseAccumulator() (string, Expr, error) {
 	if !p.startsBinding() {
 		return "", nil, p.errorf(p.peek(), "reduce needs an accumulator and its initial value: acc = init")
 	}
-	accumulator, err := p.localIdentifier()
+	return p.binding("',' before the reduce body")
+}
+
+// binding reads "name = value,": a let binding, or an accumulator and its
+// initial value. after is what is expected after the value.
+func (p *parser) binding(after string) (string, Expr, error) {
+	name, err := p.localIdentifier()
 	if err != nil {
 		return "", nil, err
 	}
 	p.index++ // =
-	init, err := p.exprThen(tokenComma, "',' before the reduce body")
+	value, err := p.exprThen(tokenComma, after)
 	if err != nil {
 		return "", nil, err
 	}
-	return accumulator, init, nil
+	return name, value, nil
 }
 
 func (p *parser) parseArray() (Expr, error) {
@@ -615,7 +616,7 @@ func (p *parser) parseArray() (Expr, error) {
 	if p.keyword("for") {
 		return p.comprehension(start, first)
 	}
-	items, err := p.parseRest(first, tokenRightBracket)
+	items, err := p.parseRest(first, tokenRightBracket, true, closingList)
 	if err != nil {
 		return nil, err
 	}
@@ -642,14 +643,17 @@ func (p *parser) parseList(end tokenKind) ([]Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return p.parseRest(first, end)
+	return p.parseRest(first, end, true, closingList)
 }
 
+// closingList is what a list of expressions expects where it goes on.
+const closingList = "',' or closing delimiter"
+
 // parseRest continues a comma separated list whose first item is already
-// parsed. A trailing comma before the closing delimiter is allowed.
-func (p *parser) parseRest(first Expr, end tokenKind) ([]Expr, error) {
+// parsed, as rest reads one.
+func (p *parser) parseRest(first Expr, end tokenKind, trailing bool, missing string) ([]Expr, error) {
 	items := []Expr{first}
-	err := p.rest(end, true, "',' or closing delimiter", func() error {
+	err := p.rest(end, trailing, missing, func() error {
 		item, err := p.parseExpr()
 		items = append(items, item)
 		return err

@@ -1,8 +1,8 @@
 package compile
 
 import (
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
-	"github.com/nethinwei/funroute/internal/money"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
 
@@ -65,11 +65,7 @@ func (o CompileOptions) argOrder() []string {
 	if len(o.Args) == 0 {
 		return nil
 	}
-	names := make([]string, len(o.Args))
-	for i, arg := range o.Args {
-		names[i] = arg.Name
-	}
-	return names
+	return kit.Map(o.Args, func(arg ArgSpec) string { return arg.Name })
 }
 
 // ValidateContract checks a host contract without needing an expression. This
@@ -79,21 +75,21 @@ func ValidateContract(options CompileOptions) error {
 	declared := make(map[string]bool, len(options.Args))
 	for _, arg := range options.Args {
 		if !machine.IsValidVariableName(arg.Name) || machine.IsReservedName(arg.Name) {
-			return contractErrorf("invalid argument name %q", arg.Name)
+			return kit.Errorf(machine.ErrContract, "invalid argument name %q", arg.Name)
 		}
 		if declared[arg.Name] {
-			return contractErrorf("argument %q is declared twice", arg.Name)
+			return kit.Errorf(machine.ErrContract, "argument %q is declared twice", arg.Name)
 		}
 		if !arg.Type.IsConcrete() {
-			return contractErrorf("argument %q has a non-concrete type: %s", arg.Name, arg.Type)
+			return kit.Errorf(machine.ErrContract, "argument %q has a non-concrete type: %s", arg.Name, arg.Type)
 		}
 		declared[arg.Name] = true
 	}
 	if options.Result != nil && !options.Result.IsConcrete() {
-		return contractErrorf("the declared result type is not concrete: %s", *options.Result)
+		return kit.Errorf(machine.ErrContract, "the declared result type is not concrete: %s", *options.Result)
 	}
 	if options.MaxInstructions < 0 {
-		return contractErrorf("the instruction limit is %d; 0 means the default", options.MaxInstructions)
+		return kit.Errorf(machine.ErrContract, "the instruction limit is %d; 0 means the default", options.MaxInstructions)
 	}
 	return nil
 }
@@ -111,8 +107,23 @@ func (o CompileOptions) validate(expr syntax.Expr) error {
 	declared := o.argTypes()
 	for _, read := range syntax.FirstReads(expr) {
 		if _, ok := declared[read.Name]; !ok {
-			return money.Classify(machine.ErrContract, "",
+			return kit.Classify(machine.ErrContract, "",
 				syntax.Around(read, "the expression reads %q but the contract does not declare it", read.Name))
+		}
+	}
+	return nil
+}
+
+// validateForms rejects a program that uses a special form its registry does
+// not enable. It runs on the AST, so source and ExprJSON go through the same
+// check and a console cannot smuggle a form in as JSON.
+//
+// Which nodes are forms is declared on the nodes themselves (syntax.Form), and
+// the walk is the generic one, so a new form needs nothing here.
+func validateForms(expr syntax.Expr, registry *machine.Registry) error {
+	for node := range syntax.Nodes(expr) {
+		if form, ok := syntax.FormOf(node); ok && !registry.FormEnabled(form) {
+			return syntax.Around(node, "%s is not enabled in this registry", string(form))
 		}
 	}
 	return nil

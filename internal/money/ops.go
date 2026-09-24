@@ -18,30 +18,22 @@ import (
 func (m Money) meet(other Money) (string, error) { return meet(m.currency, other.currency) }
 
 // Add is m + other, in their one currency.
-func (m Money) Add(other Money) (Money, error) {
+func (m Money) Add(other Money) (Money, error) { return m.plus(other, 1) }
+
+// Sub is m - other, in their one currency.
+func (m Money) Sub(other Money) (Money, error) { return m.plus(other, -1) }
+
+func (m Money) plus(other Money, sign int64) (Money, error) {
 	currency, err := m.meet(other)
 	if err != nil {
 		return Money{}, err
 	}
-	sum, err := addInt64(m.minor, other.minor, 1)
+	sum, err := addInt64(m.minor, other.minor, sign)
 	return Money{currency: currency, minor: sum}, err
 }
 
-// Sub is m - other, in their one currency.
-func (m Money) Sub(other Money) (Money, error) {
-	currency, err := m.meet(other)
-	if err != nil {
-		return Money{}, err
-	}
-	difference, err := addInt64(m.minor, other.minor, -1)
-	return Money{currency: currency, minor: difference}, err
-}
-
 // Neg is -m.
-func (m Money) Neg() (Money, error) {
-	negated, err := addInt64(0, m.minor, -1)
-	return Money{currency: m.currency, minor: negated}, err
-}
+func (m Money) Neg() (Money, error) { return Money{currency: m.currency}.Sub(m) }
 
 // Abs is m without its sign.
 func (m Money) Abs() (Money, error) {

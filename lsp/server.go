@@ -18,8 +18,8 @@ import (
 	"sync"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
-	"github.com/nethinwei/funroute/internal/money"
 )
 
 // Server is one client's session: the documents it opened, the contract it
@@ -163,7 +163,7 @@ func errorCode(err error) int {
 
 func decode(params json.RawMessage, into any) error {
 	if err := json.Unmarshal(params, into); err != nil {
-		return money.Classify(errInvalidParams, "", err)
+		return kit.Classify(errInvalidParams, "", err)
 	}
 	return nil
 }

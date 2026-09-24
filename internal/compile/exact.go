@@ -1,6 +1,8 @@
 package compile
 
 import (
+	"slices"
+
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -18,13 +20,13 @@ type exactness struct {
 	registry *machine.Registry
 	// locals is whether each let-bound name holds exact money, innermost
 	// last; a loop's names hold none.
-	locals map[string][]bool
+	locals scoped[bool]
 	// rounds is how many rounds the walk is inside.
 	rounds *int
 }
 
 func checkExact(expr syntax.Expr, inferred *inference, registry *machine.Registry) error {
-	walk := exactness{inferred: inferred, registry: registry, locals: map[string][]bool{}, rounds: new(int)}
+	walk := exactness{inferred: inferred, registry: registry, locals: scoped[bool]{}, rounds: new(int)}
 	return walk.plain(expr, "the program's result")
 }
 
@@ -43,8 +45,8 @@ func (w exactness) of(expr syntax.Expr) (bool, error) {
 	case *syntax.CallExpr:
 		return w.call(node)
 	case *syntax.VariableExpr:
-		bound := w.locals[node.Name]
-		return len(bound) > 0 && bound[len(bound)-1], nil
+		exact, _ := w.locals.top(node.Name)
+		return exact, nil
 	case *syntax.LetExpr:
 		return w.let(node)
 	case *syntax.SwitchExpr:
@@ -84,14 +86,12 @@ func (w exactness) plainAll(exprs []syntax.Expr, where string) error {
 func (w exactness) scoped(names []string, expr syntax.Expr, where string) error {
 	for _, name := range names {
 		if name != "" {
-			w.locals[name] = append(w.locals[name], false)
-			defer w.pop(name)
+			w.locals.push(name, false)
+			defer w.locals.pop(name)
 		}
 	}
 	return w.children(expr, where)
 }
-
-func (w exactness) pop(name string) { w.locals[name] = w.locals[name][:len(w.locals[name])-1] }
 
 func (w exactness) let(node *syntax.LetExpr) (bool, error) {
 	for _, binding := range node.Bindings {
@@ -99,8 +99,8 @@ func (w exactness) let(node *syntax.LetExpr) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		w.locals[binding.Name] = append(w.locals[binding.Name], exact)
-		defer w.pop(binding.Name)
+		w.locals.push(binding.Name, exact)
+		defer w.locals.pop(binding.Name)
 	}
 	return w.of(node.Body)
 }
@@ -208,12 +208,7 @@ func roundsAtOnce(function *machine.RegisteredFunction) bool {
 }
 
 func firstMoney(params []machine.Type) int {
-	for i, param := range params {
-		if param.Kind() == machine.MoneyKind {
-			return i
-		}
-	}
-	return -1
+	return slices.IndexFunc(params, func(param machine.Type) bool { return param.Kind() == machine.MoneyKind })
 }
 
 // containerName is what the error says exact money cannot go into.

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // Format lays a program out the way a person would: on one line while it
@@ -34,10 +36,7 @@ func format(expr Expr, indent string, used int) string {
 		return one
 	}
 	inner := indent + "  "
-	parts := make([]string, len(layout.parts))
-	for i, part := range layout.parts {
-		parts[i] = inner + part.layout(inner)
-	}
+	parts := kit.Map(layout.parts, func(part part) string { return inner + part.layout(inner) })
 	// A switch's subject is followed by a space on one line and by the line
 	// break when split; no other opening ends in a space.
 	return strings.TrimSuffix(layout.open, " ") + "\n" + strings.Join(parts, layout.separator) + "\n" + indent + layout.close
@@ -114,11 +113,7 @@ func (p part) lead(write func(Expr) string) string {
 	if p.matches == nil {
 		return p.head
 	}
-	matches := make([]string, len(p.matches))
-	for i, match := range p.matches {
-		matches[i] = write(match)
-	}
-	return "case " + strings.Join(matches, ", ") + " => "
+	return "case " + strings.Join(kit.Map(p.matches, write), ", ") + " => "
 }
 
 func listSplit(opening, closing string, parts []part) split {
@@ -126,20 +121,12 @@ func listSplit(opening, closing string, parts []part) split {
 }
 
 func exprParts(items []Expr) []part {
-	parts := make([]part, len(items))
-	for i, item := range items {
-		parts[i] = part{expr: item}
-	}
-	return parts
+	return kit.Map(items, func(item Expr) part { return part{expr: item} })
 }
 
 // fieldParts is a record's fields, each name: value.
 func fieldParts(fields []RecordFieldExpr) []part {
-	parts := make([]part, len(fields))
-	for i, field := range fields {
-		parts[i] = part{head: field.Name + ": ", expr: field.Value}
-	}
-	return parts
+	return kit.Map(fields, func(field RecordFieldExpr) part { return part{head: field.Name + ": ", expr: field.Value} })
 }
 
 // splitNode is how a node that has parts is printed; a leaf has none.
@@ -176,11 +163,9 @@ func splitNode(expr Expr) (split, bool) {
 func braceSplit(expr Expr) (split, bool) {
 	switch node := expr.(type) {
 	case *DictExpr:
-		parts := make([]part, len(node.Entries))
-		for i, entry := range node.Entries {
-			parts[i] = part{head: quote(entry.Key) + ": ", expr: entry.Value}
-		}
-		return listSplit("{", "}", parts), true
+		return listSplit("{", "}", kit.Map(node.Entries, func(entry DictEntryExpr) part {
+			return part{head: quote(entry.Key) + ": ", expr: entry.Value}
+		})), true
 	case *RecordExpr:
 		return listSplit("{", "}", fieldParts(node.Fields)), true
 	case *RecordUpdateExpr:

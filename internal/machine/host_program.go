@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/nethinwei/funroute/internal/money"
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // A Codec is a contract read off two Go types: the tagged fields of In are the
@@ -67,11 +67,11 @@ func (c *Codec[In, Out]) Instantiate(artifact *Artifact) (*Program[In, Out], err
 	declared := runtime.artifact
 	args, err := newArgsCodec(c.registry, c.in, declared.parts.Args)
 	if err != nil {
-		return nil, money.Classify(ErrContract, "", err)
+		return nil, kit.Classify(ErrContract, "", err)
 	}
 	result, err := newCodecFor(c.registry, c.out, declared.parts.Result)
 	if err != nil {
-		return nil, money.Classify(ErrContract, "result: ", err)
+		return nil, kit.Classify(ErrContract, "result: ", err)
 	}
 	return &Program[In, Out]{
 		args: args, result: result, runtime: runtime, reads: argumentReads(declared),
@@ -139,9 +139,9 @@ func (p *Program[In, Out]) Run(ctx context.Context, in *In, options RunOptions) 
 	args := f.argSpace(len(p.args.params))
 	if err := encodeArgs(p.args, p.reads, args, in); err != nil {
 		// Nothing ran, so the frame would not clear what was written.
-		clearValues(args)
+		clear(args)
 		r.releaseFrame(f)
-		return zero, money.Classify(ErrContract, "", err)
+		return zero, kit.Classify(ErrContract, "", err)
 	}
 	value, err := r.runFrame(ctx, f, args, options)
 	if err != nil {
@@ -156,7 +156,7 @@ func decodeInto[Out any](plan *codec, value Value) (Out, error) {
 	var out Out
 	if err := decodeResult(plan, value, &out); err != nil {
 		var zero Out
-		return zero, money.Classify(ErrContract, "result: ", err)
+		return zero, kit.Classify(ErrContract, "result: ", err)
 	}
 	return out, nil
 }

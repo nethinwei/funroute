@@ -2,8 +2,10 @@ package syntax
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -149,12 +151,8 @@ type DictExpr struct {
 }
 
 func (e *DictExpr) check() error {
-	seen := make(map[string]bool, len(e.Entries))
-	for _, entry := range e.Entries {
-		if seen[entry.Key] {
-			return fmt.Errorf("duplicate dictionary key %q", entry.Key)
-		}
-		seen[entry.Key] = true
+	if key, twice := kit.Repeated(e.Entries, func(entry DictEntryExpr) string { return entry.Key }); twice {
+		return fmt.Errorf("duplicate dictionary key %q", key)
 	}
 	return nil
 }
@@ -303,25 +301,15 @@ type LetExpr struct {
 }
 
 func (e *LetExpr) check() error {
-	names := make([]string, len(e.Bindings))
-	for i, binding := range e.Bindings {
-		names[i] = binding.Name
-	}
-	return distinctNames(names...)
+	return distinctNames(kit.Map(e.Bindings, func(binding LetBinding) string { return binding.Name })...)
 }
 
 // distinctNames rejects two locals of one node sharing a name. An empty name
 // is an absent optional one and does not count.
 func distinctNames(names ...string) error {
-	seen := make(map[string]bool, len(names))
-	for _, name := range names {
-		if name == "" {
-			continue
-		}
-		if seen[name] {
-			return fmt.Errorf("the name %q is bound twice", name)
-		}
-		seen[name] = true
+	present := slices.DeleteFunc(names, func(name string) bool { return name == "" })
+	if name, twice := kit.Repeated(present, kit.Identity[string]); twice {
+		return fmt.Errorf("the name %q is bound twice", name)
 	}
 	return nil
 }
@@ -384,7 +372,7 @@ func plainDecimal(text string) bool {
 }
 
 func digitsOnly(text string) bool {
-	return text != "" && strings.Trim(text, "0123456789") == ""
+	return text != "" && kit.IsDigits(text)
 }
 
 // CurrencyExpr is a currency, written as its code: USD. Currencies are the

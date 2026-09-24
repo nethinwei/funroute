@@ -52,23 +52,15 @@ func (c *bytecodeCompiler) tryFold(expr syntax.Expr) (bool, error) {
 // is what keeps folding from reaching an engine or a clock, and it is also
 // what makes a failure found here a certainty rather than a circumstance.
 func constexprOnly(expr syntax.Expr, inferred *inference, registry *machine.Registry) bool {
-	// A using is only there for the conversions in it, which read the run.
-	if _, using := expr.(*syntax.UsingExpr); using {
-		return false
-	}
-	if call, ok := expr.(*syntax.CallExpr); ok {
-		key, found := inferred.Selections[call.ID]
-		if !found {
+	for node := range syntax.Nodes(expr) {
+		switch node := node.(type) {
+		case *syntax.UsingExpr:
+			// A using is only there for the conversions in it, which read the run.
 			return false
-		}
-		function, found := registry.Resolve(key)
-		if !found || !function.IsConstexpr() {
-			return false
-		}
-	}
-	for _, child := range syntax.Children(expr) {
-		if !constexprOnly(child, inferred, registry) {
-			return false
+		case *syntax.CallExpr:
+			if function, found := registry.Resolve(inferred.Selections[node.ID]); !found || !function.IsConstexpr() {
+				return false
+			}
 		}
 	}
 	return true
@@ -145,7 +137,7 @@ func (c *bytecodeCompiler) constantExpr(expr syntax.Expr) bool {
 		return false
 	}
 	for _, name := range syntax.FreeVariables(expr) {
-		if len(c.constIndex[name]) == 0 {
+		if _, folded := c.constIndex.top(name); !folded {
 			return false
 		}
 	}

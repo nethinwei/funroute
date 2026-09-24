@@ -2,8 +2,9 @@ package syntax
 
 import (
 	"slices"
-	"sort"
 	"strings"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // What a position in a program can see, by the rule FreeVariables follows: a
@@ -23,12 +24,7 @@ func ScopeAt(root Expr, offset int) []string {
 		}
 		current, bound = next, inner
 	}
-	names := make([]string, 0, len(bound))
-	for name := range bound {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return kit.SortedKeys(bound)
 }
 
 // childAt is the child of expr whose source holds offset, with the names
@@ -60,16 +56,11 @@ func LocalReferences(root Expr) map[int]bool {
 // fields already written besides that one.
 func UpdatedRecordAt(root Expr, offset int, placeholder string) (base, update Span, written []string, ok bool) {
 	var found *RecordUpdateExpr
-	var visit func(Expr)
-	visit = func(expr Expr) {
+	for expr := range Nodes(root) {
 		if node, isUpdate := expr.(*RecordUpdateExpr); isUpdate && node.Extent().HoldsCursor(offset) && typedInto(node, placeholder) {
 			found = node
 		}
-		for _, child := range Children(expr) {
-			visit(child)
-		}
 	}
-	visit(root)
 	if found == nil {
 		return Span{}, Span{}, nil, false
 	}

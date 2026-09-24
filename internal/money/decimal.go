@@ -6,6 +6,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // ParseDecimal reads a plain decimal — digits, an optional point, an optional
@@ -13,10 +15,7 @@ import (
 // decimal places than that is refused: it cannot be represented, and
 // rounding it silently is the thing money types exist to prevent.
 func ParseDecimal(text string, digits int) (int64, error) {
-	body, negative := strings.CutPrefix(text, "-")
-	if !negative {
-		body = strings.TrimPrefix(body, "+")
-	}
+	body, negative := cutSign(text)
 	whole, fraction, _ := strings.Cut(body, ".")
 	if whole == "" && fraction == "" {
 		return 0, errors.New("is not a decimal")
@@ -48,7 +47,7 @@ func ParseDecimal(text string, digits int) (int64, error) {
 func accumulateDigits(total uint64, digits string, limit uint64) (uint64, error) {
 	for i := range len(digits) {
 		c := digits[i]
-		if c < '0' || c > '9' {
+		if !kit.IsDigit(c) {
 			return 0, errors.New("is not a decimal")
 		}
 		if total > (limit-uint64(c-'0'))/10 {
@@ -98,16 +97,13 @@ const maxExponent = 1 << 30
 // an optional sign, digits with at most one point among them, and an
 // optional exponent.
 func ParseDecimalLiteral(text string) (Decimal, error) {
-	body, negative := strings.CutPrefix(text, "-")
-	if !negative {
-		body = strings.TrimPrefix(body, "+")
-	}
+	body, negative := cutSign(text)
 	mantissa, power := body, ""
 	if at := strings.IndexAny(body, "eE"); at >= 0 {
 		mantissa, power = body[:at], body[at+1:]
 	}
 	whole, fraction, _ := strings.Cut(mantissa, ".")
-	if whole+fraction == "" || !isDigits(whole) || !isDigits(fraction) {
+	if whole+fraction == "" || !kit.IsDigits(whole) || !kit.IsDigits(fraction) {
 		return Decimal{}, fmt.Errorf("%q is not a decimal", text)
 	}
 	exponent, err := decimalExponent(power, len(body) > len(mantissa))
@@ -127,11 +123,8 @@ func decimalExponent(power string, written bool) (int, error) {
 	if !written {
 		return 0, nil
 	}
-	digits, negative := strings.CutPrefix(power, "-")
-	if !negative {
-		digits = strings.TrimPrefix(digits, "+")
-	}
-	if digits == "" || !isDigits(digits) {
+	digits, negative := cutSign(power)
+	if digits == "" || !kit.IsDigits(digits) {
 		return 0, errors.New("has a malformed exponent")
 	}
 	value, err := strconv.Atoi(digits)
@@ -144,7 +137,13 @@ func decimalExponent(power string, written bool) (int, error) {
 	return value, nil
 }
 
-func isDigits(text string) bool { return strings.Trim(text, "0123456789") == "" }
+// cutSign takes a leading - or + off text, reporting whether it was a minus.
+func cutSign(text string) (body string, negative bool) {
+	if body, negative = strings.CutPrefix(text, "-"); !negative {
+		body = strings.TrimPrefix(body, "+")
+	}
+	return body, negative
+}
 
 // String writes the decimal the way strconv.FormatFloat(f, 'g', -1, 64)
 // writes a float64 holding exactly it: the same digits, a plain decimal
@@ -192,9 +191,9 @@ func (d Decimal) Ratio() (Ratio, error) {
 	}
 	switch {
 	case d.exponent > 18:
-		return Ratio{}, errConversion("ratio %s: does not fit an int64", d)
+		return Ratio{}, kit.Errorf(ErrArithmetic, "ratio %s: does not fit an int64", d)
 	case d.exponent < -18:
-		return Ratio{}, errConversion("ratio %s: has %d decimal places, at most 18 fit", d, -d.exponent)
+		return Ratio{}, kit.Errorf(ErrArithmetic, "ratio %s: has %d decimal places, at most 18 fit", d, -d.exponent)
 	}
 	return ParseRatio(sign + d.plain())
 }

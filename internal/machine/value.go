@@ -7,6 +7,7 @@ import (
 	"math"
 	"slices"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
 )
 
@@ -327,11 +328,7 @@ func (v Value) recordAny() any {
 func (v Value) containerAny() any {
 	switch box := v.box.(type) {
 	case *nestedArray:
-		out := make([]any, len(box.items))
-		for i := range box.items {
-			out[i] = box.items[i].Any()
-		}
-		return out
+		return kit.Map(box.items, Value.Any)
 	case *nestedDict:
 		out := make(map[string]any, len(box.entries))
 		for key, value := range box.entries {
@@ -485,11 +482,14 @@ func compareEqual(left, right Value) (Value, error) {
 // decision has no meaning for NaN or infinity, so they are rejected where they
 // enter rather than checked at every use.
 func CheckedFloat(value float64) (Value, error) {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
+	if !finite(value) {
 		return Value{}, errors.New("non-finite floats are not supported")
 	}
 	return Float(value), nil
 }
+
+// finite reports a float that is neither NaN nor an infinity.
+func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 
 func (v Value) validateInvariant() error {
 	switch box := v.box.(type) {
@@ -500,17 +500,8 @@ func (v Value) validateInvariant() error {
 	case *recordValue, *nestedArray, *nestedDict:
 		return v.eachPart(false, Value.validateInvariant)
 	}
-	if v.kind == FloatKind && (math.IsNaN(v.f) || math.IsInf(v.f, 0)) {
+	if v.kind == FloatKind && !finite(v.f) {
 		return errors.New("non-finite floats are not supported")
 	}
 	return nil
-}
-
-func sortedKeys[T any](entries map[string]T) []string {
-	keys := make([]string, 0, len(entries))
-	for key := range entries {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	return keys
 }

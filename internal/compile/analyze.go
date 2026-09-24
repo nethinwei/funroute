@@ -22,8 +22,7 @@ func Analyze(source string, registry *machine.Registry, options CompileOptions) 
 	}
 	analysis := &Analysis{Params: inferred.Params, Result: inferred.Result}
 	locals := syntax.LocalReferences(expr)
-	var visit func(syntax.Expr)
-	visit = func(node syntax.Expr) {
+	for node := range syntax.Nodes(expr) {
 		fact := NodeFact{Span: node.Extent(), Signature: inferred.Selections[node.NodeID()]}
 		if typ, ok := inferred.NodeTypes[node.NodeID()]; ok {
 			fact.Type = &typ
@@ -32,11 +31,7 @@ func Analyze(source string, registry *machine.Registry, options CompileOptions) 
 			fact.Reference = referenceKind(local)
 		}
 		analysis.Nodes = append(analysis.Nodes, fact)
-		for _, child := range syntax.Children(node) {
-			visit(child)
-		}
 	}
-	visit(expr)
 	return analysis, err
 }
 

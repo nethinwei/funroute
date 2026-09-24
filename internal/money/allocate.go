@@ -32,7 +32,7 @@ var allocationNames = [...]string{"largest_remainder", "largest_weight", "in_ord
 
 // AllocationStrategies lists every strategy by name, in declaration order:
 // the members of the allocation enum a rule writes @last with.
-func AllocationStrategies() []string { return append([]string(nil), allocationNames[:]...) }
+func AllocationStrategies() []string { return slices.Clone(allocationNames[:]) }
 
 func (a AllocationStrategy) String() string { return nameOf(allocationNames[:], a) }
 
@@ -182,9 +182,5 @@ func (m Money) SplitBy(strategy AllocationStrategy, n int) ([]Money, error) {
 	if n <= 0 || n > maxAllocation {
 		return nil, fmt.Errorf("%w: allocate needs 1 to %d shares, got %d", ErrArithmetic, maxAllocation, n)
 	}
-	weights := make([]int64, n)
-	for i := range weights {
-		weights[i] = 1
-	}
-	return m.AllocateBy(strategy, weights...)
+	return m.AllocateBy(strategy, slices.Repeat([]int64{1}, n)...)
 }

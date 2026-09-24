@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -38,12 +39,10 @@ func inferRecordUpdate(node *syntax.RecordUpdateExpr, state *inferState, context
 	return record(node, state, base), err
 }
 
-func updatedValues(node *syntax.RecordUpdateExpr) []syntax.Expr {
-	values := make([]syntax.Expr, len(node.Fields))
-	for i, field := range node.Fields {
-		values[i] = field.Value
-	}
-	return values
+func updatedValues(node *syntax.RecordUpdateExpr) []syntax.Expr { return fieldValues(node.Fields) }
+
+func fieldValues(fields []syntax.RecordFieldExpr) []syntax.Expr {
+	return kit.Map(fields, func(field syntax.RecordFieldExpr) syntax.Expr { return field.Value })
 }
 
 // updateFields holds every new value to the type of the field it replaces.
@@ -64,13 +63,8 @@ func updateFields(node *syntax.RecordUpdateExpr, base typeTerm, values []typeTer
 // compileRecordUpdate pushes the base, then the new values in the order they
 // were written, and replaces them in one instruction.
 func (c *bytecodeCompiler) compileRecordUpdate(node *syntax.RecordUpdateExpr) error {
-	values := make([]syntax.Expr, 0, len(node.Fields)+1)
-	values = append(values, node.Base)
-	names := make([]string, len(node.Fields))
-	for i, field := range node.Fields {
-		names[i] = field.Name
-		values = append(values, field.Value)
-	}
+	values := append([]syntax.Expr{node.Base}, fieldValues(node.Fields)...)
+	names := kit.Map(node.Fields, func(field syntax.RecordFieldExpr) string { return field.Name })
 	return c.compileMake(node.ID, machine.RecordKind, values,
 		machine.Instruction{Op: machine.OpRecordWith, Keys: names}, "internal error: record update with unresolved type")
 }

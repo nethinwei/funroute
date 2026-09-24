@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // ParseType parses bool, int, float, string, array<T>, dict<T>, handle<name>,
@@ -99,7 +101,7 @@ func (p *typeParser) list(what string, item func() error) error {
 }
 
 func (p *typeParser) parse() (Type, error) {
-	name := p.word(isNameChar)
+	name := p.word(kit.IsNameChar)
 	if t, ok := namedTypes[name]; ok {
 		if (t.kind == MoneyKind || t.kind == CurrencyKind || t.kind == FxRateKind) && p.peek('<') {
 			return Type{}, fmt.Errorf("%s takes no currency: a currency is the value's, so the type is %s", name, name)
@@ -127,10 +129,6 @@ func (p *typeParser) parse() (Type, error) {
 		return alias, nil
 	}
 	return Type{}, fmt.Errorf("unknown type %q", name)
-}
-
-func isNameChar(ch byte) bool {
-	return ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
 }
 
 func (p *typeParser) parseEnum() (Type, error) {
@@ -179,7 +177,7 @@ func (p *typeParser) parseRecord() (Type, error) {
 }
 
 func (p *typeParser) recordField() (Field, error) {
-	name := p.word(isNameChar)
+	name := p.word(kit.IsNameChar)
 	if !IsValidFieldName(name) {
 		return Field{}, fmt.Errorf("invalid record field name %q", name)
 	}
@@ -200,7 +198,7 @@ func (p *typeParser) member() (string, error) {
 	if p.peek('"') {
 		return "", errors.New("enum members are identifiers: write enum<name>{adyen,stripe}")
 	}
-	value := p.word(isNameChar)
+	value := p.word(kit.IsNameChar)
 	if !IsValidFieldName(value) {
 		return "", fmt.Errorf("invalid enum member %q", value)
 	}
@@ -228,7 +226,7 @@ func (p *typeParser) angled(name string, inner func() (Type, error)) (Type, erro
 // handleName reads the host's name for a handle, which has the shape of a
 // function name so it can carry a namespace and a version: onnx.tensor_v2.
 func (p *typeParser) handleName() (Type, error) {
-	name := p.word(func(ch byte) bool { return ch == '.' || isNameChar(ch) })
+	name := p.word(func(ch byte) bool { return ch == '.' || kit.IsNameChar(ch) })
 	if !IsValidFunctionName(name) {
 		return Type{}, fmt.Errorf("invalid handle name %q", name)
 	}

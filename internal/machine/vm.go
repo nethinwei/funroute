@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,7 +9,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/nethinwei/funroute/internal/money"
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 type Runtime struct {
@@ -114,11 +115,7 @@ func resolveUpdates(artifact *Artifact) [][]int {
 		if updates == nil {
 			updates = make([][]int, len(artifact.parts.Instructions))
 		}
-		indexes := make([]int, len(instruction.Keys))
-		for i, name := range instruction.Keys {
-			indexes[i] = instruction.Type.FieldIndex(name)
-		}
-		updates[pc] = indexes
+		updates[pc] = kit.Map(instruction.Keys, instruction.Type.FieldIndex)
 	}
 	return updates
 }
@@ -354,9 +351,9 @@ func (r *Runtime) Run(ctx context.Context, rawArgs map[string]any, options RunOp
 	args := f.argSpace(len(r.artifact.parts.Args))
 	if err := r.bindArgs(args, rawArgs); err != nil {
 		// Nothing ran, so the frame would not clear what was bound.
-		clearValues(args)
+		clear(args)
 		r.releaseFrame(f)
-		return Value{}, money.Classify(ErrContract, "", err)
+		return Value{}, kit.Classify(ErrContract, "", err)
 	}
 	return r.runFrame(ctx, f, args, options)
 }
@@ -376,10 +373,7 @@ func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOption
 	if err := r.checkKinds(args, false); err != nil {
 		return Value{}, err
 	}
-	f := r.acquireFrame()
-	space := f.argSpace(len(args))
-	copy(space, args)
-	return r.runFrame(ctx, f, space, options)
+	return r.runTyped(ctx, args, options)
 }
 
 // admit checks a request's arguments as a run would — their kinds unless a
@@ -417,9 +411,9 @@ func (r *Runtime) checkKinds(args []Value, typed bool) error {
 func argumentError(param Parameter, value Value) error {
 	err := fmt.Errorf("argument %q: expected %s, got %s", param.name, param.typ.Summary(), value.Type().Summary())
 	if value.kind == param.typ.kind && IsUnitKind(value.kind) {
-		err = money.Classify(ErrCurrency, "", err)
+		err = kit.Classify(ErrCurrency, "", err)
 	}
-	return money.Classify(ErrContract, "", err)
+	return kit.Classify(ErrContract, "", err)
 }
 
 // runTyped runs arguments a Codec produced. They are typed by construction,
@@ -436,16 +430,8 @@ func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, options 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	fuel := options.Fuel
-	if fuel == 0 {
-		fuel = 10_000
-	}
-	maxStack := options.MaxStack
-	if maxStack == 0 {
-		maxStack = 1_024
-	}
-	f.fuelCell = fuel
-	f.reset(r, args, &f.fuelCell, maxStack)
+	f.fuelCell = cmp.Or(options.Fuel, DefaultFuel)
+	f.reset(r, args, &f.fuelCell, cmp.Or(options.MaxStack, 1_024))
 	f.ctx = ctx
 	f.deadline = ctx.Done() != nil
 	f.prefetched = options.prefetched

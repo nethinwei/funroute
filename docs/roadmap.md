@@ -121,6 +121,7 @@
 | Manifest 与 Catalog 分开：Manifest 是能装回注册表的签名数据（`Apply`），Catalog 是给前端的只读说明（语言形式的语法与包裹模板、签名文本） | 方向相反，一种形状只会让两种用途都变差 | 合成一份 |
 | 语言形式只有一张表（`languageForms`），节点的 kind tag 说哪些节点是形式、哪些可开关，由测试对照；前端从语法树的 `form` 与目录的 `wrap` 得知一切 | 前端不写语法 | 前端的 `FORM_NODES`/`BLOCKS` |
 | `Program` 的批量只有一个入口 `RunBatch(ctx, n, in(i), out(i), opts, failed)` | 一个概念一个入口；请求与结果放在哪由宿主的两个函数说 | `RunBatch`/`RunBatchInto`/`RunBatchFunc` 三种形状 |
+| 多个包共用的同一段逻辑只写在 `internal/kit`（错误分类、字符判断、`Map`/`Repeated`/`SortedKeys`、JSON 数字解码），kit 只依赖标准库；只有一个包用的工具留在原包 | 相同逻辑写两份会各自漂移；放在最底层，谁都能用而不引入环 | 每个包各写一份私有小工具；万能 `util` 包收纳"将来可能用到"的函数 |
 
 ### 语言服务与工作台
 

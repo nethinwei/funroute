@@ -142,9 +142,9 @@ func (f *frame) release() {
 	f.fuel = nil
 	f.ctx = nil
 	f.prefetched = nil
-	clearValues(f.stackArray[:f.stackUsed()])
-	clearValues(f.argsArray[:min(f.argsUsed, len(f.argsArray))])
-	clearValues(f.locals)
+	clear(f.stackArray[:f.stackUsed()])
+	clear(f.argsArray[:min(f.argsUsed, len(f.argsArray))])
+	clear(f.locals)
 	f.loops = f.loops[:0]
 	f.fallbacks = f.fallbacks[:0]
 	f.dropScopes(0)
@@ -155,12 +155,6 @@ func (f *frame) release() {
 // compiler's figure, or how far an activation actually pushed past it.
 func (f *frame) stackUsed() int {
 	return min(max(f.overflow, f.reserved), len(f.stackArray))
-}
-
-func clearValues(values []Value) {
-	for i := range values {
-		values[i] = Value{}
-	}
 }
 
 // guardedRun contains a panicking extension for the whole activation, which
@@ -264,11 +258,9 @@ func (f *frame) catchFallback(err error) (int, bool) {
 	last := len(f.fallbacks) - 1
 	handler := f.fallbacks[last]
 	f.fallbacks = f.fallbacks[:last]
-	clearValues(f.stack[handler.stack:])
+	clear(f.stack[handler.stack:])
 	f.stack = f.stack[:handler.stack]
-	for i := handler.loops; i < len(f.loops); i++ {
-		f.loops[i] = loopFrame{}
-	}
+	clear(f.loops[handler.loops:])
 	f.loops = f.loops[:handler.loops]
 	f.dropScopes(handler.scopes)
 	return handler.target, true

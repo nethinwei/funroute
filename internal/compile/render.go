@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -56,15 +57,17 @@ func comment(label string, width int, typeName, doc string) string {
 
 // ContractFromArtifact recovers the contract an artifact was compiled with, so
 // a host that only stored the artifact can still render or re-check it.
+// argSpecs is the contract's arguments as parameters declare them.
+func argSpecs(params []machine.Parameter) []ArgSpec {
+	return kit.Map(params, func(param machine.Parameter) ArgSpec {
+		return ArgSpec{Name: param.Name(), Type: param.Type(), Doc: param.Doc()}
+	})
+}
+
 func ContractFromArtifact(artifact *machine.Artifact) CompileOptions {
 	if artifact == nil {
 		return CompileOptions{}
 	}
-	params := artifact.Args()
-	args := make([]ArgSpec, len(params))
-	for i, param := range params {
-		args[i] = ArgSpec{Name: param.Name(), Type: param.Type(), Doc: param.Doc()}
-	}
 	result := artifact.Result()
-	return CompileOptions{Args: args, Result: &result, ResultDoc: artifact.ResultDoc()}
+	return CompileOptions{Args: argSpecs(artifact.Args()), Result: &result, ResultDoc: artifact.ResultDoc()}
 }

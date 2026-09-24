@@ -3,6 +3,7 @@ package machine
 import (
 	"fmt"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
 )
 
@@ -57,7 +58,7 @@ func (r *Runtime) scanArgs(args []Value, ordered bool) error {
 			continue
 		}
 		if err := declaredValue(r.money.table, args[i], ordered); err != nil {
-			return money.Classify(ErrContract, fmt.Sprintf("argument %q: ", param.name), err)
+			return kit.Classify(ErrContract, fmt.Sprintf("argument %q: ", param.name), err)
 		}
 	}
 	return nil

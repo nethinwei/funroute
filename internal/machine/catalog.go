@@ -109,13 +109,16 @@ func (c LanguageCatalog) Functions() []FunctionDescriptor { return slices.Clone(
 func (c LanguageCatalog) SpecialForms() []FormDescriptor { return slices.Clone(c.forms) }
 
 // Money is the declared money feature, if there is one.
-func (c LanguageCatalog) Money() (money.MoneySpec, bool) {
-	if c.money == nil {
+func (c LanguageCatalog) Money() (money.MoneySpec, bool) { return cloneSpec(c.money) }
+
+// cloneSpec is a copy of spec that shares no slice with it, and false for nil.
+func cloneSpec(spec *money.MoneySpec) (money.MoneySpec, bool) {
+	if spec == nil {
 		return money.MoneySpec{}, false
 	}
-	spec := *c.money
-	spec.Currencies = slices.Clone(spec.Currencies)
-	return spec, true
+	out := *spec
+	out.Currencies = slices.Clone(out.Currencies)
+	return out, true
 }
 
 type catalogJSON struct {
@@ -275,7 +278,9 @@ var languageForms = []struct {
 
 // OptionalForms is every form a registry can turn on, in the catalog's order:
 // the ones the parser's node tags mark optional.
-func OptionalForms() []Form {
+func OptionalForms() []Form { return slices.Clone(optionalForms) }
+
+var optionalForms = func() []Form {
 	var out []Form
 	for _, entry := range languageForms {
 		if entry.optional != "" {
@@ -283,7 +288,7 @@ func OptionalForms() []Form {
 		}
 	}
 	return out
-}
+}()
 
 // specialForms is every form a program on this registry may write.
 func (r *Registry) specialForms() []FormDescriptor {

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nethinwei/funroute/internal/money"
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // Batch runs one artifact for many requests, calling each model once per batch
@@ -111,7 +111,7 @@ func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, er
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return Value{}, money.Classify(ErrDeadline, "", err)
+		return Value{}, kit.Classify(ErrDeadline, "", err)
 	}
 	request := &batchRequest{ctx: ctx, args: args, done: make(chan batchResult, 1), typed: typed}
 	if err := b.enqueue(request); err != nil {
@@ -121,7 +121,7 @@ func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, er
 	case result := <-request.done:
 		return result.value, result.err
 	case <-ctx.Done():
-		return Value{}, money.Classify(ErrDeadline, "", ctx.Err())
+		return Value{}, kit.Classify(ErrDeadline, "", ctx.Err())
 	}
 }
 
@@ -189,11 +189,9 @@ func (b *Batch) execute(requests []*batchRequest, options RunOptions) {
 // executeShared is one batch whose requests all carry ctx — a synchronous
 // batch — so the engine calls run under it directly, with its values.
 func (b *Batch) executeShared(ctx context.Context, requests []*batchRequest, options RunOptions) {
-	active := b.rejectCanceled(requests)
-	if len(active) == 0 {
-		return
+	if active := b.rejectCanceled(requests); len(active) > 0 {
+		b.executeUnder(ctx, active, options)
 	}
-	b.executeUnder(ctx, active, options)
 }
 
 // executeUnder is one batch: every hoisted call once under ctx, then every
@@ -239,7 +237,7 @@ func (b *Batch) rejectCanceled(requests []*batchRequest) []*batchRequest {
 	active := make([]*batchRequest, 0, len(requests))
 	for _, request := range requests {
 		if err := request.ctx.Err(); err != nil {
-			request.finish(batchResult{err: money.Classify(ErrDeadline, "", err)})
+			request.finish(batchResult{err: kit.Classify(ErrDeadline, "", err)})
 			continue
 		}
 		active = append(active, request)
@@ -303,11 +301,8 @@ func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchR
 }
 
 func invokeBatch(ctx context.Context, function *RegisteredFunction, calls [][]Value) ([]Value, error) {
-	if function.Doc.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, function.Doc.Timeout)
-		defer cancel()
-	}
+	ctx, cancel := withTimeout(ctx, function)
+	defer cancel()
 	var results []Value
 	var err error
 	if function.Doc.Detached {
@@ -315,10 +310,7 @@ func invokeBatch(ctx context.Context, function *RegisteredFunction, calls [][]Va
 	} else {
 		results, err = callBatchSafely(ctx, function, calls)
 	}
-	if err != nil && ctx.Err() != nil && !keepsIdentity(err) {
-		return nil, money.Classify(ErrDeadline, "", err)
-	}
-	return results, err
+	return results, timedOut(ctx, err)
 }
 
 func callBatchSafely(ctx context.Context, function *RegisteredFunction, calls [][]Value) (results []Value, err error) {

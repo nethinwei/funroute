@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -42,14 +43,14 @@ func (c *TextContract) Options() (CompileOptions, error) {
 	for _, arg := range c.Args {
 		typ, err := machine.ParseTypeWith(arg.Type, aliases)
 		if err != nil {
-			return options, contractErrorf("argument %q: %v", arg.Name, err)
+			return options, kit.Errorf(machine.ErrContract, "argument %q: %v", arg.Name, err)
 		}
 		options.Args = append(options.Args, ArgSpec{Name: arg.Name, Type: typ, Doc: arg.Doc})
 	}
 	if c.Result != nil {
 		typ, err := machine.ParseTypeWith(c.Result.Type, aliases)
 		if err != nil {
-			return options, contractErrorf("result: %v", err)
+			return options, kit.Errorf(machine.ErrContract, "result: %v", err)
 		}
 		options.Result = &typ
 		options.ResultDoc = c.Result.Doc
@@ -67,7 +68,7 @@ func (c *TextContract) Aliases() (map[string]machine.Type, error) {
 	for name, text := range c.Types {
 		typ, err := machine.ParseType(text)
 		if err != nil {
-			return nil, contractErrorf("type %q: %v", name, err)
+			return nil, kit.Errorf(machine.ErrContract, "type %q: %v", name, err)
 		}
 		aliases[name] = typ
 	}

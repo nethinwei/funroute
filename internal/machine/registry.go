@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
 )
 
@@ -101,11 +102,7 @@ type FunctionSpec struct {
 }
 
 func (s FunctionSpec) Signature() string {
-	params := make([]string, len(s.Params))
-	for i := range s.Params {
-		params[i] = s.Params[i].String()
-	}
-	return fmt.Sprintf("%s(%s)->%s", s.Name, strings.Join(params, ","), s.Result)
+	return fmt.Sprintf("%s(%s)->%s", s.Name, strings.Join(kit.Map(s.Params, Type.String), ","), s.Result)
 }
 
 // RegisteredFunction is a function as the registry holds it: its spec plus the
@@ -248,7 +245,7 @@ const (
 
 func (r *Registry) EnableForm(forms ...Form) error {
 	for _, form := range forms {
-		if !slices.Contains(OptionalForms(), form) {
+		if !slices.Contains(optionalForms, form) {
 			return fmt.Errorf("unknown form %q", string(form))
 		}
 	}
@@ -283,18 +280,16 @@ func (r *Registry) EnabledForms() []Form {
 // run's boundary asks of every currency unit whether it is a variable, and a
 // regexp's matcher comes from a pool.
 func nameShape(name string, dotted bool) bool {
-	if name == "" || !wordStart(name[0]) {
+	if name == "" || !kit.IsNameStart(name[0]) {
 		return false
 	}
 	for i := 1; i < len(name); i++ {
-		if c := name[i]; !wordStart(c) && (c < '0' || c > '9') && (!dotted || c != '.') {
+		if c := name[i]; !kit.IsNameChar(c) && (!dotted || c != '.') {
 			return false
 		}
 	}
 	return true
 }
-
-func wordStart(c byte) bool { return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
 
 // reservedNames are parsed as literals or special forms, so no function may
 // claim them.
@@ -412,7 +407,7 @@ func validateSignature(spec FunctionSpec) error {
 
 func validateTypePattern(t Type, vars map[string]bool) error {
 	switch t.kind {
-	case BoolKind, IntKind, FloatKind, StringKind:
+	case BoolKind, IntKind, FloatKind, StringKind, RatioKind:
 		return nil
 	case EnumKind:
 		if !IsAnyEnum(t) && !t.IsConcrete() {
@@ -429,8 +424,6 @@ func validateTypePattern(t Type, vars map[string]bool) error {
 			return errors.New("unnamed type variable")
 		}
 		vars[t.name] = true
-		return nil
-	case RatioKind:
 		return nil
 	case MoneyKind, CurrencyKind, FxRateKind:
 		if t.name != "" || len(t.values) != 0 {

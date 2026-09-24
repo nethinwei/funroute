@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -255,7 +256,7 @@ func (s *inferState) unify(left, right typeTerm) error {
 	case right.kind == machine.VarKind:
 		return s.bindVar(right, left)
 	case left.kind != right.kind || left.name != right.name || !slices.Equal(left.values, right.values):
-		return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
+		return s.cannotUnify(left, right)
 	case left.kind == machine.RecordKind:
 		return s.unifyFields(left, right)
 	case left.elem != nil && right.elem != nil:
@@ -268,17 +269,21 @@ func (s *inferState) unify(left, right typeTerm) error {
 // each field's type.
 func (s *inferState) unifyFields(left, right typeTerm) error {
 	if len(left.fields) != len(right.fields) {
-		return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
+		return s.cannotUnify(left, right)
 	}
 	for i, field := range left.fields {
 		if field.name != right.fields[i].name {
-			return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
+			return s.cannotUnify(left, right)
 		}
 		if err := s.unify(field.term, right.fields[i].term); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *inferState) cannotUnify(left, right typeTerm) error {
+	return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
 }
 
 // bindVar binds an open variable to term, keeping what the variable may
@@ -358,10 +363,9 @@ func (s *inferState) concrete(t machine.Type) typeTerm {
 	case machine.ArrayKind, machine.DictKind:
 		return containerTerm(t.Kind(), s.concrete(elemOf(t)))
 	case machine.RecordKind:
-		fields := make([]fieldTerm, len(t.Fields()))
-		for i, field := range t.Fields() {
-			fields[i] = fieldTerm{name: field.Name(), term: s.concrete(field.Type())}
-		}
+		fields := kit.Map(t.Fields(), func(field machine.Field) fieldTerm {
+			return fieldTerm{name: field.Name(), term: s.concrete(field.Type())}
+		})
 		return typeTerm{kind: machine.RecordKind, fields: fields}
 	default:
 		return typeTerm{kind: t.Kind(), name: t.Name(), values: t.Values()}
@@ -413,10 +417,7 @@ func (s *inferState) describe(term typeTerm) string {
 	case term.elem != nil:
 		return fmt.Sprintf("%s<%s>", term.kind, s.describe(*term.elem))
 	case term.kind == machine.RecordKind:
-		fields := make([]string, len(term.fields))
-		for i, field := range term.fields {
-			fields[i] = field.name + ": " + s.describe(field.term)
-		}
+		fields := kit.Map(term.fields, func(field fieldTerm) string { return field.name + ": " + s.describe(field.term) })
 		return "record{" + strings.Join(fields, ", ") + "}"
 	}
 	return term.kind.String()

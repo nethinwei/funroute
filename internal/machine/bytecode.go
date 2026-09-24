@@ -1,13 +1,14 @@
 package machine
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // ArtifactVersion names the shape of everything the digest covers; an artifact
@@ -59,11 +60,7 @@ type Parameter struct {
 // cloneParameters copies each parameter's name and type, the type deep; the
 // doc stays behind.
 func cloneParameters(params []Parameter) []Parameter {
-	out := make([]Parameter, len(params))
-	for i, param := range params {
-		out[i] = Parameter{name: param.name, typ: param.typ}
-	}
-	return out
+	return kit.Map(params, func(param Parameter) Parameter { return Parameter{name: param.name, typ: param.typ} })
 }
 
 // NewParameter is the compiler's entry: a contract is the host's input,
@@ -124,8 +121,7 @@ func ConstantOf(value Value, typ Type) (Constant, bool) {
 
 // value reads the constant back as a value of its type.
 func (c Constant) value() (Value, error) {
-	decoder := json.NewDecoder(bytes.NewReader(c.Value))
-	decoder.UseNumber()
+	decoder := kit.NumberDecoder(c.Value)
 	var input any
 	if err := decoder.Decode(&input); err != nil {
 		return Value{}, fmt.Errorf("constant: %w", err)
@@ -239,11 +235,7 @@ func ArtifactDigest(artifact *Artifact) (string, error) {
 	copyArtifact.Digest = ""
 	// Prose is not part of the contract: digest names and types only. The
 	// ExprJSON needs no scrubbing, because it holds the expression alone.
-	copyArtifact.Args = make([]Parameter, len(artifact.parts.Args))
-	for i, param := range artifact.parts.Args {
-		param.doc = ""
-		copyArtifact.Args[i] = param
-	}
+	copyArtifact.Args = cloneParameters(artifact.parts.Args)
 	copyArtifact.ResultDoc = ""
 	encoded, err := json.Marshal(copyArtifact)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
 )
 
@@ -84,7 +85,7 @@ func structFromGo(input any) (Value, error) {
 // keeps the invariant that no NaN or infinity is ever inside the VM.
 func checkFloats(values []float64) error {
 	for i, value := range values {
-		if math.IsNaN(value) || math.IsInf(value, 0) {
+		if !finite(value) {
 			return fmt.Errorf("item %d: non-finite floats are not supported", i)
 		}
 	}
@@ -104,7 +105,7 @@ func checkFxRates(rates []money.FxRate) error {
 // checkFloatMap is checkFloats for a dictionary's backing.
 func checkFloatMap(entries map[string]float64) error {
 	for key, value := range entries {
-		if math.IsNaN(value) || math.IsInf(value, 0) {
+		if !finite(value) {
 			return fmt.Errorf("entry %q: non-finite floats are not supported", key)
 		}
 	}
@@ -437,13 +438,7 @@ func anySlice(input any, expected Type) ([]any, error) {
 }
 
 // toAnys boxes each item, the []any a decoder would have produced.
-func toAnys[T any](values []T) []any {
-	raw := make([]any, len(values))
-	for i := range values {
-		raw[i] = values[i]
-	}
-	return raw
-}
+func toAnys[T any](values []T) []any { return kit.Map(values, func(value T) any { return value }) }
 
 func coerceDict(input any, expected Type, table *money.Currencies) (Value, error) {
 	if expected.elem == nil {

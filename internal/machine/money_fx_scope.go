@@ -42,7 +42,7 @@ func (f *frame) dropScopes(depth int) {
 		return
 	}
 	mark := f.fxMarks[depth]
-	clearValues(f.fxQuotes[mark:])
+	clear(f.fxQuotes[mark:])
 	f.fxQuotes = f.fxQuotes[:mark]
 	f.fxMarks = f.fxMarks[:depth]
 }

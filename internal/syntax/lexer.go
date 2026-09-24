@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 type tokenKind uint8
@@ -167,11 +169,11 @@ func (l *lexer) lexeme(start int) (token, error) {
 	switch {
 	case ch == '"':
 		return l.stringToken()
-	case ch >= '0' && ch <= '9':
+	case kit.IsDigit(ch):
 		return l.number()
 	case ch == '@':
 		return l.enumMember(start)
-	case isIdentifierStart(ch):
+	case kit.IsNameStart(ch):
 		return l.identifier(start)
 	default:
 		return token{}, unexpectedCharacter(l.source, start)
@@ -229,7 +231,7 @@ func (l *lexer) enumMember(start int) (token, error) {
 }
 
 func (l *lexer) memberName(start int) (string, error) {
-	if l.pos >= len(l.source) || !isIdentifierStart(l.source[l.pos]) {
+	if l.pos >= len(l.source) || !kit.IsNameStart(l.source[l.pos]) {
 		return "", At(start, "syntax error: @ must be followed by an enum member name")
 	}
 	from := l.pos
@@ -248,13 +250,7 @@ func (l *lexer) identifier(start int) (token, error) {
 	return token{kind: tokenIdentifier, text: l.source[start:l.pos], pos: start}, nil
 }
 
-func isIdentifierStart(ch byte) bool {
-	return ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
-}
-
-func isIdentifierPart(ch byte) bool {
-	return isIdentifierStart(ch) || (ch >= '0' && ch <= '9') || ch == '.'
-}
+func isIdentifierPart(ch byte) bool { return kit.IsNameChar(ch) || ch == '.' }
 
 func (l *lexer) number() (token, error) {
 	start := l.pos
@@ -316,7 +312,7 @@ func (l *lexer) ratioUnit() string {
 func (l *lexer) digits() {
 	for l.pos < len(l.source) {
 		ch := l.source[l.pos]
-		if (ch >= '0' && ch <= '9') || (ch == '_' && l.startsDigitAt(l.pos+1)) {
+		if kit.IsDigit(ch) || (ch == '_' && l.startsDigitAt(l.pos+1)) {
 			l.pos++
 			continue
 		}
@@ -325,7 +321,7 @@ func (l *lexer) digits() {
 }
 
 func (l *lexer) startsDigitAt(index int) bool {
-	return index < len(l.source) && l.source[index] >= '0' && l.source[index] <= '9'
+	return index < len(l.source) && kit.IsDigit(l.source[index])
 }
 
 func (l *lexer) stringToken() (token, error) {

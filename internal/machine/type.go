@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // Kind is a runtime and compile-time type constructor: a small enum so values
@@ -59,13 +61,12 @@ func (k Kind) String() string {
 func (k Kind) MarshalText() ([]byte, error) { return []byte(k.String()), nil }
 
 func (k *Kind) UnmarshalText(text []byte) error {
-	for i, name := range kindNames {
-		if name == string(text) {
-			*k = Kind(i)
-			return nil
-		}
+	i := slices.Index(kindNames[:], string(text))
+	if i < 0 {
+		return fmt.Errorf("unknown kind %q", text)
 	}
-	return fmt.Errorf("unknown kind %q", text)
+	*k = Kind(i)
+	return nil
 }
 
 // Type is both a concrete type and, in function signatures, a named type
@@ -260,11 +261,7 @@ func (t Type) String() string {
 
 // fieldTexts is each field as "name: type", the type written by text.
 func (t Type) fieldTexts(text func(Type) string) []string {
-	out := make([]string, len(t.fields))
-	for i, field := range t.fields {
-		out[i] = field.name + ": " + text(field.typ)
-	}
-	return out
+	return kit.Map(t.fields, func(field Field) string { return field.name + ": " + text(field.typ) })
 }
 
 // enumSummaryLimit is how many members an error message spells out. A contract
@@ -337,17 +334,8 @@ func (t Type) IsConcrete() bool {
 		return t.name != ""
 	}
 	if t.kind == EnumKind {
-		if !IsValidFunctionName(t.name) || len(t.values) == 0 {
-			return false
-		}
-		seen := make(map[string]bool, len(t.values))
-		for _, value := range t.values {
-			if seen[value] {
-				return false
-			}
-			seen[value] = true
-		}
-		return true
+		_, twice := kit.Repeated(t.values, kit.Identity[string])
+		return IsValidFunctionName(t.name) && len(t.values) > 0 && !twice
 	}
 	if t.kind == ArrayKind || t.kind == DictKind {
 		return t.elem != nil && t.elem.IsConcrete()
@@ -359,44 +347,26 @@ func (t Type) IsConcrete() bool {
 }
 
 func (t Type) fieldsAreConcrete() bool {
-	if len(t.fields) == 0 {
-		return false
-	}
-	seen := make(map[string]bool, len(t.fields))
-	for _, field := range t.fields {
-		if seen[field.name] || !IsValidFieldName(field.name) || !field.typ.IsConcrete() {
-			return false
-		}
-		seen[field.name] = true
-	}
-	return true
+	_, twice := kit.Repeated(t.fields, Field.Name)
+	return len(t.fields) > 0 && !twice && !slices.ContainsFunc(t.fields, func(field Field) bool {
+		return !IsValidFieldName(field.name) || !field.typ.IsConcrete()
+	})
 }
 
 // FieldIndex is where a field sits in a record, or -1. The compiler resolves a
 // field access with it, so nothing looks a name up at run time.
 func (t Type) FieldIndex(name string) int {
-	for i, field := range t.fields {
-		if field.name == name {
-			return i
-		}
-	}
-	return -1
+	return slices.IndexFunc(t.fields, func(field Field) bool { return field.name == name })
 }
 
 func (t Type) Equal(other Type) bool {
-	if t.kind != other.kind || t.name != other.name || !slices.Equal(t.values, other.values) {
+	if t.kind != other.kind || t.name != other.name || !slices.Equal(t.values, other.values) || !slices.EqualFunc(t.fields, other.fields, sameField) {
 		return false
-	}
-	if len(t.fields) != len(other.fields) {
-		return false
-	}
-	for i, field := range t.fields {
-		if field.name != other.fields[i].name || !field.typ.Equal(other.fields[i].typ) {
-			return false
-		}
 	}
 	if t.elem == nil || other.elem == nil {
 		return t.elem == nil && other.elem == nil
 	}
 	return t.elem.Equal(*other.elem)
 }
+
+func sameField(a, b Field) bool { return a.name == b.name && a.typ.Equal(b.typ) }

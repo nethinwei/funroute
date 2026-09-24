@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
 )
 
@@ -37,14 +38,7 @@ type Manifest struct{ parts manifestParts }
 func (m Manifest) Version() int { return m.parts.Version }
 
 // Money is the money feature the manifest declares, if it declares one.
-func (m Manifest) Money() (money.MoneySpec, bool) {
-	if m.parts.Money == nil {
-		return money.MoneySpec{}, false
-	}
-	spec := *m.parts.Money
-	spec.Currencies = slices.Clone(spec.Currencies)
-	return spec, true
-}
+func (m Manifest) Money() (money.MoneySpec, bool) { return cloneSpec(m.parts.Money) }
 
 func (m Manifest) MarshalJSON() ([]byte, error) { return json.Marshal(m.parts) }
 
@@ -84,24 +78,10 @@ var ErrUnavailable = errors.New("function is not available in this runtime")
 func (r *Registry) Manifest() Manifest {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	keys := make([]string, 0, len(r.byKey))
-	for key := range r.byKey {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	functions := make([]ManifestFunction, len(keys))
-	for i, key := range keys {
-		functions[i] = manifestFunction(r.byKey[key])
-	}
-	handles := make([]string, 0, len(r.byHandle))
-	for name := range r.byHandle {
-		handles = append(handles, name)
-	}
-	slices.Sort(handles)
-	parts := manifestParts{Version: ManifestVersion, Forms: r.enabledFormsLocked(), Handles: handles, Functions: functions}
+	functions := kit.Map(kit.SortedKeys(r.byKey), func(key string) ManifestFunction { return manifestFunction(r.byKey[key]) })
+	parts := manifestParts{Version: ManifestVersion, Forms: r.enabledFormsLocked(), Handles: kit.SortedKeys(r.byHandle), Functions: functions}
 	if r.money != nil {
 		spec := r.money.Spec()
-		spec.Currencies = slices.Clone(spec.Currencies)
 		parts.Money = &spec
 	}
 	return Manifest{parts: parts}
@@ -204,7 +184,7 @@ func unavailable(name string) EvalFunc {
 
 // unavailableError is a call to a function known only by its signature.
 func unavailableError(name string) error {
-	return money.Classify(ErrExtension, "", fmt.Errorf("%w: %s", ErrUnavailable, name))
+	return kit.Classify(ErrExtension, "", fmt.Errorf("%w: %s", ErrUnavailable, name))
 }
 
 type unavailableKey struct{}
@@ -237,7 +217,7 @@ func TrackUnavailable(ctx context.Context) (context.Context, func() []string) {
 
 func (r *Registry) enabledFormsLocked() []Form {
 	out := make([]Form, 0, len(r.forms))
-	for _, form := range OptionalForms() {
+	for _, form := range optionalForms {
 		if r.forms[form] {
 			out = append(out, form)
 		}

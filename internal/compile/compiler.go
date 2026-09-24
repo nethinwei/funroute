@@ -1,9 +1,12 @@
 package compile
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"slices"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -84,11 +87,7 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	if err := compiler.compile(expr); err != nil {
 		return inferred, nil, compileError(err)
 	}
-	limit := options.MaxInstructions
-	if limit == 0 {
-		limit = 10_000
-	}
-	if len(compiler.instructions) > limit {
+	if limit := cmp.Or(options.MaxInstructions, 10_000); len(compiler.instructions) > limit {
 		return inferred, nil, compileError(fmt.Errorf("compiled program has %d instructions, limit is %d", len(compiler.instructions), limit))
 	}
 	return inferred, compiler, nil
@@ -99,8 +98,8 @@ func newBytecodeCompiler(registry *machine.Registry, inferred *inference) *bytec
 		registry:   registry,
 		inferred:   inferred,
 		argIndex:   map[string]int{},
-		localIndex: map[string][]int{},
-		constIndex: map[string][]int{},
+		localIndex: scoped[int]{},
+		constIndex: scoped[int]{},
 		callIndex:  map[string]int{},
 	}
 	for i, param := range inferred.Params {
@@ -124,11 +123,11 @@ type bytecodeCompiler struct {
 	// one that never folds, known without walking it again.
 	readsArgument map[int]bool
 	argIndex      map[string]int
-	localIndex    map[string][]int
+	localIndex    scoped[int]
 	// constIndex holds the bindings that folded to a constant: they occupy a
 	// constant-pool slot instead of a local one, so nothing is stored at run
 	// time and every read is a single OpConstant.
-	constIndex   map[string][]int
+	constIndex   scoped[int]
 	nextLocal    int
 	callIndex    map[string]int
 	constants    []machine.Constant
@@ -223,12 +222,12 @@ func (c *bytecodeCompiler) emitConstant(value machine.Value, typ machine.Type) e
 }
 
 func (c *bytecodeCompiler) compileVariable(node *syntax.VariableExpr) error {
-	if indexes := c.constIndex[node.Name]; len(indexes) > 0 {
-		c.emit(machine.Instruction{Op: machine.OpConstant, A: indexes[len(indexes)-1]})
+	if index, ok := c.constIndex.top(node.Name); ok {
+		c.emit(machine.Instruction{Op: machine.OpConstant, A: index})
 		return nil
 	}
-	if slots := c.localIndex[node.Name]; len(slots) > 0 {
-		c.emit(machine.Instruction{Op: machine.OpLoadLocal, A: slots[len(slots)-1]})
+	if slot, ok := c.localIndex.top(node.Name); ok {
+		c.emit(machine.Instruction{Op: machine.OpLoadLocal, A: slot})
 		return nil
 	}
 	index, ok := c.argIndex[node.Name]
@@ -247,10 +246,7 @@ func (c *bytecodeCompiler) compileArray(node *syntax.ArrayExpr) error {
 // compileDict packs the values in key order, which is the order the parser
 // and the ExprJSON import keep a dictionary's entries in.
 func (c *bytecodeCompiler) compileDict(node *syntax.DictExpr) error {
-	keys := make([]string, len(node.Entries))
-	for i, entry := range node.Entries {
-		keys[i] = entry.Key
-	}
+	keys := kit.Map(node.Entries, func(entry syntax.DictEntryExpr) string { return entry.Key })
 	return c.compileMake(node.ID, machine.DictKind, dictValues(node),
 		machine.Instruction{Op: machine.OpMakeDict, A: len(keys), Keys: keys}, "cannot compile dictionary with unresolved type")
 }
@@ -259,11 +255,7 @@ func (c *bytecodeCompiler) compileDict(node *syntax.DictExpr) error {
 // them; compileField turns the name into the index it resolved to, so reading
 // a field is one instruction and no name survives into the bytecode.
 func (c *bytecodeCompiler) compileRecord(node *syntax.RecordExpr) error {
-	values := make([]syntax.Expr, len(node.Fields))
-	for i, field := range node.Fields {
-		values[i] = field.Value
-	}
-	return c.compileMake(node.ID, machine.RecordKind, values,
+	return c.compileMake(node.ID, machine.RecordKind, fieldValues(node.Fields),
 		machine.Instruction{Op: machine.OpMakeRecord, A: len(node.Fields)}, "cannot compile record with unresolved type")
 }
 
@@ -412,7 +404,8 @@ func (c *bytecodeCompiler) boundedExpr(expr syntax.Expr) bool {
 		return true
 	case *syntax.VariableExpr:
 		// A binding that folded to a constant is as good as a literal.
-		return len(c.constIndex[node.Name]) > 0
+		_, folded := c.constIndex.top(node.Name)
+		return folded
 	case *syntax.CallExpr:
 		return c.boundedCall(node)
 	}
@@ -436,12 +429,7 @@ func (c *bytecodeCompiler) boundedCall(node *syntax.CallExpr) bool {
 	case "len":
 		return true
 	case "add", "sub", "mul", "div", "mod":
-		for _, arg := range node.Args {
-			if !c.boundedExpr(arg) {
-				return false
-			}
-		}
-		return true
+		return !slices.ContainsFunc(node.Args, func(arg syntax.Expr) bool { return !c.boundedExpr(arg) })
 	}
 	return false
 }
@@ -586,7 +574,7 @@ func (c *bytecodeCompiler) bindLocal(name string) int {
 	}
 	slot := c.nextLocal
 	c.nextLocal++
-	c.localIndex[name] = append(c.localIndex[name], slot)
+	c.localIndex.push(name, slot)
 	return slot
 }
 
@@ -594,8 +582,7 @@ func (c *bytecodeCompiler) unbindLocal(name string) {
 	if name == "" {
 		return
 	}
-	slots := c.localIndex[name]
-	c.localIndex[name] = slots[:len(slots)-1]
+	c.localIndex.pop(name)
 }
 
 // compileReduce lays out: source, init, loop_init, condition, body,
@@ -633,8 +620,8 @@ func (c *bytecodeCompiler) compileLet(node *syntax.LetExpr) error {
 			return err
 		}
 		if folded {
-			c.bindConstant(binding.Name, index)
-			defer c.unbindConstant(binding.Name)
+			c.constIndex.push(binding.Name, index)
+			defer c.constIndex.pop(binding.Name)
 			c.folded++
 			continue
 		}
@@ -646,16 +633,6 @@ func (c *bytecodeCompiler) compileLet(node *syntax.LetExpr) error {
 		c.emit(machine.Instruction{Op: machine.OpStoreLocal, A: slot})
 	}
 	return c.compile(node.Body)
-}
-
-func (c *bytecodeCompiler) bindConstant(name string, index int) {
-	c.constIndex[name] = append(c.constIndex[name], index)
-}
-
-// unbindConstant undoes the bindConstant compileLet made.
-func (c *bytecodeCompiler) unbindConstant(name string) {
-	stack := c.constIndex[name]
-	c.constIndex[name] = stack[:len(stack)-1]
 }
 
 func (c *bytecodeCompiler) compileIf(node *syntax.CallExpr) error {
@@ -677,6 +654,23 @@ func (c *bytecodeCompiler) compileIf(node *syntax.CallExpr) error {
 	}
 	c.instructions[jumpEnd].A = len(c.instructions)
 	return nil
+}
+
+// scoped is names bound in nested scopes, each name's innermost binding last.
+type scoped[T any] map[string][]T
+
+func (s scoped[T]) push(name string, value T) { s[name] = append(s[name], value) }
+
+func (s scoped[T]) pop(name string) { s[name] = s[name][:len(s[name])-1] }
+
+// top is the innermost binding of name, and false when it has none.
+func (s scoped[T]) top(name string) (T, bool) {
+	stack := s[name]
+	if len(stack) == 0 {
+		var zero T
+		return zero, false
+	}
+	return stack[len(stack)-1], true
 }
 
 func (c *bytecodeCompiler) emit(instruction machine.Instruction) int {

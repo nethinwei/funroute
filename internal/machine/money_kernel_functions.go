@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -51,7 +52,7 @@ func registerParts(registry *Registry) {
 		moneyDoc("sign", "金额的符号：负数 -1，零 0，正数 1。", "金额"),
 		func(_ context.Context, args []Value) (Value, error) {
 			// An exact amount's numerator carries its sign.
-			return Int(int64(compareOrdered(args[0].i, 0))), nil
+			return Int(int64(cmp.Compare(args[0].i, 0))), nil
 		})
 	registerMoneyOp(registry, "string", []Type{CurrencyType}, StringType,
 		moneyDoc("string", "币种的代码。", "币种"),

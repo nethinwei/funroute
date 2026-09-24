@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nethinwei/funroute/internal/money"
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // call runs one call instruction. There are three ways to get the value,
@@ -24,7 +24,7 @@ import (
 func (f *frame) call(pc int, instruction Instruction) error {
 	function := f.runtime.functions[instruction.A]
 	if !function.IsBuiltin() && f.deadline && f.ctx.Err() != nil {
-		return fmt.Errorf("%s: %w", function.Name, money.Classify(ErrDeadline, "", f.ctx.Err()))
+		return fmt.Errorf("%s: %w", function.Name, kit.Classify(ErrDeadline, "", f.ctx.Err()))
 	}
 	if f.fuelLeft < function.Doc.Cost {
 		return fmt.Errorf("%w before %s", ErrFuel, function.Name)
@@ -86,7 +86,7 @@ func (f *frame) hostResult(function *RegisteredFunction, value Value, typ *Type)
 func (f *frame) resultTypeError(function *RegisteredFunction, value Value, typ Type) error {
 	err := fmt.Errorf("returned %s, contract requires %s", value.Type(), typ)
 	if value.kind == typ.kind && IsUnitKind(value.kind) {
-		return fmt.Errorf("%s: %w", function.Name, money.Classify(ErrCurrency, "", err))
+		return fmt.Errorf("%s: %w", function.Name, kit.Classify(ErrCurrency, "", err))
 	}
 	return fmt.Errorf("%s: %w", function.Name, f.functionError(function, err))
 }
@@ -106,14 +106,10 @@ func (f *frame) prefetchedAt(pc int) (Prefetched, bool) {
 // is what makes a program stop promptly once its time is up.
 func (f *frame) invokeBounded(function *RegisteredFunction, args []Value) (Value, error) {
 	if f.deadline && f.ctx.Err() != nil {
-		return Value{}, money.Classify(ErrDeadline, "", f.ctx.Err())
+		return Value{}, kit.Classify(ErrDeadline, "", f.ctx.Err())
 	}
-	ctx := f.ctx
-	if function.Doc.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, function.Doc.Timeout)
-		defer cancel()
-	}
+	ctx, cancel := withTimeout(f.ctx, function)
+	defer cancel()
 	var value Value
 	var err error
 	switch {
@@ -124,10 +120,24 @@ func (f *frame) invokeBounded(function *RegisteredFunction, args []Value) (Value
 	default:
 		value, err = function.Eval(ctx, args)
 	}
-	if err != nil && ctx.Err() != nil && !keepsIdentity(err) {
-		return Value{}, money.Classify(ErrDeadline, "", err)
+	return value, timedOut(ctx, err)
+}
+
+// withTimeout is ctx capped by the function's Timeout, when it has one.
+func withTimeout(ctx context.Context, function *RegisteredFunction) (context.Context, context.CancelFunc) {
+	if function.Doc.Timeout > 0 {
+		return context.WithTimeout(ctx, function.Doc.Timeout)
 	}
-	return value, err
+	return ctx, func() {}
+}
+
+// timedOut is a failure under ctx as ErrDeadline once ctx has run out,
+// unless the failure has a class of its own.
+func timedOut(ctx context.Context, err error) error {
+	if err != nil && ctx.Err() != nil && !keepsIdentity(err) {
+		return kit.Classify(ErrDeadline, "", err)
+	}
+	return err
 }
 
 func (f *frame) functionError(function *RegisteredFunction, err error) error {
@@ -149,9 +159,9 @@ func classifyUnder(ctx context.Context, err error) error {
 		return err
 	}
 	if ctx.Err() != nil {
-		return money.Classify(ErrDeadline, "", err)
+		return kit.Classify(ErrDeadline, "", err)
 	}
-	return money.Classify(ErrExtension, "", err)
+	return kit.Classify(ErrExtension, "", err)
 }
 
 // keepsIdentity reports an error that already has one of the classes a host

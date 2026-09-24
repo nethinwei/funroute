@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/nethinwei/funroute/internal/money"
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // RunBatch runs the program once per request, calling each batchable model
@@ -66,7 +66,7 @@ func (p *Program[In, Out]) encodeBatch(ctx context.Context, n int, arg func(int)
 			err = encodeArgs(p.args, p.reads, window, in)
 		}
 		if err != nil {
-			requests[i].result.err = money.Classify(ErrContract, "", err)
+			requests[i].result.err = kit.Classify(ErrContract, "", err)
 			continue
 		}
 		requests[i] = batchRequest{ctx: ctx, args: window, typed: true}
@@ -96,7 +96,7 @@ func (p *Program[In, Out]) decodeInPlace(result batchResult, out *Out) error {
 	*out = zero
 	if err := decodeResult(p.result, result.value, out); err != nil {
 		*out = zero
-		return money.Classify(ErrContract, "result: ", err)
+		return kit.Classify(ErrContract, "result: ", err)
 	}
 	return nil
 }
@@ -126,7 +126,7 @@ func (b *ProgramBatch[In, Out]) Run(ctx context.Context, in *In) (Out, error) {
 	}
 	args := make([]Value, len(b.args.params))
 	if err := encodeArgs(b.args, b.reads, args, in); err != nil {
-		return zero, money.Classify(ErrContract, "", err)
+		return zero, kit.Classify(ErrContract, "", err)
 	}
 	value, err := b.batch.submit(ctx, args, true)
 	if err != nil {

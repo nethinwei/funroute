@@ -2,8 +2,9 @@ package syntax
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -23,8 +24,8 @@ type operatorMatch struct {
 
 // readingOrder is the operator table from the most specific reading down.
 var readingOrder = func() []operatorSpec {
-	order := append([]operatorSpec(nil), sourceOperators...)
-	sort.SliceStable(order, func(i, j int) bool { return order[i].specificity() > order[j].specificity() })
+	order := slices.Clone(sourceOperators)
+	slices.SortStableFunc(order, func(a, b operatorSpec) int { return cmp.Compare(b.specificity(), a.specificity()) })
 	return order
 }()
 
@@ -39,14 +40,7 @@ func readOperator(expr Expr) (operatorMatch, bool) {
 
 // postfixPrecedence is how tightly xs[i] and r.field bind: tighter than any
 // prefix or infix operator, so what they apply to keeps its parentheses.
-var postfixPrecedence = func() int {
-	for _, spec := range sourceOperators {
-		if spec.fixity == "index" {
-			return spec.precedence
-		}
-	}
-	panic("the operator table has no index operator")
-}()
+var postfixPrecedence = sourceOperators[slices.IndexFunc(sourceOperators, func(spec operatorSpec) bool { return spec.fixity == "index" })].precedence
 
 func inline(expr Expr, parent int) string {
 	if match, ok := readOperator(expr); ok {

@@ -1,6 +1,9 @@
 package machine
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // What makes an opcode well-formed lives in one row: the name it takes in
 // JSON and the operands it must have. How it moves the typed stack is
@@ -116,13 +119,12 @@ func (o OpCode) String() string { return o.spec().name }
 func (o OpCode) MarshalText() ([]byte, error) { return []byte(o.String()), nil }
 
 func (o *OpCode) UnmarshalText(text []byte) error {
-	for i := range opcodes {
-		if opcodes[i].name == string(text) {
-			*o = OpCode(i)
-			return nil
-		}
+	i := slices.IndexFunc(opcodes[:], func(spec opcodeSpec) bool { return spec.name == string(text) })
+	if i < 0 {
+		return fmt.Errorf("unknown opcode %q", text)
 	}
-	return fmt.Errorf("unknown opcode %q", text)
+	*o = OpCode(i)
+	return nil
 }
 
 func validateLocalSlot(in Instruction, a *Artifact, fail failFunc) error {

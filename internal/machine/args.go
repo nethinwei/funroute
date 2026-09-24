@@ -2,11 +2,10 @@ package machine
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 
-	"github.com/nethinwei/funroute/internal/money"
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // DefaultFuel is the budget a run gets when the one who asks for it names
@@ -22,10 +21,9 @@ func DecodeArgs(data []byte) (map[string]any, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return args, nil
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
+	decoder := kit.NumberDecoder(data)
 	if err := decoder.Decode(&args); err != nil {
-		return nil, money.Classify(ErrContract, "args: ", err)
+		return nil, kit.Classify(ErrContract, "args: ", err)
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, fmt.Errorf("%w: args: trailing data after the object", ErrContract)

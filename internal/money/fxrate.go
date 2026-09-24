@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // FxRate is an exchange rate, the Go form of fxrate: one unit of the base
@@ -176,21 +178,19 @@ func (f FxRate) MarshalJSON() ([]byte, error) {
 	if err := f.checked(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(struct {
-		Base  string `json:"base"`
-		Quote string `json:"quote"`
-		Rate  string `json:"rate"`
-	}{f.pair.Base, f.pair.Quote, f.rate.String()})
+	return json.Marshal(fxRateJSON{f.pair.Base, f.pair.Quote, f.rate.String()})
+}
+
+type fxRateJSON struct {
+	Base  string `json:"base"`
+	Quote string `json:"quote"`
+	Rate  string `json:"rate"`
 }
 
 // UnmarshalJSON reads the shape MarshalJSON writes. Whether the currencies
 // are declared is the table's to say, where the rate is used.
 func (f *FxRate) UnmarshalJSON(data []byte) error {
-	var shape struct {
-		Base  string `json:"base"`
-		Quote string `json:"quote"`
-		Rate  string `json:"rate"`
-	}
+	var shape fxRateJSON
 	if err := json.Unmarshal(data, &shape); err != nil {
 		return err
 	}
@@ -210,7 +210,7 @@ func readFxRate(base, quote, text string) (FxRate, error) {
 	}
 	r, err := parseRatio(text)
 	if err != nil {
-		return FxRate{}, Classify(ErrArithmetic, fmt.Sprintf("exchange rate %q ", text), err)
+		return FxRate{}, kit.Classify(ErrArithmetic, fmt.Sprintf("exchange rate %q ", text), err)
 	}
 	return newFxRate(&Pair{Base: base, Quote: quote}, r)
 }
@@ -228,7 +228,7 @@ func (c *Currencies) FxRate(base, quote, rate string) (FxRate, error) {
 	}
 	parsed, err := parseRatio(rate)
 	if err != nil {
-		return FxRate{}, Classify(ErrArithmetic, fmt.Sprintf("%s→%s: exchange rate %q ", base, quote, rate), err)
+		return FxRate{}, kit.Classify(ErrArithmetic, fmt.Sprintf("%s→%s: exchange rate %q ", base, quote, rate), err)
 	}
 	return newFxRate(pair, parsed)
 }
@@ -289,10 +289,7 @@ func (c *Currencies) convertAt(m Money, fx FxRate, mode Rounding) (Money, error)
 	if err := m.wellFormed(); err != nil {
 		return Money{}, err
 	}
-	if m.currency != "" && m.currency != fx.pair.Base {
-		return Money{}, fmt.Errorf("%w: %s converted at %s→%s", ErrCurrency, m.currency, fx.pair.Base, fx.pair.Quote)
-	}
-	factor, err := c.factor(fx.pair.Base, fx.pair.Quote, fx.rate)
+	factor, err := c.rateFactor(m.currency, fx)
 	if err != nil {
 		return Money{}, err
 	}
@@ -300,16 +297,21 @@ func (c *Currencies) convertAt(m Money, fx FxRate, mode Rounding) (Money, error)
 	return Money{currency: fx.pair.Quote, minor: minor}, err
 }
 
+// rateFactor is the factor fx converts money in currency by: currency is
+// fx's base, or none for the currency-less zero.
+func (c *Currencies) rateFactor(currency string, fx FxRate) (Ratio, error) {
+	if currency != "" && currency != fx.pair.Base {
+		return Ratio{}, fmt.Errorf("%w: %s converted at %s→%s", ErrCurrency, currency, fx.pair.Base, fx.pair.Quote)
+	}
+	return c.factor(fx.pair.Base, fx.pair.Quote, fx.rate)
+}
+
 // factor is what minor units of from are multiplied by to be minor units of
 // to at rate: the rate rescaled between the two currencies' places.
 func (c *Currencies) factor(from, to string, r Ratio) (Ratio, error) {
 	fromDigits, _ := c.Places(from)
 	toDigits, _ := c.Places(to)
-	scale := Ratio{num: pow10(abs(toDigits - fromDigits)), den: 1}
-	if toDigits >= fromDigits {
-		return r.Mul(scale)
-	}
-	return r.Div(scale)
+	return r.scaleTen(toDigits - fromDigits)
 }
 
 // pairOf is the table's one fxPair for two declared currencies, made the

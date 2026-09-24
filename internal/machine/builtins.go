@@ -1,11 +1,14 @@
 package machine
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // CoreRegistry is the minimal computational kernel: operator-facing functions
@@ -75,7 +78,7 @@ func compareValues(left, right Value) (int, error) {
 	case left.kind == StringKind && right.kind == StringKind:
 		return strings.Compare(left.s, right.s), nil
 	case left.kind == IntKind && right.kind == IntKind:
-		return compareOrdered(left.i, right.i), nil
+		return cmp.Compare(left.i, right.i), nil
 	}
 	first, err := numericFloat(left)
 	if err != nil {
@@ -85,18 +88,7 @@ func compareValues(left, right Value) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return compareOrdered(first, second), nil
-}
-
-func compareOrdered[T int64 | float64](left, right T) int {
-	switch {
-	case left < right:
-		return -1
-	case left > right:
-		return 1
-	default:
-		return 0
-	}
+	return cmp.Compare(first, second), nil
 }
 
 func registerControl(registry *Registry) {
@@ -142,27 +134,35 @@ func registerFallback(registry *Registry, t Type) {
 	})
 }
 
+// arithmetic is the four operators on numbers, int with int and float with
+// float, in registration order; add also joins strings.
+var arithmetic = []struct {
+	name, label, description string
+	ints, floats             EvalFunc
+	mixed                    func(a, b float64) (Value, error)
+}{
+	{"add", "加法 / 拼接", "数值相加或字符串拼接，具体类型由上下文自动推导。", evalIntAdd, evalFloatAdd,
+		func(a, b float64) (Value, error) { return finiteResult(a+b, "add") }},
+	{"sub", "减法", "两个同类型数值相减，具体类型由上下文自动推导。", evalIntSub, evalFloatSub,
+		func(a, b float64) (Value, error) { return finiteResult(a-b, "sub") }},
+	{"mul", "乘法", "两个同类型数值相乘，具体类型由上下文自动推导。", evalIntMul, evalFloatMul,
+		func(a, b float64) (Value, error) { return finiteResult(a*b, "mul") }},
+	{"div", "除法", "两个同类型数值相除；除数不能为零。", evalIntDiv, evalFloatDiv, floatDiv},
+}
+
 func registerArithmetic(registry *Registry) {
-	registerBinary(registry, "add", IntType, "加法 / 拼接", "数值相加或字符串拼接，具体类型由上下文自动推导。", evalIntAdd)
-	registerBinary(registry, "add", FloatType, "加法 / 拼接", "数值相加或字符串拼接，具体类型由上下文自动推导。", evalFloatAdd)
-	registerBinary(registry, "add", StringType, "加法 / 拼接", "数值相加或字符串拼接，具体类型由上下文自动推导。", func(_ context.Context, args []Value) (Value, error) {
-		return String(args[0].s + args[1].s), nil
-	})
-	registerBinary(registry, "sub", IntType, "减法", "两个同类型数值相减，具体类型由上下文自动推导。", evalIntSub)
-	registerBinary(registry, "sub", FloatType, "减法", "两个同类型数值相减，具体类型由上下文自动推导。", evalFloatSub)
-	registerBinary(registry, "mul", IntType, "乘法", "两个同类型数值相乘，具体类型由上下文自动推导。", evalIntMul)
-	registerBinary(registry, "mul", FloatType, "乘法", "两个同类型数值相乘，具体类型由上下文自动推导。", evalFloatMul)
-	registerBinary(registry, "div", IntType, "除法", "两个同类型数值相除；除数不能为零。", evalIntDiv)
-	registerBinary(registry, "div", FloatType, "除法", "两个同类型数值相除；除数不能为零。", evalFloatDiv)
-	registerMixedNumeric(registry, "add", "加法 / 拼接", func(a, b float64) (Value, error) { return finiteResult(a+b, "add") })
-	registerMixedNumeric(registry, "sub", "减法", func(a, b float64) (Value, error) { return finiteResult(a-b, "sub") })
-	registerMixedNumeric(registry, "mul", "乘法", func(a, b float64) (Value, error) { return finiteResult(a*b, "mul") })
-	registerMixedNumeric(registry, "div", "除法", func(a, b float64) (Value, error) {
-		if b == 0 {
-			return Value{}, errDivisionByZero
+	for _, op := range arithmetic {
+		registerBinary(registry, op.name, IntType, op.label, op.description, op.ints)
+		registerBinary(registry, op.name, FloatType, op.label, op.description, op.floats)
+		if op.name == "add" {
+			registerBinary(registry, op.name, StringType, op.label, op.description, func(_ context.Context, args []Value) (Value, error) {
+				return String(args[0].s + args[1].s), nil
+			})
 		}
-		return finiteResult(a/b, "div")
-	})
+	}
+	for _, op := range arithmetic {
+		registerMixedNumeric(registry, op.name, op.label, op.mixed)
+	}
 }
 
 func registerMixedNumeric(registry *Registry, name, label string, eval func(float64, float64) (Value, error)) {
@@ -197,7 +197,7 @@ func registerMixedNumeric(registry *Registry, name, label string, eval func(floa
 func numericFloat(value Value) (float64, error) {
 	if value.kind == IntKind {
 		if value.i < -maxExactFloatInt || value.i > maxExactFloatInt {
-			return 0, errConversion("int %d cannot be represented exactly as float", value.i)
+			return 0, kit.Errorf(ErrArithmetic, "int %d cannot be represented exactly as float", value.i)
 		}
 		return float64(value.i), nil
 	}
@@ -212,25 +212,25 @@ func registerConversions(registry *Registry) {
 }
 
 func registerIntConversions(registry *Registry) {
-	registerConversion(registry, "int", IntType, IntType, "转为整数", "保持整数不变。", func(_ context.Context, args []Value) (Value, error) { return args[0], nil })
+	registerConversion(registry, "int", IntType, IntType, "转为整数", "保持整数不变。", evalIdentity)
 	registerConversion(registry, "int", FloatType, IntType, "转为整数", "只接受没有小数部分的浮点数，避免静默丢失精度。", func(_ context.Context, args []Value) (Value, error) {
 		whole, ok := floatInt(args[0].f)
 		if !ok {
-			return Value{}, errConversion("float %v cannot be converted to int without data loss", args[0].f)
+			return Value{}, kit.Errorf(ErrArithmetic, "float %v cannot be converted to int without data loss", args[0].f)
 		}
 		return Int(whole), nil
 	})
 	registerConversion(registry, "int", StringType, IntType, "转为整数", "解析十进制整数字符串。", func(_ context.Context, args []Value) (Value, error) {
 		value, err := strconv.ParseInt(strings.TrimSpace(args[0].s), 10, 64)
 		if err != nil {
-			return Value{}, errConversion("cannot convert %q to int", args[0].s)
+			return Value{}, kit.Errorf(ErrArithmetic, "cannot convert %q to int", args[0].s)
 		}
 		return Int(value), nil
 	})
 }
 
 func registerFloatConversions(registry *Registry) {
-	registerConversion(registry, "float", FloatType, FloatType, "转为浮点数", "保持浮点数不变。", func(_ context.Context, args []Value) (Value, error) { return args[0], nil })
+	registerConversion(registry, "float", FloatType, FloatType, "转为浮点数", "保持浮点数不变。", evalIdentity)
 	registerConversion(registry, "float", IntType, FloatType, "转为浮点数", "把可精确表示的整数转换为 float64。", func(_ context.Context, args []Value) (Value, error) {
 		value, err := numericFloat(args[0])
 		if err != nil {
@@ -241,14 +241,14 @@ func registerFloatConversions(registry *Registry) {
 	registerConversion(registry, "float", StringType, FloatType, "转为浮点数", "解析有限浮点数字符串。", func(_ context.Context, args []Value) (Value, error) {
 		value, err := strconv.ParseFloat(strings.TrimSpace(args[0].s), 64)
 		if err != nil {
-			return Value{}, errConversion("cannot convert %q to float", args[0].s)
+			return Value{}, kit.Errorf(ErrArithmetic, "cannot convert %q to float", args[0].s)
 		}
 		return CheckedFloat(value)
 	})
 }
 
 func registerStringConversions(registry *Registry) {
-	registerConversion(registry, "string", StringType, StringType, "转为字符串", "保持字符串不变。", func(_ context.Context, args []Value) (Value, error) { return args[0], nil })
+	registerConversion(registry, "string", StringType, StringType, "转为字符串", "保持字符串不变。", evalIdentity)
 	registerConversion(registry, "string", AnyEnumType, StringType, "转为字符串", "取枚举成员的名字。枚举是 nominal 类型，当字符串用必须显式转换。", func(_ context.Context, args []Value) (Value, error) {
 		return String(args[0].s), nil
 	})
@@ -264,7 +264,7 @@ func registerStringConversions(registry *Registry) {
 }
 
 func registerBoolConversions(registry *Registry) {
-	registerConversion(registry, "bool", BoolType, BoolType, "转为布尔值", "保持布尔值不变。", func(_ context.Context, args []Value) (Value, error) { return args[0], nil })
+	registerConversion(registry, "bool", BoolType, BoolType, "转为布尔值", "保持布尔值不变。", evalIdentity)
 	registerConversion(registry, "bool", StringType, BoolType, "转为布尔值", "解析 true 或 false，不接受模糊写法。", func(_ context.Context, args []Value) (Value, error) {
 		switch strings.ToLower(strings.TrimSpace(args[0].s)) {
 		case "true":
@@ -276,6 +276,9 @@ func registerBoolConversions(registry *Registry) {
 		}
 	})
 }
+
+// evalIdentity is a conversion to the type the value already has.
+func evalIdentity(_ context.Context, args []Value) (Value, error) { return args[0], nil }
 
 func registerConversion(registry *Registry, name string, from, to Type, label, description string, eval EvalFunc) {
 	mustRegister(registry, FunctionSpec{
@@ -366,14 +369,18 @@ func evalFloatMul(_ context.Context, args []Value) (Value, error) {
 }
 
 func evalFloatDiv(_ context.Context, args []Value) (Value, error) {
-	if args[1].f == 0 {
+	return floatDiv(args[0].f, args[1].f)
+}
+
+func floatDiv(a, b float64) (Value, error) {
+	if b == 0 {
 		return Value{}, errDivisionByZero
 	}
-	return finiteResult(args[0].f/args[1].f, "div")
+	return finiteResult(a/b, "div")
 }
 
 func finiteResult(value float64, operation string) (Value, error) {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
+	if !finite(value) {
 		return Value{}, fmt.Errorf("%w: non-finite float result in %s", ErrArithmetic, operation)
 	}
 	return Float(value), nil

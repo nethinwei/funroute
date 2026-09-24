@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 	"github.com/nethinwei/funroute/internal/syntax"
@@ -124,10 +125,7 @@ func examples(list []machine.Example) string {
 	if len(list) == 0 {
 		return ""
 	}
-	lines := make([]string, len(list))
-	for i, example := range list {
-		lines[i] = example.Source + "  // " + example.Result
-	}
+	lines := kit.Map(list, func(example machine.Example) string { return example.Source + "  // " + example.Result })
 	return "\n\n```funroute\n" + strings.Join(lines, "\n") + "\n```"
 }
 
@@ -179,22 +177,16 @@ func (s *Server) currencies() []completionItem {
 	if !declared {
 		return nil
 	}
-	items := make([]completionItem, len(spec.Currencies))
-	for i, currency := range spec.Currencies {
-		items[i] = completionItem{Label: currency.Code, Kind: kindConstant, SortText: "4" + currency.Code, Detail: fmt.Sprintf("currency，%d 位小数", currency.Digits)}
-	}
-	return items
+	return kit.Map(spec.Currencies, func(currency money.CurrencySpec) completionItem {
+		return completionItem{Label: currency.Code, Kind: kindConstant, SortText: "4" + currency.Code, Detail: fmt.Sprintf("currency，%d 位小数", currency.Digits)}
+	})
 }
 
 // arguments is what the program takes: the contract's, or, when it declares
 // none, what the compiler inferred from the text as it last compiled.
 func (s *Server) arguments(doc *document) []machine.Parameter {
 	if len(s.contract.Args) > 0 {
-		out := make([]machine.Parameter, len(s.contract.Args))
-		for i, arg := range s.contract.Args {
-			out[i] = machine.NewParameter(arg.Name, arg.Type, arg.Doc)
-		}
-		return out
+		return kit.Map(s.contract.Args, func(arg compile.ArgSpec) machine.Parameter { return machine.NewParameter(arg.Name, arg.Type, arg.Doc) })
 	}
 	if analysis, _ := s.analysisOf(doc); analysis != nil {
 		return analysis.Params

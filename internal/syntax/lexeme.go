@@ -1,8 +1,8 @@
 package syntax
 
 import (
+	"cmp"
 	"slices"
-	"sort"
 )
 
 // Lexemes says what every piece of a source is in this language: its lexical
@@ -70,7 +70,7 @@ func Lexemes(source string) ([]Lexeme, error) {
 	// Clipped to its length, so the append copies rather than writing into
 	// r.tokens.
 	all := append(slices.Clip(r.tokens[:len(r.tokens)-1]), r.lex.comments...)
-	sort.Slice(all, func(i, j int) bool { return all[i].pos < all[j].pos })
+	slices.SortFunc(all, func(a, b token) int { return cmp.Compare(a.pos, b.pos) })
 	out := make([]Lexeme, 0, len(all))
 	for _, tok := range all {
 		out = append(out, pieces(tok, r.parser.roles)...)

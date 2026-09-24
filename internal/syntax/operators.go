@@ -1,8 +1,10 @@
 package syntax
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -131,7 +133,7 @@ func lexedOperators() []lexedOperator {
 		seen[spec.token] = true
 		out = append(out, lexedOperator{spec.token, spec.kind})
 	}
-	sort.SliceStable(out, func(i, j int) bool { return len(out[i].text) > len(out[j].text) })
+	slices.SortStableFunc(out, func(a, b lexedOperator) int { return cmp.Compare(len(b.text), len(a.text)) })
 	return out
 }
 
@@ -216,9 +218,5 @@ func isNumber(expr Expr) bool {
 // Operators lists every operator as its fixity and spelling, fixity:token,
 // in the parser's table order.
 func Operators() []string {
-	out := make([]string, len(sourceOperators))
-	for i, spec := range sourceOperators {
-		out[i] = spec.fixity + ":" + spec.token
-	}
-	return out
+	return kit.Map(sourceOperators, func(spec operatorSpec) string { return spec.fixity + ":" + spec.token })
 }

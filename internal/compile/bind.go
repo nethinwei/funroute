@@ -20,10 +20,7 @@ func Bind[In, Out any](registry *machine.Registry) (*Binding[In, Out], error) {
 		return nil, err
 	}
 	result := codec.Result()
-	options := CompileOptions{Result: &result}
-	for _, param := range codec.Parameters() {
-		options.Args = append(options.Args, ArgSpec{Name: param.Name(), Type: param.Type()})
-	}
+	options := CompileOptions{Args: argSpecs(codec.Parameters()), Result: &result}
 	if err := ValidateContract(options); err != nil {
 		return nil, err
 	}
@@ -34,10 +31,7 @@ func Bind[In, Out any](registry *machine.Registry) (*Binding[In, Out], error) {
 // language server that checks against it. It is a copy.
 func (b *Binding[In, Out]) Options() CompileOptions {
 	options := b.options
-	options.Args = make([]ArgSpec, len(b.options.Args))
-	for i, arg := range b.options.Args {
-		options.Args[i] = ArgSpec{Name: arg.Name, Type: arg.Type, Doc: arg.Doc}
-	}
+	options.Args = append([]ArgSpec{}, b.options.Args...)
 	result := *b.options.Result
 	options.Result = &result
 	return options

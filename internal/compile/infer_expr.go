@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -74,11 +75,7 @@ func inferVariable(node *syntax.VariableExpr, state *inferState, context inferCo
 
 // dictValues is a dictionary literal's values, in key order.
 func dictValues(node *syntax.DictExpr) []syntax.Expr {
-	values := make([]syntax.Expr, len(node.Entries))
-	for i, entry := range node.Entries {
-		values[i] = entry.Value
-	}
-	return values
+	return kit.Map(node.Entries, func(entry syntax.DictEntryExpr) syntax.Expr { return entry.Value })
 }
 
 // inferHomogeneous infers an array or dictionary node, whose elements all share
@@ -111,7 +108,7 @@ func inferAs(expr syntax.Expr, want typeTerm, state *inferState, context inferCo
 
 // typeErrorAt is err, or the node's own message when err is a mismatch.
 func typeErrorAt(node syntax.Expr, err error, message string) error {
-	if errors.As(err, new(mismatch)) {
+	if _, ok := errors.AsType[mismatch](err); ok {
 		return syntax.Around(node, "type error: %s", message)
 	}
 	return err

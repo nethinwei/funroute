@@ -67,8 +67,8 @@ func over(start, end int, format string, args ...any) error {
 // LineColumn finds err's position in source, counting lines from 1 and columns
 // in characters. It reports false when the error carries no position.
 func LineColumn(err error, source string) (line, column int, ok bool) {
-	var positioned *PosError
-	if !errors.As(err, &positioned) || positioned.pos < 0 {
+	positioned, ok := errors.AsType[*PosError](err)
+	if !ok || positioned.pos < 0 {
 		return 0, 0, false
 	}
 	pos := min(positioned.pos, len(source))

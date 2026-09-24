@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -181,8 +182,7 @@ type exprJSONDocument struct {
 func decodeDocument(data []byte) (exprJSONDocument, error) {
 	var document exprJSONDocument
 	var fields map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
+	decoder := kit.NumberDecoder(data)
 	if err := decoder.Decode(&fields); err != nil {
 		return document, fmt.Errorf("decode expression JSON: %w", err)
 	}

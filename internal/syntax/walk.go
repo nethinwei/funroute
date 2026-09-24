@@ -2,12 +2,15 @@ package syntax
 
 import (
 	"fmt"
+	"iter"
+	"maps"
 	"reflect"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -172,12 +175,11 @@ func sortLists(value reflect.Value, plan *structPlan) {
 }
 
 func keyField(plan *structPlan, name string) int {
-	for _, field := range plan.fields {
-		if field.name == name {
-			return field.index
-		}
+	at := slices.IndexFunc(plan.fields, func(field fieldPlan) bool { return field.name == name })
+	if at < 0 {
+		panic(fmt.Sprintf("sort key %q is not a field", name))
 	}
-	panic(fmt.Sprintf("sort key %q is not a field", name))
+	return plan.fields[at].index
 }
 
 // Children returns a node's direct subexpressions, in definition order and
@@ -188,6 +190,24 @@ func Children(expr Expr) []Expr {
 	return out
 }
 
+// Nodes is root and every node under it, parents before their children and
+// children in definition order.
+func Nodes(root Expr) iter.Seq[Expr] {
+	return func(yield func(Expr) bool) { preorder(root, yield) }
+}
+
+func preorder(expr Expr, yield func(Expr) bool) bool {
+	if !yield(expr) {
+		return false
+	}
+	for _, child := range Children(expr) {
+		if !preorder(child, yield) {
+			return false
+		}
+	}
+	return true
+}
+
 // scope is the set of locally bound names at a point in the tree.
 type scope map[string]bool
 
@@ -196,9 +216,7 @@ func (s scope) with(names []string) scope {
 		return s
 	}
 	inner := make(scope, len(s)+len(names))
-	for name := range s {
-		inner[name] = true
-	}
+	maps.Copy(inner, s)
 	for _, name := range names {
 		inner[name] = true
 	}
@@ -327,12 +345,7 @@ func heldExpr(value reflect.Value) Expr {
 // contract. Locals bound by let, for and reduce are not free, so a name used
 // only inside a comprehension never becomes an argument.
 func FreeVariables(expr Expr) []string {
-	reads := FirstReads(expr)
-	names := make([]string, len(reads))
-	for i, read := range reads {
-		names[i] = read.Name
-	}
-	return names
+	return kit.Map(FirstReads(expr), func(read *VariableExpr) string { return read.Name })
 }
 
 // FreeReads is every read of a free variable in expr, by node ID: the reads

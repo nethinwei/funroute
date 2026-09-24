@@ -79,14 +79,6 @@ func ClassName(err error) string {
 // errDivisionByZero is every division by zero the machine refuses.
 var errDivisionByZero = fmt.Errorf("%w: division by zero", ErrArithmetic)
 
-// errConversion is a conversion with no answer — text that is not a number, a
-// float with a fraction taken as an int, an int a float cannot hold, a figure
-// with more places than a ratio keeps: arithmetic with no answer, like a
-// division by zero, and so the rule's or the data's.
-func errConversion(format string, args ...any) error {
-	return fmt.Errorf("%w: %s", ErrArithmetic, fmt.Sprintf(format, args...))
-}
-
 // overflowIn is an integer result past int64 in the named operation.
 func overflowIn(operation string) error {
 	return fmt.Errorf("%w: integer overflow in %s", ErrArithmetic, operation)

@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // CurrencySpec is one currency a console accepts: its code and how many
@@ -27,11 +29,7 @@ type MoneySpec struct {
 
 // Codes is the declared currency codes, in the spec's order.
 func (spec MoneySpec) Codes() []string {
-	codes := make([]string, len(spec.Currencies))
-	for i, currency := range spec.Currencies {
-		codes[i] = currency.Code
-	}
-	return codes
+	return kit.Map(spec.Currencies, func(currency CurrencySpec) string { return currency.Code })
 }
 
 // maxCurrencyDigits is as many places as any currency in use has, a
@@ -171,10 +169,21 @@ func (c *Currencies) Format(m Money) (string, error) {
 }
 
 // pow10 is 10^n for n from 0 to 18.
-func pow10(n int) int64 {
-	out := int64(1)
-	for range n {
-		out *= 10
+func pow10(n int) int64 { return powersOfTen[n] }
+
+var powersOfTen = [19]int64{1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18}
+
+// IsCurrencyCode reports whether name has the shape of a currency code: an
+// upper-case letter, then two to seven upper-case letters or digits. It is
+// the one rule; the type parser, the source parser and the registry use it.
+func IsCurrencyCode(name string) bool {
+	if len(name) < 3 || len(name) > 8 || name[0] < 'A' || name[0] > 'Z' {
+		return false
 	}
-	return out
+	for i := 1; i < len(name); i++ {
+		if (name[i] < 'A' || name[i] > 'Z') && !kit.IsDigit(name[i]) {
+			return false
+		}
+	}
+	return true
 }
