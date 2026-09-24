@@ -3,10 +3,10 @@ package machine
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,11 +23,13 @@ func TestMoneyArrivesInEitherJSONShape(t *testing.T) {
 		want  string
 	}{
 		"text":            {"USD 1.70", MoneyType, "{USD 170}"},
-		"minor units":     {map[string]any{"currency": "JPY", "minor": float64(500)}, MoneyType, "{JPY 500}"},
-		"zero":            {float64(0), MoneyType, "{ 0}"},
+		"minor units":     {map[string]any{"currency": "JPY", "minor": json.Number("500")}, MoneyType, "{JPY 500}"},
+		"zero":            {json.Number("0"), MoneyType, "{ 0}"},
 		"a ratio string":  {"0.029", RatioType, "0.029"},
-		"a ratio number":  {0.03, RatioType, "0.03"},
+		"a ratio number":  {json.Number("0.03"), RatioType, "0.03"},
 		"an exact number": {json.Number("1.25"), RatioType, "1.25"},
+		"18 places":       {json.Number("0.123456789012345678"), RatioType, "0.123456789012345678"},
+		"18 places text":  {"-0.123456789012345678", RatioType, "-0.123456789012345678"},
 		"a currency":      {"JPY", CurrencyType, "JPY"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -52,7 +54,7 @@ func TestMoneyTextMustFitTheCurrency(t *testing.T) {
 			t.Fatalf("coerce(%q) error = %v, want one containing %q", input, err, want)
 		}
 	}
-	if _, err := coerceWith(float64(5), MoneyType, table); err == nil {
+	if _, err := coerceWith(json.Number("5"), MoneyType, table); err == nil {
 		t.Fatal("a bare 5 became money, want an error: only zero has no currency")
 	}
 }
@@ -113,24 +115,23 @@ func TestEveryMoneyShapeCoerces(t *testing.T) {
 		typ   Type
 		want  string
 	}{
-		"minor as a json.Number":      {map[string]any{"currency": "USD", "minor": json.Number("170")}, MoneyType, "{USD 170}"},
-		"minor as an int":             {map[string]any{"currency": "USD", "minor": 170}, MoneyType, "{USD 170}"},
-		"minor as a negative int64":   {map[string]any{"currency": "USD", "minor": int64(-5)}, MoneyType, "{USD -5}"},
-		"extra keys are ignored":      {map[string]any{"currency": "USD", "minor": 1, "note": "x"}, MoneyType, "{USD 1}"},
-		"an empty code with zero":     {map[string]any{"currency": "", "minor": 0}, MoneyType, "{ 0}"},
-		"an int zero":                 {0, MoneyType, "{ 0}"},
-		"an int64 zero":               {int64(0), MoneyType, "{ 0}"},
-		"a json.Number zero":          {json.Number("0"), MoneyType, "{ 0}"},
-		"a negative float zero":       {math.Copysign(0, -1), MoneyType, "{ 0}"},
-		"a Go money.Money":            {money.Make("USD", 3), MoneyType, "{USD 3}"},
-		"a money Value":               {MoneyValue(3, "USD"), MoneyType, "{USD 3}"},
-		"a ratio as a whole int":      {3, RatioType, "3"},
-		"a negative ratio int64":      {int64(-2), RatioType, "-2"},
-		"a ratio as a uint8":          {uint8(1), RatioType, "1"},
-		"a negative ratio string":     {"-0.5", RatioType, "-0.5"},
-		"a ratio float of ten places": {0.0000000001, RatioType, "0.0000000001"},
-		"a Go money.Ratio":            {ratio(29, 1000), RatioType, "0.029"},
-		"a Go money.Currency":         {money.CurrencyOf("USD"), CurrencyType, "USD"},
+		"minor as a json.Number":    {map[string]any{"currency": "USD", "minor": json.Number("170")}, MoneyType, "{USD 170}"},
+		"minor as an int":           {map[string]any{"currency": "USD", "minor": 170}, MoneyType, "{USD 170}"},
+		"minor as a negative int64": {map[string]any{"currency": "USD", "minor": int64(-5)}, MoneyType, "{USD -5}"},
+		"extra keys are ignored":    {map[string]any{"currency": "USD", "minor": 1, "note": "x"}, MoneyType, "{USD 1}"},
+		"an empty code with zero":   {map[string]any{"currency": "", "minor": 0}, MoneyType, "{ 0}"},
+		"an int zero":               {0, MoneyType, "{ 0}"},
+		"an int64 zero":             {int64(0), MoneyType, "{ 0}"},
+		"a json.Number zero":        {json.Number("0"), MoneyType, "{ 0}"},
+		"a Go money.Money":          {money.Make("USD", 3), MoneyType, "{USD 3}"},
+		"a money Value":             {MoneyValue(3, "USD"), MoneyType, "{USD 3}"},
+		"a ratio as a whole int":    {3, RatioType, "3"},
+		"a negative ratio int64":    {int64(-2), RatioType, "-2"},
+		"a ratio as a uint8":        {uint8(1), RatioType, "1"},
+		"a negative ratio string":   {"-0.5", RatioType, "-0.5"},
+		"a ratio of ten places":     {json.Number("0.0000000001"), RatioType, "0.0000000001"},
+		"a Go money.Ratio":          {ratio(29, 1000), RatioType, "0.029"},
+		"a Go money.Currency":       {money.CurrencyOf("USD"), CurrencyType, "USD"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -180,6 +181,33 @@ func TestMoneyShapesThatDoNotCoerce(t *testing.T) {
 	}
 }
 
+// A float64 never becomes money, a ratio or a rate: decoded into any, JSON
+// has already rounded it to the binary fraction nearest what was written.
+func TestAFloat64NeverBecomesMoney(t *testing.T) {
+	t.Parallel()
+	table := declared(t, money.CurrencySpec{Code: "USD", Digits: 2}).currencies()
+	for name, test := range map[string]struct {
+		input any
+		typ   Type
+	}{
+		"money zero":         {0.0, MoneyType},
+		"a negative zero":    {math.Copysign(0, -1), MoneyType},
+		"minor units":        {map[string]any{"currency": "USD", "minor": 170.0}, MoneyType},
+		"a ratio":            {0.03, RatioType},
+		"a whole ratio":      {3.0, RatioType},
+		"a float32 ratio":    {float32(0.5), RatioType},
+		"an exchange rate":   {map[string]any{"base": "USD", "quote": "JPY", "rate": 150.25}, FxRateType},
+		"an array of ratios": {[]any{0.1}, ArrayOf(RatioType)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if value, err := coerceWith(test.input, test.typ, table); err == nil || !strings.Contains(err.Error(), "may already be rounded") {
+				t.Fatalf("coerce(%#v, %s) = %s, %v, want the float64 refused", test.input, test.typ, sprint(value), err)
+			}
+		})
+	}
+}
+
 // Without a table only the text form needs one: minor units, ratios and
 // currencies read the same.
 func TestCoercingMoneyWithoutATable(t *testing.T) {
@@ -192,8 +220,8 @@ func TestCoercingMoneyWithoutATable(t *testing.T) {
 		typ   Type
 		want  string
 	}{
-		"minor units": {map[string]any{"currency": "USD", "minor": 170.0}, MoneyType, "{USD 170}"},
-		"zero":        {0.0, MoneyType, "{ 0}"},
+		"minor units": {map[string]any{"currency": "USD", "minor": json.Number("170")}, MoneyType, "{USD 170}"},
+		"zero":        {json.Number("0"), MoneyType, "{ 0}"},
 		"a ratio":     {"0.029", RatioType, "0.029"},
 		"a currency":  {"USD", CurrencyType, "USD"},
 	} {
@@ -221,7 +249,9 @@ func TestMoneyContainersKeepTheNativeBacking(t *testing.T) {
 		t.Fatalf("FromValue(coerce(fees)) = %v, %v, want the same map", back, err)
 	}
 	amounts := []money.Money{money.Make("USD", 1)}
-	if value, err := coerceWith(amounts, ArrayOf(MoneyType), nil); err != nil || &value.box.([]money.Money)[0] != &amounts[0] {
+	if value, err := coerceWith(amounts, ArrayOf(MoneyType), nil); err != nil {
+		t.Fatalf("coerce([]money.Money) = %v, %v, want the same backing", value.box, err)
+	} else if packed, ok := value.box.([]money.Money); !ok || &packed[0] != &amounts[0] {
 		t.Fatalf("coerce([]money.Money) = %v, %v, want the same backing", value.box, err)
 	}
 	table := declared(t, money.CurrencySpec{Code: "USD", Digits: 2}).currencies()
@@ -235,13 +265,13 @@ func TestMoneyContainersKeepTheNativeBacking(t *testing.T) {
 	}
 }
 
-func TestKindErrorNamesBothSides(t *testing.T) {
+func TestFromValueErrorNamesBothSides(t *testing.T) {
 	t.Parallel()
-	if err := kindError(true, Int(1), money.Money{}); err != nil {
-		t.Fatalf("kindError(ok) = %v, want nil", err)
+	if code, err := FromValue[money.Currency](CurrencyValue("USD")); err != nil || code.Code() != "USD" {
+		t.Fatalf("FromValue[money.Currency](USD) = %v, %v, want USD", code, err)
 	}
-	if err := kindError(false, Int(1), money.Money{}); err == nil || err.Error() != "argument is int, want money.Money" {
-		t.Fatalf("kindError(int, money.Money) = %v, want %q", err, "argument is int, want money.Money")
+	if _, err := FromValue[money.Currency](Int(1)); err == nil || err.Error() != "argument is int, want money.Currency" {
+		t.Fatalf("FromValue[money.Currency](int) error = %v, want %q", err, "argument is int, want money.Currency")
 	}
 	if _, err := FromValue[money.Ratio](MoneyValue(1, "USD")); err == nil || !strings.Contains(err.Error(), "want money.Ratio") {
 		t.Fatalf("FromValue[money.Ratio](money) error = %v, want one naming money.Ratio", err)
@@ -254,7 +284,7 @@ func TestWholeRatiosAreExact(t *testing.T) {
 	t.Parallel()
 	for _, whole := range []int64{0, 1, -1, 922_337_204, math.MaxInt64, -math.MaxInt64} {
 		got, err := coerceRatio(whole)
-		if want := fmt.Sprint(whole); err != nil || got.String() != want {
+		if want := strconv.FormatInt(whole, 10); err != nil || got.String() != want {
 			t.Fatalf("coerceRatio(%d) = %s, %v, want %s", whole, got, err, want)
 		}
 	}
@@ -276,7 +306,6 @@ func TestExchangeRatesCoerce(t *testing.T) {
 	}{
 		"a decimal string":     {usdJPY("150.25"), FxRateType, "150.25 JPY / USD"},
 		"a json.Number":        {usdJPY(json.Number("150.25")), FxRateType, "150.25 JPY / USD"},
-		"a float":              {usdJPY(150.25), FxRateType, "150.25 JPY / USD"},
 		"a fraction":           {usdJPY("1/3"), FxRateType, "1/3 JPY / USD"},
 		"a currency to itself": {map[string]any{"base": "USD", "quote": "USD", "rate": "1"}, FxRateType, "1 USD / USD"},
 		"extra keys":           {map[string]any{"base": "USD", "quote": "JPY", "rate": "150", "at": "noon"}, FxRateType, "150 JPY / USD"},
@@ -306,7 +335,7 @@ func TestExchangeRateShapesThatDoNotCoerce(t *testing.T) {
 		"a rate that is a bool":    {input: map[string]any{"base": "USD", "quote": "JPY", "rate": true}, text: `needs a "rate"`},
 		"a lowercase code":         {input: map[string]any{"base": "usd", "quote": "JPY", "rate": "150"}, want: ErrCurrency},
 		"a zero rate":              {input: map[string]any{"base": "USD", "quote": "JPY", "rate": "0"}, want: ErrArithmetic},
-		"a negative rate":          {input: map[string]any{"base": "USD", "quote": "JPY", "rate": -150.0}, want: ErrArithmetic},
+		"a negative rate":          {input: map[string]any{"base": "USD", "quote": "JPY", "rate": json.Number("-150")}, want: ErrArithmetic},
 		"an exponent":              {input: map[string]any{"base": "USD", "quote": "JPY", "rate": "1.5e2"}, want: ErrArithmetic},
 		"itself, not 1":            {input: map[string]any{"base": "USD", "quote": "USD", "rate": "2"}, want: ErrArithmetic},
 	} {

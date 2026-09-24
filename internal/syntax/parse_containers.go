@@ -27,7 +27,7 @@ func (p *parser) parseBrace() (Expr, error) {
 	p.index++
 	if p.peek().kind == tokenRightBrace {
 		p.index++
-		return &DictExpr{ID: p.id(), Pos: start.pos}, nil
+		return &DictExpr{Node: p.at(start.pos)}, nil
 	}
 	// The first key of a record is read as an expression, which would take a
 	// reserved word for a bad variable name; it is a bad field name.
@@ -37,11 +37,8 @@ func (p *parser) parseBrace() (Expr, error) {
 	if first := p.peek(); p.fieldOnlyName(first) && p.tokens[p.index+1].kind == tokenColon {
 		return p.recordNamedFirst(start, first)
 	}
-	key, err := p.parseExpr()
+	key, err := p.exprThen(tokenColon, "':' after the key")
 	if err != nil {
-		return nil, err
-	}
-	if err := p.expect(tokenColon, "':' after the key"); err != nil {
 		return nil, err
 	}
 	value, err := p.parseExpr()
@@ -76,7 +73,7 @@ func (p *parser) recordNamedFirst(start, name token) (Expr, error) {
 // One clause only: splicing dictionaries would have to answer what a repeated
 // key means, and a nested list comprehension inside the value says it better.
 func (p *parser) dictComprehension(start token, key, value Expr) (Expr, error) {
-	clauses, err := p.loopClauses(start)
+	clauses, err := p.loopClauses()
 	if err != nil {
 		return nil, err
 	}
@@ -98,20 +95,16 @@ type loopClause struct {
 // loopClauses reads the clauses back to back, starting on a "for". Python
 // spells a cartesian product this way and so does this language, because the
 // alternative — flatten([[...] for ...]) — is a puzzle, not a rule.
-func (p *parser) loopClauses(start token) ([]loopClause, error) {
+func (p *parser) loopClauses() ([]loopClause, error) {
 	var clauses []loopClause
 	for {
 		p.takeKeyword() // for
-		key, variable, err := p.loopVariables(start)
+		key, variable, err := p.loopVariables()
 		if err != nil {
 			return nil, err
 		}
 		p.takeKeyword() // in
-		source, err := p.parseExpr()
-		if err != nil {
-			return nil, err
-		}
-		where, err := p.loopFilter()
+		source, where, err := p.loopSource()
 		if err != nil {
 			return nil, err
 		}
@@ -134,7 +127,7 @@ func (p *parser) nestClauses(start token, clauses []loopClause, yieldKey, yield 
 			key = yieldKey
 		}
 		expr, err := p.node(start, &ForExpr{
-			ID: p.id(), Pos: start.pos, Source: clause.source, Variable: clause.variable,
+			Node: p.at(start.pos), Source: clause.source, Variable: clause.variable,
 			KeyVariable: clause.key, Where: clause.where, YieldKey: key, Yield: node,
 			Flatten: !innermost,
 		})
@@ -172,31 +165,37 @@ func (p *parser) parseBraceLiteral(start token, key, value Expr) (Expr, error) {
 
 func (p *parser) dictLiteral(start token, firstKey string, firstValue Expr) (Expr, error) {
 	entries := []DictEntryExpr{{Key: firstKey, Value: firstValue}}
-	for {
-		if done, err := p.endOfBrace(); err != nil {
-			return nil, err
-		} else if done {
-			return p.node(start, &DictExpr{ID: p.id(), Pos: start.pos, Entries: entries})
-		}
-		keyToken := p.peek()
-		if keyToken.kind != tokenString {
-			return nil, p.errorf(keyToken, "dictionary keys must be strings")
-		}
-		p.index++
-		p.mark(keyToken, RoleLiteral)
-		key, err := p.unquote(keyToken, "invalid dictionary key")
-		if err != nil {
-			return nil, err
-		}
-		if err := p.expect(tokenColon, "':' after the dictionary key"); err != nil {
-			return nil, err
-		}
-		value, err := p.parseExpr()
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, DictEntryExpr{Key: key, Value: value})
+	err := p.rest(tokenRightBrace, true, "',' between entries", func() error {
+		entry, err := p.dictEntry()
+		entries = append(entries, entry)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
+	return p.node(start, &DictExpr{Node: p.at(start.pos), Entries: entries})
+}
+
+// dictEntry reads one "key": value.
+func (p *parser) dictEntry() (DictEntryExpr, error) {
+	keyToken := p.peek()
+	if keyToken.kind != tokenString {
+		return DictEntryExpr{}, p.errorf(keyToken, "dictionary keys must be strings")
+	}
+	p.index++
+	p.mark(keyToken, RoleLiteral)
+	key, err := p.unquote(keyToken, "invalid dictionary key")
+	if err != nil {
+		return DictEntryExpr{}, err
+	}
+	if err := p.expect(tokenColon, "':' after the dictionary key"); err != nil {
+		return DictEntryExpr{}, err
+	}
+	value, err := p.parseExpr()
+	if err != nil {
+		return DictEntryExpr{}, err
+	}
+	return DictEntryExpr{Key: key, Value: value}, nil
 }
 
 func (p *parser) recordLiteral(start token, firstName string, firstValue Expr) (Expr, error) {
@@ -204,7 +203,7 @@ func (p *parser) recordLiteral(start token, firstName string, firstValue Expr) (
 	if err != nil {
 		return nil, err
 	}
-	return p.node(start, &RecordExpr{ID: p.id(), Pos: start.pos, Fields: fields})
+	return p.node(start, &RecordExpr{Node: p.at(start.pos), Fields: fields})
 }
 
 // parseWith reads what follows base in base with {name: value, …}: the
@@ -227,23 +226,20 @@ func (p *parser) parseWith(base Expr) (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return p.node(with, &RecordUpdateExpr{ID: p.id(), Pos: with.pos, Base: base, Fields: fields})
+	return p.node(with, &RecordUpdateExpr{Node: p.at(with.pos), Base: base, Fields: fields})
 }
 
 // recordFields reads ", name: value" entries up to the closing brace.
 func (p *parser) recordFields(fields []RecordFieldExpr) ([]RecordFieldExpr, error) {
-	for {
-		if done, err := p.endOfBrace(); err != nil {
-			return nil, err
-		} else if done {
-			return fields, nil
-		}
+	err := p.rest(tokenRightBrace, true, "',' between entries", func() error {
 		field, err := p.recordField()
-		if err != nil {
-			return nil, err
-		}
 		fields = append(fields, field)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
+	return fields, nil
 }
 
 // recordField reads one name: value.
@@ -267,28 +263,11 @@ func (p *parser) recordField() (RecordFieldExpr, error) {
 	return RecordFieldExpr{Name: name.text, Value: value}, nil
 }
 
-// endOfBrace consumes the separator after an entry and reports whether the
-// brace closed, so a trailing comma reads the same as in a list.
-func (p *parser) endOfBrace() (bool, error) {
-	if p.peek().kind == tokenRightBrace {
-		p.index++
-		return true, nil
-	}
-	if err := p.expect(tokenComma, "',' between entries"); err != nil {
-		return false, err
-	}
-	if p.peek().kind == tokenRightBrace {
-		p.index++
-		return true, nil
-	}
-	return false, nil
-}
-
 // comprehension reads [yield for item in source if condition], the same shape
 // Python and Haskell use. It is sugar for a ForExpr, so ExprJSON and the canvas
 // see one node either way.
 func (p *parser) comprehension(start token, yield Expr) (Expr, error) {
-	clauses, err := p.loopClauses(start)
+	clauses, err := p.loopClauses()
 	if err != nil {
 		return nil, err
 	}
@@ -298,37 +277,43 @@ func (p *parser) comprehension(start token, yield Expr) (Expr, error) {
 	return p.nestClauses(start, clauses, nil, yield)
 }
 
-// loopFilter reads the optional "if condition" that both loop forms share:
-// items the condition rejects are neither yielded nor folded.
-func (p *parser) loopFilter() (Expr, error) {
+// loopSource reads what a loop walks and the optional "if condition" after
+// it, which both loop forms share: items the condition rejects are neither
+// yielded nor folded. A loop without a condition gets a nil where.
+func (p *parser) loopSource() (source, where Expr, err error) {
+	source, err = p.parseExpr()
+	if err != nil {
+		return nil, nil, err
+	}
 	if !p.keyword("if") {
-		return nil, nil
+		return source, nil, nil
 	}
 	p.takeKeyword()
-	return p.parseExpr()
+	where, err = p.parseExpr()
+	if err != nil {
+		return nil, nil, err
+	}
+	return source, where, nil
 }
 
 // loopVariables reads "v" or "k, v" and leaves the parser on the in keyword.
 // Two variables mean a dictionary walk: the key comes first, like Python's
 // `for k, v in d.items()`.
-func (p *parser) loopVariables(at token) (key string, value string, err error) {
-	first, err := p.localIdentifier()
+func (p *parser) loopVariables() (key string, value string, err error) {
+	value, err = p.localIdentifier()
 	if err != nil {
 		return "", "", err
 	}
-	if p.peek().kind != tokenComma {
-		if !p.keyword("in") {
-			return "", "", p.errorf(p.peek(), "expected 'in' after the loop variable")
+	what := "the loop variable"
+	if p.peek().kind == tokenComma {
+		p.index++
+		key, what = value, "the loop variables"
+		if value, err = p.localIdentifier(); err != nil {
+			return "", "", err
 		}
-		return "", first, nil
-	}
-	p.index++
-	second, err := p.localIdentifier()
-	if err != nil {
-		return "", "", err
 	}
 	if !p.keyword("in") {
-		return "", "", p.errorf(p.peek(), "expected 'in' after the loop variables")
+		return "", "", p.errorf(p.peek(), "expected 'in' after %s", what)
 	}
-	return first, second, nil
+	return key, value, nil
 }

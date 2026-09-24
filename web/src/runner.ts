@@ -6,42 +6,29 @@
 // server decodes the values against the contract, so a wrong one comes back as
 // the server's message.
 import { LitElement, css, html, nothing } from "lit";
-import type { ArgSpec, ResultSpec, RunResult } from "./protocol.ts";
-import { define, fieldStyles, labelStyles } from "./ui.ts";
+import type { PropertyValues } from "lit";
+import { property, state } from "lit/decorators.js";
+import type { Argument, ResultSpec, RunResult } from "./protocol.ts";
+import { define, emit, fieldStyles, labelStyles } from "./ui.ts";
 
 export class RunPanel extends LitElement {
-  static properties = {
-    args: { attribute: false }, result: { attribute: false }, busy: { type: Boolean },
-    inferred: { type: Boolean }, returns: { state: true }, elapsed: { state: true },
-  };
-  declare result: RunResult | null;
-  declare busy: boolean;
+  @property({ attribute: false }) accessor args: Argument[] = [];
+  @property({ attribute: false }) accessor result: RunResult | null = null;
+  @property({ type: Boolean }) accessor busy = false;
   // inferred says the arguments were read from the text, not declared.
-  declare inferred: boolean;
-  declare returns: ResultSpec;
-  declare elapsed: number;
-  private list: ArgSpec[] = [];
+  @property({ type: Boolean }) accessor inferred = false;
+  @state() accessor returns: ResultSpec = { type: "", doc: "" };
+  // elapsed is how long the run took, measured by the page around the request.
+  @state() accessor elapsed = 0;
   // values is what was typed for each argument, by name.
   values: Record<string, string> = {};
 
-  constructor() {
-    super();
-    this.result = null;
-    this.busy = false;
-    this.inferred = false;
-    this.returns = { type: "", doc: "" };
-    this.elapsed = 0;
-  }
-
-  get args(): ArgSpec[] { return this.list; }
-
   // A value typed for an argument that is gone goes with it; one that is
   // still there keeps what was typed.
-  set args(args: ArgSpec[]) {
-    const old = this.list;
-    this.list = args;
-    this.values = Object.fromEntries(args.filter(({ name }) => name in this.values).map(({ name }) => [name, this.values[name]]));
-    this.requestUpdate("args", old);
+  willUpdate(changed: PropertyValues<this>) {
+    if (changed.has("args")) {
+      this.values = Object.fromEntries(this.args.filter(({ name }) => name in this.values).map(({ name }) => [name, this.values[name]]));
+    }
   }
 
   // declared is the result the contract declares, or none.
@@ -55,22 +42,16 @@ export class RunPanel extends LitElement {
   }
 
   entries() {
-    return this.list.map(({ name }) => ({ name, text: this.values[name] ?? "" }));
-  }
-
-  // done records how long the run took, measured by the page around the request.
-  done(result: RunResult, elapsed: number) {
-    this.result = result;
-    this.elapsed = elapsed;
+    return this.args.map(({ name }) => ({ name, text: this.values[name] ?? "" }));
   }
 
   private run() {
-    this.dispatchEvent(new Event("run", { bubbles: true, composed: true }));
+    emit(this, "run");
   }
 
   private setReturns(key: keyof ResultSpec, value: string) {
     this.returns = { ...this.returns, [key]: value };
-    this.dispatchEvent(new Event("returns-change", { bubbles: true, composed: true }));
+    emit(this, "returns-change");
   }
 
   private returnsSection() {
@@ -81,12 +62,12 @@ export class RunPanel extends LitElement {
       <input class="doc" .value=${this.returns.doc ?? ""} placeholder="说明返回值的含义" aria-label="返回说明" @change=${edit("doc")}></section>`;
   }
 
-  private argRow({ name, type, doc }: ArgSpec) {
+  private argRow({ name, type, doc, example }: Argument) {
     const id = `arg-${name}`;
     return html`<div class="arg">
       <label for=${id}><strong>${name}</strong><code>${type}</code></label>
       ${doc ? html`<p class="doc">${doc}</p>` : nothing}
-      <input id=${id} .value=${this.values[name] ?? ""} placeholder=${placeholderFor(type)} spellcheck="false"
+      <input id=${id} .value=${this.values[name] ?? ""} placeholder=${example} spellcheck="false"
         @input=${(event: Event) => { this.values[name] = (event.target as HTMLInputElement).value; }}
         @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter") this.run(); }}></div>`;
   }
@@ -94,8 +75,8 @@ export class RunPanel extends LitElement {
   private argsSection() {
     const empty = this.inferred ? "表达式没有读任何参数。" : "契约里没有参数，表达式也没有读任何参数。";
     return html`<section class="args" aria-label="入参">
-      <h4 class="label">入参${this.inferred && this.list.length ? html`<span class="hint">由表达式推导，可在契约里声明</span>` : nothing}</h4>
-      ${this.list.length ? this.list.map((arg) => this.argRow(arg)) : html`<p class="empty">${empty}</p>`}</section>`;
+      <h4 class="label">入参${this.inferred && this.args.length ? html`<span class="hint">由表达式推导，可在契约里声明</span>` : nothing}</h4>
+      ${this.args.length ? this.args.map((arg) => this.argRow(arg)) : html`<p class="empty">${empty}</p>`}</section>`;
   }
 
   private outcome(result: RunResult) {
@@ -135,7 +116,6 @@ export class RunPanel extends LitElement {
       color: var(--on-ink); background: var(--ink); font-family: inherit; font-size: 12px; font-weight: 750; cursor: pointer; }
     .run svg { width: 12px; height: 12px; }
     .run:disabled { opacity: .6; cursor: wait; }
-    .run:focus-visible { outline: 3px solid var(--ring); }
     code { color: var(--violet-ink); font: 10.5px var(--mono); }
     input { width: 100%; }
     .returns { display: grid; grid-template-columns: auto minmax(70px, .8fr) minmax(0, 1.4fr); gap: 6px; align-items: center;
@@ -144,7 +124,6 @@ export class RunPanel extends LitElement {
     .returns .type { color: var(--violet-ink); }
     .returns .doc { font-family: inherit; }
     .args { display: grid; gap: 10px; }
-    .bad { margin: 0; color: var(--danger-ink); font-size: 11px; }
     .hint { margin-left: 8px; font-weight: 500; letter-spacing: 0; }
     .arg { display: grid; gap: 4px; }
     .arg label { display: flex; gap: 8px; align-items: baseline; color: var(--ink-2); font-size: 12px; }
@@ -164,22 +143,6 @@ export class RunPanel extends LitElement {
     .note { margin: 0; color: var(--ink-3); font-size: 11px; line-height: 1.5; }
     .note code { margin-right: 6px; }
   `];
-}
-
-// placeholderFor shows the shape a value of type takes as JSON. An alias
-// names its shape elsewhere, so it gets the general hint.
-function placeholderFor(type: string): string {
-  if (type === "array<fxrate>") return "[{\"base\": \"USD\", \"quote\": \"JPY\", \"rate\": \"150.25\"}]";
-  if (type.startsWith("array")) return "[ … ]";
-  if (type.startsWith("dict") || type.startsWith("record")) return "{ … }";
-  if (type === "string" || type.startsWith("enum")) return "\"…\"";
-  if (type === "bool") return "true / false";
-  if (type === "int" || type === "float") return "0";
-  if (type.startsWith("money")) return "\"USD 1.70\"";
-  if (type === "ratio") return "\"0.029\"";
-  if (type.startsWith("fxrate")) return "{\"base\": \"USD\", \"quote\": \"JPY\", \"rate\": \"150.25\"}";
-  if (type.startsWith("currency")) return "\"USD\"";
-  return "JSON 值";
 }
 
 define("fr-runner", RunPanel);

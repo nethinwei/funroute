@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // DefaultFuel is the budget a run gets when the one who asks for it names
@@ -23,7 +25,7 @@ func DecodeArgs(data []byte) (map[string]any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	if err := decoder.Decode(&args); err != nil {
-		return nil, fmt.Errorf("%w: args: %v", ErrContract, err)
+		return nil, money.Classify(ErrContract, "args: ", err)
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, fmt.Errorf("%w: args: trailing data after the object", ErrContract)

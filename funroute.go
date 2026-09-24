@@ -99,7 +99,12 @@ func DefineHandle[T any](registry *Registry, name string) error {
 	return machine.DefineHandle[T](registry, name)
 }
 
-// The registry is the single authority on what exists and what it means.
+// The registry is the single authority on what exists and what it means, and
+// Registry.Register is the one way to add a function to it. A host function is
+// a FunctionSpec that names a Go function in Go, its signature read once by
+// reflection — any arity, an optional leading context.Context, Go containers
+// nested to any depth, a result with or without an error — and GoBatch when it
+// also has a batch implementation.
 type (
 	Registry     = machine.Registry
 	FunctionSpec = machine.FunctionSpec
@@ -120,15 +125,6 @@ const (
 	SwitchForm = machine.SwitchForm
 	ForForm    = machine.ForForm
 	ReduceForm = machine.ReduceForm
-)
-
-// A host function is registered by its Go signature, read once by reflection:
-// Logic for business logic, Model for a model that also has a batch
-// implementation. Both accept any arity, an optional leading context.Context,
-// and Go containers nested to any depth.
-var (
-	Logic = machine.Logic
-	Model = machine.Model
 )
 
 // The catalog is what a registry offers — its functions and its forms, with
@@ -242,10 +238,9 @@ var NewBatch = machine.NewBatch
 // fewer arguments, in another order, and records with fewer fields, as a
 // console that declares only what a rule reads does; a Go string carries an
 // enum. Program.RunBatch runs requests the host already holds, sharing each
-// model call; RunBatchInto writes the results into the host's own objects and
-// RunBatchFunc reaches requests and results wherever they live. One index
-// names a request, its result and its failure in all three. Program.Batch
-// does the same for requests from many goroutines.
+// model call, reading and writing them wherever they live; one index names a
+// request, its result and its failure. Program.Batch does the same for
+// requests from many goroutines.
 type (
 	Binding[In, Out any]      = compile.Binding[In, Out]
 	Program[In, Out any]      = machine.Program[In, Out]

@@ -242,8 +242,9 @@ func TestRoundRoundsWhatItsStepsMake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var calls []string
-	for _, call := range machine.PartsOf(artifact).Calls {
+	parts := machine.PartsOf(artifact)
+	calls := make([]string, 0, len(parts.Calls))
+	for _, call := range parts.Calls {
 		calls = append(calls, call.Name)
 	}
 	if strings.Join(calls, " ") != "mul round" {

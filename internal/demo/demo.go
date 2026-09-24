@@ -7,6 +7,7 @@
 package demo
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -20,20 +21,18 @@ import (
 // registry accepts terminates.
 func NewRegistry() (*funroute.Registry, error) {
 	registry := funroute.CoreRegistry()
-	if err := registry.EnableForm(funroute.SwitchForm, funroute.ForForm, funroute.ReduceForm); err != nil {
-		return nil, err
-	}
 	// Money is declared before the pack, which registers its aggregates over
 	// money only when there is money to aggregate.
 	currencies := append(std.ISO4217(), cryptoCurrencies...)
-	if err := registry.DeclareMoney(funroute.MoneySpec{Currencies: currencies}); err != nil {
-		return nil, err
-	}
-	if err := std.Register(registry); err != nil {
-		return nil, err
-	}
-	if err := Register(registry); err != nil {
-		return nil, err
+	for _, step := range []func() error{
+		func() error { return registry.EnableForm(funroute.SwitchForm, funroute.ForForm, funroute.ReduceForm) },
+		func() error { return registry.DeclareMoney(funroute.MoneySpec{Currencies: currencies}) },
+		func() error { return std.Register(registry) },
+		func() error { return Register(registry) },
+	} {
+		if err := step(); err != nil {
+			return nil, err
+		}
 	}
 	return registry, nil
 }
@@ -43,21 +42,43 @@ func NewRegistry() (*funroute.Registry, error) {
 // implementation against the ABI the artifact will freeze.
 func Register(registry *funroute.Registry) error {
 	if registry == nil {
-		return fmt.Errorf("registry is required")
+		return errors.New("registry is required")
 	}
-	if err := registerHealth(registry); err != nil {
-		return err
-	}
-	if err := registerScore(registry); err != nil {
-		return err
-	}
-	if err := registerFeeQuote(registry); err != nil {
+	if err := registerAll(registry, routeFunctions()); err != nil {
 		return err
 	}
 	if err := registerMoneyQuote(registry); err != nil {
 		return err
 	}
-	return registerModel(registry)
+	if err := funroute.DefineHandle[*Embedding](registry, "demo.embedding"); err != nil {
+		return err
+	}
+	return registerAll(registry, modelFunctions())
+}
+
+func registerAll(registry *funroute.Registry, specs []funroute.FunctionSpec) error {
+	for _, spec := range specs {
+		if err := registry.Register(spec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// batchOf is the batch implementation of a function of one request: it calls
+// it once per request, in order, and stops at the first error.
+func batchOf[In, Out any](one func(In) (Out, error)) func([]In) ([]Out, error) {
+	return func(inputs []In) ([]Out, error) {
+		out := make([]Out, len(inputs))
+		for i, input := range inputs {
+			result, err := one(input)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = result
+		}
+		return out, nil
+	}
 }
 
 // Embedding stands in for an inference engine's tensor. The expression passes
@@ -65,36 +86,29 @@ func Register(registry *funroute.Registry) error {
 // looks inside; a real host would define its engine's tensor type the same way.
 type Embedding struct{ Features []float64 }
 
-// registerModel is the deep-learning shape: a model that turns features into
+// modelFunctions are the deep-learning shape: a model that turns features into
 // an engine value, and a model that scores it. Both carry a batch
 // implementation, so a Batch calls them once per batch of requests.
-func registerModel(registry *funroute.Registry) error {
-	if err := funroute.DefineHandle[*Embedding](registry, "demo.embedding"); err != nil {
-		return err
-	}
-	err := funroute.Model(registry, "model.embed_v1", funroute.Doc{
-		Label: "特征向量化", Description: "演示模型：把特征数组交给引擎，得到一个不透明的向量句柄。", Category: "模型", Cost: 20, Params: []string{"特征"}, Result: "向量句柄",
-	}, func(features []float64) (*Embedding, error) {
-		return &Embedding{Features: features}, nil
-	}, func(features [][]float64) ([]*Embedding, error) {
-		out := make([]*Embedding, len(features))
-		for i, row := range features {
-			out[i] = &Embedding{Features: row}
-		}
-		return out, nil
-	})
-	if err != nil {
-		return err
-	}
-	return funroute.Model(registry, "model.fraud_v1", funroute.Doc{
-		Label: "欺诈评分", Description: "演示模型：对向量句柄打分，返回 0 到 1 的欺诈概率（这里取特征均值）。", Category: "模型", Cost: 20, Params: []string{"向量句柄"}, Result: "欺诈概率",
-	}, fraudScore, func(embeddings []*Embedding) ([]float64, error) {
-		out := make([]float64, len(embeddings))
-		for i, embedding := range embeddings {
-			out[i], _ = fraudScore(embedding)
-		}
-		return out, nil
-	})
+func modelFunctions() []funroute.FunctionSpec {
+	return []funroute.FunctionSpec{{
+		Name: "model.embed_v1",
+		Doc: funroute.Doc{
+			Label: "特征向量化", Description: "演示模型：把特征数组交给引擎，得到一个不透明的向量句柄。", Category: "模型", Cost: 20, Params: []string{"特征"}, Result: "向量句柄",
+		},
+		Go:      embed,
+		GoBatch: batchOf(embed),
+	}, {
+		Name: "model.fraud_v1",
+		Doc: funroute.Doc{
+			Label: "欺诈评分", Description: "演示模型：对向量句柄打分，返回 0 到 1 的欺诈概率（这里取特征均值）。", Category: "模型", Cost: 20, Params: []string{"向量句柄"}, Result: "欺诈概率",
+		},
+		Go:      fraudScore,
+		GoBatch: batchOf(fraudScore),
+	}}
+}
+
+func embed(features []float64) (*Embedding, error) {
+	return &Embedding{Features: features}, nil
 }
 
 func fraudScore(embedding *Embedding) (float64, error) {
@@ -108,46 +122,52 @@ func fraudScore(embedding *Embedding) (float64, error) {
 	return total / float64(len(embedding.Features)), nil
 }
 
-func registerHealth(registry *funroute.Registry) error {
-	return funroute.Logic(registry, "route.is_healthy_v1", funroute.Doc{
-		Label:       "渠道是否健康",
-		Description: "把渠道健康快照中的 UP 映射为 true。示例函数只做纯计算，真实健康度应作为参数传入。",
-		Category:    "支付路由",
-		Cost:        3,
-		Params:      []string{"健康状态"},
-		Result:      "是否可用",
-	}, func(status string) (bool, error) {
-		return strings.EqualFold(status, "UP"), nil
-	})
-}
-
-func registerScore(registry *funroute.Registry) error {
-	return funroute.Logic(registry, "route.score_v1", funroute.Doc{
-		Label:       "渠道评分",
-		Description: "演示评分：成功率 × 100 − 成本。生产公式应由业务扩展包自行实现和版本化。",
-		Category:    "支付路由",
-		Cost:        5,
-		Params:      []string{"成功率", "成本"},
-		Result:      "评分",
-	}, func(authRate, cost float64) (float64, error) {
-		return authRate*100 - cost, nil
-	})
-}
-
-func registerFeeQuote(registry *funroute.Registry) error {
-	return funroute.Logic(registry, "route.fee_quote_v1", funroute.Doc{
-		Label:       "获取渠道费率",
-		Description: "演示一个可能失败的渠道调用：健康状态不是 UP 时返回扩展错误，可由 fallback 切到备用报价。",
-		Category:    "支付路由",
-		Cost:        5,
-		Params:      []string{"健康状态", "渠道报价"},
-		Result:      "有效费率",
-	}, func(status string, fee float64) (float64, error) {
-		if !strings.EqualFold(status, "UP") {
-			return 0, fmt.Errorf("fee quote provider is %s", status)
-		}
-		return fee, nil
-	})
+// routeFunctions are the payment routing functions of plain Go types, made
+// afresh for each registry as a host would.
+func routeFunctions() []funroute.FunctionSpec {
+	return []funroute.FunctionSpec{{
+		Name: "route.is_healthy_v1",
+		Doc: funroute.Doc{
+			Label:       "渠道是否健康",
+			Description: "把渠道健康快照中的 UP 映射为 true。示例函数只做纯计算，真实健康度应作为参数传入。",
+			Category:    "支付路由",
+			Cost:        3,
+			Params:      []string{"健康状态"},
+			Result:      "是否可用",
+		},
+		Go: func(status string) (bool, error) {
+			return strings.EqualFold(status, "UP"), nil
+		},
+	}, {
+		Name: "route.score_v1",
+		Doc: funroute.Doc{
+			Label:       "渠道评分",
+			Description: "演示评分：成功率 × 100 − 成本。生产公式应由业务扩展包自行实现和版本化。",
+			Category:    "支付路由",
+			Cost:        5,
+			Params:      []string{"成功率", "成本"},
+			Result:      "评分",
+		},
+		Go: func(authRate, cost float64) (float64, error) {
+			return authRate*100 - cost, nil
+		},
+	}, {
+		Name: "route.fee_quote_v1",
+		Doc: funroute.Doc{
+			Label:       "获取渠道费率",
+			Description: "演示一个可能失败的渠道调用：健康状态不是 UP 时返回扩展错误，可由 fallback 切到备用报价。",
+			Category:    "支付路由",
+			Cost:        5,
+			Params:      []string{"健康状态", "渠道报价"},
+			Result:      "有效费率",
+		},
+		Go: func(status string, fee float64) (float64, error) {
+			if !strings.EqualFold(status, "UP") {
+				return 0, fmt.Errorf("fee quote provider is %s", status)
+			}
+			return fee, nil
+		},
+	}}
 }
 
 // cryptoCurrencies are the tokens a payment desk settles in, declared at the

@@ -1,5 +1,6 @@
 /* The workbench's own page. Colours come from tokens.css. */
 :root {
+  min-width: 320px;
   font-family: Inter, "SF Pro Display", "PingFang SC", system-ui, -apple-system, sans-serif;
   font-synthesis: none;
   color: var(--ink);
@@ -7,8 +8,7 @@
 }
 
 * { box-sizing: border-box; }
-html { min-width: 320px; background: var(--bg); }
-body { margin: 0; min-width: 320px; background: radial-gradient(circle at 20% -20%, var(--bg-glow) 0, transparent 30rem), var(--bg); }
+body { margin: 0; background: radial-gradient(circle at 20% -20%, var(--bg-glow) 0, transparent 30rem), var(--bg); }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible {
@@ -66,7 +66,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .command-deck h1 { margin: 12px 0 10px; color: var(--ink); font-size: clamp(30px, 3.2vw, 50px); line-height: 1.04; letter-spacing: -.045em; }
 .command-deck h1 em { color: var(--violet-strong); font-style: normal; }
 .command-deck__intro p { max-width: 570px; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.7; }
-.command-deck__controls { display: grid; gap: 13px; align-content: start; }
 .examples-block { display: grid; gap: 8px; }
 .control-label { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .examples { display: grid; gap: 7px; }
@@ -97,11 +96,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .step { display: grid; place-items: center; flex: 0 0 29px; height: 29px; border-radius: 8px; color: var(--violet-ink); background: var(--violet-soft); font: 750 10px var(--mono); }
 .source-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
 .shortcut { margin-right: 3px; color: var(--muted); font: 10px var(--mono); white-space: nowrap; }
-.source-panel__editor { padding: 13px 15px 15px; }
 
-.studio-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
 .inspector { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
-.inspector-card { min-width: 0; padding: 15px; border-radius: 16px; }
+.inspector-card { min-width: 0; padding: 0; overflow: hidden; border-radius: 16px; }
+.inspector-card summary { padding: 13px 15px; color: var(--ink-3); font-size: 11px; font-weight: 700; cursor: pointer; }
 /* The expression and its test run sit side by side, two thirds to one third.
    Neither column scrolls: the editor grows with its content and the runner is
    laid out so its own content decides the height. */
@@ -109,22 +107,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 /* The editor fills its column: it grows with the expression, and when the test
    run beside it is taller, the box stretches instead of leaving the gap blank. */
 .source-views { display: flex; flex-direction: column; min-width: 0; }
-.source-views > .source-panel__editor { display: flex; flex: 1; min-width: 0; }
-.source-views > .source-panel__structure { flex: 1; min-width: 0; }
+.source-panel__editor { display: flex; flex: 1; min-width: 0; padding: 13px 15px 15px; }
+.source-panel__structure { flex: 1; min-width: 0; }
 .source-views > [hidden] { display: none; }
 /* The two views of the expression. The tab that cannot be taken yet — the
    text has an error — is dimmed, and says why when hovered. */
 .view-tabs { display: flex; gap: 4px; padding: 10px 15px 0; border-bottom: 1px solid var(--line-3); }
 .view-tab { margin-bottom: -1px; padding: 7px 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 10px 10px 0 0;
-  color: var(--muted); background: none; font-size: 12px; font-weight: 700; cursor: pointer; }
+  color: var(--muted); background: none; font-size: 12px; font-weight: 700; }
 .view-tab[aria-selected="true"] { border-color: var(--line-3); color: var(--ink-2); background: var(--surface); }
 .view-tab[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
-.view-tab:focus-visible { outline: 3px solid var(--ring); }
 .contract-runner { min-width: 0; border-left: 1px solid var(--line-3); background: var(--surface-2); }
 
-
-.json-card { padding: 0; overflow: hidden; }
-.json-card summary { padding: 13px 15px; color: var(--ink-3); font-size: 11px; font-weight: 700; cursor: pointer; }
 .code { max-height: 420px; margin: 0; padding: 14px; overflow: auto; border-top: 1px solid var(--code-line); color: var(--code-ink); background: var(--code-bg); font: 10px/1.65 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 1180px) {
@@ -147,13 +141,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   .source-panel > .section-heading { align-items: flex-start; flex-direction: column; }
   .source-toolbar { width: 100%; justify-content: flex-end; }
 }
-.syntax-card { padding: 0; overflow: hidden; }
-.syntax-card summary { padding: 13px 15px; color: var(--ink-3); font-size: 11px; font-weight: 700; cursor: pointer; }
 .reference { max-height: 520px; overflow: auto; padding: 0 15px 15px; }
 .reference h4 { margin: 12px 0 6px; color: var(--muted); font-size: 10px; letter-spacing: .08em; }
 .reference dl { margin: 0; display: grid; gap: 4px; }
-.reference dt code { color: var(--blue-ink); font: 11px var(--mono); }
-.reference dd { margin: 0 0 6px; color: var(--ink-3); font-size: 11px; line-height: 1.5; }
-.reference .money-note { margin: 0 0 6px; color: var(--ink-3); font-size: 11px; line-height: 1.5; }
+.reference dt code, .reference .currencies code { color: var(--blue-ink); font: 11px var(--mono); }
+.reference dd, .reference .money-note { margin: 0 0 6px; color: var(--ink-3); font-size: 11px; line-height: 1.5; }
 .reference .currencies { margin: 0; line-height: 1.8; }
-.reference .currencies code { color: var(--blue-ink); font: 11px var(--mono); }

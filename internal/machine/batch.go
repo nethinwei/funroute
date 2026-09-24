@@ -2,9 +2,12 @@ package machine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // Batch runs one artifact for many requests, calling each model once per batch
@@ -96,8 +99,9 @@ func (b *Batch) Sites() int { return len(b.sites) }
 // call from many goroutines; that is the point. The hoisted engine calls run
 // under the earliest deadline in the batch, and each program under its own.
 func (b *Batch) Run(ctx context.Context, args []Value) (Value, error) {
-	if len(args) != len(b.runtime.artifact.parts.Args) {
-		return Value{}, fmt.Errorf("%w: expected %d arguments, got %d", ErrContract, len(b.runtime.artifact.parts.Args), len(args))
+	// Only their number here: admit holds each to its type in the batch.
+	if err := b.runtime.checkKinds(args, true); err != nil {
+		return Value{}, err
 	}
 	return b.submit(ctx, args, false)
 }
@@ -107,7 +111,7 @@ func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, er
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, err)
+		return Value{}, money.Classify(ErrDeadline, "", err)
 	}
 	request := &batchRequest{ctx: ctx, args: args, done: make(chan batchResult, 1), typed: typed}
 	if err := b.enqueue(request); err != nil {
@@ -117,7 +121,7 @@ func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, er
 	case result := <-request.done:
 		return result.value, result.err
 	case <-ctx.Done():
-		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, ctx.Err())
+		return Value{}, money.Classify(ErrDeadline, "", ctx.Err())
 	}
 }
 
@@ -125,7 +129,7 @@ func (b *Batch) enqueue(request *batchRequest) error {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
-		return fmt.Errorf("batch is closed")
+		return errors.New("batch is closed")
 	}
 	b.pending = append(b.pending, request)
 	if len(b.pending) >= b.options.MaxSize {
@@ -235,7 +239,7 @@ func (b *Batch) rejectCanceled(requests []*batchRequest) []*batchRequest {
 	active := make([]*batchRequest, 0, len(requests))
 	for _, request := range requests {
 		if err := request.ctx.Err(); err != nil {
-			request.finish(batchResult{err: fmt.Errorf("%w: %v", ErrDeadline, err)})
+			request.finish(batchResult{err: money.Classify(ErrDeadline, "", err)})
 			continue
 		}
 		active = append(active, request)
@@ -281,12 +285,9 @@ func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchR
 		calls[i] = b.operands(site, request.args)
 	}
 	results, err := invokeBatch(ctx, site.function, calls)
-	if err != nil && !keepsIdentity(err) && ctx.Err() != nil {
-		err = fmt.Errorf("%w: %v", ErrDeadline, err)
-	} else if err != nil && !keepsIdentity(err) {
-		err = fmt.Errorf("%w: %v", ErrExtension, err)
-	}
-	if err == nil && len(results) != len(requests) {
+	if err != nil {
+		err = classifyUnder(ctx, err)
+	} else if len(results) != len(requests) {
 		err = fmt.Errorf("batch returned %d results for %d requests", len(results), len(requests))
 	}
 	for i := range requests {
@@ -310,12 +311,12 @@ func invokeBatch(ctx context.Context, function *RegisteredFunction, calls [][]Va
 	var results []Value
 	var err error
 	if function.Doc.Detached {
-		results, err = callBatchDetached(ctx, function, calls)
+		results, err = detached(ctx, function, calls, callBatchSafely)
 	} else {
 		results, err = callBatchSafely(ctx, function, calls)
 	}
 	if err != nil && ctx.Err() != nil && !keepsIdentity(err) {
-		return nil, fmt.Errorf("%w: %v", ErrDeadline, err)
+		return nil, money.Classify(ErrDeadline, "", err)
 	}
 	return results, err
 }
@@ -327,24 +328,6 @@ func callBatchSafely(ctx context.Context, function *RegisteredFunction, calls []
 		}
 	}()
 	return function.EvalBatch(ctx, calls)
-}
-
-func callBatchDetached(ctx context.Context, function *RegisteredFunction, calls [][]Value) ([]Value, error) {
-	type outcome struct {
-		values []Value
-		err    error
-	}
-	done := make(chan outcome, 1)
-	go func() {
-		values, err := callBatchSafely(ctx, function, calls)
-		done <- outcome{values: values, err: err}
-	}()
-	select {
-	case result := <-done:
-		return result.values, result.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
 }
 
 // operands assembles one request's arguments for a hoisted call.

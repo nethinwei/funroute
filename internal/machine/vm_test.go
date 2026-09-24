@@ -1,6 +1,7 @@
 package machine_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -221,8 +222,8 @@ func benchTyped(b *testing.B, registry *machine.Registry, artifact *machine.Arti
 // from the host through the VM into an extension and a score comes back. The
 // three sizes must print the same ns/op — nothing along the way converts,
 // copies, or even reads the elements. The allocations that remain are
-// reflect.Call's, because this extension is registered with Logic; they are
-// the same count at every size, and a FunctionSpec has none.
+// reflect.Call's, because this extension is registered by its Go signature; they are
+// the same count at every size, and a written Eval has none.
 func BenchmarkVectorPassThrough(b *testing.B) {
 	for _, size := range []int{16, 1024, 65536} {
 		b.Run(fmt.Sprintf("n=%d", size), func(b *testing.B) { benchVector(b, size) })
@@ -236,8 +237,12 @@ func benchVector(b *testing.B, size int) {
 		features[i] = float64(i) / float64(size)
 	}
 	registry := benchRegistry(b)
-	err := machine.Logic(registry, "model.score_v1", machine.Doc{Cost: 10}, func(xs []float64) (float64, error) {
-		return xs[0] + xs[len(xs)-1], nil
+	err := registry.Register(machine.FunctionSpec{
+		Name: "model.score_v1",
+		Doc:  machine.Doc{Cost: 10},
+		Go: func(xs []float64) (float64, error) {
+			return xs[0] + xs[len(xs)-1], nil
+		},
 	})
 	if err != nil {
 		b.Fatal(err)
@@ -293,7 +298,7 @@ func TestAnArtifactClaimingTooManyLocalsIsRefused(t *testing.T) {
 // loads the result.
 func forgedLoad(t *testing.T, source, contract string, forge func(*machine.ArtifactParts)) error {
 	t.Helper()
-	registry := moneyRegistry(t)
+	registry := fxRegistry(t)
 	artifact, err := compileMoney(t, registry, source, contract, "")
 	if err != nil {
 		t.Fatalf("CompileExpr(%q) error = %v", source, err)
@@ -314,15 +319,17 @@ func forgedLoad(t *testing.T, source, contract string, forge func(*machine.Artif
 // refused at load, not left for the program to meet.
 func TestInstantiateRefusesForgedMoneyConstants(t *testing.T) {
 	t.Parallel()
-	text := func(s string) *string { return &s }
+	forge := func(value string) func(*machine.ArtifactParts) {
+		return func(p *machine.ArtifactParts) { p.Constants[0].Value = json.RawMessage(value) }
+	}
 	for _, test := range []struct {
 		name, source, contract string
 		forge                  func(*machine.ArtifactParts)
 	}{
-		{"an amount with no currency", "a + USD 0.05", "a: money", func(p *machine.ArtifactParts) { p.Constants[0].String = text("") }},
-		{"an undeclared currency", "a + USD 0.05", "a: money", func(p *machine.ArtifactParts) { p.Constants[0].String = text("XYZ") }},
-		{"a rate in an undeclared currency", "using(150 JPY / USD, round(a -> JPY, @half_even))", "a: money", func(p *machine.ArtifactParts) { p.Constants[0].String = text("XYZ") }},
-		{"an item of an array", "[USD 0.05, USD 0.10]", "", func(p *machine.ArtifactParts) { p.Constants[0].Items[1].String = text("XYZ") }},
+		{"an amount with no currency", "a + USD 0.05", "a: money", forge(`{"currency":"","minor":5}`)},
+		{"an undeclared currency", "a + USD 0.05", "a: money", forge(`{"currency":"XYZ","minor":5}`)},
+		{"a rate in an undeclared currency", "using(150 JPY / USD, round(a -> JPY, @half_even))", "a: money", forge(`{"base":"XYZ","quote":"JPY","rate":"150"}`)},
+		{"an item of an array", "[USD 0.05, USD 0.10]", "", forge(`[{"currency":"USD","minor":5},{"currency":"XYZ","minor":10}]`)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

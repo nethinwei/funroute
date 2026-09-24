@@ -15,9 +15,6 @@ import (
 // printed parses back to the same program: that is the property the tests
 // hold every printed program to.
 
-// Inline writes expr on one line.
-func Inline(expr Expr) string { return inline(expr, 0) }
-
 // operatorMatch is a node read as the operator it was expanded from.
 type operatorMatch struct {
 	spec     operatorSpec
@@ -59,7 +56,7 @@ func inline(expr Expr, parent int) string {
 	case *VariableExpr:
 		return node.Name
 	case *LiteralExpr:
-		return literalSource(node.Value)
+		return literalSource(node)
 	case *EnumExpr:
 		return node.Source()
 	case *MoneyExpr:
@@ -71,7 +68,7 @@ func inline(expr Expr, parent int) string {
 		// Next to * or / it is bracketed for the reader; the parser would
 		// read it as one literal either way.
 		text := node.Rate + " " + node.Quote + " / " + node.Base
-		if parent >= binaryOperators[tokenStar].precedence {
+		if parent >= binaryOperators[opKey{kind: tokenStar}].precedence {
 			return "(" + text + ")"
 		}
 		return text
@@ -79,52 +76,12 @@ func inline(expr Expr, parent int) string {
 		return node.Value + node.Unit
 	case *FieldExpr:
 		return postfixBase(node.Value) + "." + node.Field
-	case *CallExpr:
-		return node.Name + "(" + joinInline(node.Args) + ")"
-	case *ArrayExpr:
-		return "[" + joinInline(node.Items) + "]"
-	default:
-		return compoundSource(expr)
 	}
-}
-
-func compoundSource(expr Expr) string {
-	switch node := expr.(type) {
-	case *DictExpr:
-		return "{" + joinParts(len(node.Entries), func(i int) string {
-			return quote(node.Entries[i].Key) + ": " + inline(node.Entries[i].Value, 0)
-		}) + "}"
-	case *RecordExpr:
-		return "{" + joinParts(len(node.Fields), func(i int) string {
-			return node.Fields[i].Name + ": " + inline(node.Fields[i].Value, 0)
-		}) + "}"
-	case *RecordUpdateExpr:
-		return postfixBase(node.Base) + " with {" + joinParts(len(node.Fields), func(i int) string {
-			return node.Fields[i].Name + ": " + inline(node.Fields[i].Value, 0)
-		}) + "}"
-	case *SwitchExpr:
-		return switchSource(node)
-	case *ForExpr:
-		return comprehensionSource(node)
-	case *ReduceExpr:
-		return "reduce(" + reduceHead(node) + ", " + accumulatorHead(node) + ", " + inline(node.Body, 0) + ")"
-	case *LetExpr:
-		return "let(" + joinParts(len(node.Bindings), func(i int) string {
-			return node.Bindings[i].Name + " = " + inline(node.Bindings[i].Value, 0)
-		}) + ", " + inline(node.Body, 0) + ")"
-	case *UsingExpr:
-		return "using(" + strings.Join(usingParts(node), ", ") + ", " + inline(node.Body, 0) + ")"
+	layout, ok := splitNode(expr)
+	if !ok {
+		panic("print: unknown node " + kindOf(expr, planOf(expr)))
 	}
-	panic("print: unknown node " + expr.kind())
-}
-
-// usingParts writes a using's rates in the order they were written.
-func usingParts(node *UsingExpr) []string {
-	var parts []string
-	for _, rate := range node.Quotes {
-		parts = append(parts, inline(rate, 0))
-	}
-	return parts
+	return layout.inline()
 }
 
 func operatorSource(match operatorMatch, parent int) string {
@@ -150,34 +107,29 @@ func operatorSource(match operatorMatch, parent int) string {
 	return text
 }
 
-// postfixBase writes what an index or a field read applies to. A number is
-// parenthesised too, since 1.x would lex as the start of a float.
-// postfixBase prints what a subscript or a field read applies to. A number
-// and an enum member are parenthesised because the lexer would read on into
-// them: (1).x is not 1.x, and (@a).b is not the qualified member @a.b.
+// postfixBase writes what a subscript or a field read applies to. Anything
+// that ends in a number or a code is parenthesised, or the lexer would read
+// the . or [ into it: (1).x is not 1.x, (@a).b is not the qualified member
+// @a.b, and so for (USD 1).x, (2.9%)[0] and (150 JPY / USD).x.
 func postfixBase(expr Expr) string {
-	// Anything that ends in a number or a code is parenthesized, or the
-	// lexer would read the . or [ into it: (1).x, (USD 1).x, (2.9%)[0],
-	// (150 JPY / USD).x.
-	_, isEnum := expr.(*EnumExpr)
-	_, isRatio := expr.(*RatioExpr)
-	_, isMoney := expr.(*MoneyExpr)
-	_, isFxRate := expr.(*FxRateExpr)
-	_, isCurrency := expr.(*CurrencyExpr)
-	if isNumber(expr) || isEnum || isRatio || isMoney || isFxRate || isCurrency {
+	switch expr.(type) {
+	case *EnumExpr, *RatioExpr, *MoneyExpr, *FxRateExpr, *CurrencyExpr:
+		return "(" + inline(expr, 0) + ")"
+	}
+	if isNumber(expr) {
 		return "(" + inline(expr, 0) + ")"
 	}
 	return inline(expr, postfixPrecedence)
 }
 
-func literalSource(value machine.Value) string {
+func literalSource(literal *LiteralExpr) string {
+	value := literal.Value
 	switch value.Kind() {
 	case machine.IntKind:
 		number, _ := value.Int()
 		return strconv.FormatInt(number, 10)
 	case machine.FloatKind:
-		number, _ := value.Float()
-		return floatLiteral(strconv.FormatFloat(number, 'g', -1, 64))
+		return floatLiteral(literal.Decimal.String())
 	case machine.StringKind:
 		text, _ := value.String()
 		return quote(text)
@@ -204,43 +156,6 @@ func quote(text string) string {
 	return strings.TrimSuffix(buf.String(), "\n")
 }
 
-func joinInline(items []Expr) string {
-	return joinParts(len(items), func(i int) string { return inline(items[i], 0) })
-}
-
-func joinParts(count int, part func(int) string) string {
-	parts := make([]string, count)
-	for i := range parts {
-		parts[i] = part(i)
-	}
-	return strings.Join(parts, ", ")
-}
-
-func switchSource(node *SwitchExpr) string {
-	head := ""
-	if node.Value != nil {
-		head = inline(node.Value, 0) + ", "
-	}
-	branches := joinParts(len(node.Cases), func(i int) string {
-		return "case " + joinInline(node.Cases[i].Match) + " => " + inline(node.Cases[i].Result, 0)
-	})
-	if node.Default == nil {
-		return "switch(" + head + branches + ")"
-	}
-	return "switch(" + head + branches + ", else => " + inline(node.Default, 0) + ")"
-}
-
-// A comprehension with a key builds a dictionary and is written in braces;
-// without one it builds an array and is written in brackets.
-func comprehensionSource(node *ForExpr) string {
-	clauses := strings.Join(forClauses(node), " ")
-	inner := innerLoop(node)
-	if inner.YieldKey == nil {
-		return "[" + inline(inner.Yield, 0) + " " + clauses + "]"
-	}
-	return "{" + inline(inner.YieldKey, 0) + ": " + inline(inner.Yield, 0) + " " + clauses + "}"
-}
-
 // A spliced loop's yield is the loop written after it, so the chain prints as
 // the one comprehension someone wrote: [e for x in xs for y in ys].
 func forClauses(node *ForExpr) []string {
@@ -248,24 +163,28 @@ func forClauses(node *ForExpr) []string {
 	if node.Where != nil {
 		clauses = append(clauses, "if "+inline(node.Where, 0))
 	}
-	if spliced(node) {
-		clauses = append(clauses, forClauses(node.Yield.(*ForExpr))...)
+	if next, ok := spliced(node); ok {
+		clauses = append(clauses, forClauses(next)...)
 	}
 	return clauses
 }
 
 // innerLoop is the clause that yields the element: the outer ones splice.
 func innerLoop(node *ForExpr) *ForExpr {
-	for spliced(node) {
-		node = node.Yield.(*ForExpr)
+	for {
+		next, ok := spliced(node)
+		if !ok {
+			return node
+		}
+		node = next
 	}
-	return node
 }
 
-// spliced is what the flatten flag means: the yield is the next clause.
-func spliced(node *ForExpr) bool {
-	_, loop := node.Yield.(*ForExpr)
-	return node.Flatten && loop
+// spliced is what the flatten flag means: the yield is the next clause,
+// which it returns.
+func spliced(node *ForExpr) (*ForExpr, bool) {
+	next, loop := node.Yield.(*ForExpr)
+	return next, node.Flatten && loop
 }
 
 func loopVariables(key, value string) string {

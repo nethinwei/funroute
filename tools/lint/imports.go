@@ -1,8 +1,7 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
+	"errors"
 	"go/ast"
 	"os"
 	"path/filepath"
@@ -24,18 +23,16 @@ var hostSide = map[string]bool{"internal/hosttest": true, "internal/demo": true}
 
 // modulePath reads the module path from root's go.mod.
 func modulePath(root string) (string, error) {
-	file, err := os.Open(filepath.Join(root, "go.mod"))
+	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		if path, ok := strings.CutPrefix(strings.TrimSpace(scanner.Text()), "module "); ok {
+	for line := range strings.Lines(string(data)) {
+		if path, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
 			return strings.TrimSpace(path), nil
 		}
 	}
-	return "", fmt.Errorf("go.mod has no module line")
+	return "", errors.New("go.mod has no module line")
 }
 
 // mayImportInternal reports the files that publish the implementation.

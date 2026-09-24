@@ -14,7 +14,8 @@ import (
 // the values at the edges of int64.
 func TestMulDivRoundIsExactThenRoundedOnce(t *testing.T) {
 	t.Parallel()
-	edges := []int64{0, 1, -1, 2, -2, 3, 5, -5, 7, 10, 999, 1_000_000_007, 10_000_000_000, math.MaxInt64, math.MinInt64, math.MaxInt64 / 3, math.MinInt64 / 7}
+	edges := make([]int64, 0, 17+2000)
+	edges = append(edges, 0, 1, -1, 2, -2, 3, 5, -5, 7, 10, 999, 1_000_000_007, 10_000_000_000, math.MaxInt64, math.MinInt64, math.MaxInt64/3, math.MinInt64/7)
 	random := rand.New(rand.NewPCG(1, 2))
 	for range 2000 {
 		value := random.Int64() >> random.IntN(63)
@@ -187,21 +188,6 @@ func TestMulDivRoundRefusesAZeroDivisor(t *testing.T) {
 		got, err := mulDivRound(a, 5, 0, RoundHalfEven)
 		if err == nil || errors.Is(err, errFixedOverflow) || !strings.Contains(err.Error(), "division by zero") {
 			t.Fatalf("mulDivRound(%d, 5, 0) = %d, %v, want division by zero", a, got, err)
-		}
-	}
-}
-
-// The exported entry is the same arithmetic a host's own money function gets.
-func TestMulDivRoundIsExported(t *testing.T) {
-	t.Parallel()
-	random := rand.New(rand.NewPCG(3, 4))
-	for range 500 {
-		a, b, d := random.Int64()-math.MaxInt64/2, random.Int64N(1<<20)-1<<19, random.Int64N(1<<30)-1<<29
-		mode := Rounding(1 + random.IntN(7))
-		got, gotErr := mulDivRound(a, b, d, mode)
-		want, wantErr := mulDivRound(a, b, d, mode)
-		if got != want || (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("mulDivRound(%d, %d, %d, %s) = %d, %v, want %d, %v", a, b, d, mode, got, gotErr, want, wantErr)
 		}
 	}
 }

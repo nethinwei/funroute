@@ -1,33 +1,63 @@
 package compile
 
-import "github.com/nethinwei/funroute/internal/machine"
+import (
+	"slices"
 
-// concrete is the term of a known type.
-func (s *inferState) concrete(t machine.Type) typeTerm {
-	switch t.Kind() {
-	case machine.ArrayKind, machine.DictKind:
-		return containerTerm(t.Kind(), s.concrete(elemOf(t)))
-	case machine.RecordKind:
-		return recordTerm(t)
-	default:
-		return typeTerm{kind: t.Kind(), name: t.Name(), values: append([]string(nil), t.Values()...)}
+	"github.com/nethinwei/funroute/internal/machine"
+	"github.com/nethinwei/funroute/internal/syntax"
+)
+
+// inferRecord types a record literal: every field is typed on its own, and
+// the record's type is those types in the order they were written.
+func inferRecord(node *syntax.RecordExpr, state *inferState, context inferContext) (typeTerm, error) {
+	fields := make([]fieldTerm, len(node.Fields))
+	for i, field := range node.Fields {
+		term, err := inferExpr(field.Value, state, context)
+		if err != nil {
+			return typeTerm{}, err
+		}
+		fields[i] = fieldTerm{name: field.Name, term: term}
 	}
+	term := typeTerm{kind: machine.RecordKind, fields: fields}
+	state.checks = append(state.checks, func() error {
+		if _, ok := state.publicType(term); !ok {
+			return syntax.Around(node, "type error: every record field needs a type of its own")
+		}
+		return nil
+	})
+	return record(node, state, term), nil
 }
 
-// recordTerm is the term of a record type. A record's shape is concrete
-// wherever one appears — it comes from the contract or from a literal whose
-// field values have types — so it unifies as a whole.
-func recordTerm(t machine.Type) typeTerm {
-	cloned := machine.CloneType(t)
-	return typeTerm{kind: machine.RecordKind, record: &cloned}
+// fieldIndex is the position of the named field in a record term, or -1.
+func fieldIndex(record typeTerm, name string) int {
+	return slices.IndexFunc(record.fields, func(field fieldTerm) bool { return field.name == name })
 }
 
-// unifyRecords reports whether two record terms are one type.
-func (s *inferState) unifyRecords(left, right typeTerm) bool {
-	return left.record != nil && right.record != nil && left.record.Equal(*right.record)
-}
-
-// fieldTerm is the term of a record's field.
-func (s *inferState) fieldTerm(record typeTerm, index int) typeTerm {
-	return s.concrete(record.record.Fields()[index].Type())
+// inferField reads one field off a record, once the record's type is known
+// — from the contract, from a literal, from a let binding or from a call
+// decided later — because the field's own type comes from it.
+func inferField(node *syntax.FieldExpr, state *inferState, context inferContext) (typeTerm, error) {
+	base, err := inferExpr(node.Value, state, context)
+	if err != nil {
+		return typeTerm{}, err
+	}
+	result := state.fresh()
+	unknown := func() error {
+		return syntax.Around(node, "type error: %q is read off something that is not a record with a known type", node.Field)
+	}
+	err = state.waitFor(func() (bool, error) {
+		found := state.deref(base)
+		switch {
+		case found.kind == machine.VarKind:
+			return false, nil
+		case found.kind != machine.RecordKind:
+			return false, unknown()
+		}
+		index := fieldIndex(found, node.Field)
+		if index < 0 {
+			return false, syntax.Around(node, "type error: %s has no field %q", state.describe(found), node.Field)
+		}
+		return true, state.unify(result, found.fields[index].term)
+	}, unknown)
+	return record(node, state, result), err
 }

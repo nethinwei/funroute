@@ -46,18 +46,7 @@ func intoMoneyGo(value Value, typ reflect.Type) (reflect.Value, bool, error) {
 	if value.kind != want.kind {
 		return reflect.Value{}, true, fmt.Errorf("argument is %s, want %s", value.Type(), want)
 	}
-	switch typ {
-	case moneyGoType:
-		amount, _ := value.Money()
-		return reflect.ValueOf(amount), true, nil
-	case ratioGoType:
-		return reflect.ValueOf(ratioFrom(value)), true, nil
-	case fxRateGoType:
-		rate, _ := value.FxRate()
-		return reflect.ValueOf(rate), true, nil
-	default:
-		return reflect.ValueOf(money.CurrencyOf(value.s)), true, nil
-	}
+	return newMoneyGo(typ, value), true, nil
 }
 
 // outOfMoneyGo converts a money Go value into a Value.

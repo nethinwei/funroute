@@ -288,7 +288,7 @@ registry.DeclareMoney(funroute.MoneySpec{Currencies: std.ISO4217()})
 | 类型 | 写法 | 说明 |
 |---|---|---|
 | `money` | `USD 1.70`、`USD -1.70`、`JPY 100` | 某币种的 int64 个最小单位；负号写在数上；代码与数之间只能是空格或 Tab（不能换行、不能有注释）；位数超过币种的小数位是编译错误，不舍入 |
-| `ratio` | `2.9%`、`25bps`、`0.029` | 精确的比值（int64 分子/分母）；小数字面量和金额或比例一起运算时就是 `ratio`，和 float 一起时仍是 float |
+| `ratio` | `2.9%`、`25bps`、`0.029` | 精确的比值（int64 分子/分母）；小数字面量和金额或比例一起运算时就是 `ratio`，按写下的数字精确读入（至多 18 位小数），从不经过 float；和 float 一起时仍是 float |
 | `fxrate` | `150.25 JPY / USD` | 1 USD 换 150.25 JPY，精确比值，另带两边币种 |
 | `currency` | `USD`、`JPY` | 币种字面量；可进 `switch`、作字典的键、和 `==` 比较 |
 
@@ -416,7 +416,7 @@ using(market, using(fx(EUR, USD) * 103.5%, round(amount -> USD, @half_even)))   
 - `implied(到账额, 支付额)` 得成交汇率，`fx(基准, 报价)` 读出当前 `using` 里的汇率，`ratio(字符串)` 把十进制文本或分数精确读成比例（读不出是 `ErrArithmetic`）。
 - 标准包的 `sum`/`min`/`max`/`avg`/`median`/`sort`/`cumsum`/`sort_by`/`top_k` 等在声明了币种后也接受金额。
 
-**宿主那边**：Go 用 `funroute.Money`、`funroute.Ratio`、`funroute.FxRate`、`funroute.Currency`，由币种表构造（见[在 Go 里算钱](#在-go-里算钱)），`[]funroute.Money`、`[]funroute.FxRate` 与规则之间零拷贝；JSON 输入认 `"USD 1.70"` 与 `{"currency": "USD", "minor": 170}` 两种，汇率是 `{"base": "USD", "quote": "JPY", "rate": "150.25"}`（`rate` 也可以是分数 `"1/3"`），`Registry.EncodeJSON` 把金额写成 `"USD 1.70"`。
+**宿主那边**：Go 用 `funroute.Money`、`funroute.Ratio`、`funroute.FxRate`、`funroute.Currency`，由币种表构造（见[在 Go 里算钱](#在-go-里算钱)），`[]funroute.Money`、`[]funroute.FxRate` 与规则之间零拷贝；JSON 输入认 `"USD 1.70"` 与 `{"currency": "USD", "minor": 170}` 两种，汇率是 `{"base": "USD", "quote": "JPY", "rate": "150.25"}`（`rate` 也可以是分数 `"1/3"`）；金额、比例与汇率里的数只收字符串、`json.Number` 与整数，float64 一律拒绝——解码成 `any` 的 JSON 数已经被舍入过，`funroute.DecodeArgs` 把数保留为原文；`Registry.EncodeJSON` 把金额写成 `"USD 1.70"`。
 
 ## 契约
 
@@ -525,7 +525,10 @@ if(risk.approved_v1(country, amount), "primary", "backup")
 - 没有其他约束时，`add(a, b)` 把参数推成 `int`；
 - 出现浮点字面量时变量被推成 `float`：`risk < 0.5` 得到 `risk: float`；
 - `add(1, 1.5)` 这样的混合运算把整数提升为 `float`，超出 float64 精确范围的整数会被拒绝；
-- 混合签名 `(int, float)` 只在没有同型解读时才使用。
+- 混合签名 `(int, float)` 只在没有同型解读时才使用；
+- 小数字面量读作 `float` 时必须恰好是写下的那个 float64：`0.30000000000000001` 会被拒绝并指出最近的是 `0.3`；读作 `ratio` 时没有这个限制。
+
+推导只读一遍程序。几个重载都合适的调用先等着，其他地方能确定的类型全部确定之后，再由内向外逐个决定：优先不留下未定的类型，其次不改变字面量的种类，再次不做提升，最后选最朴素的类型；最优的并列时报歧义并列出候选。耗时随程序长度近线性。
 
 推导结果可以用 `-types` 或 `CompileOptions.Args` 覆盖：
 
@@ -704,22 +707,24 @@ text, _ := table.Format(yen)                               // JPY 522
 
 ### 注册扩展函数
 
-最常用的方式是按 Go 函数签名注册，签名用反射读取：
+注册只有一个入口：`registry.Register(funroute.FunctionSpec{…})`。最常用的是在 `Go` 里给一个 Go 函数，签名用反射读取：
 
 ```go
-funroute.Logic(registry, "risk.score_v1", funroute.Doc{
-    Label:       "风险评分",
-    Description: "根据国家和金额计算风险分。",
-    Cost:        25,
-    Params:      []string{"国家", "金额"},
-}, func(country string, amount int64) (float64, error) {
-    return 0.9, nil
+registry.Register(funroute.FunctionSpec{
+    Name: "risk.score_v1",
+    Doc: funroute.Doc{
+        Label:       "风险评分",
+        Description: "根据国家和金额计算风险分。",
+        Cost:        25,
+        Params:      []string{"国家", "金额"},
+    },
+    Go: func(country string, amount int64) float64 { return 0.9 },
 })
 ```
 
-- 参数可以是 Go 标量、任意嵌套的切片和 `map[string]…`、struct（见[记录](#记录)）或句柄；首参数可选 `context.Context`；返回 `(R, error)`。
-- 每次调用约 300 ns。对性能敏感的函数可以手写 `funroute.FunctionSpec`，成本与内核函数相同。
-- 金额直接写 Go 类型：`funroute.Money`、`funroute.Ratio`、`funroute.FxRate`、`funroute.Currency` 及它们的切片与映射（零拷贝），`Logic` 反射就能读出签名；手写 `FunctionSpec` 时用 `funroute.MoneyType` 等。币种是值的属性，签名不约束它：收到几笔金额的函数自己检查它们同币种（错了返回 `ErrCurrency`），返回的金额币种必须已声明，否则是 `ErrCurrency`。
+- 参数可以是 Go 标量、任意嵌套的切片和 `map[string]…`、struct（见[记录](#记录)）或句柄；首参数可选 `context.Context`；返回 `R`，会失败的返回 `(R, error)`。
+- 每次调用约 300 ns。对性能敏感的函数不填 `Go`，手写 `Params`、`Result`、`Eval`，成本与内核函数相同；两种写法二选一。
+- 金额直接写 Go 类型：`funroute.Money`、`funroute.Ratio`、`funroute.FxRate`、`funroute.Currency` 及它们的切片与映射（零拷贝），`Go` 的签名反射就能读出；手写 `Params` 时用 `funroute.MoneyType` 等。币种是值的属性，签名不约束它：收到几笔金额的函数自己检查它们同币种（错了返回 `ErrCurrency`），返回的金额币种必须已声明，否则是 `ErrCurrency`。
 - 名字里的 `_v1` 只是约定。函数的身份是完整签名，签名或成本变了，旧 artifact 会拒绝装载。
 - `Doc` 只写机器算不出来的东西：标签、说明、成本、参数标签，以及可选的案例 `Examples: []funroute.Example{{Source: "risk.score_v1(\"SG\", 100)", Result: "0.9"}}`（源码与它的 JSON 结果）。签名来自 Go 类型，分类默认取命名空间（`risk.score_v1` → `risk`）。
 - 语言服务从注册表读函数的说明与案例，用在悬停和补全里，新增函数不需要改任何前端代码。
@@ -736,8 +741,10 @@ FunRoute 不定义张量。模型引擎的数据以**不透明句柄**的形式�
 ```go
 funroute.DefineHandle[*ort.Tensor](registry, "onnx.tensor")
 
-funroute.Logic(registry, "model.embed_v2", doc, func(ctx context.Context, features []float64) (*ort.Tensor, error) { … })
-funroute.Logic(registry, "model.fraud_v3", doc, func(ctx context.Context, emb *ort.Tensor) (float64, error) { … })
+registry.Register(funroute.FunctionSpec{Name: "model.embed_v2", Doc: doc,
+    Go: func(ctx context.Context, features []float64) (*ort.Tensor, error) { … }})
+registry.Register(funroute.FunctionSpec{Name: "model.fraud_v3", Doc: doc,
+    Go: func(ctx context.Context, emb *ort.Tensor) (float64, error) { … }})
 ```
 
 ```text
@@ -749,12 +756,15 @@ let(emb = model.embed_v2(features),
 
 ### 模型批处理
 
-推理引擎要按批调用才划算。用 `funroute.Model` 同时注册单条和批量两种实现，`Batch` 把一个时间窗内的请求合成一批：
+推理引擎要按批调用才划算。`GoBatch` 与 `Go` 一起给出批量实现，`Batch` 把一个时间窗内的请求合成一批：
 
 ```go
-funroute.Model(registry, "model.fraud_v3", funroute.Doc{Cost: 20, Timeout: 8 * time.Millisecond},
-    func(ctx context.Context, emb *ort.Tensor) (float64, error) { … },        // 单条
-    func(ctx context.Context, embs []*ort.Tensor) ([]float64, error) { … })   // 批量
+registry.Register(funroute.FunctionSpec{
+    Name:    "model.fraud_v3",
+    Doc:     funroute.Doc{Cost: 20, Timeout: 8 * time.Millisecond},
+    Go:      func(ctx context.Context, emb *ort.Tensor) (float64, error) { … },       // 单条
+    GoBatch: func(ctx context.Context, embs []*ort.Tensor) ([]float64, error) { … }, // 批量
+})
 
 batch := funroute.NewBatch(runtime, funroute.BatchOptions{MaxSize: 256, MaxWait: 2 * time.Millisecond})
 result, err := batch.Run(ctx, args)   // 可在任意 goroutine 调用，阻塞到本批完成
@@ -766,26 +776,24 @@ result, err := batch.Run(ctx, args)   // 可在任意 goroutine 调用，阻塞�
 - 多个 goroutine 各自提交时，用 `program.Batch`。
 
 ```go
-outs := program.RunBatch(ctx, requests, funroute.RunOptions{}, func(i int, err error) {
-    log.Printf("request %d: %v", i, err)
-})                                                                  // requests []RouteIn，整批共用 ctx
+outs := make([]RouteOut, len(requests))                             // requests []RouteIn，整批共用 ctx
+program.RunBatch(ctx, len(requests),
+    func(i int) *RouteIn { return &requests[i] },                   // 第 i 条请求在哪
+    func(i int) *RouteOut { return &outs[i] },                      // 第 i 个结果写到哪
+    funroute.RunOptions{}, func(i int, err error) { log.Printf("request %d: %v", i, err) })
 
 batch := program.Batch(funroute.BatchOptions{MaxSize: 256, MaxWait: 2 * time.Millisecond})
 defer batch.Close()
 decision, err := batch.Run(ctx, &request)
 ```
 
-三种形状共用一条规则：**一个下标同时指请求、结果和失败**——`out[i]` 对应 `in[i]`，`failed(i, err)` 说的就是 `in[i]`。
-
-- `RunBatch(ctx, in []In, opts, failed) []Out`：结果新分配。
-- `RunBatchInto(ctx, in []In, out []*Out, opts, failed)`：结果直接写进宿主已有的对象（比如每个请求自己的响应），不为结果分配也不复制；`in` 与 `out` 必须等长。
-- `RunBatchFunc(ctx, n, in func(i int) *In, out func(i int) *Out, opts, failed)`：其余一切形状——`In`/`Out` 是更大对象里的字段、请求分散在堆上、结果缓冲区跨批复用。`in(i)` 在运行前调用一次，`out(i)` 在该条跑完后调用一次；返回 nil 只让那一条失败（`ErrContract`）。
+`RunBatch(ctx, n, in func(i int) *In, out func(i int) *Out, opts, failed)` 只有这一个入口：**一个下标同时指请求、结果和失败**，请求从 `in(i)` 读，结果写进 `out(i)`，`failed(i, err)` 说的就是第 i 条。请求与结果放在哪由宿主说：两个切片、每个请求自己的响应对象（结果直接写进去，不分配也不复制）、更大对象里的字段、跨批复用的缓冲区都是同一个调用。`in(i)` 在运行前调用一次，`out(i)` 在该条跑完后调用一次；返回 nil 只让那一条失败（`ErrContract`）。
 
 几条共同的保证：
 
 - **写回的 `Out` 总是完整的结果**：先清零再写，artifact 没声明的字段也是零，和 `Run` 返回的一样，跨规则复用的缓冲区不会残留上一条规则的值；失败那条保持零值，不会写一半。因此宿主自己的数据不要和规则结果放在同一个 `Out` 里。
 - **ctx 一路传到引擎**：整批在宿主传入的 `ctx` 下运行，deadline 和 ctx 里的值（trace 等）都能到达模型调用。
-- **分配**：三种形状的全部参数共用一次分配；`program.Batch` 每条请求多分配一次参数切片，因为请求要排队。和 `Program.Run` 一样，只转换程序读到的参数。
+- **分配**：`RunBatch` 的全部参数共用一次分配；`program.Batch` 每条请求多分配一次参数切片，因为请求要排队。和 `Program.Run` 一样，只转换程序读到的参数。
 - **只合批不改变结果的调用**：参数直接来自入参或常量，且不在循环或条件分支里。`if`、`switch`、`fallback` 里的调用仍按需逐条执行。
 
 ### 超时、兜底与错误
@@ -800,9 +808,9 @@ decision, err := batch.Run(ctx, &request)
 fallback(primary.quote_v1(order), secondary.quote_v1(order), 0.0)
 ```
 
-`fallback` 只接住**数据暂时不可得**：扩展函数失败、超时、换汇找不到汇率。**规则或数据自身的错误**（fuel 耗尽、算术失败、币种不一致）不会被吞掉，即使发生在扩展函数里：扩展函数返回的 `ErrCurrency`、`ErrArithmetic`、`ErrNoFxRate` 保留原来的类别，不会被包成 `ErrExtension`。前一个候选在 `using` 里失败时，下一个候选从 `fallback` 所在处的汇率重新开始。
+`fallback` 只接住**数据暂时不可得**：扩展函数失败、超时、换汇找不到汇率。**规则或数据自身的错误**（fuel 耗尽、算术失败、币种不一致）不会被吞掉，即使发生在扩展函数里：扩展函数返回的错误已经带上面任何一个类别（如 `ErrCurrency`、`ErrArithmetic`、`ErrNoFxRate`）时原样保留，不会被包成 `ErrExtension`。前一个候选在 `using` 里失败时，下一个候选从 `fallback` 所在处的汇率重新开始。
 
-所有错误都可以用 `errors.Is` 区分：
+所有错误都可以用 `errors.Is` 区分。扩展函数自己的错误被归类后仍在错误链上：`errors.Is(err, funroute.ErrExtension)` 与 `errors.Is(err, 你的哨兵错误)` 都成立，`errors.As` 也取得到你的错误类型，超时同样认得出 `context.DeadlineExceeded`。
 
 | 错误 | 含义 | `fallback` 接吗 |
 |---|---|---|
@@ -810,6 +818,7 @@ fallback(primary.quote_v1(order), secondary.quote_v1(order), 0.0)
 | `ErrContract` | 契约非法、表达式读了未声明的参数，或入参不合契约 | —（运行前） |
 | `ErrDeadline` | 请求或函数的时间预算耗尽 | 接 |
 | `ErrExtension` | 扩展函数报错 | 接 |
+| `ErrUnavailable` | 调用了只登记签名、没有实现的函数；同时是 `ErrExtension` | 接 |
 | `ErrNoFxRate` | 换汇时 `using` 里没有这一对货币的汇率 | 接 |
 | `ErrFuel` | 超出成本上限 | 不接 |
 | `ErrCurrency` | 币种不一致或未声明 | 不接 |
@@ -993,7 +1002,7 @@ Apple M5，`go test ./internal/machine ./internal/compile -bench . -benchtime 1s
 | 500 元素推导式映射 | 44 µs | 5 次 / 8 KB |
 | 500 元素嵌套推导式 | 77 µs | 8 次 / 12 KB |
 | 向量透传，n = 16 / 1024 / 65536 | 271 / 271 / 271 ns | 4 次 |
-| `Logic` 注册的函数调用 vs 内核 `add` | 329 ns vs 189 ns | 6 次 vs 0 |
+| 按 Go 签名注册的函数调用 vs 内核 `add` | 329 ns vs 189 ns | 6 次 vs 0 |
 | 编译（含推导与常量折叠） | 43 µs | 625 次 / 93 KB |
 | 模型调用（模拟 20 µs 引擎开销）：单条 vs 64 条一批 | 27.6 µs vs 1.03 µs / 请求 | — |
 

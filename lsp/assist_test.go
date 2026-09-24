@@ -12,19 +12,19 @@ import (
 func TestFormattingAndHover(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, standard(t), `{}`)
-	s.notify("github.com/nethinwei/funroute/setContract", contract("fee:int", "x:int"))
+	s.notify("funroute/setContract", contract("fee:int", "x:int"))
 	s.open("file:///a.fr", "let(rate=fee*2,rate+x)\n")
-	edits := s.request("textDocument/formatting", docParams("file:///a.fr")).([]any)
-	if len(edits) != 1 || edits[0].(map[string]any)["newText"] != "let(rate = fee * 2, rate + x)\n" {
+	edits := as[[]any](t, s.request("textDocument/formatting", docParams("file:///a.fr")))
+	if len(edits) != 1 || as[map[string]any](t, edits[0])["newText"] != "let(rate = fee * 2, rate + x)\n" {
 		t.Errorf("formatting gives %v, want one edit to %q", edits, "let(rate = fee * 2, rate + x)\n")
 	}
-	shown := s.request("textDocument/hover", position("file:///a.fr", 0, 19)).(map[string]any)
-	value := shown["contents"].(map[string]any)["value"].(string)
+	shown := as[map[string]any](t, s.request("textDocument/hover", position("file:///a.fr", 19)))
+	value := as[string](t, as[map[string]any](t, shown["contents"])["value"])
 	if !strings.Contains(value, "rate+x: int") || !strings.Contains(value, "add(int,int)->int") {
 		t.Errorf("hover on + is %q, want the type \"rate+x: int\" and the signature \"add(int,int)->int\"", value)
 	}
-	argument := s.request("textDocument/hover", position("file:///a.fr", 0, 10)).(map[string]any)
-	if value := argument["contents"].(map[string]any)["value"].(string); !strings.Contains(value, "fee 的说明") {
+	argument := as[map[string]any](t, s.request("textDocument/hover", position("file:///a.fr", 10)))
+	if value := as[string](t, as[map[string]any](t, argument["contents"])["value"]); !strings.Contains(value, "fee 的说明") {
 		t.Errorf("hover on an argument is %q, want its contract doc \"fee 的说明\"", value)
 	}
 }
@@ -32,18 +32,18 @@ func TestFormattingAndHover(t *testing.T) {
 func TestCompletionOffersWhatThePositionCanName(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, standard(t), `{}`)
-	s.notify("github.com/nethinwei/funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
+	s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
 		{"name": "fee", "type": "int"}, {"name": "ch", "type": "enum<channel>{adyen,stripe}"},
 	}}})
 	s.open("file:///a.fr", "let(rate = fee, rate)")
-	got := strings.Join(labels(s.request("textDocument/completion", position("file:///a.fr", 0, 17))), " ")
+	got := strings.Join(labels(t, s.request("textDocument/completion", position("file:///a.fr", 17))), " ")
 	for _, want := range []string{"fee", "ch", "rate", "add", "let", "switch"} {
 		if !strings.Contains(" "+got+" ", " "+want+" ") {
 			t.Errorf("completion lacks %s: %s", want, got)
 		}
 	}
 	s.open("file:///b.fr", "ch == @")
-	if got := labels(s.request("textDocument/completion", position("file:///b.fr", 0, 7))); strings.Join(got, ",") != "adyen,stripe" {
+	if got := labels(t, s.request("textDocument/completion", position("file:///b.fr", 7))); strings.Join(got, ",") != "adyen,stripe" {
 		t.Errorf("after @ the completion is %v, want [adyen stripe]", got)
 	}
 }
@@ -53,8 +53,9 @@ func TestSignatureHelpFindsTheCallBeingTyped(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, standard(t), `{}`)
 	s.open("file:///a.fr", "if(a, [1, 2], ")
-	help := s.request("textDocument/signatureHelp", position("file:///a.fr", 0, 14)).(map[string]any)
-	if help["activeParameter"].(float64) != 2 || !strings.HasPrefix(help["signatures"].([]any)[0].(map[string]any)["label"].(string), "if(") {
+	help := as[map[string]any](t, s.request("textDocument/signatureHelp", position("file:///a.fr", 14)))
+	first := as[map[string]any](t, as[[]any](t, help["signatures"])[0])
+	if as[float64](t, help["activeParameter"]) != 2 || !strings.HasPrefix(as[string](t, first["label"]), "if(") {
 		t.Errorf("signature help is %v, want the third parameter of if", help)
 	}
 }
@@ -68,8 +69,8 @@ func TestSignatureHelpCountsPastRecordsAndFields(t *testing.T) {
 			t.Parallel()
 			s := newSession(t, standard(t), `{}`)
 			s.open("file:///a.fr", text)
-			help := s.request("textDocument/signatureHelp", position("file:///a.fr", 0, len(text))).(map[string]any)
-			if help["activeParameter"].(float64) != want {
+			help := as[map[string]any](t, s.request("textDocument/signatureHelp", position("file:///a.fr", len(text))))
+			if as[float64](t, help["activeParameter"]) != want {
 				t.Errorf("%q: the active argument is %v, want %v", text, help["activeParameter"], want)
 			}
 		})
@@ -94,9 +95,9 @@ func TestCompletionOffersLocalsWhileTyping(t *testing.T) {
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
 			s := newSession(t, standard(t), `{}`)
-			s.notify("github.com/nethinwei/funroute/setContract", contract("fee:int"))
+			s.notify("funroute/setContract", contract("fee:int"))
 			s.open("file:///a.fr", text)
-			got := labels(s.request("textDocument/completion", position("file:///a.fr", 0, len(text))))
+			got := labels(t, s.request("textDocument/completion", position("file:///a.fr", len(text))))
 			checkLocals(t, text, got, want)
 		})
 	}
@@ -123,19 +124,22 @@ func TestInferredArgumentsAreOfferedAndListed(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, standard(t), `{}`)
 	s.open("file:///a.fr", "amount * bps / 10000")
-	list := s.request("github.com/nethinwei/funroute/arguments", docParams("file:///a.fr")).([]any)
-	if len(list) != 2 || list[0].(map[string]any)["name"] != "amount" || list[1].(map[string]any)["type"] != "int" {
+	list := as[[]any](t, s.request("funroute/arguments", docParams("file:///a.fr")))
+	if len(list) != 2 || as[map[string]any](t, list[0])["name"] != "amount" || as[map[string]any](t, list[1])["type"] != "int" {
 		t.Fatalf("the arguments are %v, want amount then bps, both int", list)
 	}
-	if got := labels(s.request("textDocument/completion", position("file:///a.fr", 0, 0))); !slices.Contains(got, "bps") {
+	if got := labels(t, s.request("textDocument/completion", position("file:///a.fr", 0))); !slices.Contains(got, "bps") {
 		t.Errorf("completion without a contract offers %v, want bps among them", got)
 	}
 }
 
-func labels(items any) []string {
-	var out []string
-	for _, item := range items.([]any) {
-		out = append(out, item.(map[string]any)["label"].(string))
+// labels is the label of each completion item, in order.
+func labels(t *testing.T, items any) []string {
+	t.Helper()
+	list := as[[]any](t, items)
+	out := make([]string, 0, len(list))
+	for _, item := range list {
+		out = append(out, as[string](t, as[map[string]any](t, item)["label"]))
 	}
 	return out
 }
@@ -159,9 +163,9 @@ func withMoney(t *testing.T) *machine.Registry {
 func TestMoneyIsCompletedAndExplained(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, withMoney(t), `{}`)
-	s.notify("github.com/nethinwei/funroute/setContract", contract("amount:money"))
+	s.notify("funroute/setContract", contract("amount:money"))
 	s.open("file:///a.fr", "round(amount * 2.9% + USD 1.70, @")
-	got := " " + strings.Join(labels(s.request("textDocument/completion", position("file:///a.fr", 0, 33))), " ") + " "
+	got := " " + strings.Join(labels(t, s.request("textDocument/completion", position("file:///a.fr", 33))), " ") + " "
 	for _, want := range []string{"half_up", "half_even"} {
 		if !strings.Contains(got, " "+want+" ") {
 			t.Errorf("after @ the completion lacks %s: %s", want, got)
@@ -171,15 +175,15 @@ func TestMoneyIsCompletedAndExplained(t *testing.T) {
 		t.Errorf("after @ a currency is offered, but currencies are no enum: %s", got)
 	}
 	s.open("file:///c.fr", "amount -> ")
-	names := " " + strings.Join(labels(s.request("textDocument/completion", position("file:///c.fr", 0, 10))), " ") + " "
+	names := " " + strings.Join(labels(t, s.request("textDocument/completion", position("file:///c.fr", 10))), " ") + " "
 	for _, want := range []string{"USD", "JPY"} {
 		if !strings.Contains(names, " "+want+" ") {
 			t.Errorf("the completion lacks the currency %s: %s", want, names)
 		}
 	}
 	s.open("file:///b.fr", "amount + USD 1.70")
-	shown := s.request("textDocument/hover", position("file:///b.fr", 0, 10)).(map[string]any)
-	if value := shown["contents"].(map[string]any)["value"].(string); !strings.Contains(value, "money") || !strings.Contains(value, "最小单位 170") {
+	shown := as[map[string]any](t, s.request("textDocument/hover", position("file:///b.fr", 10)))
+	if value := as[string](t, as[map[string]any](t, shown["contents"])["value"]); !strings.Contains(value, "money") || !strings.Contains(value, "最小单位 170") {
 		t.Errorf("hover on USD 1.70 is %q, want its type and 最小单位 170", value)
 	}
 }
@@ -205,15 +209,15 @@ func withKWD(t *testing.T) *machine.Registry {
 func TestCompletionQualifiesMembersTheContractShares(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, withKWD(t), `{}`)
-	s.notify("github.com/nethinwei/funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
+	s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
 		{"name": "ccy", "type": "enum<ccy>{USD,EUR}"}, {"name": "mode", "type": "enum<mode>{half_up,fast}"},
 	}}})
 	s.open("file:///a.fr", "ccy == @")
-	items := s.request("textDocument/completion", position("file:///a.fr", 0, 8)).([]any)
+	items := as[[]any](t, s.request("textDocument/completion", position("file:///a.fr", 8)))
 	details := map[string]string{}
 	for _, item := range items {
-		entry := item.(map[string]any)
-		details[entry["label"].(string)] = entry["detail"].(string)
+		entry := as[map[string]any](t, item)
+		details[as[string](t, entry["label"])] = as[string](t, entry["detail"])
 	}
 	want := map[string]string{
 		"EUR": "enum<ccy>", "USD": "enum<ccy>",
@@ -239,9 +243,9 @@ func TestCompletionQualifiesMembersTheContractShares(t *testing.T) {
 func TestCompletionOffersNoCurrencyWithoutMoney(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, standard(t), `{}`)
-	s.notify("github.com/nethinwei/funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{{"name": "ch", "type": "enum<channel>{adyen,stripe}"}}}})
+	s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{{"name": "ch", "type": "enum<channel>{adyen,stripe}"}}}})
 	s.open("file:///a.fr", "ch == @")
-	if got := labels(s.request("textDocument/completion", position("file:///a.fr", 0, 7))); strings.Join(got, ",") != "adyen,stripe" {
+	if got := labels(t, s.request("textDocument/completion", position("file:///a.fr", 7))); strings.Join(got, ",") != "adyen,stripe" {
 		t.Errorf("after @ without money the completion is %v, want [adyen stripe]", got)
 	}
 }
@@ -266,10 +270,10 @@ func TestHoverSaysAnAmountInMinorUnits(t *testing.T) {
 		t.Run(test.text, func(t *testing.T) {
 			t.Parallel()
 			s := newSession(t, withKWD(t), `{}`)
-			s.notify("github.com/nethinwei/funroute/setContract", contract("k:money"))
+			s.notify("funroute/setContract", contract("k:money"))
 			s.open("file:///a.fr", test.text)
-			shown := s.request("textDocument/hover", position("file:///a.fr", 0, test.character)).(map[string]any)
-			value := shown["contents"].(map[string]any)["value"].(string)
+			shown := as[map[string]any](t, s.request("textDocument/hover", position("file:///a.fr", test.character)))
+			value := as[string](t, as[map[string]any](t, shown["contents"])["value"])
 			if !strings.Contains(value, test.typ) || !strings.Contains(value, test.note) {
 				t.Errorf("hover on %q at %d = %q, want %q and %q", test.text, test.character, value, test.typ, test.note)
 			}
@@ -283,10 +287,10 @@ func TestHoverSaysAnAmountInMinorUnits(t *testing.T) {
 func TestHoverOnlyExplainsAmountLiterals(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, withKWD(t), `{}`)
-	s.notify("github.com/nethinwei/funroute/setContract", contract("amount:money"))
+	s.notify("funroute/setContract", contract("amount:money"))
 	for text, character := range map[string]int{"round(amount * 2.9%, @half_even)": 10, "amount": 2, "money(170, USD)": 1} {
 		s.open("file:///a.fr", text)
-		shown, _ := s.request("textDocument/hover", position("file:///a.fr", 0, character)).(map[string]any)
+		shown, _ := s.request("textDocument/hover", position("file:///a.fr", character)).(map[string]any)
 		value, _ := shown["contents"].(map[string]any)["value"].(string)
 		if value == "" || strings.Contains(value, "位小数）") {
 			t.Errorf("hover on %q at %d = %q, want a type and no minor units", text, character, value)
@@ -301,8 +305,8 @@ func TestHoverExplainsAmountsHoweverSpaced(t *testing.T) {
 	for text, note := range map[string]string{"JPY 1_000": "最小单位 1000", "USD  1.70": "最小单位 170", "USD\t1.70": "最小单位 170"} {
 		s := newSession(t, withKWD(t), `{}`)
 		s.open("file:///a.fr", text)
-		shown := s.request("textDocument/hover", position("file:///a.fr", 0, 1)).(map[string]any)
-		if value := shown["contents"].(map[string]any)["value"].(string); !strings.Contains(value, note) {
+		shown := as[map[string]any](t, s.request("textDocument/hover", position("file:///a.fr", 1)))
+		if value := as[string](t, as[map[string]any](t, shown["contents"])["value"]); !strings.Contains(value, note) {
 			t.Errorf("hover on %q = %q, want %q", text, value, note)
 		}
 	}
@@ -314,15 +318,15 @@ func TestHoverAndCompletionShowExamples(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, standard(t), `{}`)
 	s.open("file:///a.fr", "len([1]) + sw")
-	shown := s.request("textDocument/hover", position("file:///a.fr", 0, 1)).(map[string]any)
-	if value := shown["contents"].(map[string]any)["value"].(string); !strings.Contains(value, "len([1, 2, 3])  // 3") {
+	shown := as[map[string]any](t, s.request("textDocument/hover", position("file:///a.fr", 1)))
+	if value := as[string](t, as[map[string]any](t, shown["contents"])["value"]); !strings.Contains(value, "len([1, 2, 3])  // 3") {
 		t.Errorf("hover on len = %q, want its examples", value)
 	}
 	documented := map[string]string{}
-	for _, item := range s.request("textDocument/completion", position("file:///a.fr", 0, 13)).([]any) {
-		entry := item.(map[string]any)
+	for _, item := range as[[]any](t, s.request("textDocument/completion", position("file:///a.fr", 13))) {
+		entry := as[map[string]any](t, item)
 		if doc, ok := entry["documentation"].(map[string]any); ok {
-			documented[entry["label"].(string)] = doc["value"].(string)
+			documented[as[string](t, entry["label"])] = as[string](t, doc["value"])
 		}
 	}
 	for label, want := range map[string]string{"len": `len("日本円")  // 3`, "switch": `else => "many")  // "few"`} {

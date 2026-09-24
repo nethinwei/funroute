@@ -25,8 +25,10 @@ func collectEnums(dst map[string]machine.Type, hints map[string]machine.Type, re
 }
 
 // Enums is the contract's enum namespace, by name: what an @member in a
-// program under it resolves in. A contract ValidateContract accepted has no
-// two enums under one name, so there is no conflict to report here.
+// program under it resolves in. ValidateContract does not look for two
+// different enums under one name; collectEnums refuses them when a program
+// compiles. Enums reports no such conflict: it stops at the first one it
+// meets, and holds only the enums collected before it.
 func (o CompileOptions) Enums() map[string]machine.Type {
 	enums := map[string]machine.Type{}
 	_ = collectEnums(enums, o.argTypes(), o.Result)
@@ -44,7 +46,7 @@ func collectEnum(dst map[string]machine.Type, typ machine.Type) error {
 		if existing, ok := dst[inner.Name()]; ok && !existing.Equal(inner) {
 			return fmt.Errorf("the contract declares %s and %s under the same name", existing.Summary(), inner.Summary())
 		}
-		dst[inner.Name()] = machine.CloneType(inner)
+		dst[inner.Name()] = inner
 		return nil
 	})
 }
@@ -110,161 +112,4 @@ func declaredEnums(enums map[string]machine.Type) string {
 	}
 	slices.Sort(names)
 	return "; the contract declares " + strings.Join(names, ", ")
-}
-
-// validateEnumResult proves every enum-bearing part of the declared result.
-// It also pushes the declared type into container-producing nodes, so their
-// bytecode builds array<enum>/dict<enum> rather than a plain string container.
-func validateEnumResult(expr syntax.Expr, inferred *inference, registry *machine.Registry) error {
-	if !containsEnum(inferred.Result) {
-		return nil
-	}
-	if err := validateConstrainedReturn(expr, inferred.Result, inferred, registry); err != nil {
-		return err
-	}
-	inferred.NodeTypes[expr.NodeID()] = machine.CloneType(inferred.Result)
-	return nil
-}
-
-func containsEnum(typ machine.Type) bool {
-	return machine.TypeContains(typ, machine.EnumKind)
-}
-
-func validateConstrainedReturn(expr syntax.Expr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
-	switch node := expr.(type) {
-	case *syntax.CallExpr:
-		return validateConstrainedCall(node, expected, inferred, registry)
-	case *syntax.SwitchExpr:
-		return validateConstrainedSwitch(node, expected, inferred, registry)
-	case *syntax.LetExpr:
-		return validateAndSet(node, node.Body, expected, inferred, registry)
-	case *syntax.UsingExpr:
-		return validateAndSet(node, node.Body, expected, inferred, registry)
-	case *syntax.ReduceExpr:
-		if err := validateConstrainedReturn(node.Init, expected, inferred, registry); err != nil {
-			return err
-		}
-		return validateAndSet(node, node.Body, expected, inferred, registry)
-	case *syntax.ArrayExpr:
-		return validateConstrainedArray(node, expected, inferred, registry)
-	case *syntax.DictExpr:
-		return validateConstrainedDict(node, expected, inferred, registry)
-	case *syntax.ForExpr:
-		return validateConstrainedFor(node, expected, inferred, registry)
-	default:
-		// A node with no case here is checked whole: its inferred type has to
-		// be the expected one. That is the conservative answer — it rejects a
-		// program this walk could have proven rather than letting one through
-		// — so a new node type costs precision here, never soundness.
-		return validateKnownType(expr, expected, inferred)
-	}
-}
-
-func validateConstrainedCall(node *syntax.CallExpr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
-	key, ok := inferred.Selections[node.ID]
-	function, resolved := registry.Resolve(key)
-	if ok && resolved && function.IsLazyIf() && len(node.Args) == 3 {
-		return validatePair(node, node.Args[1], node.Args[2], expected, inferred, registry)
-	}
-	if ok && resolved && function.IsLazyFallback() && len(node.Args) >= 2 {
-		for _, candidate := range node.Args {
-			if err := validateConstrainedReturn(candidate, expected, inferred, registry); err != nil {
-				return err
-			}
-		}
-		inferred.NodeTypes[node.ID] = machine.CloneType(expected)
-		return nil
-	}
-	return validateKnownType(node, expected, inferred)
-}
-
-func validatePair(parent syntax.Expr, left, right syntax.Expr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
-	if err := validateConstrainedReturn(left, expected, inferred, registry); err != nil {
-		return err
-	}
-	return validateAndSet(parent, right, expected, inferred, registry)
-}
-
-func validateConstrainedSwitch(node *syntax.SwitchExpr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
-	for _, item := range node.Cases {
-		if err := validateConstrainedReturn(item.Result, expected, inferred, registry); err != nil {
-			return err
-		}
-	}
-	if node.Default != nil {
-		if err := validateConstrainedReturn(node.Default, expected, inferred, registry); err != nil {
-			return err
-		}
-	}
-	inferred.NodeTypes[node.ID] = machine.CloneType(expected)
-	return nil
-}
-
-func validateConstrainedArray(node *syntax.ArrayExpr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
-	if expected.Kind() != machine.ArrayKind || !hasElem(expected) {
-		return enumReturnError(node, expected)
-	}
-	for _, item := range node.Items {
-		if err := validateConstrainedReturn(item, elemOf(expected), inferred, registry); err != nil {
-			return err
-		}
-	}
-	inferred.NodeTypes[node.ID] = machine.CloneType(expected)
-	return nil
-}
-
-func validateConstrainedDict(node *syntax.DictExpr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
-	if expected.Kind() != machine.DictKind || !hasElem(expected) {
-		return enumReturnError(node, expected)
-	}
-	for _, entry := range node.Entries {
-		if err := validateConstrainedReturn(entry.Value, elemOf(expected), inferred, registry); err != nil {
-			return err
-		}
-	}
-	inferred.NodeTypes[node.ID] = machine.CloneType(expected)
-	return nil
-}
-
-// validateConstrainedFor proves each shape a comprehension takes: a list
-// yields elements, a dictionary comprehension yields values under its keys,
-// and an outer clause of [e for x in xs for y in ys] yields the inner list,
-// which is spliced in — so that one is held to the whole expected type. The
-// comprehension itself has the container type, not its element's.
-func validateConstrainedFor(node *syntax.ForExpr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
-	want := machine.ArrayKind
-	if node.YieldKey != nil {
-		want = machine.DictKind
-	}
-	if expected.Kind() != want || !hasElem(expected) {
-		return enumReturnError(node, expected)
-	}
-	yield := elemOf(expected)
-	if node.Flatten {
-		yield = expected
-	}
-	if err := validateConstrainedReturn(node.Yield, yield, inferred, registry); err != nil {
-		return err
-	}
-	inferred.NodeTypes[node.ID] = machine.CloneType(expected)
-	return nil
-}
-
-func validateAndSet(parent, child syntax.Expr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
-	if err := validateConstrainedReturn(child, expected, inferred, registry); err != nil {
-		return err
-	}
-	inferred.NodeTypes[parent.NodeID()] = machine.CloneType(expected)
-	return nil
-}
-
-func validateKnownType(expr syntax.Expr, expected machine.Type, inferred *inference) error {
-	if typ, ok := inferred.NodeTypes[expr.NodeID()]; ok && typ.Equal(expected) {
-		return nil
-	}
-	return enumReturnError(expr, expected)
-}
-
-func enumReturnError(expr syntax.Expr, expected machine.Type) error {
-	return syntax.Around(expr, "type error: cannot prove the expression returns %s", expected.Summary())
 }

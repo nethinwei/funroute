@@ -263,7 +263,7 @@ func TestFxPushIsValidatedOnLoad(t *testing.T) {
 
 // tamperedUsing is using(160 JPY / USD, a -> JPY) with its instructions
 // changed by edit, resealed and loaded.
-func tamperedUsing(t *testing.T, edit func([]machine.Instruction) []machine.Instruction) *machine.Runtime {
+func tamperedUsing(t *testing.T, edit func([]machine.Instruction) []machine.Instruction) error {
 	t.Helper()
 	registry := fxRegistry(t)
 	artifact, err := compileMoney(t, registry, "using(160 JPY / USD, round(a -> JPY, @half_even))", "a: money", "")
@@ -276,16 +276,14 @@ func tamperedUsing(t *testing.T, edit func([]machine.Instruction) []machine.Inst
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := machine.Instantiate(tampered, registry)
-	if err != nil {
-		t.Fatalf("Instantiate(the tampered using) = %v", err)
-	}
-	return runtime
+	_, err = machine.Instantiate(tampered, registry)
+	return err
 }
 
-// Load cannot see what a quote is or how deep the stack is where a using
-// opens: a broken artifact fails its run rather than the process.
-func TestABrokenUsingFailsItsRun(t *testing.T) {
+// Loading types every path through the bytecode, so a using whose quotes are
+// not on the stack, or that closes what it never opened, is refused before
+// anything runs.
+func TestABrokenUsingIsRefusedAtLoad(t *testing.T) {
 	t.Parallel()
 	for name, edit := range map[string]func([]machine.Instruction) []machine.Instruction{
 		"a push past the stack": func(in []machine.Instruction) []machine.Instruction {
@@ -304,9 +302,8 @@ func TestABrokenUsingFailsItsRun(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			runtime := tamperedUsing(t, edit)
-			if value, err := runtime.RunValues(t.Context(), []machine.Value{machine.MoneyValue(100, "USD")}, machine.RunOptions{}); err == nil {
-				t.Fatalf("the run of a broken using = %v, nil, want an error", value.Any())
+			if err := tamperedUsing(t, edit); err == nil {
+				t.Fatal("Instantiate(a broken using) = nil, want it refused")
 			}
 		})
 	}

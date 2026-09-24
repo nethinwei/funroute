@@ -5,15 +5,16 @@ import (
 	"fmt"
 
 	"github.com/nethinwei/funroute/internal/machine"
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 func compileError(err error) error {
 	if err == nil || errors.Is(err, machine.ErrCompile) || errors.Is(err, machine.ErrContract) {
 		return err
 	}
-	// Both are wrapped: errors.Is finds the class, errors.As finds the
-	// position the lexer or the type checker recorded.
-	return fmt.Errorf("%w: %w", machine.ErrCompile, err)
+	// errors.Is finds the class, errors.As the position the lexer or the
+	// type checker recorded behind it.
+	return money.Classify(machine.ErrCompile, "", err)
 }
 
 func contractErrorf(format string, args ...any) error {

@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/nethinwei/funroute/internal/money"
@@ -19,7 +20,7 @@ func (r *Registry) DeclareMoney(spec money.MoneySpec) error {
 	r.mu.Lock()
 	if r.money != nil {
 		r.mu.Unlock()
-		return fmt.Errorf("money is already declared")
+		return errors.New("money is already declared")
 	}
 	r.money = table
 	r.mu.Unlock()
@@ -65,23 +66,12 @@ const AllocationEnum = "allocation"
 // AllocationEnumType is the enum an allocation strategy is written in.
 func AllocationEnumType() Type { return EnumOf(AllocationEnum, money.AllocationStrategies()...) }
 
-// DeclaredCurrency checks a currency code against the registry: a program's
-// USD names a declared currency.
-func DeclaredCurrency(r *Registry, code string) error {
-	table := r.currencies()
-	if table == nil {
-		return fmt.Errorf("money is not declared for this registry")
-	}
-	_, err := table.Places(code)
-	return err
-}
-
 // ParseMoneyAmount reads an amount written in a currency's major unit — the
 // "1.70" of USD 1.70 — into a money value, exactly.
 func ParseMoneyAmount(r *Registry, code, amount string) (Value, error) {
 	table := r.currencies()
 	if table == nil {
-		return Value{}, fmt.Errorf("money is not declared for this registry")
+		return Value{}, errors.New("money is not declared for this registry")
 	}
 	m, err := table.Of(code, amount)
 	return moneyValueOf(m), err

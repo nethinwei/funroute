@@ -127,11 +127,10 @@ func (c *codec) planRecord(registry *Registry) error {
 	c.shape = shapeRecord
 	c.fields = make([]fieldCodec, len(c.typ.fields))
 	for i, wanted := range c.typ.fields {
-		position := slices.IndexFunc(declared, func(field Field) bool { return field.name == wanted.name })
-		if position < 0 {
-			return fmt.Errorf("%s has no field %q for %s", c.goType, wanted.name, c.typ.Summary())
+		field, err := structFieldFor(c.goType, declared, indexes, c.typ, wanted.name)
+		if err != nil {
+			return err
 		}
-		field := c.goType.Field(indexes[position])
 		plan, err := newCodecFor(registry, field.Type, wanted.typ)
 		if err != nil {
 			return fmt.Errorf("field %q: %w", wanted.name, err)
@@ -182,43 +181,22 @@ func nativeCarries(registry *Registry, typ reflect.Type, want Type) bool {
 	return err == nil && derived.Equal(want)
 }
 
-var (
-	boolGo    = reflect.TypeFor[bool]()
-	int64Go   = reflect.TypeFor[int64]()
-	float64Go = reflect.TypeFor[float64]()
-	stringGo  = reflect.TypeFor[string]()
-)
-
 // nativeSlice reports whether a slice has the memory layout of a Value
-// backing: its elements are exactly bool, int64, float64 or string. A named
-// slice type (type Vector []float64) has the same header and qualifies.
+// backing: its elements are exactly one of natives' types. A named slice type
+// (type Vector []float64) has the same header and qualifies.
 func nativeSlice(typ reflect.Type) (native, bool) {
-	switch typ.Elem() {
-	case boolGo:
-		return nativeBools, true
-	case int64Go:
-		return nativeInts, true
-	case float64Go:
-		return nativeFloats, true
-	case stringGo:
-		return nativeStrings, true
-	case moneyGoType:
-		return nativeMonies, true
-	case fxRateGoType:
-		return nativeFxRates, true
-	default:
-		return 0, false
-	}
+	i := slices.IndexFunc(natives, func(entry nativeBacking) bool { return entry.goElem == typ.Elem() })
+	return native(i), i >= 0
 }
 
 // nativeMap is nativeSlice for maps. The key must be exactly string: a map is
 // hashed by its key type, so a named key type is a different map.
 func nativeMap(typ reflect.Type) (native, bool) {
-	if typ.Key() != stringGo {
+	kind, ok := nativeSlice(typ)
+	if !ok || typ.Key() != reflect.TypeFor[string]() || !natives[kind].dict {
 		return 0, false
 	}
-	kind, ok := nativeSlice(typ)
-	return kind + nativeBoolMap, ok
+	return kind + nativeBoolMap, true
 }
 
 // argsCodec plans the arguments an artifact takes, in its order, each found

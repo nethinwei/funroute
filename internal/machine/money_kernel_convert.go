@@ -14,28 +14,8 @@ func (k moneyKernel) registerConvert(registry *Registry) {
 	doc := moneyDoc("convert", "按所在 using 的报价换汇：amount -> JPY。只用这一对货币的报价或反向报价的倒数，不经中转货币；"+
 		"要经过别的货币就连写，amount -> CNY -> USD，每一跳舍入一次。using 里没有这一对的报价是 ErrNoFxRate，fallback 可以兜底。", "金额", "目标币种")
 	doc.Cost = 5
-	params := []Type{MoneyType, CurrencyType}
-	mustRegister(registry, FunctionSpec{Name: "convert", Params: params, Result: MoneyType, Doc: doc, readsRun: true, exactStep: true,
-		Eval: func(ctx context.Context, args []Value) (Value, error) {
-			return exactResult(k.convertExactIn(ctx, args))
-		}})
-	explicit := append(append([]Type(nil), params...), RoundingEnumType())
-	doc.Params = append(append([]string(nil), doc.Params...), "舍入方式")
-	mustRegister(registry, FunctionSpec{Name: "convert", Params: explicit, Result: MoneyType, Doc: doc, readsRun: true, takesExact: true,
-		Eval: func(ctx context.Context, args []Value) (Value, error) {
-			mode, err := money.ParseRounding(args[2].s)
-			if err != nil {
-				return Value{}, err
-			}
-			if IsExact(args[0]) {
-				e, err := k.convertExactIn(ctx, args[:2])
-				if err != nil {
-					return Value{}, err
-				}
-				return moneyResult(e.Round(mode))
-			}
-			return k.convertIn(ctx, args[:2], mode)
-		}})
+	registerRounded(registry, FunctionSpec{Name: "convert", Params: []Type{MoneyType, CurrencyType}, Result: MoneyType, Doc: doc, readsRun: true},
+		k.convertExactIn, k.convertIn)
 }
 
 // registerRateReading registers fx(base, quote): the exchange rate the
@@ -51,15 +31,20 @@ func (k moneyKernel) registerRateReading(registry *Registry) {
 
 // ratioIn reads the using's rate as convertIn converts at it.
 func (k moneyKernel) ratioIn(ctx context.Context, args []Value) (Value, error) {
-	f, err := scopeFrame(ctx)
-	if err != nil {
-		return Value{}, err
-	}
-	fx, err := f.rateBetween(k.table, args[0].s, args[1].s)
+	fx, err := k.rateFor(ctx, args[0].s, args[1].s)
 	if err != nil {
 		return Value{}, err
 	}
 	return FxRateValue(fx), nil
+}
+
+// rateFor is the rate from base to quote in the using the call is inside.
+func (k moneyKernel) rateFor(ctx context.Context, base, quote string) (money.FxRate, error) {
+	f, err := scopeFrame(ctx)
+	if err != nil {
+		return money.FxRate{}, err
+	}
+	return f.rateBetween(k.table, base, quote)
 }
 
 // convertIn converts at the using's rate. Money already in the currency,
@@ -75,11 +60,7 @@ func (k moneyKernel) convertIn(ctx context.Context, args []Value, mode money.Rou
 	if m.Currency() == "" {
 		return MoneyValue(0, to), noCurrencyIsZero(MoneyValue(m.Minor(), ""))
 	}
-	f, err := scopeFrame(ctx)
-	if err != nil {
-		return Value{}, err
-	}
-	fx, err := f.rateBetween(k.table, m.Currency(), to)
+	fx, err := k.rateFor(ctx, m.Currency(), to)
 	if err != nil {
 		return Value{}, err
 	}
@@ -98,11 +79,7 @@ func (k moneyKernel) convertExactIn(ctx context.Context, args []Value) (money.Ex
 	if m.Currency() == to || m.Currency() == "" {
 		return money.ExactFrom(to, m.Minor()), nil
 	}
-	f, err := scopeFrame(ctx)
-	if err != nil {
-		return money.ExactMoney{}, err
-	}
-	fx, err := f.rateBetween(k.table, m.Currency(), to)
+	fx, err := k.rateFor(ctx, m.Currency(), to)
 	if err != nil {
 		return money.ExactMoney{}, err
 	}

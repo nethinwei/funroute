@@ -2,10 +2,10 @@ package machine
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
-	"sort"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -109,7 +109,7 @@ func Record(typ Type, fields []Value) (Value, error) {
 		}
 		stored[i] = field
 	}
-	return Value{kind: RecordKind, box: &recordValue{typ: CloneType(typ), fields: stored}}, nil
+	return Value{kind: RecordKind, box: &recordValue{typ: typ, fields: stored}}, nil
 }
 
 // Field is the value at a record's i-th field. The compiler resolved the name
@@ -193,32 +193,20 @@ func (v Value) hasType(t Type) bool {
 
 func (v Value) Type() Type {
 	switch v.kind {
-	case BoolKind:
-		return BoolType
-	case IntKind:
-		return IntType
-	case FloatKind:
-		return FloatType
-	case StringKind:
-		return StringType
+	case BoolKind, IntKind, FloatKind, StringKind, RatioKind, MoneyKind, CurrencyKind, FxRateKind:
+		return Type{kind: v.kind}
 	case ArrayKind:
-		return ArrayOf(CloneType(v.elemType()))
+		return ArrayOf(v.elemType())
 	case DictKind:
-		return DictOf(CloneType(v.elemType()))
+		return DictOf(v.elemType())
 	case HandleKind:
 		return HandleOf(v.s)
-	case RatioKind:
-		return RatioType
-	case MoneyKind, CurrencyKind, FxRateKind:
-		return Type{kind: v.kind}
 	case RecordKind:
 		if record, ok := v.box.(*recordValue); ok {
-			return CloneType(record.typ)
+			return record.typ
 		}
-		return Type{kind: InvalidKind}
-	default:
-		return Type{kind: InvalidKind}
 	}
+	return Type{kind: InvalidKind}
 }
 
 func (v Value) Bool() (bool, bool)     { return v.b, v.kind == BoolKind }
@@ -355,75 +343,57 @@ func (v Value) containerAny() any {
 	}
 }
 
+// MarshalJSON writes a record's fields in the type's order. A Go map would come
+// out alphabetical, and the order of a record's fields is part of its type, so
+// the JSON a host reads back matches the contract it wrote. A container of
+// records is walked too, or the field order would hold at the top level and
+// quietly go alphabetical one level down.
 func (v Value) MarshalJSON() ([]byte, error) {
-	if v.kind == RecordKind {
-		return v.marshalRecord()
-	}
-	// A container of records has to be walked too, or the field order would
-	// hold at the top level and quietly go alphabetical one level down.
-	if (v.kind == ArrayKind || v.kind == DictKind) && holdsRecord(v.Type()) {
-		return v.marshalContainer()
-	}
-	return json.Marshal(v.Any())
+	return json.Marshal(jsonTree(v, holdsRecord, Value.Any))
 }
 
-func holdsRecord(typ Type) bool {
-	return TypeContains(typ, RecordKind)
+// holdsRecord reports whether v is a record or a container with one inside:
+// the values whose JSON is walked rather than handed to json.Marshal whole.
+func holdsRecord(v Value) bool {
+	return v.kind == RecordKind || (v.kind == ArrayKind || v.kind == DictKind) && TypeContains(v.Type(), RecordKind)
 }
 
-func (v Value) marshalContainer() ([]byte, error) {
-	if v.kind == ArrayKind {
-		items := make([]json.RawMessage, v.length())
+// jsonTree is v as the tree json.Marshal writes. The values walk accepts are
+// opened — a record into orderedFields, which keeps its field order, a
+// container into its items — and every other value is what leaf makes of it.
+// Dictionary keys have no order of their own; encoding/json sorts a Go map's,
+// which keeps the output stable.
+func jsonTree(v Value, walk func(Value) bool, leaf func(Value) any) any {
+	if !walk(v) {
+		return leaf(v)
+	}
+	switch v.kind {
+	case RecordKind:
+		record, ok := v.box.(*recordValue)
+		if !ok {
+			return nil
+		}
+		out := orderedFields{names: make([]string, len(record.fields)), values: make([]any, len(record.fields))}
+		for i, field := range record.fields {
+			out.names[i] = record.typ.fields[i].name
+			out.values[i] = jsonTree(field, walk, leaf)
+		}
+		return out
+	case ArrayKind:
+		items := make([]any, v.length())
 		for i := range items {
-			encoded, err := json.Marshal(v.at(i))
-			if err != nil {
-				return nil, err
-			}
-			items[i] = encoded
+			items[i] = jsonTree(v.at(i), walk, leaf)
 		}
-		return json.Marshal(items)
+		return items
+	case DictKind:
+		entries := make(map[string]any, v.length())
+		for _, key := range v.keys() {
+			entry, _ := v.lookup(key)
+			entries[key] = jsonTree(entry, walk, leaf)
+		}
+		return entries
 	}
-	// Dictionary keys have no order of their own, so they are sorted, which is
-	// what encoding/json does for a Go map and keeps the output stable.
-	entries := make(map[string]json.RawMessage, v.length())
-	for _, key := range v.keys() {
-		item, _ := v.lookup(key)
-		encoded, err := json.Marshal(item)
-		if err != nil {
-			return nil, err
-		}
-		entries[key] = encoded
-	}
-	return json.Marshal(entries)
-}
-
-// marshalRecord writes the fields in the type's order. A Go map would come out
-// alphabetical, and the order of a record's fields is part of its type, so the
-// JSON a host reads back matches the contract it wrote.
-func (v Value) marshalRecord() ([]byte, error) {
-	record, ok := v.box.(*recordValue)
-	if !ok {
-		return []byte("null"), nil
-	}
-	var out []byte
-	out = append(out, '{')
-	for i, field := range record.fields {
-		if i > 0 {
-			out = append(out, ',')
-		}
-		name, err := json.Marshal(record.typ.fields[i].name)
-		if err != nil {
-			return nil, err
-		}
-		value, err := json.Marshal(field)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, name...)
-		out = append(out, ':')
-		out = append(out, value...)
-	}
-	return append(out, '}'), nil
+	return leaf(v)
 }
 
 // Equal compares two values of one type. Handles are never equal: the
@@ -437,20 +407,12 @@ func (v Value) Equal(other Value) bool {
 		return false
 	}
 	switch v.kind {
-	case BoolKind:
-		return v.b == other.b
-	case IntKind:
-		return v.i == other.i
-	case FloatKind:
-		return v.f == other.f
-	case StringKind:
-		return v.s == other.s
-	case ArrayKind:
-		return v.equalArray(other)
-	case DictKind:
-		return v.equalDict(other)
-	case RecordKind:
-		return v.equalRecord(other)
+	case BoolKind, IntKind, FloatKind, StringKind:
+		// A scalar's other fields are zero, so they match too.
+		return v.b == other.b && v.i == other.i && v.f == other.f && v.s == other.s
+	case ArrayKind, DictKind, RecordKind:
+		equal, _ := equalItems(v, other, func(a, b Value) (bool, error) { return a.Equal(b), nil })
+		return equal
 	case RatioKind:
 		return ratioFrom(v).Cmp(ratioFrom(other)) == 0
 	default:
@@ -458,53 +420,49 @@ func (v Value) Equal(other Value) bool {
 	}
 }
 
-// equalRecord compares field by field. The types matched already, so both
-// records hold the same fields in the same order.
-func (v Value) equalRecord(other Value) bool {
-	left, leftOK := v.box.(*recordValue)
-	right, rightOK := other.box.(*recordValue)
-	if !leftOK || !rightOK || len(left.fields) != len(right.fields) {
-		return false
+// equalItems compares two containers or records of one type item by item
+// with same. The first difference or error decides; containers of different
+// sizes, and a key only one dictionary has, are simply unequal.
+func equalItems(left, right Value, same func(a, b Value) (bool, error)) (bool, error) {
+	n, m := left.length(), right.length()
+	pair := func(i int) (Value, Value, bool) { return left.at(i), right.at(i), true }
+	switch left.kind {
+	case DictKind:
+		keys := left.keys()
+		pair = func(i int) (Value, Value, bool) {
+			a, _ := left.lookup(keys[i])
+			b, ok := right.lookup(keys[i])
+			return a, b, ok
+		}
+	case RecordKind:
+		a, aOK := left.box.(*recordValue)
+		b, bOK := right.box.(*recordValue)
+		if !aOK || !bOK {
+			return false, nil
+		}
+		n, m = len(a.fields), len(b.fields)
+		pair = func(i int) (Value, Value, bool) { return a.fields[i], b.fields[i], true }
 	}
-	for i := range left.fields {
-		if !left.fields[i].Equal(right.fields[i]) {
-			return false
+	if n != m {
+		return false, nil
+	}
+	for i := range n {
+		a, b, ok := pair(i)
+		if !ok {
+			return false, nil
+		}
+		if equal, err := same(a, b); err != nil || !equal {
+			return false, err
 		}
 	}
-	return true
-}
-
-func (v Value) equalArray(other Value) bool {
-	if v.length() != other.length() {
-		return false
-	}
-	for i := 0; i < v.length(); i++ {
-		if !v.at(i).Equal(other.at(i)) {
-			return false
-		}
-	}
-	return true
-}
-
-func (v Value) equalDict(other Value) bool {
-	if v.length() != other.length() {
-		return false
-	}
-	for _, key := range v.keys() {
-		mine, _ := v.lookup(key)
-		theirs, ok := other.lookup(key)
-		if !ok || !mine.Equal(theirs) {
-			return false
-		}
-	}
-	return true
+	return true, nil
 }
 
 // compareEqual is the VM's equality: eq and switch both use it. Handles are
 // opaque, so comparing them is an error rather than a guess.
 func compareEqual(left, right Value) (Value, error) {
 	if left.kind == HandleKind || right.kind == HandleKind {
-		return Value{}, fmt.Errorf("handles cannot be compared")
+		return Value{}, errors.New("handles cannot be compared")
 	}
 	if err := sameUnits(left, right); err != nil {
 		return Value{}, err
@@ -528,7 +486,7 @@ func compareEqual(left, right Value) (Value, error) {
 // enter rather than checked at every use.
 func CheckedFloat(value float64) (Value, error) {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return Value{}, fmt.Errorf("non-finite floats are not supported")
+		return Value{}, errors.New("non-finite floats are not supported")
 	}
 	return Float(value), nil
 }
@@ -539,27 +497,11 @@ func (v Value) validateInvariant() error {
 		return checkFloats(box)
 	case map[string]float64:
 		return checkFloatMap(box)
-	case *recordValue:
-		for i, value := range box.fields {
-			if err := value.validateInvariant(); err != nil {
-				return fmt.Errorf("field %q: %w", box.typ.fields[i].name, err)
-			}
-		}
-	case *nestedArray:
-		for i, value := range box.items {
-			if err := value.validateInvariant(); err != nil {
-				return fmt.Errorf("item %d: %w", i, err)
-			}
-		}
-	case *nestedDict:
-		for key, value := range box.entries {
-			if err := value.validateInvariant(); err != nil {
-				return fmt.Errorf("entry %q: %w", key, err)
-			}
-		}
+	case *recordValue, *nestedArray, *nestedDict:
+		return v.eachPart(false, Value.validateInvariant)
 	}
 	if v.kind == FloatKind && (math.IsNaN(v.f) || math.IsInf(v.f, 0)) {
-		return fmt.Errorf("non-finite floats are not supported")
+		return errors.New("non-finite floats are not supported")
 	}
 	return nil
 }
@@ -569,6 +511,6 @@ func sortedKeys[T any](entries map[string]T) []string {
 	for key := range entries {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }

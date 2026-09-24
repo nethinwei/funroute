@@ -3,6 +3,8 @@ package syntax
 import (
 	"strings"
 	"testing"
+
+	"github.com/nethinwei/funroute/internal/machine"
 )
 
 // A minus before a number makes a negative literal only when the number
@@ -34,15 +36,15 @@ func TestAMinusIsALiteralOnlyBeforeANumberAlone(t *testing.T) {
 	}
 }
 
-// A decimal literal is the float64 it is written as, or refused: rounded on
-// the way in, a rule would say one number and compute another, and a literal
-// read as an exact ratio would carry the rounding with it. Exponents far out
-// of range are refused without being worked out.
+// A decimal literal is the decimal it is written as. Read as a float it is
+// the float64 it is written as, or refused, naming the one it would have
+// been: rounded on the way in, a rule would say one number and compute
+// another. Exponents far out of range are refused without being worked out.
 func TestADecimalLiteralIsExactlyAFloat(t *testing.T) {
 	t.Parallel()
 	for _, source := range []string{"0.1", "1.50", "1e300", "1.5e-3", "2.5", "0.0", "1e-320", "15e-1", "0.000125"} {
-		if _, err := Parse(source); err != nil {
-			t.Errorf("Parse(%q) error = %v, want the float", source, err)
+		if _, err := floatOf(t, source); err != nil {
+			t.Errorf("Parse(%q).Float() error = %v, want the float", source, err)
 		}
 	}
 	for source, nearest := range map[string]string{
@@ -52,19 +54,39 @@ func TestADecimalLiteralIsExactlyAFloat(t *testing.T) {
 		"1e-999999999":           "0",
 		"-0.30000000000000001":   "-0.3",
 	} {
-		_, err := Parse(source)
+		_, err := floatOf(t, source)
 		if err == nil || !strings.Contains(err.Error(), "the nearest one is "+nearest) {
-			t.Errorf("Parse(%q) error = %v, want one naming %s", source, err, nearest)
+			t.Errorf("Parse(%q).Float() error = %v, want one naming %s", source, err, nearest)
 		}
 	}
-	if _, err := Parse("1e99999999999999999999"); err == nil {
-		t.Error("Parse(1e99999999999999999999) = nil error, want a refusal")
-	}
-	for _, document := range []string{`{"version":1,"expr":{"node":"float","float":"0.30000000000000001"}}`} {
-		if _, err := ImportExprJSON([]byte(document)); err == nil {
-			t.Errorf("ImportExprJSON(%s) = nil error, want the float refused as it is in source", document)
+	for _, source := range []string{"1e99999999999999999999", "1e400"} {
+		if _, err := Parse(source); err == nil {
+			t.Errorf("Parse(%s) = nil error, want a refusal", source)
 		}
 	}
+	expr, err := ImportExprJSON([]byte(`{"version":1,"expr":{"node":"float","float":"0.30000000000000001"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if literal, ok := expr.(*LiteralExpr); !ok {
+		t.Errorf("ImportExprJSON(0.30000000000000001) = %T, want a literal", expr)
+	} else if _, err := literal.Float(); err == nil {
+		t.Error("an imported 0.30000000000000001 read as a float = nil error, want it refused as it is in source")
+	}
+}
+
+// floatOf parses source, a decimal literal, and reads it as a float.
+func floatOf(t *testing.T, source string) (machine.Value, error) {
+	t.Helper()
+	expr, err := Parse(source)
+	if err != nil {
+		t.Fatalf("Parse(%q) error = %v", source, err)
+	}
+	literal, ok := expr.(*LiteralExpr)
+	if !ok {
+		t.Fatalf("Parse(%q) = %T, want a literal", source, expr)
+	}
+	return literal.Float()
 }
 
 // A money or an exchange rate literal is on one line with no comment in it:

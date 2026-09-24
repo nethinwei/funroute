@@ -38,7 +38,9 @@ func format(expr Expr, indent string, used int) string {
 	for i, part := range layout.parts {
 		parts[i] = inner + part.layout(inner)
 	}
-	return layout.open + "\n" + strings.Join(parts, layout.separator) + "\n" + indent + layout.close
+	// A switch's subject is followed by a space on one line and by the line
+	// break when split; no other opening ends in a space.
+	return strings.TrimSuffix(layout.open, " ") + "\n" + strings.Join(parts, layout.separator) + "\n" + indent + layout.close
 }
 
 func chainSource(match operatorMatch, indent string) (string, bool) {
@@ -63,60 +65,84 @@ func chainParts(match operatorMatch) []string {
 	return append(left, inline(match.operands[1], spec.rightLevel()))
 }
 
-// split is a node laid out one part per line between an opening and a closing.
+// split is a node's parts between an opening and a closing: on one line
+// joined by sep, or one part per line joined by separator. It is the one
+// description of how a node is printed, so inline and format cannot disagree.
 type split struct {
-	open, close, separator string
-	parts                  []part
+	open, close, sep, separator string
+	parts                       []part
 }
 
-type part interface {
-	layout(indent string) string
-}
-
-// exprPart is a subexpression on a line of its own.
-type exprPart struct{ expr Expr }
-
-func (p exprPart) layout(indent string) string { return format(p.expr, indent, 0) }
-
-// textPart is a line already written, such as a loop clause.
-type textPart string
-
-func (p textPart) layout(string) string { return string(p) }
-
-// headedPart is a subexpression after a head on its line — a binding's name,
-// a key, else — and the head counts toward the line.
-type headedPart struct {
-	head string
-	expr Expr
-}
-
-func (p headedPart) layout(indent string) string {
-	return p.head + format(p.expr, indent, utf8.RuneCountInString(p.head))
-}
-
-// branchPart is one switch case, whose matches are part of its head.
-type branchPart struct{ branch SwitchCaseExpr }
-
-func (p branchPart) layout(indent string) string {
-	matches := make([]string, len(p.branch.Match))
-	for i, match := range p.branch.Match {
-		matches[i] = format(match, indent, 0)
+func (s split) inline() string {
+	// Most nodes have a few parts, and their text stays on the stack.
+	var fixed [8]string
+	parts := fixed[:0]
+	for _, part := range s.parts {
+		parts = append(parts, part.inline())
 	}
-	return headedPart{"case " + strings.Join(matches, ", ") + " => ", p.branch.Result}.layout(indent)
+	return s.open + strings.Join(parts, s.sep) + s.close
 }
 
-func listSplit(open, close string, parts []part) split {
-	return split{open: open, close: close, separator: ",\n", parts: parts}
+// part is one part of a split: a head — a binding's name, a key, else —
+// and the subexpression after it, the head counting toward the line. A
+// switch case's head is its matches; a part with no subexpression is a line
+// already written, such as a loop clause.
+type part struct {
+	head    string
+	matches []Expr
+	expr    Expr
+}
+
+func (p part) inline() string {
+	head := p.lead(func(match Expr) string { return inline(match, 0) })
+	if p.expr == nil {
+		return head
+	}
+	return head + inline(p.expr, 0)
+}
+
+func (p part) layout(indent string) string {
+	head := p.lead(func(match Expr) string { return format(match, indent, 0) })
+	if p.expr == nil {
+		return head
+	}
+	return head + format(p.expr, indent, utf8.RuneCountInString(head))
+}
+
+// lead is the head, or a switch case's, written with its matches.
+func (p part) lead(write func(Expr) string) string {
+	if p.matches == nil {
+		return p.head
+	}
+	matches := make([]string, len(p.matches))
+	for i, match := range p.matches {
+		matches[i] = write(match)
+	}
+	return "case " + strings.Join(matches, ", ") + " => "
+}
+
+func listSplit(opening, closing string, parts []part) split {
+	return split{open: opening, close: closing, sep: ", ", separator: ",\n", parts: parts}
 }
 
 func exprParts(items []Expr) []part {
 	parts := make([]part, len(items))
 	for i, item := range items {
-		parts[i] = exprPart{item}
+		parts[i] = part{expr: item}
 	}
 	return parts
 }
 
+// fieldParts is a record's fields, each name: value.
+func fieldParts(fields []RecordFieldExpr) []part {
+	parts := make([]part, len(fields))
+	for i, field := range fields {
+		parts[i] = part{head: field.Name + ": ", expr: field.Value}
+	}
+	return parts
+}
+
+// splitNode is how a node that has parts is printed; a leaf has none.
 func splitNode(expr Expr) (split, bool) {
 	switch node := expr.(type) {
 	case *CallExpr:
@@ -128,19 +154,20 @@ func splitNode(expr Expr) (split, bool) {
 	case *ForExpr:
 		return comprehensionSplit(node), true
 	case *ReduceExpr:
-		return listSplit("reduce(", ")", []part{textPart(reduceHead(node)), textPart(accumulatorHead(node)), exprPart{node.Body}}), true
+		return listSplit("reduce(", ")", []part{{head: reduceHead(node)}, {head: accumulatorHead(node)}, {expr: node.Body}}), true
 	case *LetExpr:
 		parts := make([]part, 0, len(node.Bindings)+1)
 		for _, binding := range node.Bindings {
-			parts = append(parts, headedPart{binding.Name + " = ", binding.Value})
+			parts = append(parts, part{head: binding.Name + " = ", expr: binding.Value})
 		}
-		return listSplit("let(", ")", append(parts, exprPart{node.Body})), true
+		return listSplit("let(", ")", append(parts, part{expr: node.Body})), true
 	case *UsingExpr:
-		var parts []part
-		for _, text := range usingParts(node) {
-			parts = append(parts, textPart(text))
+		// A rate stays on its line, however long.
+		parts := make([]part, 0, len(node.Quotes)+1)
+		for _, rate := range node.Quotes {
+			parts = append(parts, part{head: inline(rate, 0)})
 		}
-		return listSplit("using(", ")", append(parts, exprPart{node.Body})), true
+		return listSplit("using(", ")", append(parts, part{expr: node.Body})), true
 	default:
 		return braceSplit(expr)
 	}
@@ -151,21 +178,13 @@ func braceSplit(expr Expr) (split, bool) {
 	case *DictExpr:
 		parts := make([]part, len(node.Entries))
 		for i, entry := range node.Entries {
-			parts[i] = headedPart{quote(entry.Key) + ": ", entry.Value}
+			parts[i] = part{head: quote(entry.Key) + ": ", expr: entry.Value}
 		}
 		return listSplit("{", "}", parts), true
 	case *RecordExpr:
-		parts := make([]part, len(node.Fields))
-		for i, field := range node.Fields {
-			parts[i] = headedPart{field.Name + ": ", field.Value}
-		}
-		return listSplit("{", "}", parts), true
+		return listSplit("{", "}", fieldParts(node.Fields)), true
 	case *RecordUpdateExpr:
-		parts := make([]part, len(node.Fields))
-		for i, field := range node.Fields {
-			parts[i] = headedPart{field.Name + ": ", field.Value}
-		}
-		return listSplit(postfixBase(node.Base)+" with {", "}", parts), true
+		return listSplit(postfixBase(node.Base)+" with {", "}", fieldParts(node.Fields)), true
 	default:
 		return split{}, false
 	}
@@ -174,31 +193,35 @@ func braceSplit(expr Expr) (split, bool) {
 func switchSplit(node *SwitchExpr) split {
 	open := "switch("
 	if node.Value != nil {
-		open += inline(node.Value, 0) + ","
+		open += inline(node.Value, 0) + ", "
 	}
 	parts := make([]part, 0, len(node.Cases)+1)
 	for _, branch := range node.Cases {
-		parts = append(parts, branchPart{branch})
+		parts = append(parts, part{matches: branch.Match, expr: branch.Result})
 	}
 	if node.Default != nil {
-		parts = append(parts, headedPart{"else => ", node.Default})
+		parts = append(parts, part{head: "else => ", expr: node.Default})
 	}
 	return listSplit(open, ")", parts)
 }
 
-// A comprehension keeps its clauses one per line under what it yields.
+// A comprehension keeps its clauses one per line under what it yields. One
+// with a key builds a dictionary and is written in braces; without one it
+// builds an array and is written in brackets.
 func comprehensionSplit(node *ForExpr) split {
 	inner := innerLoop(node)
-	open, close := "[", "]"
-	parts := []part{exprPart{inner.Yield}}
+	opening, closing := "[", "]"
+	clauses := forClauses(node)
+	parts := make([]part, 1, 1+len(clauses))
+	parts[0] = part{expr: inner.Yield}
 	if inner.YieldKey != nil {
-		open, close = "{", "}"
-		parts = []part{headedPart{inline(inner.YieldKey, 0) + ": ", inner.Yield}}
+		opening, closing = "{", "}"
+		parts[0] = part{head: inline(inner.YieldKey, 0) + ": ", expr: inner.Yield}
 	}
-	for _, clause := range forClauses(node) {
-		parts = append(parts, textPart(clause))
+	for _, clause := range clauses {
+		parts = append(parts, part{head: clause})
 	}
-	return split{open: open, close: close, separator: "\n", parts: parts}
+	return split{open: opening, close: closing, sep: " ", separator: "\n", parts: parts}
 }
 
 // FormatSource formats a program's text. Comments never reach the AST, so a

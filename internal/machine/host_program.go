@@ -2,8 +2,11 @@ package machine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
+
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // A Codec is a contract read off two Go types: the tagged fields of In are the
@@ -20,11 +23,11 @@ type Codec[In, Out any] struct {
 
 // NewCodec reads the contract off In and Out. In must be a struct; its
 // `funroute:"name"` fields are the arguments, and a struct with none — struct{}
-// — is a rule that takes none. Out is any type a Logic function could return.
+// — is a rule that takes none. Out is any type a Go function could return.
 // registry names the handles either may hold.
 func NewCodec[In, Out any](registry *Registry) (*Codec[In, Out], error) {
 	if registry == nil {
-		return nil, fmt.Errorf("a registry is required")
+		return nil, errors.New("a registry is required")
 	}
 	c := &Codec[In, Out]{registry: registry, in: reflect.TypeFor[In](), out: reflect.TypeFor[Out]()}
 	if c.in.Kind() != reflect.Struct {
@@ -45,14 +48,10 @@ func NewCodec[In, Out any](registry *Registry) (*Codec[In, Out], error) {
 
 // Parameters is the contract's argument list, in ABI order.
 func (c *Codec[In, Out]) Parameters() []Parameter {
-	params := make([]Parameter, len(c.params))
-	for i, param := range c.params {
-		params[i] = Parameter{name: param.name, typ: CloneType(param.typ)}
-	}
-	return params
+	return cloneParameters(c.params)
 }
 
-func (c *Codec[In, Out]) Result() Type { return CloneType(c.result) }
+func (c *Codec[In, Out]) Result() Type { return c.result }
 
 // Instantiate binds an artifact to the Go types. Each argument it declares
 // must be a field of In, by name, able to carry the declared type; its result
@@ -68,11 +67,11 @@ func (c *Codec[In, Out]) Instantiate(artifact *Artifact) (*Program[In, Out], err
 	declared := runtime.artifact
 	args, err := newArgsCodec(c.registry, c.in, declared.parts.Args)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrContract, err)
+		return nil, money.Classify(ErrContract, "", err)
 	}
 	result, err := newCodecFor(c.registry, c.out, declared.parts.Result)
 	if err != nil {
-		return nil, fmt.Errorf("%w: result: %v", ErrContract, err)
+		return nil, money.Classify(ErrContract, "result: ", err)
 	}
 	return &Program[In, Out]{
 		args: args, result: result, runtime: runtime, reads: argumentReads(declared),
@@ -142,7 +141,7 @@ func (p *Program[In, Out]) Run(ctx context.Context, in *In, options RunOptions) 
 		// Nothing ran, so the frame would not clear what was written.
 		clearValues(args)
 		r.releaseFrame(f)
-		return zero, fmt.Errorf("%w: %v", ErrContract, err)
+		return zero, money.Classify(ErrContract, "", err)
 	}
 	value, err := r.runFrame(ctx, f, args, options)
 	if err != nil {
@@ -157,7 +156,7 @@ func decodeInto[Out any](plan *codec, value Value) (Out, error) {
 	var out Out
 	if err := decodeResult(plan, value, &out); err != nil {
 		var zero Out
-		return zero, fmt.Errorf("%w: result: %v", ErrContract, err)
+		return zero, money.Classify(ErrContract, "result: ", err)
 	}
 	return out, nil
 }

@@ -18,34 +18,39 @@ import (
 // exactly; rounded is the same operation rounding at once, for operands that
 // are whole minor units.
 type (
-	exactStep func(args []Value) (money.ExactMoney, error)
-	rounded   func(args []Value, mode money.Rounding) (Value, error)
+	exactStep func(ctx context.Context, args []Value) (money.ExactMoney, error)
+	rounded   func(ctx context.Context, args []Value, mode money.Rounding) (Value, error)
 )
 
 // registerRounded registers an operation that lands between two minor units:
 // the bare step, and its variant with the mode spelled out. An exact operand
-// — a step inside a round — goes the exact way and is rounded after.
-func registerRounded(registry *Registry, name string, params []Type, result Type, doc Doc, exactly exactStep, fast rounded) {
-	mustRegister(registry, FunctionSpec{Name: name, Params: params, Result: result, Doc: doc, exactStep: true,
-		Eval: func(_ context.Context, args []Value) (Value, error) { return exactResult(exactly(args)) }})
-	explicit := append(append([]Type(nil), params...), RoundingEnumType())
-	doc.Params = append(append([]string(nil), doc.Params...), "舍入方式")
-	registerExactOp(registry, name, explicit, result, doc, func(_ context.Context, args []Value) (Value, error) {
+// — a step inside a round — goes the exact way and is rounded after. spec is
+// the bare step's name, signature and doc, and whether it reads the run.
+func registerRounded(registry *Registry, spec FunctionSpec, exactly exactStep, fast rounded) {
+	bare := spec
+	bare.exactStep = true
+	bare.Eval = func(ctx context.Context, args []Value) (Value, error) { return exactResult(exactly(ctx, args)) }
+	mustRegister(registry, bare)
+	spec.Params = append(slices.Clone(spec.Params), RoundingEnumType())
+	spec.Doc.Params = append(slices.Clone(spec.Doc.Params), "舍入方式")
+	spec.takesExact = true
+	spec.Eval = func(ctx context.Context, args []Value) (Value, error) {
 		mode, err := money.ParseRounding(args[len(args)-1].s)
 		if err != nil {
 			return Value{}, err
 		}
-		return roundedAt(args[:len(args)-1], mode, exactly, fast)
-	})
+		return roundedAt(ctx, args[:len(args)-1], mode, exactly, fast)
+	}
+	mustRegister(registry, spec)
 }
 
 // roundedAt is an operation rounding once by mode: at once for whole minor
 // units, after the exact step for an exact operand.
-func roundedAt(args []Value, mode money.Rounding, exactly exactStep, fast rounded) (Value, error) {
+func roundedAt(ctx context.Context, args []Value, mode money.Rounding, exactly exactStep, fast rounded) (Value, error) {
 	if !anyExact(args) {
-		return fast(args, mode)
+		return fast(ctx, args, mode)
 	}
-	e, err := exactly(args)
+	e, err := exactly(ctx, args)
 	if err != nil {
 		return Value{}, err
 	}
@@ -56,8 +61,10 @@ func anyExact(args []Value) bool { return slices.ContainsFunc(args, IsExact) }
 
 func (k moneyKernel) registerProducts(registry *Registry) {
 	byRatio := moneyDoc("mul", "金额乘比例得到同币种金额；落在两个最小单位之间时按舍入方式取整。", "金额", "比例")
-	registerRounded(registry, "mul", []Type{MoneyType, RatioType}, MoneyType, byRatio, exactTimesRatio(0, 1), moneyTimesRatio(0, 1))
-	registerRounded(registry, "mul", []Type{RatioType, MoneyType}, MoneyType, byRatio, exactTimesRatio(1, 0), moneyTimesRatio(1, 0))
+	registerRounded(registry, FunctionSpec{Name: "mul", Params: []Type{MoneyType, RatioType}, Result: MoneyType, Doc: byRatio},
+		exactTimesRatio(0, 1), moneyTimesRatio(0, 1))
+	registerRounded(registry, FunctionSpec{Name: "mul", Params: []Type{RatioType, MoneyType}, Result: MoneyType, Doc: byRatio},
+		exactTimesRatio(1, 0), moneyTimesRatio(1, 0))
 	byInt := moneyDoc("mul", "金额乘整数（数量），精确。", "金额", "数量")
 	registerExactOp(registry, "mul", []Type{MoneyType, IntType}, MoneyType, byInt, moneyTimesInt(0, 1))
 	registerExactOp(registry, "mul", []Type{IntType, MoneyType}, MoneyType, byInt, moneyTimesInt(1, 0))
@@ -88,13 +95,13 @@ func moneyResult(amount money.Money, err error) (Value, error) {
 }
 
 func moneyTimesRatio(amount, ratio int) rounded {
-	return func(args []Value, mode money.Rounding) (Value, error) {
+	return func(_ context.Context, args []Value, mode money.Rounding) (Value, error) {
 		return moneyResult(moneyOf(args[amount]).MulRatio(ratioFrom(args[ratio]), mode))
 	}
 }
 
 func exactTimesRatio(amount, ratio int) exactStep {
-	return func(args []Value) (money.ExactMoney, error) {
+	return func(_ context.Context, args []Value) (money.ExactMoney, error) {
 		return exactOf(args[amount]).MulRatio(ratioFrom(args[ratio]))
 	}
 }
@@ -116,7 +123,8 @@ func ratioProduct(_ context.Context, args []Value) (Value, error) {
 
 func (k moneyKernel) registerQuotients(registry *Registry) {
 	gross := moneyDoc("div", "金额除以比例，比如由净额反推含费总额 net / (100% - fee)。", "金额", "比例")
-	registerRounded(registry, "div", []Type{MoneyType, RatioType}, MoneyType, gross, exactOverRatio, moneyOverRatio)
+	registerRounded(registry, FunctionSpec{Name: "div", Params: []Type{MoneyType, RatioType}, Result: MoneyType, Doc: gross},
+		exactOverRatio, moneyOverRatio)
 	registerMoneyOp(registry, "div", []Type{MoneyType, MoneyType}, RatioType,
 		moneyDoc("div", "同币种金额相除得到比例，比如实际费率 fee / amount。", "金额", "金额"), moneyRatio)
 	registerMoneyOp(registry, "implied", []Type{MoneyType, MoneyType}, FxRateType,
@@ -125,11 +133,16 @@ func (k moneyKernel) registerQuotients(registry *Registry) {
 		moneyDoc("div", "两个比例相除。", "左值", "右值"), ratioQuotient)
 }
 
-func moneyOverRatio(args []Value, mode money.Rounding) (Value, error) {
+func ratioQuotient(_ context.Context, args []Value) (Value, error) {
+	quotient, err := ratioFrom(args[0]).Div(ratioFrom(args[1]))
+	return RatioValue(quotient), err
+}
+
+func moneyOverRatio(_ context.Context, args []Value, mode money.Rounding) (Value, error) {
 	return moneyResult(moneyOf(args[0]).DivRatio(ratioFrom(args[1]), mode))
 }
 
-func exactOverRatio(args []Value) (money.ExactMoney, error) {
+func exactOverRatio(_ context.Context, args []Value) (money.ExactMoney, error) {
 	return exactOf(args[0]).DivRatio(ratioFrom(args[1]))
 }
 
@@ -150,9 +163,4 @@ func (k moneyKernel) impliedRate(_ context.Context, args []Value) (Value, error)
 func moneyRatio(_ context.Context, args []Value) (Value, error) {
 	ratio, err := moneyOf(args[0]).Ratio(moneyOf(args[1]))
 	return RatioValue(ratio), err
-}
-
-func ratioQuotient(_ context.Context, args []Value) (Value, error) {
-	quotient, err := ratioFrom(args[0]).Div(ratioFrom(args[1]))
-	return RatioValue(quotient), err
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,30 +16,27 @@ import (
 	"github.com/nethinwei/funroute/lsp"
 )
 
+// commands are the subcommands, by the name that picks one.
+var commands = map[string]func(args []string) error{
+	"inspect": inspect,
+	"export":  exportExpr,
+	"compile": compile,
+	"run":     run,
+	"fmt":     formatSource,
+	"lsp":     serveLanguage,
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
 	}
-	var err error
-	switch os.Args[1] {
-	case "inspect":
-		err = inspect(os.Args[2:])
-	case "export":
-		err = exportExpr(os.Args[2:])
-	case "compile":
-		err = compile(os.Args[2:])
-	case "run":
-		err = run(os.Args[2:])
-	case "fmt":
-		err = formatSource(os.Args[2:])
-	case "lsp":
-		err = serveLanguage(os.Args[2:])
-	default:
+	command, known := commands[os.Args[1]]
+	if !known {
 		usage()
-		err = fmt.Errorf("unknown command %q", os.Args[1])
+		command = func([]string) error { return fmt.Errorf("unknown command %q", os.Args[1]) }
 	}
-	if err != nil {
+	if err := command(os.Args[2:]); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -79,50 +77,48 @@ arguments like any other:
 }
 
 type commonFlags struct {
-	set        *flag.FlagSet
-	expr       *string
-	types      *string
-	aliases    *string
-	currencies *string
+	set                              *flag.FlagSet
+	expr, types, aliases, currencies string
 }
 
-func flags(name string) commonFlags {
-	set := flag.NewFlagSet(name, flag.ContinueOnError)
-	return commonFlags{
-		set:        set,
-		expr:       set.String("expr", "", "expression source"),
-		types:      set.String("types", "", "comma-separated argument type hints"),
-		aliases:    set.String("alias", "", "comma-separated type declarations, Name=type"),
-		currencies: set.String("currencies", "iso", "the money declared: iso (ISO 4217) or none"),
-	}
+func flags(name string) *commonFlags {
+	common := &commonFlags{set: flag.NewFlagSet(name, flag.ContinueOnError)}
+	common.set.StringVar(&common.expr, "expr", "", "expression source")
+	common.set.StringVar(&common.types, "types", "", "comma-separated argument type hints")
+	common.set.StringVar(&common.aliases, "alias", "", "comma-separated type declarations, Name=type")
+	common.set.StringVar(&common.currencies, "currencies", "iso", "the money declared: iso (ISO 4217) or none")
+	return common
 }
 
-// moneySpec is the money -currencies declares, nil for none.
-func moneySpec(currencies string) (*funroute.MoneySpec, error) {
-	switch currencies {
+// parseFlags reads a command's arguments into the flags every command shares.
+func parseFlags(name string, args []string) (*commonFlags, error) {
+	common := flags(name)
+	return common, common.set.Parse(args)
+}
+
+// isoMoney is the money -currencies iso declares: ISO 4217.
+func isoMoney() *funroute.MoneySpec {
+	return &funroute.MoneySpec{Currencies: std.ISO4217()}
+}
+
+// registry is the registry with the money -currencies declares: iso or none.
+func (common *commonFlags) registry() (*funroute.Registry, error) {
+	switch common.currencies {
 	case "none":
-		return nil, nil
+		return newRegistry(nil)
 	case "iso":
-		return &funroute.MoneySpec{Currencies: std.ISO4217()}, nil
+		return newRegistry(isoMoney())
 	default:
-		return nil, fmt.Errorf("-currencies is iso or none, not %q", currencies)
+		return nil, fmt.Errorf("-currencies is iso or none, not %q", common.currencies)
 	}
-}
-
-func (common commonFlags) registry() (*funroute.Registry, error) {
-	money, err := moneySpec(*common.currencies)
-	if err != nil {
-		return nil, err
-	}
-	return newRegistry(money)
 }
 
 func inspect(args []string) error {
-	common := flags("inspect")
-	if err := common.set.Parse(args); err != nil {
+	common, err := parseFlags("inspect", args)
+	if err != nil {
 		return err
 	}
-	artifact, err := compileSource(common)
+	artifact, _, err := compileSource(common)
 	if err != nil {
 		return err
 	}
@@ -137,16 +133,16 @@ func inspect(args []string) error {
 }
 
 func exportExpr(args []string) error {
-	common := flags("export")
-	if err := common.set.Parse(args); err != nil {
+	common, err := parseFlags("export", args)
+	if err != nil {
 		return err
 	}
-	if *common.expr == "" {
-		return fmt.Errorf("-expr is required")
+	if common.expr == "" {
+		return errors.New("-expr is required")
 	}
-	encoded, err := funroute.ParseToJSON(*common.expr)
+	encoded, err := funroute.ParseToJSON(common.expr)
 	if err != nil {
-		return locate(err, *common.expr)
+		return locate(err, common.expr)
 	}
 	var pretty bytes.Buffer
 	if err := json.Indent(&pretty, encoded, "", "  "); err != nil {
@@ -165,13 +161,17 @@ func serveLanguage(args []string) error {
 	if err := set.Parse(args); err != nil {
 		return err
 	}
-	manifest, err := readManifest(*manifestPath)
-	if err != nil {
-		return err
+	var manifest *funroute.Manifest
+	if *manifestPath != "" {
+		read, err := readManifest(*manifestPath)
+		if err != nil {
+			return err
+		}
+		manifest = read
 	}
 	// The manifest's money is declared before the standard pack registers,
 	// so the pack's aggregates over money are the real ones.
-	money, _ := moneySpec("iso")
+	money := isoMoney()
 	if manifest != nil {
 		money = nil
 		if spec, declared := manifest.Money(); declared {
@@ -191,9 +191,6 @@ func serveLanguage(args []string) error {
 }
 
 func readManifest(path string) (*funroute.Manifest, error) {
-	if path == "" {
-		return nil, nil
-	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -207,11 +204,11 @@ func readManifest(path string) (*funroute.Manifest, error) {
 
 // formatSource prints a program laid out the way the language prints it.
 func formatSource(args []string) error {
-	common := flags("fmt")
-	if err := common.set.Parse(args); err != nil {
+	common, err := parseFlags("fmt", args)
+	if err != nil {
 		return err
 	}
-	source := *common.expr
+	source := common.expr
 	if source == "" {
 		input, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -228,11 +225,11 @@ func formatSource(args []string) error {
 }
 
 func compile(args []string) error {
-	common := flags("compile")
-	if err := common.set.Parse(args); err != nil {
+	common, err := parseFlags("compile", args)
+	if err != nil {
 		return err
 	}
-	artifact, err := compileSource(common)
+	artifact, _, err := compileSource(common)
 	if err != nil {
 		return err
 	}
@@ -251,11 +248,7 @@ func run(args []string) error {
 	if err := common.set.Parse(args); err != nil {
 		return err
 	}
-	artifact, err := compileSource(common)
-	if err != nil {
-		return err
-	}
-	registry, err := common.registry()
+	artifact, registry, err := compileSource(common)
 	if err != nil {
 		return err
 	}
@@ -287,27 +280,29 @@ func run(args []string) error {
 	return nil
 }
 
-func compileSource(common commonFlags) (*funroute.Artifact, error) {
-	if *common.expr == "" {
-		return nil, fmt.Errorf("-expr is required")
+// compileSource compiles -expr against the registry -currencies names, and
+// returns that registry too, for running what it compiled.
+func compileSource(common *commonFlags) (*funroute.Artifact, *funroute.Registry, error) {
+	if common.expr == "" {
+		return nil, nil, errors.New("-expr is required")
 	}
-	contract, err := textContract(*common.aliases, *common.types)
+	contract, err := textContract(common.aliases, common.types)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	options, err := contract.Options()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	registry, err := common.registry()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	artifact, err := funroute.CompileExpr(*common.expr, registry, options)
+	artifact, err := funroute.CompileExpr(common.expr, registry, options)
 	if err != nil {
-		return nil, locate(err, *common.expr)
+		return nil, nil, locate(err, common.expr)
 	}
-	return artifact, nil
+	return artifact, registry, nil
 }
 
 // newRegistry is the kernel with every lazy form enabled, the money given
@@ -337,41 +332,39 @@ func newRegistry(money *funroute.MoneySpec) (*funroute.Registry, error) {
 // that order is the artifact's ABI.
 func textContract(aliases, types string) (*funroute.TextContract, error) {
 	contract := &funroute.TextContract{}
-	declared, err := declarations(aliases)
-	if err != nil {
-		return nil, err
-	}
-	for _, pair := range declared {
+	err := declarations(aliases, func(name, typ string) {
 		if contract.Types == nil {
 			contract.Types = map[string]string{}
 		}
-		contract.Types[pair[0]] = pair[1]
-	}
-	args, err := declarations(types)
+		contract.Types[name] = typ
+	})
 	if err != nil {
 		return nil, err
 	}
-	for _, pair := range args {
-		contract.Args = append(contract.Args, funroute.TextArg{Name: pair[0], Type: pair[1]})
+	err = declarations(types, func(name, typ string) {
+		contract.Args = append(contract.Args, funroute.TextArg{Name: name, Type: typ})
+	})
+	if err != nil {
+		return nil, err
 	}
 	return contract, nil
 }
 
-// declarations cuts "a=t1,b=t2" into its name=type pairs, in order. A type's
-// own commas are inside <> or {}, so only the top-level ones separate.
-func declarations(source string) ([][2]string, error) {
+// declarations cuts "a=t1,b=t2" into its name=type pairs and gives each to
+// declare, in order. A type's own commas are inside <> or {}, so only the
+// top-level ones separate.
+func declarations(source string, declare func(name, typ string)) error {
 	if strings.TrimSpace(source) == "" {
-		return nil, nil
+		return nil
 	}
-	var out [][2]string
 	for _, part := range splitTopLevel(source) {
-		pair := strings.SplitN(strings.TrimSpace(part), "=", 2)
-		if len(pair) != 2 || strings.TrimSpace(pair[0]) == "" {
-			return nil, fmt.Errorf("invalid declaration %q, expected name=type", part)
+		name, typ, ok := strings.Cut(part, "=")
+		if name = strings.TrimSpace(name); !ok || name == "" {
+			return fmt.Errorf("invalid declaration %q, expected name=type", part)
 		}
-		out = append(out, [2]string{strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])})
+		declare(name, strings.TrimSpace(typ))
 	}
-	return out, nil
+	return nil
 }
 
 func splitTopLevel(source string) []string {

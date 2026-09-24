@@ -139,9 +139,13 @@ func TestHostVectorsReachExtensionsWithoutCopying(t *testing.T) {
 	t.Parallel()
 	registry := funroute.CoreRegistry()
 	var received []float64
-	err := funroute.Logic(registry, "model.score_v1", funroute.Doc{Cost: 10}, func(xs []float64) (float64, error) {
-		received = xs
-		return xs[0], nil
+	err := registry.Register(funroute.FunctionSpec{
+		Name: "model.score_v1",
+		Doc:  funroute.Doc{Cost: 10},
+		Go: func(xs []float64) (float64, error) {
+			received = xs
+			return xs[0], nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -224,8 +228,7 @@ type Order struct {
 	CurrencyCode string   `funroute:"currency_code"`
 	Tags         []string `funroute:"tags"`
 	UpdatedAt    string   // untagged: the language never sees it
-	//lint:ignore U1000 unexported: invisible either way, which is what this field is here to show
-	internal int
+	internal     int      // unexported: invisible either way
 }
 
 type Decision struct {
@@ -236,10 +239,14 @@ type Decision struct {
 func decisionRegistry(t *testing.T) *funroute.Registry {
 	t.Helper()
 	registry := funroute.CoreRegistry()
-	err := funroute.Logic(registry, "route.decide_v1", funroute.Doc{
-		Label: "决策", Category: "路由", Cost: 10, Params: []string{"订单"}, Result: "决策",
-	}, func(order Order) (Decision, error) {
-		return Decision{Channel: "adyen_" + order.CurrencyCode, Net: order.Amount - 30}, nil
+	err := registry.Register(funroute.FunctionSpec{
+		Name: "route.decide_v1",
+		Doc: funroute.Doc{
+			Label: "决策", Category: "路由", Cost: 10, Params: []string{"订单"}, Result: "决策",
+		},
+		Go: func(order Order) (Decision, error) {
+			return Decision{Channel: "adyen_" + order.CurrencyCode, Net: order.Amount - 30}, nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -330,11 +337,13 @@ func TestOnlyTaggedFieldsAreInTheRecord(t *testing.T) {
 	type Untagged struct {
 		Amount int64
 	}
-	err = funroute.Logic(funroute.CoreRegistry(), "demo.untagged_v1",
-		funroute.Doc{Label: "无标签", Category: "演示", Cost: 1, Params: []string{"值"}, Result: "值"},
-		func(u Untagged) (int64, error) { return u.Amount, nil })
+	err = funroute.CoreRegistry().Register(funroute.FunctionSpec{
+		Name: "demo.untagged_v1",
+		Doc:  funroute.Doc{Label: "无标签", Category: "演示", Cost: 1, Params: []string{"值"}, Result: "值"},
+		Go:   func(u Untagged) (int64, error) { return u.Amount, nil },
+	})
 	if err == nil || !strings.Contains(err.Error(), "no record fields") {
-		t.Fatalf("Logic(func(Untagged)) error = %v, want \"no record fields\"", err)
+		t.Fatalf("Register(func(Untagged)) error = %v, want \"no record fields\"", err)
 	}
 }
 
@@ -365,7 +374,7 @@ type Basket struct {
 func TestRecordsNest(t *testing.T) {
 	t.Parallel()
 	basket := Basket{
-		Customer: Order{Amount: 1200, CurrencyCode: "SGD", Tags: []string{"vip"}, UpdatedAt: "ignored"},
+		Customer: Order{Amount: 1200, CurrencyCode: "SGD", Tags: []string{"vip"}, UpdatedAt: "ignored", internal: 7},
 		Lines:    []Line{{SKU: "a", Amount: 10}, {SKU: "b", Amount: 20}},
 	}
 	contract := funroute.CompileOptions{Args: []funroute.ArgSpec{{Name: "basket", Type: mustParseType(t,
@@ -501,8 +510,11 @@ func TestTwoFieldsCannotShareATag(t *testing.T) {
 	if _, err := funroute.ToValue(twice{}); err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("ToValue(twice{}) error = %v, want %q", err, want)
 	}
-	if err := funroute.Logic(funroute.CoreRegistry(), "f.g_v1", funroute.Doc{}, func(twice) (int64, error) { return 0, nil }); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("Logic(func(twice)) error = %v, want %q", err, want)
+	if err := funroute.CoreRegistry().Register(funroute.FunctionSpec{
+		Name: "f.g_v1",
+		Go:   func(twice) (int64, error) { return 0, nil },
+	}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Register(func(twice)) error = %v, want %q", err, want)
 	}
 	type in struct {
 		R twice `funroute:"r"`
@@ -546,9 +558,13 @@ func TestMoneyArraysReachExtensionsWithoutCopying(t *testing.T) {
 	t.Parallel()
 	registry := moneyConsole(t)
 	var received []funroute.Money
-	err := funroute.Logic(registry, "ledger.count_v1", funroute.Doc{Cost: 1}, func(lines []funroute.Money) (int64, error) {
-		received = lines
-		return int64(len(lines)), nil
+	err := registry.Register(funroute.FunctionSpec{
+		Name: "ledger.count_v1",
+		Doc:  funroute.Doc{Cost: 1},
+		Go: func(lines []funroute.Money) (int64, error) {
+			received = lines
+			return int64(len(lines)), nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -598,7 +614,7 @@ func TestRunValuesChecksTheCurrencies(t *testing.T) {
 		t.Errorf("RunValues = %s, %v, want the fee and EUR 1.00", encoded, err)
 	}
 	for name, edit := range map[string]func([]funroute.Value){
-		"undeclared amount": func(args []funroute.Value) { args[0] = valueOf(looseMoney("XXX", 1)) },
+		"undeclared amount": func(args []funroute.Value) { args[0] = valueOf(looseMoney(1)) },
 		"undeclared payout": func(args []funroute.Value) { args[2] = valueOf(currency("XXX")) },
 	} {
 		args := valid()
@@ -710,4 +726,23 @@ func third(t *testing.T, text string) funroute.Ratio {
 		t.Fatal(err)
 	}
 	return ratio
+}
+
+// A part of an array is the array's own backing, not a copy: a host's
+// vector sliced is still the host's vector, read-only as it was.
+func TestASliceSharesTheArraysBacking(t *testing.T) {
+	t.Parallel()
+	vector := []float64{0.5, 1.5, 2.5, 3.5}
+	value, err := funroute.ToValue(vector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part, ok := value.Slice(1, 3)
+	got, isFloats := part.Any().([]float64)
+	if !ok || !isFloats || len(got) != 2 || &got[0] != &vector[1] {
+		t.Fatalf("Slice(1, 3) of %v = %v, %v, want [1.5 2.5] over the same memory", vector, part.Any(), ok)
+	}
+	if _, ok := value.Slice(3, 5); ok {
+		t.Fatal("Slice(3, 5) of four items = ok, want false")
+	}
 }

@@ -9,64 +9,41 @@ import (
 // implied(settled, paid), 150 JPY / USD, an argument — or an array of them,
 // between any two currencies.
 
-func inferUsing(node *syntax.UsingExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	states := []*inferState{state}
+func inferUsing(node *syntax.UsingExpr, state *inferState, context inferContext) (typeTerm, error) {
 	for _, rate := range node.Quotes {
-		next, err := inferQuotedRate(rate, states, context)
-		if err != nil {
-			return nil, err
+		if err := inferQuotedRate(rate, state, context); err != nil {
+			return typeTerm{}, err
 		}
-		states = next
 	}
-	var out []inferResult
-	var dropped error
-	for _, candidate := range states {
-		bodies, err := inferExpr(node.Body, candidate, context)
-		if err != nil {
-			dropped = err
-			continue
-		}
-		out = append(out, bodies...)
+	body, err := inferExpr(node.Body, state, context)
+	if err != nil {
+		return typeTerm{}, err
 	}
-	if len(out) == 0 {
-		return nil, dropped
-	}
-	return record(node, out), nil
+	return record(node, state, body), nil
 }
 
-// inferQuotedRate types one quoted rate in every candidate state, keeping the
-// readings that are exchange rates.
-func inferQuotedRate(rate syntax.Expr, states []*inferState, context inferContext) ([]*inferState, error) {
-	var next []*inferState
-	var dropped error
-	for _, candidate := range states {
-		results, err := inferExpr(rate, candidate, context)
-		if err != nil {
-			dropped = err
-			continue
+// inferQuotedRate holds one quote to an exchange rate or an array of them,
+// once its type is known; a quote nothing else decides is one rate.
+func inferQuotedRate(rate syntax.Expr, state *inferState, context inferContext) error {
+	quote, err := inferExpr(rate, state, context)
+	if err != nil {
+		return err
+	}
+	rateTerm := scalarTerm(machine.FxRateKind)
+	return state.waitFor(func() (bool, error) {
+		found := state.deref(quote)
+		if found.kind == machine.VarKind {
+			return false, nil
 		}
-		for _, result := range results {
-			if reading, ok := asExchangeRate(result); ok {
-				next = append(next, reading)
+		if found.kind == machine.ArrayKind {
+			found = state.deref(*found.elem)
+			if found.kind == machine.VarKind {
+				return true, state.unify(found, rateTerm)
 			}
 		}
-		if len(results) > 0 && len(next) == 0 {
-			dropped = syntax.Around(rate, "type error: using quotes exchange rates — an fxrate such as 150 JPY / USD or implied(settled, paid), or an array<fxrate> — and this is %s", candidate.describe(results[0].typ))
+		if found.kind != machine.FxRateKind {
+			return false, syntax.Around(rate, "type error: using quotes exchange rates — an fxrate such as 150 JPY / USD or implied(settled, paid), or an array<fxrate> — and this is %s", state.describe(quote))
 		}
-	}
-	if len(next) == 0 {
-		return nil, dropped
-	}
-	return next, nil
-}
-
-// asExchangeRate is result's state with its type an exchange rate, or an
-// array of them, if it can be one.
-func asExchangeRate(result inferResult) (*inferState, bool) {
-	candidate := result.state.clone()
-	if candidate.unify(scalarTerm(machine.FxRateKind), result.typ) == nil {
-		return candidate, true
-	}
-	candidate = result.state.clone()
-	return candidate, candidate.unify(containerTerm(machine.ArrayKind, scalarTerm(machine.FxRateKind)), result.typ) == nil
+		return true, nil
+	}, func() error { return state.unify(quote, rateTerm) })
 }

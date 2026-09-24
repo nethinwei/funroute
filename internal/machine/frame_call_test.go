@@ -52,10 +52,14 @@ func slowRegistry(t *testing.T) *machine.Registry {
 			return x, nil
 		}
 	}
-	if err := machine.Logic(registry, "model.slow_v1", machine.Doc{Cost: 1, Timeout: 5 * time.Millisecond}, slow); err != nil {
+	if err := registry.Register(machine.FunctionSpec{
+		Name: "model.slow_v1",
+		Doc:  machine.Doc{Cost: 1, Timeout: 5 * time.Millisecond},
+		Go:   slow,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := machine.Logic(registry, "model.patient_v1", machine.Doc{Cost: 1}, slow); err != nil {
+	if err := registry.Register(machine.FunctionSpec{Name: "model.patient_v1", Doc: machine.Doc{Cost: 1}, Go: slow}); err != nil {
 		t.Fatal(err)
 	}
 	return registry
@@ -83,7 +87,7 @@ func TestExtensionAndFuelErrorsAreTyped(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
 	failing := func(x float64) (float64, error) { return 0, errors.New("boom") }
-	if err := machine.Logic(registry, "model.failing_v1", machine.Doc{Cost: 1}, failing); err != nil {
+	if err := registry.Register(machine.FunctionSpec{Name: "model.failing_v1", Doc: machine.Doc{Cost: 1}, Go: failing}); err != nil {
 		t.Fatal(err)
 	}
 	artifact, err := compile.CompileExpr(`model.failing_v1(x)`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "x", Type: machine.FloatType}}})
@@ -116,7 +120,11 @@ func TestDetachedCallsStopWaitingAtTheDeadline(t *testing.T) {
 			<-released
 			return x, nil
 		}
-		if err := machine.Logic(registry, "engine.stubborn_v1", machine.Doc{Cost: 1, Timeout: timeout, Detached: true}, stubborn); err != nil {
+		if err := registry.Register(machine.FunctionSpec{
+			Name: "engine.stubborn_v1",
+			Doc:  machine.Doc{Cost: 1, Timeout: timeout, Detached: true},
+			Go:   stubborn,
+		}); err != nil {
 			t.Fatal(err)
 		}
 		started := time.Now()
@@ -132,8 +140,12 @@ func TestDetachedCallsStopWaitingAtTheDeadline(t *testing.T) {
 func TestDetachedPanicsAreContainedAndTyped(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
-	if err := machine.Logic(registry, "engine.panic_v1", machine.Doc{Cost: 1, Detached: true}, func(float64) (float64, error) {
-		panic("detached exploded")
+	if err := registry.Register(machine.FunctionSpec{
+		Name: "engine.panic_v1",
+		Doc:  machine.Doc{Cost: 1, Detached: true},
+		Go: func(float64) (float64, error) {
+			panic("detached exploded")
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -183,9 +195,12 @@ func TestPanickingExtensionIsContained(t *testing.T) {
 func TestPrefetchedCallStillHonorsRequestCancellation(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
-	if err := machine.Model(registry, "model.score_v1", machine.Doc{Cost: 1},
-		func(x float64) (float64, error) { return x, nil },
-		func(xs []float64) ([]float64, error) { return xs, nil }); err != nil {
+	if err := registry.Register(machine.FunctionSpec{
+		Name:    "model.score_v1",
+		Doc:     machine.Doc{Cost: 1},
+		Go:      func(x float64) (float64, error) { return x, nil },
+		GoBatch: func(xs []float64) ([]float64, error) { return xs, nil },
+	}); err != nil {
 		t.Fatal(err)
 	}
 	artifact, err := compile.CompileExpr(`model.score_v1(x)`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "x", Type: machine.FloatType}}})
@@ -297,7 +312,11 @@ func classedFailureRegistry(t *testing.T) *machine.Registry {
 	t.Helper()
 	registry := machine.CoreRegistry()
 	for name, class := range map[string]error{"h.nofxrate_v1": machine.ErrNoFxRate, "h.currency_v1": machine.ErrCurrency} {
-		err := machine.Logic(registry, name, machine.Doc{Cost: 1}, func(float64) (float64, error) { return 0, fmt.Errorf("quote: %w", class) })
+		err := registry.Register(machine.FunctionSpec{
+			Name: name,
+			Doc:  machine.Doc{Cost: 1},
+			Go:   func(float64) (float64, error) { return 0, fmt.Errorf("quote: %w", class) },
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -335,11 +354,45 @@ func TestAClassifiedErrorOutlivesTheDeadline(t *testing.T) {
 			<-ctx.Done()
 			return 0, fmt.Errorf("late: %w", machine.ErrCurrency)
 		}
-		if err := machine.Logic(registry, "h.late_v1", machine.Doc{Cost: 1, Timeout: 5 * time.Millisecond}, late); err != nil {
+		if err := registry.Register(machine.FunctionSpec{
+			Name: "h.late_v1",
+			Doc:  machine.Doc{Cost: 1, Timeout: 5 * time.Millisecond},
+			Go:   late,
+		}); err != nil {
 			t.Fatal(err)
 		}
 		if err := runOneFloat(t, t.Context(), registry, "h.late_v1(x)"); !errors.Is(err, machine.ErrCurrency) || errors.Is(err, machine.ErrDeadline) {
 			t.Fatalf("h.late_v1(x) error = %v, want ErrCurrency and not ErrDeadline", err)
 		}
 	})
+}
+
+// Whatever class a host function's error already has, it keeps, and it is not
+// made an extension failure besides.
+func TestAHostErrorKeepsAnyClassItHas(t *testing.T) {
+	t.Parallel()
+	for _, class := range []error{machine.ErrCompile, machine.ErrContract, machine.ErrFuel, machine.ErrDeadline, machine.ErrArithmetic} {
+		t.Run(class.Error(), func(t *testing.T) {
+			t.Parallel()
+			registry := machine.CoreRegistry()
+			if err := registry.Register(machine.FunctionSpec{
+				Name: "h.classed_v1",
+				Go:   func(int64) (int64, error) { return 0, fmt.Errorf("upstream: %w", class) },
+			}); err != nil {
+				t.Fatal(err)
+			}
+			artifact, err := compile.CompileExpr(`h.classed_v1(1)`, registry, compile.CompileOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime, err := machine.Instantiate(artifact, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = runtime.Run(t.Context(), nil, machine.RunOptions{})
+			if !errors.Is(err, class) || errors.Is(err, machine.ErrExtension) {
+				t.Fatalf("a host error wrapping %v = %v, want %v and not ErrExtension", class, err, class)
+			}
+		})
+	}
 }

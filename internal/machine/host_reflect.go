@@ -132,7 +132,7 @@ func intoSlice(registry *Registry, value Value, typ reflect.Type) (reflect.Value
 		return reflect.Value{}, fmt.Errorf("argument is %s, want an array", value.Type())
 	}
 	out := reflect.MakeSlice(typ, value.length(), value.length())
-	for i := 0; i < value.length(); i++ {
+	for i := range value.length() {
 		item, err := intoGo(registry, value.at(i), typ.Elem())
 		if err != nil {
 			return reflect.Value{}, fmt.Errorf("item %d: %w", i, err)
@@ -212,7 +212,7 @@ func outOfSlice(registry *Registry, value reflect.Value, typ Type) (Value, error
 		return wrapped, nil
 	}
 	builder := newArrayBuilder(*typ.elem, value.Len())
-	for i := 0; i < value.Len(); i++ {
+	for i := range value.Len() {
 		item, err := outOfGo(registry, value.Index(i), *typ.elem)
 		if err != nil {
 			return Value{}, fmt.Errorf("item %d: %w", i, err)

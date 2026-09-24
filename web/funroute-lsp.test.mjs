@@ -4,25 +4,38 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import "./dist/wasm_exec.js";
-import { BLOCKS, wrap } from "./src/projection.ts";
+import { children, isCard, wrap } from "./src/projection.ts";
 
+// start loads a fresh server. A request resolves with its response. The
+// server handles messages in order, so a notification has been handled once
+// a request sent after it is answered: notify waits for one, which asks for
+// a method no server has and changes nothing.
 async function start() {
   const go = new globalThis.Go();
   const module = await readFile(new URL("./dist/funroute.wasm", import.meta.url));
   const { instance } = await WebAssembly.instantiate(module, go.importObject);
   go.run(instance);
   const received = [];
-  globalThis.funroute.connect((message) => received.push(JSON.parse(message)));
+  const waiting = new Map();
+  globalThis.funroute.connect((text) => {
+    const message = JSON.parse(text);
+    received.push(message);
+    waiting.get(message.id)?.(message);
+    waiting.delete(message.id);
+  });
   let id = 0;
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const send = (message) => globalThis.funroute.send(JSON.stringify({ jsonrpc: "2.0", ...message }));
+  const request = (method, params) => new Promise((resolve) => {
+    id += 1;
+    waiting.set(id, resolve);
+    send({ id, method, params });
+  });
   return {
     received,
-    notify: async (method, params) => { globalThis.funroute.send(JSON.stringify({ jsonrpc: "2.0", method, params })); await settle(); },
-    request: async (method, params) => {
-      id += 1;
-      globalThis.funroute.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
-      await settle();
-      return received.find((message) => message.id === id);
+    request,
+    notify: async (method, params) => {
+      send({ method, params });
+      await request("$/handled", {});
     },
   };
 }
@@ -50,11 +63,31 @@ test("every block the workbench drops in is a program the language compiles", as
   // leaves to fill in are parameters. That one may have no concrete type yet
   // is what a name to fill in is; any other diagnostic is the block's own.
   await server.notify("funroute/setContract", { contract: {} });
-  for (const block of Object.keys(BLOCKS)) {
-    const uri = `file:///${block}.fr`;
-    await server.notify("textDocument/didOpen", { textDocument: { uri, version: 1, text: wrap(block, "x") } });
+  const catalog = (await server.request("funroute/catalog", {})).result;
+  const blocks = [...catalog.special_forms, ...catalog.functions].filter((item) => item.wrap);
+  assert.ok(blocks.length > 0, "the catalog offers no block");
+  for (const block of blocks) {
+    const uri = `file:///${block.name}.fr`;
+    await server.notify("textDocument/didOpen", { textDocument: { uri, version: 1, text: wrap(block.wrap, "x") } });
     const published = server.received.find((message) => message.method === "textDocument/publishDiagnostics" && message.params.uri === uri);
     const own = published.params.diagnostics.map((diagnostic) => diagnostic.message).filter((message) => !message.includes("cannot infer a concrete type"));
-    assert.deepEqual(own, [], `${block}: ${wrap(block, "x")}`);
+    assert.deepEqual(own, [], `${block.name}: ${wrap(block.wrap, "x")}`);
   }
+});
+
+// The structure view draws a node that is not a card as what joins its parts
+// and each part. A record's entries keep their values in items, so a block
+// in one is among its parts only when they are read with children: the nodes
+// of its fields alone miss it.
+test("a block inside a record is among the record's parts", async () => {
+  const server = await start();
+  await server.request("initialize", { capabilities: {} });
+  const catalog = await server.request("funroute/catalog", {});
+  const lazy = new Set(catalog.result.functions.filter((item) => item.special).map((item) => item.name));
+  const uri = "file:///record.fr";
+  await server.notify("textDocument/didOpen", { textDocument: { uri, version: 1, text: "{a: if(c, 1, 2), b: 3}" } });
+  const { result: tree } = await server.request("funroute/syntaxTree", { textDocument: { uri } });
+  assert.equal(isCard(tree, lazy), false);
+  assert.equal(children(tree).filter((node) => isCard(node, lazy)).length, 1);
+  assert.equal(tree.fields.flatMap((field) => field.nodes ?? []).some((node) => isCard(node, lazy)), false);
 });

@@ -37,7 +37,7 @@ type document struct {
 
 func newDocument(uri string, version int, text string) *document {
 	lines := []int{0}
-	for i := 0; i < len(text); i++ {
+	for i := range len(text) {
 		if text[i] == '\n' {
 			lines = append(lines, i+1)
 		}

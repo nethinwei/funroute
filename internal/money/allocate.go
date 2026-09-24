@@ -34,19 +34,12 @@ var allocationNames = [...]string{"largest_remainder", "largest_weight", "in_ord
 // the members of the allocation enum a rule writes @last with.
 func AllocationStrategies() []string { return append([]string(nil), allocationNames[:]...) }
 
-func (a AllocationStrategy) String() string {
-	if int(a) < len(allocationNames) {
-		return allocationNames[a]
-	}
-	return "invalid"
-}
+func (a AllocationStrategy) String() string { return nameOf(allocationNames[:], a) }
 
 // ParseAllocation reads a strategy by name.
 func ParseAllocation(name string) (AllocationStrategy, error) {
-	for i, known := range allocationNames {
-		if known == name {
-			return AllocationStrategy(i), nil
-		}
+	if strategy, ok := valueOf[AllocationStrategy](allocationNames[:], name); ok {
+		return strategy, nil
 	}
 	return 0, fmt.Errorf("%w: unknown allocation strategy %q", ErrArithmetic, name)
 }

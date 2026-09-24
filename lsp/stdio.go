@@ -20,13 +20,13 @@ func Serve(r io.Reader, w io.Writer, registry *machine.Registry) error {
 	server := New(registry, func(message []byte) {
 		mu.Lock()
 		defer mu.Unlock()
-		fmt.Fprintf(w, "Content-Length: %d\r\n\r\n", len(message))
+		_, _ = fmt.Fprintf(w, "Content-Length: %d\r\n\r\n", len(message))
 		_, _ = w.Write(message)
 	})
 	reader := bufio.NewReader(r)
 	for !server.Exited() {
 		message, err := readFrame(reader)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {

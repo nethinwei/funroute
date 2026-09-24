@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
@@ -33,32 +34,37 @@ func stampFor(t *money.Currencies, codes []string) MoneyStamp {
 // constants state. A code folding took out of the
 // program, as minor(USD 1.70) folds to 170, is no fact the run depends on:
 // what was computed from it is a constant now, whatever the table says.
-func moneyCodes(artifact *Artifact) []string {
+func moneyCodes(artifact *Artifact) ([]string, error) {
 	var codes []string
 	add := func(code string) {
 		if money.IsCurrencyCode(code) {
 			codes = append(codes, code)
 		}
 	}
-	for _, constant := range artifact.parts.Constants {
-		constantCodes(constant, add)
+	for i, constant := range artifact.parts.Constants {
+		value, err := constant.value()
+		if err == nil {
+			err = valueCodes(value, add)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("constant %d: %w", i, err)
+		}
 	}
 	slices.Sort(codes)
-	return slices.Compact(codes)
+	return slices.Compact(codes), nil
 }
 
-// constantCodes adds the codes a constant names: an amount's or a
-// currency's, both of an exchange rate's, and those of its items.
-func constantCodes(constant Constant, add func(string)) {
-	if IsMoneyKind(constant.Type) && constant.String != nil {
-		add(*constant.String)
+// valueCodes adds the codes a value names: an amount's or a currency's,
+// both of an exchange rate's, and those of its parts.
+func valueCodes(value Value, add func(string)) error {
+	switch value.kind {
+	case MoneyKind, CurrencyKind:
+		add(value.s)
+	case FxRateKind:
+		add(value.s)
+		add(value.quote())
 	}
-	if constant.Type == FxRateKind && len(constant.Keys) > 0 {
-		add(constant.Keys[0])
-	}
-	for _, item := range constant.Items {
-		constantCodes(item, add)
-	}
+	return value.eachPart(false, func(part Value) error { return valueCodes(part, add) })
 }
 
 // ArtifactUsesMoney reports whether any type an artifact states — an
@@ -74,24 +80,13 @@ func ArtifactUsesMoney(artifact *Artifact) bool {
 			types = append(types, *instruction.Type)
 		}
 	}
-	return slices.ContainsFunc(types, typeUsesMoney) || slices.ContainsFunc(artifact.parts.Constants, constantUsesMoney)
-}
-
-func typeUsesMoney(typ Type) bool {
-	found := false
-	_ = WalkTypes(typ, func(inner Type) error {
-		found = found || IsMoneyKind(inner.kind)
-		return nil
-	})
-	return found
-}
-
-func constantUsesMoney(constant Constant) bool {
-	if IsMoneyKind(constant.Type) || (constant.Elem != nil && typeUsesMoney(*constant.Elem)) {
-		return true
+	for _, constant := range artifact.parts.Constants {
+		types = append(types, constant.Type)
 	}
-	return slices.ContainsFunc(constant.Items, constantUsesMoney)
+	return slices.ContainsFunc(types, typeUsesMoney)
 }
+
+func typeUsesMoney(typ Type) bool { return typeHas(typ, IsMoneyKind) }
 
 // checkMoneyStamp refuses an artifact whose money was compiled against
 // another default rounding than the registry's, or against other places for
@@ -102,11 +97,11 @@ func checkMoneyStamp(artifact *Artifact, registry *Registry) error {
 	switch {
 	case stamp == nil:
 		if ArtifactUsesMoney(artifact) {
-			return fmt.Errorf("artifact uses money but records no money stamp")
+			return errors.New("artifact uses money but records no money stamp")
 		}
 		return nil
 	case table == nil:
-		return fmt.Errorf("artifact was compiled with money, and this registry declares none")
+		return errors.New("artifact was compiled with money, and this registry declares none")
 	}
 	for _, currency := range stamp.Currencies {
 		digits, err := table.Places(currency.Code)

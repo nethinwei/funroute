@@ -1,9 +1,8 @@
 package compile
 
 import (
-	"fmt"
-
 	"github.com/nethinwei/funroute/internal/machine"
+	"github.com/nethinwei/funroute/internal/money"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
 
@@ -73,16 +72,6 @@ func (o CompileOptions) argOrder() []string {
 	return names
 }
 
-func (o CompileOptions) argDocs() map[string]string {
-	docs := make(map[string]string, len(o.Args))
-	for _, arg := range o.Args {
-		if arg.Doc != "" {
-			docs[arg.Name] = arg.Doc
-		}
-	}
-	return docs
-}
-
 // ValidateContract checks a host contract without needing an expression. This
 // lets consoles put contract authoring before expression authoring and reject a
 // malformed ABI before an operator starts writing policy logic.
@@ -119,13 +108,10 @@ func (o CompileOptions) validate(expr syntax.Expr) error {
 	if len(o.Args) == 0 {
 		return nil
 	}
-	declared := make(map[string]bool, len(o.Args))
-	for _, arg := range o.Args {
-		declared[arg.Name] = true
-	}
+	declared := o.argTypes()
 	for _, read := range syntax.FirstReads(expr) {
-		if !declared[read.Name] {
-			return fmt.Errorf("%w: %w", machine.ErrContract,
+		if _, ok := declared[read.Name]; !ok {
+			return money.Classify(machine.ErrContract, "",
 				syntax.Around(read, "the expression reads %q but the contract does not declare it", read.Name))
 		}
 	}

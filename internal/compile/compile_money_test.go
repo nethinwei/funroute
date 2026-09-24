@@ -10,6 +10,7 @@ import (
 
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
+	"github.com/nethinwei/funroute/internal/syntax"
 )
 
 // Declaring money changes nothing a program without money compiles to: the
@@ -64,7 +65,7 @@ func TestMoneyArtifactsCarryTheStamp(t *testing.T) {
 		if stamp == nil {
 			t.Fatalf("%s: no stamp, want one", test.source)
 		}
-		var named []string
+		named := make([]string, 0, len(stamp.Currencies))
 		for _, currency := range stamp.Currencies {
 			named = append(named, fmt.Sprintf("%s:%d", currency.Code, currency.Digits))
 		}
@@ -133,9 +134,10 @@ func TestMoneyRunsDoNotAllocate(t *testing.T) {
 // fiveAmounts is a record of five amounts.
 func fiveAmounts(t *testing.T) (machine.Type, machine.Value) {
 	t.Helper()
-	var fields []machine.Field
-	var values []machine.Value
-	for _, name := range []string{"a", "b", "c", "d", "e"} {
+	names := []string{"a", "b", "c", "d", "e"}
+	fields := make([]machine.Field, 0, len(names))
+	values := make([]machine.Value, 0, len(names))
+	for _, name := range names {
 		fields = append(fields, machine.FieldOf(name, machine.MoneyType))
 		values = append(values, machine.MoneyValue(1, "USD"))
 	}
@@ -211,7 +213,8 @@ func TestMoneyAndRatioLiteralsAreExact(t *testing.T) {
 }
 
 // Too many places, too large a value, a currency the registry does not
-// declare, or no money at all are compile errors rather than roundings.
+// declare, or no money at all are compile errors rather than roundings — for
+// amounts, ratios and exchange rates alike.
 func TestMoneyLiteralsOutOfRangeAreCompileErrors(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
@@ -228,6 +231,15 @@ func TestMoneyLiteralsOutOfRangeAreCompileErrors(t *testing.T) {
 		{"USD 1", false, "declares no money"},
 		{"2.9%", false, "declares no money"},
 		{"25bps", false, "declares no money"},
+		{"150 USD / USD", true, "from a currency to itself it is 1"},
+		{"150 GBP / USD", true, `"GBP" is not declared`},
+		{"150 JPY / GBP", true, `"GBP" is not declared`},
+		{"0 JPY / USD", true, "not positive"},
+		{"0.0 JPY / USD", true, "not positive"},
+		{"1.0000000000000000001 JPY / USD", true, "at most 18 fit"},
+		{"10000000000000000000 JPY / USD", true, "overflows int64"},
+		{"150 JPY / USD == 150 USD / JPY", true, "cannot compare an exchange rate"},
+		{"150 JPY / USD", false, "declares no money"},
 	} {
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
@@ -629,37 +641,6 @@ func TestExchangeRateLiteralsAreExact(t *testing.T) {
 	}
 }
 
-func TestExchangeRateLiteralsOutOfRangeAreCompileErrors(t *testing.T) {
-	t.Parallel()
-	for _, test := range []struct {
-		source string
-		money  bool
-		want   string
-	}{
-		{"150 USD / USD", true, "from a currency to itself it is 1"},
-		{"150 GBP / USD", true, `"GBP" is not declared`},
-		{"150 JPY / GBP", true, `"GBP" is not declared`},
-		{"0 JPY / USD", true, "not positive"},
-		{"0.0 JPY / USD", true, "not positive"},
-		{"1.0000000000000000001 JPY / USD", true, "at most 18 fit"},
-		{"10000000000000000000 JPY / USD", true, "overflows int64"},
-		{"150 JPY / USD == 150 USD / JPY", true, "cannot compare an exchange rate"},
-		{"150 JPY / USD", false, "declares no money"},
-	} {
-		t.Run(test.source, func(t *testing.T) {
-			t.Parallel()
-			registry := moneyRegistry(t)
-			if !test.money {
-				registry = consoleRegistry(t)
-			}
-			_, err := CompileExpr(test.source, registry, CompileOptions{})
-			if !errors.Is(err, machine.ErrCompile) || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("CompileExpr(%q) error = %v, want ErrCompile containing %q", test.source, err, test.want)
-			}
-		})
-	}
-}
-
 // A literal ratio is one constant, and it survives the artifact's JSON.
 func TestAnExchangeRateLiteralIsAConstant(t *testing.T) {
 	t.Parallel()
@@ -692,4 +673,77 @@ func TestMinorUnitsAreAnIntLikeAnyOther(t *testing.T) {
 	if err != nil || got != "{JPY 170}" {
 		t.Fatalf("money(minor(USD 1.70), JPY) = %s, %v, want JPY 170", got, err)
 	}
+}
+
+// A decimal read as a ratio is its digits, however many a float64 would
+// drop: no ratio ever passes through a float.
+func TestADecimalReadAsARatioKeepsEveryDigit(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ source, want string }{
+		{"r + 0.123456789012345678", "0.123456789012345679"},
+		{"0.30000000000000001 - r", "0.300000000000000009"},
+		{"r * 1e18", "1"},
+		{"0.1 + 0.2 == 0.3 + r - r", "true"},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			got, err := runMoney(t, test.source, "r: ratio", map[string]any{"r": "0.000000000000000001"})
+			if err != nil || got != test.want {
+				t.Fatalf("%s = %s, %v, want %s", test.source, got, err, test.want)
+			}
+		})
+	}
+}
+
+// A decimal read as a float must be the float64 it is written as, and the
+// refusal points at the literal.
+func TestADecimalReadAsAFloatMustBeOne(t *testing.T) {
+	t.Parallel()
+	for _, registry := range []*machine.Registry{machine.CoreRegistry(), moneyRegistry(t)} {
+		_, err := CompileExpr("x < 0.30000000000000001", registry, CompileOptions{})
+		var positioned *syntax.PosError
+		if !errors.As(err, &positioned) || !strings.Contains(err.Error(), "the nearest one is 0.3") || positioned.Offset() != 4 {
+			t.Fatalf("CompileExpr(x < 0.30000000000000001) error = %v, want one at offset 4 naming 0.3", err)
+		}
+	}
+}
+
+// FuzzADecimalLiteralIsItsRatio holds a decimal literal read as a ratio to
+// the ratio its digits are, as the money package reads them: the same
+// value, or the same refusal.
+func FuzzADecimalLiteralIsItsRatio(f *testing.F) {
+	for _, seed := range []string{"0.1", "0.123456789012345678", "2.5e-3", "9e18", "1e-19", "0.30000000000000001", "150.0"} {
+		f.Add(seed)
+	}
+	registry := moneyRegistry(f)
+	contract := CompileOptions{Args: moneyContract(f, "r: ratio")}
+	f.Fuzz(func(t *testing.T, text string) {
+		literal, isLiteral := parsedLiteral(text)
+		if !isLiteral || literal.Value.Kind() != machine.FloatKind {
+			return
+		}
+		decimal := literal.Decimal
+		want, wantErr := decimal.Ratio()
+		artifact, err := CompileExpr("r + "+text, registry, contract)
+		if err != nil {
+			if wantErr == nil {
+				t.Fatalf("CompileExpr(r + %s) error = %v, want %s", text, err, want)
+			}
+			return
+		}
+		got, err := runArtifact(t, artifact, map[string]any{"r": "0"})
+		if wantErr != nil || err != nil || got != want.String() {
+			t.Fatalf("r + %s with r = 0 is %s, %v; the decimal's ratio is %s, %v", text, got, err, want, wantErr)
+		}
+	})
+}
+
+// parsedLiteral is text parsed, when it is one literal and nothing else.
+func parsedLiteral(text string) (*syntax.LiteralExpr, bool) {
+	expr, err := syntax.Parse(text)
+	if err != nil {
+		return nil, false
+	}
+	literal, ok := expr.(*syntax.LiteralExpr)
+	return literal, ok
 }

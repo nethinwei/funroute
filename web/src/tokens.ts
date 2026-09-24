@@ -3,7 +3,7 @@
 // into absolute spans; which class each gets is the server's word for it.
 import type { Position } from "./protocol.ts";
 
-export type Token = { start: Position; length: number; type: string; declaration: boolean };
+type Token = { start: Position; length: number; type: string; declaration: boolean };
 
 export function decodeTokens(data: number[], types: string[]): Token[] {
   const tokens: Token[] = [];

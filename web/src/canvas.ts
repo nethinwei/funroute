@@ -4,17 +4,16 @@
 // applies to the editor; the next tree comes from the server.
 import { LitElement, css, html, svg } from "lit";
 import type { TemplateResult } from "lit";
-import type { Range, Tree, TreeField } from "./protocol.ts";
-import { BLOCKS, Text, callName, commonIndent, dedent, indent, isCard, isPlain, wrap } from "./projection.ts";
-import { define, fieldStyles } from "./ui.ts";
+import { property, state } from "lit/decorators.js";
+import { Text } from "@codemirror/state";
+import type { Doc, Range, Tree, TreeField } from "./protocol.ts";
+import { callName, children, commonIndent, dedent, indent, isCard, isPlain, slice, wrap } from "./projection.ts";
+import { define, emit, fieldStyles } from "./ui.ts";
 
 // An edit replaces range with text. source is the text the range was read
-// from: the page applies the edit only if the editor still holds it, since a
-// range into an older text would land in the wrong place.
-export type Edit = { range: Range; text: string; source: string };
-
-// A block as the catalog describes it.
-export type Block = { label: string; description: string };
+// from: the page applies the edit only if the editor still holds that very
+// text, since a range into another would land in the wrong place.
+export type Edit = { range: Range; text: string; source: Text };
 
 // How each block looks: an icon in the style of the page's own (16 units,
 // strokes of 1.4, no fill) and an accent from the palette in tokens.css. The
@@ -43,62 +42,57 @@ const FIELD_TEXT: Record<string, string> = {
 };
 
 export class StructureView extends LitElement {
-  static properties = { tree: { attribute: false }, text: { attribute: false }, blocks: { attribute: false }, selected: { state: true } };
-  declare tree: Tree | null;
-  declare text: Text;
-  // blocks is what the catalog says of each function and form, by name; the
-  // palette offers the ones that wrap an expression.
-  declare blocks: Map<string, Block>;
-  declare selected: string;
+  @property({ attribute: false }) accessor tree: Tree | null = null;
+  @property({ attribute: false }) accessor text: Text = Text.empty;
+  // blocks is what the catalog says of each function and form, by name, and
+  // wraps how each one that takes in an expression does: what the palette
+  // offers.
+  @property({ attribute: false }) accessor blocks = new Map<string, Doc>();
+  @property({ attribute: false }) accessor wraps = new Map<string, string>();
+  @state() accessor selected = "";
   lazy = new Set<string>();
 
-  constructor() {
-    super();
-    this.tree = null;
-    this.text = new Text("");
-    this.blocks = new Map();
-    this.selected = "";
+  private edit(range: Range, text: string) {
+    emit(this, "edit", { range, text, source: this.text } satisfies Edit);
   }
 
-  private edit(range: Range, text: string) {
-    const detail: Edit = { range, text, source: this.text.source };
-    this.dispatchEvent(new CustomEvent<Edit>("edit", { detail, bubbles: true, composed: true }));
+  // wrapAt wraps an expression in the block selected, if one is, and puts
+  // the block down.
+  private wrapAt(tree: Tree) {
+    if (!this.selected) return;
+    this.edit(tree.range, wrap(this.wraps.get(this.selected) ?? "$", slice(this.text, tree.range)));
+    this.selected = "";
   }
 
   // A slot is one expression as source, as many lines as it has: typing
   // replaces it, and with a block selected a click or Enter wraps it in the
   // block.
   private slotFor(tree: Tree) {
-    const source = this.text.slice(tree.range);
+    const source = slice(this.text, tree.range);
     const shared = commonIndent(source);
-    const wrapIt = () => {
-      if (!this.selected) return;
-      this.edit(tree.range, wrap(this.selected, source));
-      this.selected = "";
-    };
     const enter = (event: KeyboardEvent) => {
       if (this.selected && event.key === "Enter") {
         event.preventDefault();
-        wrapIt();
+        this.wrapAt(tree);
       }
     };
     return html`<textarea class="slot ${this.selected ? "ready" : ""}" rows="1" .value=${dedent(source, shared)} spellcheck="false"
-      aria-label="表达式" @click=${wrapIt} @keydown=${enter}
+      aria-label="表达式" @click=${() => this.wrapAt(tree)} @keydown=${enter}
       @change=${(event: Event) => this.edit(tree.range, indent((event.target as HTMLTextAreaElement).value, shared))}></textarea>`;
   }
 
   private node(tree: Tree): TemplateResult {
     if (isPlain(tree, this.lazy)) return this.slotFor(tree);
     const name = tree.node === "call" ? callName(tree) : tree.node;
-    const fields = (tree.fields ?? []).filter((field) => !(tree.node === "call" && field.name === "name"));
     // Not a block but holding one — say (a + b) where b is a switch: say
     // what joins the parts, and show each part.
     if (!isCard(tree, this.lazy)) {
-      return html`<div class="plain"><code class="joins">${tree.operator ?? name}</code>${fields.flatMap((field) => field.nodes ?? []).map((node) => this.node(node))}</div>`;
+      return html`<div class="plain"><code class="joins">${tree.operator ?? name}</code>${children(tree).map((node) => this.node(node))}</div>`;
     }
+    const fields = (tree.fields ?? []).filter((field) => !(tree.node === "call" && field.name === "name"));
     return html`<div class="card" style="--accent: ${LOOKS[name]?.accent ?? "var(--violet)"}">
       <button type="button" class="title ${this.selected ? "ready" : ""}" ?disabled=${!this.selected} title=${this.selected ? "用选中的块包起来" : ""}
-        @click=${() => this.edit(tree.range, wrap(this.selected, this.text.slice(tree.range)))}>
+        @click=${() => this.wrapAt(tree)}>
       ${icon(name)}${this.blocks.get(name)?.label ?? name}<code>${name}</code></button>${this.fields(tree.node, fields)}</div>`;
   }
 
@@ -124,7 +118,7 @@ export class StructureView extends LitElement {
     const pick = (name: string) => { this.selected = this.selected === name ? "" : name; };
     return html`<aside class="palette" aria-label="控制块">
       <header><strong>控制块</strong><span>${this.selected ? "点一个表达式，用它包起来" : "选一个块，再点表达式"}</span></header>
-      <div class="list">${[...this.blocks].filter(([name]) => name in BLOCKS).map(([name, block]) => html`
+      <div class="list">${[...this.wraps.keys()].map((name) => [name, this.blocks.get(name)!] as const).map(([name, block]) => html`
         <button type="button" class=${this.selected === name ? "on" : ""} aria-pressed=${this.selected === name} @click=${() => pick(name)}>
           ${icon(name)}<span class="body"><strong>${block.label}<code>${name}</code></strong><small>${block.description}</small></span>
         </button>`)}</div></aside>`;
@@ -145,11 +139,9 @@ export class StructureView extends LitElement {
     .palette header strong { color: var(--ink-2); font-size: 11px; letter-spacing: .04em; }
     .palette header span { color: var(--muted); font-size: 10px; }
     .list { display: grid; gap: 6px; align-content: start; padding: 9px; overflow: auto; scrollbar-width: thin; }
-    button { box-sizing: border-box; }
     .list button { display: flex; gap: 9px; align-items: flex-start; width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 10px;
       color: inherit; background: var(--surface); font: inherit; text-align: left; cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .15s; }
     .list button:hover { border-color: var(--violet-line); box-shadow: 0 6px 16px var(--shadow-soft); transform: translateX(2px); }
-    .list button:focus-visible { outline: 3px solid var(--ring); }
     .list button.on { border-color: var(--violet); background: var(--violet-soft); box-shadow: 0 0 0 2px var(--violet-ghost); }
     .body { display: grid; gap: 2px; min-width: 0; }
     .body strong { display: flex; gap: 6px; align-items: baseline; color: var(--ink-2); font-size: 12px; }
@@ -166,7 +158,7 @@ export class StructureView extends LitElement {
     .title { display: flex; gap: 8px; align-items: center; padding: 0; border: 0; color: var(--ink-2); background: none;
       font: inherit; font-size: 12px; font-weight: 750; text-align: left; }
     .title:disabled { color: var(--ink-2); cursor: default; }
-    .title:focus-visible { outline: 3px solid var(--ring); border-radius: 6px; }
+    .title:focus-visible { border-radius: 6px; }
     .title .icon { width: 22px; height: 22px; }
     .title.ready { cursor: copy; }
     .field { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; align-items: start; }

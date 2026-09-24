@@ -8,10 +8,38 @@ package machine
 // different question, and lives in builtins_container.go.
 
 import (
+	"fmt"
 	"maps"
+	"reflect"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
+
+// nativeBacking is the Go element type containers of one element kind are
+// held in, and whether a dictionary of them has a native backing too.
+type nativeBacking struct {
+	elem   Kind
+	goElem reflect.Type
+	dict   bool
+}
+
+// natives is every native backing, in the order of the native constants: the
+// Go element type a container of each element kind is held in, as a slice,
+// and as a map keyed by string where dict says one exists. It is the one
+// list. The switches that read a backing — here, in fromGo and in
+// host_access.go — stay switches, because the hot path cannot afford an
+// indirect call, and TestEveryBackingIsHandledEverywhere holds each of them
+// to every entry.
+var natives = []nativeBacking{
+	{BoolKind, reflect.TypeFor[bool](), true},
+	{IntKind, reflect.TypeFor[int64](), true},
+	{FloatKind, reflect.TypeFor[float64](), true},
+	{StringKind, reflect.TypeFor[string](), true},
+	{MoneyKind, reflect.TypeFor[money.Money](), true},
+	// No backing holds exchange rates by key: a map of them is carried value
+	// by value.
+	{FxRateKind, reflect.TypeFor[money.FxRate](), false},
+}
 
 // length is the item count of an array or the entry count of a dictionary.
 func (v Value) length() int {
@@ -126,6 +154,43 @@ func (v Value) eachEntry(visit func(key string, entry Value) error) error {
 	return nil
 }
 
+// eachPart checks each item of an array, entry of a dictionary or field of a
+// record, naming the part in the error. Dictionaries go in the map's order,
+// which costs nothing, or in key order when ordered, for an error said the
+// same every time.
+func (v Value) eachPart(ordered bool, check func(Value) error) error {
+	entry := func(key string, entry Value) error {
+		if err := check(entry); err != nil {
+			return fmt.Errorf("entry %q: %w", key, err)
+		}
+		return nil
+	}
+	switch record, _ := v.box.(*recordValue); {
+	case v.kind == ArrayKind:
+		for i := range v.length() {
+			if err := check(v.at(i)); err != nil {
+				return fmt.Errorf("item %d: %w", i, err)
+			}
+		}
+	case v.kind == DictKind && !ordered:
+		return v.eachEntry(entry)
+	case v.kind == DictKind:
+		for _, key := range v.keys() {
+			value, _ := v.lookup(key)
+			if err := entry(key, value); err != nil {
+				return err
+			}
+		}
+	case record != nil:
+		for i, field := range record.fields {
+			if err := check(field); err != nil {
+				return fmt.Errorf("field %q: %w", record.typ.fields[i].name, err)
+			}
+		}
+	}
+	return nil
+}
+
 func (v Value) keys() []string {
 	switch box := v.box.(type) {
 	case map[string]bool:
@@ -145,27 +210,31 @@ func (v Value) keys() []string {
 	}
 }
 
-// tail shares the suffix of a non-empty array: values never change in place,
-// so the two arrays can alias the same backing.
-func (v Value) tail() Value {
+// Slice is items [from, to) of an array, sharing its backing: values never
+// change in place, so two arrays can alias one. It is read-only, as every
+// backing is. It is false for what is not an array, and for a range that is
+// not inside it.
+func (v Value) Slice(from, to int) (Value, bool) {
+	if v.kind != ArrayKind || from < 0 || to < from || to > v.length() {
+		return Value{}, false
+	}
 	switch box := v.box.(type) {
 	case []bool:
-		return Value{kind: ArrayKind, box: box[1:]}
+		return Value{kind: ArrayKind, box: box[from:to:to]}, true
 	case []int64:
-		return Value{kind: ArrayKind, box: box[1:]}
+		return Value{kind: ArrayKind, box: box[from:to:to]}, true
 	case []float64:
-		return Value{kind: ArrayKind, box: box[1:]}
+		return Value{kind: ArrayKind, box: box[from:to:to]}, true
 	case []string:
-		return Value{kind: ArrayKind, box: box[1:]}
+		return Value{kind: ArrayKind, box: box[from:to:to]}, true
 	case []money.Money:
-		return Value{kind: ArrayKind, box: box[1:]}
+		return Value{kind: ArrayKind, box: box[from:to:to]}, true
 	case []money.FxRate:
-		return Value{kind: ArrayKind, box: box[1:]}
+		return Value{kind: ArrayKind, box: box[from:to:to]}, true
 	case *nestedArray:
-		return Value{kind: ArrayKind, box: &nestedArray{elem: box.elem, items: box.items[1:]}}
-	default:
-		return Value{}
+		return Value{kind: ArrayKind, box: &nestedArray{elem: box.elem, items: box.items[from:to:to]}}, true
 	}
+	return Value{}, false
 }
 
 // arrayBuilder collects values into the canonical backing for their element
@@ -229,7 +298,7 @@ func (b *arrayBuilder) add(value Value) {
 // comprehension yields is one array per outer item, and the elements are what
 // the output collects.
 func (b *arrayBuilder) addAll(value Value) {
-	for i := 0; i < value.length(); i++ {
+	for i := range value.length() {
 		b.add(value.at(i))
 	}
 }
@@ -249,7 +318,7 @@ func (b *arrayBuilder) finish() Value {
 	case FxRateKind:
 		return Value{kind: ArrayKind, box: b.fxRates}
 	default:
-		return Value{kind: ArrayKind, box: &nestedArray{elem: CloneType(b.elem), items: b.values}}
+		return Value{kind: ArrayKind, box: &nestedArray{elem: b.elem, items: b.values}}
 	}
 }
 
@@ -270,7 +339,7 @@ func packDict(elem Type, entries map[string]Value) Value {
 	default:
 		copied := make(map[string]Value, len(entries))
 		maps.Copy(copied, entries)
-		return Value{kind: DictKind, box: &nestedDict{elem: CloneType(elem), entries: copied}}
+		return Value{kind: DictKind, box: &nestedDict{elem: elem, entries: copied}}
 	}
 }
 

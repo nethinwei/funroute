@@ -1,0 +1,31 @@
+# golangci-lint runs the checks staticcheck, vet and modernize leave out: the
+# error paths (a wrapped error kept whole, one checked, no nil that says
+# nothing), parameters and results that carry nothing, and the plainer
+# spellings. Every finding is fixed, never silenced: see CLAUDE.md.
+version: "2"
+linters:
+  default: none
+  enable:
+    - dupl
+    - errcheck
+    - errname
+    - errorlint
+    - forcetypeassert
+    - gocritic
+    - ineffassign
+    - intrange
+    - makezero
+    - mirror
+    - nakedret
+    - nilerr
+    - nilnil
+    - perfsprint
+    - prealloc
+    - predeclared
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - wastedassign
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

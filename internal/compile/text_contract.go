@@ -60,8 +60,8 @@ func (c *TextContract) Options() (CompileOptions, error) {
 // Aliases resolves the declared types. They do not nest: one alias may not be
 // written in terms of another, so there is no order to resolve them in.
 func (c *TextContract) Aliases() (map[string]machine.Type, error) {
-	if c == nil || len(c.Types) == 0 {
-		return nil, nil
+	if c == nil {
+		return map[string]machine.Type{}, nil
 	}
 	aliases := make(map[string]machine.Type, len(c.Types))
 	for name, text := range c.Types {

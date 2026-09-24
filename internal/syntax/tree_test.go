@@ -27,7 +27,7 @@ func TestSyntaxTreeLocatesNodesAndNames(t *testing.T) {
 		t.Errorf("the outer field read is %+v, want %q with its last name at %d", value, "order.amount.amount", len("let(amount = order.amount."))
 	}
 	loop := tree.Fields[1].Nodes[0]
-	if loop.Node != "for" || text(*loop.Fields[1].TextSpan) != "x" || loop.Fields[1].TextSpan.Start <= int(len("let(amount = order.amount.amount, [amount + x")) {
+	if loop.Node != "for" || text(*loop.Fields[1].TextSpan) != "x" || loop.Fields[1].TextSpan.Start <= len("let(amount = order.amount.amount, [amount + x") {
 		t.Errorf("the loop variable is %+v, want the x after the yield", loop.Fields[1])
 	}
 	where := loop.Fields[2].Nodes[0]

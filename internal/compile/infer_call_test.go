@@ -2,7 +2,7 @@ package compile
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 
@@ -113,7 +113,7 @@ func registerCollectionTestExtensions(t *testing.T, registry *machine.Registry) 
 				key, _ := args[1].String()
 				value, ok := entries[key]
 				if !ok {
-					return machine.Value{}, fmt.Errorf("missing key")
+					return machine.Value{}, errors.New("missing key")
 				}
 				return value, nil
 			},
@@ -124,7 +124,7 @@ func registerCollectionTestExtensions(t *testing.T, registry *machine.Registry) 
 				items, _ := args[0].Array()
 				index, _ := args[1].Int()
 				if index < 0 || index >= int64(len(items)) {
-					return machine.Value{}, fmt.Errorf("bad index")
+					return machine.Value{}, errors.New("bad index")
 				}
 				return items[index], nil
 			},

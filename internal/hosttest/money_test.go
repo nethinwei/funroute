@@ -32,11 +32,12 @@ func amount(code string, minor int64) funroute.Money {
 	return m
 }
 
-// looseMoney is money read from JSON, which checks only its shape: the way
-// an undeclared currency reaches a rule's boundary.
-func looseMoney(code string, minor int64) funroute.Money {
+// looseMoney is money in the undeclared currency XXX, read from JSON, which
+// checks only its shape: the way an undeclared currency reaches a rule's
+// boundary.
+func looseMoney(minor int64) funroute.Money {
 	var m funroute.Money
-	if err := json.Unmarshal(fmt.Appendf(nil, `{"currency":%q,"minor":%d}`, code, minor), &m); err != nil {
+	if err := json.Unmarshal(fmt.Appendf(nil, `{"currency":"XXX","minor":%d}`, minor), &m); err != nil {
 		panic(err)
 	}
 	return m
@@ -352,8 +353,9 @@ func TestBindingCarriesEveryMoneyType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var types []string
-	for _, arg := range binding.Options().Args {
+	args := binding.Options().Args
+	types := make([]string, 0, len(args))
+	for _, arg := range args {
 		types = append(types, arg.Name+":"+arg.Type.String())
 	}
 	want := []string{"amount:money", "fee:ratio", "fx:fxrate", "payout:currency", "lines:array<money>", "caps:dict<money>"}
@@ -420,9 +422,9 @@ func TestBindingRefusesCurrenciesThatDoNotFit(t *testing.T) {
 		contract bool
 	}{
 		"undeclared payout":       {func(in *Ledger) { in.Payout = currency("XXX") }, true},
-		"undeclared amount":       {func(in *Ledger) { in.Amount = looseMoney("XXX", 1000) }, true},
-		"undeclared line":         {func(in *Ledger) { in.Lines[1] = looseMoney("XXX", 2) }, true},
-		"undeclared cap":          {func(in *Ledger) { in.Caps["card"] = looseMoney("XXX", 1) }, true},
+		"undeclared amount":       {func(in *Ledger) { in.Amount = looseMoney(1000) }, true},
+		"undeclared line":         {func(in *Ledger) { in.Lines[1] = looseMoney(2) }, true},
+		"undeclared cap":          {func(in *Ledger) { in.Caps["card"] = looseMoney(1) }, true},
 		"two currencies in lines": {func(in *Ledger) { in.Lines[1] = amount("JPY", 2) }, false},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -618,7 +620,8 @@ func TestFallbackDoesNotCatchACurrencyError(t *testing.T) {
 func TestManifestCarriesTheMoneyFeature(t *testing.T) {
 	t.Parallel()
 	host := fullConsole(t)
-	if err := funroute.Logic(host, "ledger.fee_v1", funroute.Doc{Cost: 5}, func(amount funroute.Money) (funroute.Money, error) { return amount, nil }); err != nil {
+	fee := func(amount funroute.Money) funroute.Money { return amount }
+	if err := host.Register(funroute.FunctionSpec{Name: "ledger.fee_v1", Doc: funroute.Doc{Cost: 5}, Go: fee}); err != nil {
 		t.Fatal(err)
 	}
 	encoded, err := json.Marshal(host.Manifest())
@@ -754,5 +757,27 @@ func TestHostAndRuleTradeExchangeRates(t *testing.T) {
 	back, converted := funroute.FromValue[funroute.FxRate](value)
 	if order, _ := back.Cmp(agreed); err != nil || converted != nil || order != 0 {
 		t.Fatalf("implied(JPY 30050, USD 200.00) = %v (%v, %v), want %s", back, err, converted, agreed)
+	}
+}
+
+// The strategy constants are the members of the enum a rule names them in.
+func TestAllocationConstantsAreTheEnumsMembers(t *testing.T) {
+	t.Parallel()
+	enum := funroute.AllocationEnumType()
+	strategies := []funroute.AllocationStrategy{
+		funroute.AllocateLargestRemainder, funroute.AllocateLargestWeight, funroute.AllocateInOrder,
+		funroute.AllocateReverseOrder, funroute.AllocateAllFirst, funroute.AllocateAllLast,
+	}
+	names := make([]string, 0, len(strategies))
+	for _, strategy := range strategies {
+		parsed, err := funroute.ParseAllocation(strategy.String())
+		if err != nil || parsed != strategy {
+			t.Fatalf("ParseAllocation(%q) = %v, %v, want %v", strategy.String(), parsed, err, strategy)
+		}
+		names = append(names, strategy.String())
+	}
+	slices.Sort(names)
+	if enum.Name() != "allocation" || !slices.Equal(enum.Values(), names) {
+		t.Fatalf("AllocationEnumType() = %s, want enum<allocation> of %v", enum, names)
 	}
 }

@@ -22,11 +22,11 @@ func TestCompletionOffersTheFieldsOfARecordBeingUpdated(t *testing.T) {
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
 			s := newSession(t, standard(t), `{}`)
-			s.notify("github.com/nethinwei/funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
+			s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
 				{"name": "order", "type": "record{amount: int, fee: int, currency: string}"},
 			}}})
 			s.open("file:///a.fr", text)
-			if got := strings.Join(labels(s.request("textDocument/completion", position("file:///a.fr", 0, len(text)))), " "); got != want {
+			if got := strings.Join(labels(t, s.request("textDocument/completion", position("file:///a.fr", len(text)))), " "); got != want {
 				t.Errorf("%q: completion is %q, want %q", text, got, want)
 			}
 		})
@@ -34,19 +34,19 @@ func TestCompletionOffersTheFieldsOfARecordBeingUpdated(t *testing.T) {
 	// A declared result the half-written program does not return yet does not
 	// hide the base's fields.
 	s := newSession(t, standard(t), `{}`)
-	s.notify("github.com/nethinwei/funroute/setContract", map[string]any{"contract": map[string]any{
+	s.notify("funroute/setContract", map[string]any{"contract": map[string]any{
 		"args":   []map[string]string{{"name": "order", "type": "record{amount: int, fee: int}"}},
 		"result": map[string]string{"type": "int"},
 	}})
 	s.open("file:///a.fr", "order with {")
-	if got := strings.Join(labels(s.request("textDocument/completion", position("file:///a.fr", 0, 12))), " "); got != "amount fee" {
+	if got := strings.Join(labels(t, s.request("textDocument/completion", position("file:///a.fr", 12))), " "); got != "amount fee" {
 		t.Errorf("with a declared result the completion is %q, want \"amount fee\"", got)
 	}
 	// Anywhere else in an update the usual names are offered.
 	s = newSession(t, standard(t), `{}`)
-	s.notify("github.com/nethinwei/funroute/setContract", contract("fee:int"))
+	s.notify("funroute/setContract", contract("fee:int"))
 	s.open("file:///a.fr", "order with {amount: ")
-	if got := labels(s.request("textDocument/completion", position("file:///a.fr", 0, 20))); !slices.Contains(got, "fee") {
+	if got := labels(t, s.request("textDocument/completion", position("file:///a.fr", 20))); !slices.Contains(got, "fee") {
 		t.Errorf("a field's value is offered %v, want fee among them", got)
 	}
 }

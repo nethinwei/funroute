@@ -334,3 +334,26 @@ func TestEnumsAreCollectedFromAnyDepthOfTheContract(t *testing.T) {
 		t.Fatalf("a switch missing a member compiled: %v, want an error naming missing stripe", err)
 	}
 }
+
+// string(e) takes a member of any enum: the signature's wildcard is a
+// variable only an enum fills, so the argument is the enum the contract
+// declares, and nothing else.
+func TestTheEnumWildcardIsFilledByTheContractsEnum(t *testing.T) {
+	t.Parallel()
+	channel := machine.EnumOf("channel", "adyen", "stripe")
+	artifact, err := CompileExpr(`string(ch) + string(@stripe)`, machine.CoreRegistry(), CompileOptions{Args: []ArgSpec{{Name: "ch", Type: channel}}})
+	if err != nil || !artifact.Result().Equal(machine.StringType) {
+		t.Fatalf("CompileExpr(string(ch) + string(@stripe)) = %v, want a string", err)
+	}
+	state := newInferState()
+	wildcard := state.instantiate(machine.AnyEnumType, map[string]typeTerm{})
+	if got := state.describe(wildcard); got != "enum" {
+		t.Fatalf("the wildcard reads %s, want enum", got)
+	}
+	if err := state.unify(wildcard, scalarTerm(machine.StringKind)); err == nil {
+		t.Fatal("the wildcard unified with a string, want only an enum to fill it")
+	}
+	if err := state.unify(wildcard, state.concrete(channel)); err != nil || state.describe(wildcard) != channel.String() {
+		t.Fatalf("the wildcard filled by %s = %v, reads %s", channel, err, state.describe(wildcard))
+	}
+}

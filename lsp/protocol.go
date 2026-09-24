@@ -13,6 +13,11 @@ type incoming struct {
 	Params json.RawMessage `json:"params,omitempty"`
 }
 
+// null is the result a request has when the protocol's answer is null — no
+// hover here, no call being typed, no tree for text that does not parse,
+// shutdown's — which is an answer, not a failure.
+var null = json.RawMessage("null")
+
 type response struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`

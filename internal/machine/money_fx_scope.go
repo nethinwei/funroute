@@ -28,24 +28,13 @@ func (f *frame) pushScope(in Instruction) error {
 	if err != nil {
 		return err
 	}
-	for _, quote := range quotes {
-		if _, ok := quote.FxRate(); !ok && !quote.holdsFxRates() {
-			return fmt.Errorf("a using quote is %s, not an exchange rate", quote.Type())
-		}
-	}
 	f.fxMarks = append(f.fxMarks, len(f.fxQuotes))
 	f.fxQuotes = append(f.fxQuotes, quotes...)
 	return nil
 }
 
 // popScope closes the innermost using.
-func (f *frame) popScope() error {
-	if len(f.fxMarks) == 0 {
-		return fmt.Errorf("fx_pop without a using")
-	}
-	f.dropScopes(len(f.fxMarks) - 1)
-	return nil
-}
+func (f *frame) popScope() { f.dropScopes(len(f.fxMarks) - 1) }
 
 // dropScopes closes every using past the first depth ones.
 func (f *frame) dropScopes(depth int) {
@@ -67,19 +56,13 @@ func (f *frame) scopeQuotes() ([]Value, bool) {
 	return f.fxQuotes[f.fxMarks[len(f.fxMarks)-1]:], true
 }
 
-// holdsFxRates reports an array<fxrate>, whose backing is a []FxRate.
-func (v Value) holdsFxRates() bool {
-	_, ok := v.box.([]money.FxRate)
-	return ok && v.kind == ArrayKind
-}
-
 // quoteBetween is the rate from one currency to another among quotes: the
 // last quote of the pair either way, a quote the other way by its inverse.
 // found is false when no quote names the pair.
 func quoteBetween(quotes []Value, from, to string) (money.FxRate, bool) {
 	// Last first, by index: an iterator's closure is not free in every build,
 	// and a conversion allocates nothing.
-	for i := range len(quotes) {
+	for i := range quotes {
 		quote := quotes[len(quotes)-1-i]
 		if rates, ok := quote.box.([]money.FxRate); ok {
 			if rate, found := lastBetween(rates, from, to); found {
@@ -96,7 +79,7 @@ func quoteBetween(quotes []Value, from, to string) (money.FxRate, bool) {
 
 // lastBetween is the last of rates that quotes the pair, either way.
 func lastBetween(rates []money.FxRate, from, to string) (money.FxRate, bool) {
-	for i := range len(rates) {
+	for i := range rates {
 		if rate := rates[len(rates)-1-i]; matches(rate, from, to) {
 			return rate, true
 		}

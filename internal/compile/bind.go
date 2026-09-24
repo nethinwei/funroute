@@ -36,9 +36,9 @@ func (b *Binding[In, Out]) Options() CompileOptions {
 	options := b.options
 	options.Args = make([]ArgSpec, len(b.options.Args))
 	for i, arg := range b.options.Args {
-		options.Args[i] = ArgSpec{Name: arg.Name, Type: machine.CloneType(arg.Type), Doc: arg.Doc}
+		options.Args[i] = ArgSpec{Name: arg.Name, Type: arg.Type, Doc: arg.Doc}
 	}
-	result := machine.CloneType(*b.options.Result)
+	result := *b.options.Result
 	options.Result = &result
 	return options
 }

@@ -49,17 +49,21 @@ func ExampleCompileExpr() {
 
 // A domain function is registered by its Go signature; the Doc says only what
 // the signature cannot, and a rule calls the function by its name.
-func ExampleLogic() {
+func ExampleFunctionSpec() {
 	registry := funroute.CoreRegistry()
-	err := funroute.Logic(registry, "risk.score_v1", funroute.Doc{
-		Label:  "风险评分",
-		Cost:   25,
-		Params: []string{"国家", "金额"},
-	}, func(country string, amount int64) (float64, error) {
-		if country == "SG" && amount < 1_000_000 {
-			return 0.2, nil
-		}
-		return 0.9, nil
+	err := registry.Register(funroute.FunctionSpec{
+		Name: "risk.score_v1",
+		Doc: funroute.Doc{
+			Label:  "风险评分",
+			Cost:   25,
+			Params: []string{"国家", "金额"},
+		},
+		Go: func(country string, amount int64) (float64, error) {
+			if country == "SG" && amount < 1_000_000 {
+				return 0.2, nil
+			}
+			return 0.9, nil
+		},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -119,9 +123,9 @@ func ExampleBind() {
 	fmt.Printf("%+v\n", route)
 
 	requests := []Request{{Country: "SG", Amount: 40000}, {Country: "BR", Amount: 80000}}
-	routes := program.RunBatch(ctx, requests, funroute.RunOptions{}, func(i int, err error) {
-		log.Printf("request %d: %v", i, err)
-	})
+	routes := make([]Route, len(requests))
+	program.RunBatch(ctx, len(requests), func(i int) *Request { return &requests[i] }, func(i int) *Route { return &routes[i] },
+		funroute.RunOptions{}, func(i int, err error) { log.Printf("request %d: %v", i, err) })
 	for i, route := range routes {
 		fmt.Printf("%d: %+v\n", i, route)
 	}

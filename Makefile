@@ -1,10 +1,10 @@
 GO ?= go
 NODE ?= node
 
-.PHONY: ci build test test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize run clean
+.PHONY: ci build test test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean
 
 # ci must pass before any commit.
-ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize lint build wasm test test-js
+ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize golangci deadcode lint build wasm test test-js
 
 # The linters are tools, not dependencies: go.mod stays empty. Each is
 # installed once, at the pinned version, into .tools/<version>/ — built for
@@ -12,10 +12,13 @@ ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck moderniz
 # new version pin installs afresh rather than reusing an old binary.
 STATICCHECK_VERSION := v0.8.1
 X_TOOLS_VERSION     := v0.50.0
+GOLANGCI_VERSION    := v2.11.4
 TOOLS       := $(CURDIR)/.tools
 STATICCHECK := $(TOOLS)/staticcheck-$(STATICCHECK_VERSION)/staticcheck
 MODERNIZE   := $(TOOLS)/x-tools-$(X_TOOLS_VERSION)/modernize
 GOIMPORTS   := $(TOOLS)/x-tools-$(X_TOOLS_VERSION)/goimports
+DEADCODE    := $(TOOLS)/x-tools-$(X_TOOLS_VERSION)/deadcode
+GOLANGCI    := $(TOOLS)/golangci-lint-$(GOLANGCI_VERSION)/golangci-lint
 
 $(STATICCHECK):
 	GOBIN=$(dir $@) $(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
@@ -25,6 +28,12 @@ $(MODERNIZE):
 
 $(GOIMPORTS):
 	GOBIN=$(dir $@) $(GO) install golang.org/x/tools/cmd/goimports@$(X_TOOLS_VERSION)
+
+$(DEADCODE):
+	GOBIN=$(dir $@) $(GO) install golang.org/x/tools/cmd/deadcode@$(X_TOOLS_VERSION)
+
+$(GOLANGCI):
+	GOBIN=$(dir $@) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 # staticcheck.conf enables every check. The browser entry builds only for
 # js/wasm, so it is checked there, as vet-wasm does.
@@ -36,6 +45,17 @@ staticcheck: $(STATICCHECK)
 modernize: $(MODERNIZE)
 	$(MODERNIZE) ./...
 	GOOS=js GOARCH=wasm $(MODERNIZE) ./web/wasm
+
+# golangci-lint runs the linters .golangci.yml enables, on both builds.
+golangci: $(GOLANGCI)
+	$(GOLANGCI) run ./...
+	GOOS=js GOARCH=wasm $(GOLANGCI) run ./web/wasm/...
+
+# deadcode reports a function nothing reaches, not even a test: code to delete,
+# or public API with no test. Its output is the failure.
+deadcode: $(DEADCODE)
+	@unreachable=$$($(DEADCODE) -test ./...) || exit 1; \
+	if [ -n "$$unreachable" ]; then echo "$$unreachable"; exit 1; fi
 
 # Imports come in two groups: the standard library, then this module.
 check-imports: $(GOIMPORTS)

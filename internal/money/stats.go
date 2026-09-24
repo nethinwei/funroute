@@ -1,7 +1,8 @@
 package money
 
 import (
-	"fmt"
+	"cmp"
+	"errors"
 	"slices"
 )
 
@@ -28,7 +29,7 @@ func MedianMoney(amounts []Money, mode Rounding) (Money, error) {
 		return Money{}, err
 	}
 	sorted := slices.Clone(amounts)
-	slices.SortFunc(sorted, func(a, b Money) int { return compareOrdered(a.minor, b.minor) })
+	slices.SortFunc(sorted, func(a, b Money) int { return cmp.Compare(a.minor, b.minor) })
 	middle := len(sorted) / 2
 	if len(sorted)%2 == 1 {
 		return newMoney(currency, sorted[middle].minor), nil
@@ -41,7 +42,7 @@ func MedianMoney(amounts []Money, mode Rounding) (Money, error) {
 // currency-less zero goes with any.
 func oneCurrency(amounts []Money) (string, error) {
 	if len(amounts) == 0 {
-		return "", fmt.Errorf("an empty array has no average")
+		return "", errors.New("an empty array has no average")
 	}
 	currency := ""
 	for _, amount := range amounts {

@@ -14,8 +14,11 @@ type Tree struct {
 	Span Span   `json:"span"`
 	// Operator is how the node is spelled when it is an operator's expansion:
 	// add(a, b) written a + b.
-	Operator string      `json:"operator,omitempty"`
-	Fields   []TreeField `json:"fields,omitempty"`
+	Operator string `json:"operator,omitempty"`
+	// Form says the node is one of the language's forms: it branches, binds
+	// names or scopes what is inside it.
+	Form   bool        `json:"form,omitempty"`
+	Fields []TreeField `json:"fields,omitempty"`
 }
 
 // TreeField is one field of a node: a subexpression, a list of them, a list
@@ -53,11 +56,13 @@ func nameSpans(source string, roles map[int]roleMark) map[string][]Span {
 }
 
 func treeOf(expr Expr, names map[string][]Span) Tree {
-	tree := Tree{Node: expr.kind(), Span: expr.Extent()}
+	plan := planOf(expr)
+	tree := Tree{Node: kindOf(expr, plan), Span: expr.Extent()}
 	if match, ok := readOperator(expr); ok {
 		tree.Operator = match.spec.token
 	}
-	if plan := planOf(expr); plan != nil {
+	if plan != nil {
+		tree.Form = plan.isForm
 		own := ownSource{node: tree.Span}
 		for _, child := range Children(expr) {
 			own.children = append(own.children, child.Extent())
@@ -101,14 +106,10 @@ func fieldsOf(value reflect.Value, plan *structPlan, within ownSource, names map
 func fieldOf(value reflect.Value, field fieldPlan, within ownSource, names map[string][]Span) TreeField {
 	out := TreeField{Name: field.name}
 	switch field.kind {
-	case fieldExpr:
-		out.Nodes = []Tree{treeOf(value.Interface().(Expr), names)}
-	case fieldExprs:
-		for i := 0; i < value.Len(); i++ {
-			out.Nodes = append(out.Nodes, treeOf(value.Index(i).Interface().(Expr), names))
-		}
+	case fieldExpr, fieldExprs:
+		visitField(value, field.kind, nil, func(child Expr, _ scope) { out.Nodes = append(out.Nodes, treeOf(child, names)) })
 	case fieldList:
-		for i := 0; i < value.Len(); i++ {
+		for i := range value.Len() {
 			out.Items = append(out.Items, fieldsOf(value.Index(i), field.item, within, names))
 		}
 	case fieldFlag:

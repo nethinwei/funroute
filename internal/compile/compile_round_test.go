@@ -185,8 +185,9 @@ func TestRoundRunsAfterItsSteps(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var calls []string
-			for _, call := range machine.PartsOf(artifact).Calls {
+			parts := machine.PartsOf(artifact).Calls
+			calls := make([]string, 0, len(parts))
+			for _, call := range parts {
 				calls = append(calls, call.Name)
 			}
 			if got := strings.Join(calls, " "); got != want {

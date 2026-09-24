@@ -3,8 +3,10 @@ package main
 import (
 	"go/ast"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -32,19 +34,11 @@ func checkTestPairing(path string) []violation {
 // isTestSuite reports a directory whose only source file is doc.go.
 func isTestSuite(dir string) bool {
 	sources, _ := filepath.Glob(filepath.Join(dir, "*.go"))
-	count := 0
-	for _, source := range sources {
-		if !strings.HasSuffix(source, "_test.go") {
-			count++
-			if filepath.Base(source) != "doc.go" {
-				return false
-			}
-		}
-	}
-	return count == 1
+	sources = slices.DeleteFunc(sources, func(source string) bool { return strings.HasSuffix(source, "_test.go") })
+	return len(sources) == 1 && filepath.Base(sources[0]) == "doc.go"
 }
 
-// checkTestFile holds a _test.go file to the testing package's current
+// checkTestFunction holds a function of a _test.go file to the testing package's current
 // idioms, the ones that keep a test from outliving its t and a benchmark from
 // timing its own setup:
 //
@@ -59,25 +53,19 @@ func isTestSuite(dir string) bool {
 //     before it out of the timing;
 //   - a helper that takes a testing value calls Helper() first, so a failure
 //     is reported at the line of the test that called it.
-func checkTestFile(path string, fileSet *token.FileSet, file *ast.File) []violation {
+func checkTestFunction(path string, fileSet *token.FileSet, function *ast.FuncDecl) []violation {
 	var violations []violation
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if !ok || function.Body == nil {
-			continue
-		}
-		params := testingParams(function.Type)
-		if message, bad := missingHelper(function, params); bad {
-			violations = append(violations, violation{path, fileSet.Position(function.Pos()).Line, message})
-		}
-		benchmark := strings.HasPrefix(function.Name.Name, "Benchmark")
-		ast.Inspect(function.Body, func(node ast.Node) bool {
-			if message, bad := testIdiom(node, params, benchmark); bad {
-				violations = append(violations, violation{path, fileSet.Position(node.Pos()).Line, message})
-			}
-			return true
-		})
+	params := testingParams(function.Type)
+	if message, bad := missingHelper(function, params); bad {
+		violations = append(violations, violation{path, fileSet.Position(function.Pos()).Line, message})
 	}
+	benchmark := strings.HasPrefix(function.Name.Name, "Benchmark")
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		if message, bad := testIdiom(node, params, benchmark); bad {
+			violations = append(violations, violation{path, fileSet.Position(node.Pos()).Line, message})
+		}
+		return true
+	})
 	return violations
 }
 
@@ -97,29 +85,11 @@ func testingParams(signature *ast.FuncType) map[string]string {
 	return params
 }
 
-func testingKind(expr ast.Expr) string {
-	if star, ok := expr.(*ast.StarExpr); ok {
-		if kind := testingSelector(star.X); kind == "T" || kind == "B" || kind == "F" {
-			return kind
-		}
-		return ""
-	}
-	if kind := testingSelector(expr); kind == "TB" {
-		return kind
-	}
-	return ""
-}
+// testingKinds names the testing values a parameter can hold.
+var testingKinds = map[string]string{"*testing.T": "T", "*testing.B": "B", "*testing.F": "F", "testing.TB": "TB"}
 
-// testingSelector is the name in testing.<name>, or "".
-func testingSelector(expr ast.Expr) string {
-	selector, ok := expr.(*ast.SelectorExpr)
-	if !ok {
-		return ""
-	}
-	if pkg, ok := selector.X.(*ast.Ident); ok && pkg.Name == "testing" {
-		return selector.Sel.Name
-	}
-	return ""
+func testingKind(expr ast.Expr) string {
+	return testingKinds[types.ExprString(expr)]
 }
 
 // missingHelper reports a helper — a function with a testing value that is
@@ -136,12 +106,9 @@ func missingHelper(function *ast.FuncDecl, params map[string]string) (string, bo
 }
 
 func isTestEntry(name string) bool {
-	for _, prefix := range []string{"Test", "Benchmark", "Fuzz", "Example"} {
-		if strings.HasPrefix(name, prefix) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc([]string{"Test", "Benchmark", "Fuzz", "Example"}, func(prefix string) bool {
+		return strings.HasPrefix(name, prefix)
+	})
 }
 
 func callsHelper(statement ast.Stmt, params map[string]string) bool {
@@ -153,12 +120,8 @@ func callsHelper(statement ast.Stmt, params map[string]string) bool {
 	if !ok {
 		return false
 	}
-	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != "Helper" {
-		return false
-	}
-	receiver, ok := selector.X.(*ast.Ident)
-	return ok && params[receiver.Name] != ""
+	receiver, ok := strings.CutSuffix(types.ExprString(call.Fun), ".Helper")
+	return ok && params[receiver] != ""
 }
 
 // testIdiom reports one node of a test that has a better spelling.
@@ -176,22 +139,14 @@ func testIdiom(node ast.Node, params map[string]string, benchmark bool) (string,
 }
 
 func idiomaticCall(call *ast.CallExpr, params map[string]string, benchmark bool) (string, bool) {
-	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return "", false
-	}
-	pkg, ok := selector.X.(*ast.Ident)
-	if !ok {
-		return "", false
-	}
-	switch pkg.Name + "." + selector.Sel.Name {
+	switch name := types.ExprString(call.Fun); name {
 	case "time.Sleep":
 		if !benchmark {
 			return "a test does not sleep: run timers on synctest's fake clock", true
 		}
 	case "context.Background", "context.TODO":
 		if len(params) > 0 {
-			return "use the testing value's Context() rather than context." + selector.Sel.Name + "()", true
+			return "use the testing value's Context() rather than " + name + "()", true
 		}
 	}
 	return "", false

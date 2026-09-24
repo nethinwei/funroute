@@ -179,9 +179,11 @@ e ::= c                              字面量：bool、int、float、string、�
 交给扩展函数。宿主用 Go 实现它，在那里可以自由使用循环、超时、并发与外部服务，并由宿主为它设定自己的上界与 SLA：
 
 ```go
-funroute.Logic(registry, "route.optimal_v1",
-    funroute.Doc{Cost: 500, Timeout: 5 * time.Millisecond},   // 迭代算法：标高成本，设超时
-    optimalChannel)                                       // Go 侧自带迭代上限
+registry.Register(funroute.FunctionSpec{
+    Name: "route.optimal_v1",
+    Doc:  funroute.Doc{Cost: 500, Timeout: 5 * time.Millisecond}, // 迭代算法：标高成本，设超时
+    Go:   optimalChannel,                                         // Go 侧自带迭代上限
+})
 ```
 
 这条边界是刻意的：**语言负责可解释、可计费、有上界的决策；需要搜索的计算是一个被命名、被审查、被限时的扩展**。

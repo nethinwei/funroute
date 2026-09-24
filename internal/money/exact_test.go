@@ -74,3 +74,28 @@ func TestConvertExactLeavesTheRounding(t *testing.T) {
 		t.Fatalf("ConvertExact of euros at a dollar rate: error = %v, want ErrCurrency", err)
 	}
 }
+
+// The sign of exact money is the sign of its minor units, however small a
+// part of one they are.
+func TestExactMoneySign(t *testing.T) {
+	t.Parallel()
+	third, _ := Money{currency: "USD", minor: 1}.Exact().DivRatio(ratio(3, 1))
+	minusThird, _ := third.Neg()
+	for _, test := range []struct {
+		name string
+		e    ExactMoney
+		want int
+	}{
+		{"a third of a cent", third, 1},
+		{"minus a third of a cent", minusThird, -1},
+		{"the currency-less zero", ExactMoney{}, 0},
+		{"a dollar's zero", Money{currency: "USD"}.Exact(), 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := test.e.Sign(); got != test.want {
+				t.Fatalf("(%s).Sign() = %d, want %d", test.e, got, test.want)
+			}
+		})
+	}
+}

@@ -2,8 +2,9 @@ package machine
 
 import (
 	"context"
-	"errors"
 	"fmt"
+
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // call runs one call instruction. There are three ways to get the value,
@@ -23,7 +24,7 @@ import (
 func (f *frame) call(pc int, instruction Instruction) error {
 	function := f.runtime.functions[instruction.A]
 	if !function.IsBuiltin() && f.deadline && f.ctx.Err() != nil {
-		return fmt.Errorf("%s: %w: %v", function.Name, ErrDeadline, f.ctx.Err())
+		return fmt.Errorf("%s: %w", function.Name, money.Classify(ErrDeadline, "", f.ctx.Err()))
 	}
 	if f.fuelLeft < function.Doc.Cost {
 		return fmt.Errorf("%w before %s", ErrFuel, function.Name)
@@ -53,14 +54,12 @@ func (f *frame) call(pc int, instruction Instruction) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", function.Name, f.functionError(function, err))
 	}
+	// A kernel function's result is of its signature's type, which loading
+	// proved the call's; a host's is looked at.
 	if !function.IsBuiltin() {
 		if err := f.hostResult(function, value, instruction.Type); err != nil {
 			return err
 		}
-	} else if !value.hasType(*instruction.Type) {
-		return f.resultTypeError(function, value, *instruction.Type)
-	} else if err := value.validateInvariant(); err != nil {
-		return fmt.Errorf("%s: invalid result: %w", function.Name, err)
 	}
 	return f.push(value)
 }
@@ -77,7 +76,7 @@ func (f *frame) hostResult(function *RegisteredFunction, value Value, typ *Type)
 		return f.resultTypeError(function, value, *typ)
 	}
 	if err := value.validateInvariant(); err != nil {
-		return fmt.Errorf("%s: %w", function.Name, f.functionError(function, fmt.Errorf("invalid result: %v", err)))
+		return fmt.Errorf("%s: %w", function.Name, f.functionError(function, fmt.Errorf("invalid result: %w", err)))
 	}
 	return nil
 }
@@ -87,7 +86,7 @@ func (f *frame) hostResult(function *RegisteredFunction, value Value, typ *Type)
 func (f *frame) resultTypeError(function *RegisteredFunction, value Value, typ Type) error {
 	err := fmt.Errorf("returned %s, contract requires %s", value.Type(), typ)
 	if value.kind == typ.kind && IsUnitKind(value.kind) {
-		return fmt.Errorf("%s: %w: %w", function.Name, ErrCurrency, err)
+		return fmt.Errorf("%s: %w", function.Name, money.Classify(ErrCurrency, "", err))
 	}
 	return fmt.Errorf("%s: %w", function.Name, f.functionError(function, err))
 }
@@ -107,7 +106,7 @@ func (f *frame) prefetchedAt(pc int) (Prefetched, bool) {
 // is what makes a program stop promptly once its time is up.
 func (f *frame) invokeBounded(function *RegisteredFunction, args []Value) (Value, error) {
 	if f.deadline && f.ctx.Err() != nil {
-		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, f.ctx.Err())
+		return Value{}, money.Classify(ErrDeadline, "", f.ctx.Err())
 	}
 	ctx := f.ctx
 	if function.Doc.Timeout > 0 {
@@ -117,15 +116,16 @@ func (f *frame) invokeBounded(function *RegisteredFunction, args []Value) (Value
 	}
 	var value Value
 	var err error
-	if function.Doc.Detached {
+	switch {
+	case function.Doc.Detached:
 		value, err = callDetached(ctx, function, args)
-	} else if len(f.fallbacks) > 0 {
+	case len(f.fallbacks) > 0:
 		value, err = callSafely(ctx, function, args)
-	} else {
+	default:
 		value, err = function.Eval(ctx, args)
 	}
 	if err != nil && ctx.Err() != nil && !keepsIdentity(err) {
-		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, err)
+		return Value{}, money.Classify(ErrDeadline, "", err)
 	}
 	return value, err
 }
@@ -141,47 +141,58 @@ func (f *frame) functionError(function *RegisteredFunction, err error) error {
 // budget ran out and ErrExtension otherwise, so fallback and monitoring can
 // tell the two apart. An error that already has its class keeps it
 // (keepsIdentity).
-func (f *frame) classify(err error) error {
+func (f *frame) classify(err error) error { return classifyUnder(f.ctx, err) }
+
+// classifyUnder is classify for a failure under ctx.
+func classifyUnder(ctx context.Context, err error) error {
 	if keepsIdentity(err) {
 		return err
 	}
-	if f.ctx.Err() != nil {
-		return fmt.Errorf("%w: %v", ErrDeadline, err)
+	if ctx.Err() != nil {
+		return money.Classify(ErrDeadline, "", err)
 	}
-	return fmt.Errorf("%w: %v", ErrExtension, err)
+	return money.Classify(ErrExtension, "", err)
 }
 
-// keepsIdentity reports an error that already has a class a host tells
-// apart with errors.Is: one a Batch or invokeBounded classified, or the
-// rule's or the data's own — a currency mismatch or an arithmetic failure,
-// which fallback must not take however late it came, and a missing exchange
-// rate, which fallback takes as data not yet at hand whoever reported it.
-// Wrapping one of these as an extension failure would lose that.
+// keepsIdentity reports an error that already has one of the classes a host
+// tells apart with errors.Is — one a Batch or invokeBounded classified, the
+// rule's or the data's own, or any other — so it is passed on as it is.
+// Wrapping it as an extension failure would add a class it does not have: a
+// currency mismatch or an arithmetic failure must stay what fallback does not
+// take however late it came.
 func keepsIdentity(err error) bool {
-	return errors.Is(err, ErrDeadline) || errors.Is(err, ErrExtension) || errors.Is(err, ErrCurrency) ||
-		errors.Is(err, ErrArithmetic) || errors.Is(err, ErrNoFxRate)
+	_, classified := classOf(err)
+	return classified
 }
 
 // callDetached runs the function on its own goroutine and stops waiting at the
 // deadline. The arguments are copied first: the stack window they live in is
 // reused once this returns, and the abandoned call may still be reading them.
 func callDetached(ctx context.Context, function *RegisteredFunction, args []Value) (Value, error) {
-	type outcome struct {
-		value Value
-		err   error
-	}
 	owned := make([]Value, len(args))
 	copy(owned, args)
+	return detached(ctx, function, owned, callSafely)
+}
+
+// detached makes call on its own goroutine and stops waiting when ctx is done;
+// the call keeps running until it returns on its own.
+func detached[A, R any](ctx context.Context, function *RegisteredFunction, args A,
+	call func(context.Context, *RegisteredFunction, A) (R, error)) (R, error) {
+	type outcome struct {
+		result R
+		err    error
+	}
 	done := make(chan outcome, 1)
 	go func() {
-		value, err := callSafely(ctx, function, owned)
-		done <- outcome{value, err}
+		result, err := call(ctx, function, args)
+		done <- outcome{result, err}
 	}()
 	select {
-	case result := <-done:
-		return result.value, result.err
+	case got := <-done:
+		return got.result, got.err
 	case <-ctx.Done():
-		return Value{}, ctx.Err()
+		var zero R
+		return zero, ctx.Err()
 	}
 }
 

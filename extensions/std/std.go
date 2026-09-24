@@ -10,16 +10,21 @@
 package std
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/nethinwei/funroute"
 )
 
 var (
-	errNoAbsolute   = fmt.Errorf("the smallest int has no absolute value")
-	errDivideByZero = fmt.Errorf("%w: division by zero", funroute.ErrArithmetic)
+	errNoAbsolute      = errors.New("the smallest int has no absolute value")
+	errDivideByZero    = fmt.Errorf("%w: division by zero", funroute.ErrArithmetic)
+	errIntegerOverflow = fmt.Errorf("%w: integer overflow in sum", funroute.ErrArithmetic)
+	errNotFinite       = fmt.Errorf("%w: non-finite float result in sum", funroute.ErrArithmetic)
 )
 
 // maxRangeLength caps one range call. The compiler already requires constant
@@ -27,46 +32,59 @@ var (
 // writing an absurd literal; it is not what bounds the language.
 const maxRangeLength = 10_000
 
-// Register adds the pack to a registry.
+// Register adds the pack to a registry. The order is the pack's: the order a
+// name's overloads are registered in is the order the compiler tries them,
+// and the money overloads, registered only when the registry declares money,
+// come after all the others.
 func Register(registry *funroute.Registry) error {
 	if registry == nil {
-		return fmt.Errorf("registry is required")
+		return errors.New("registry is required")
 	}
-	for _, register := range []func(*funroute.Registry) error{
-		registerSum, registerExtremes, registerQuantifiers, registerRange,
-		registerStrings, registerArrays, registerNumbers, registerStatistics, registerSelect, registerGroups, registerDicts,
-		registerMoney,
-	} {
-		if err := register(registry); err != nil {
+	specs := slices.Concat(
+		sumSpecs(), extremeSpecs(), quantifierSpecs(), rangeSpecs(),
+		caseSpecs(), testSpecs(), partSpecs(), paddingSpecs(),
+		shapeSpecs(), sortSpecs(), sequenceSpecs(),
+		numberSpecs(), statisticSpecs(),
+		selectSpecs(), keyedSpecs(false), whileSpecs(), positionSpecs(),
+		groupSpecs(), dictSpecs(),
+	)
+	if _, declared := registry.Money(); declared {
+		specs = append(specs, moneySpecs()...)
+	}
+	for _, spec := range specs {
+		// Everything in the pack depends only on its arguments, so the
+		// compiler may fold any call to it; a name's examples go with every
+		// overload of it.
+		spec.Doc.Constexpr = true
+		spec.Doc.Examples = examples[spec.Name]
+		if err := registry.Register(spec); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func registerSum(registry *funroute.Registry) error {
-	doc := funroute.Doc{Constexpr: true,
+func sumSpecs() []funroute.FunctionSpec {
+	return eachType("sum", funroute.Doc{
 		Label:       "求和",
 		Description: "把数组里的元素依次加起来；空数组是 0。要加的东西先用推导式算出来，再交给它。",
 		Category:    "聚合",
 		Cost:        4,
 		Params:      []string{"数组"},
 		Result:      "总和",
-	}
-	return eachType(registry, "sum", doc, sumInts, sumFloats)
+	}, sumInts, sumFloats)
 }
 
-func registerExtremes(registry *funroute.Registry) error {
+func extremeSpecs() []funroute.FunctionSpec {
+	specs := make([]funroute.FunctionSpec, 0, 6) // two names, three types each
 	for _, extreme := range []struct {
 		name, label, result string
-		ints                func([]int64) (int64, error)
-		floats              func([]float64) (float64, error)
-		texts               func([]string) (string, error)
+		smallest            bool
 	}{
-		{"min", "最小值", "最小的元素", minOf[int64], minOf[float64], minOf[string]},
-		{"max", "最大值", "最大的元素", maxOf[int64], maxOf[float64], maxOf[string]},
+		{"min", "最小值", "最小的元素", true},
+		{"max", "最大值", "最大的元素", false},
 	} {
-		doc := funroute.Doc{Constexpr: true,
+		doc := funroute.Doc{
 			Label:       extreme.label,
 			Description: "取数组里" + extreme.label + "；数值按大小、字符串按 UTF-8 字节序；空数组报错，因为没有可取的元素。",
 			Category:    "聚合",
@@ -76,83 +94,71 @@ func registerExtremes(registry *funroute.Registry) error {
 		}
 		// Strings order the same way the comparison operators order them, so
 		// the extremes work on them too.
-		if err := eachType(registry, extreme.name, doc, extreme.ints, extreme.floats, extreme.texts); err != nil {
-			return err
-		}
+		name, smallest := extreme.name, extreme.smallest
+		specs = append(specs, eachType(name, doc,
+			extremeOf[int64](name, smallest), extremeOf[float64](name, smallest), extremeOf[string](name, smallest))...)
 	}
-	return nil
+	return specs
 }
 
-func registerQuantifiers(registry *funroute.Registry) error {
-	any := funroute.Doc{Constexpr: true,
-		Label:       "任一为真",
-		Description: "数组里只要有一个 true 就是 true；空数组是 false。",
-		Category:    "聚合",
-		Cost:        3,
-		Params:      []string{"布尔数组"},
-		Result:      "是否存在",
-	}
-	all := funroute.Doc{Constexpr: true,
-		Label:       "全部为真",
-		Description: "数组里每一个都是 true 才是 true；空数组是 true。",
-		Category:    "聚合",
-		Cost:        3,
-		Params:      []string{"布尔数组"},
-		Result:      "是否全部满足",
-	}
-	if err := logic(registry, "any", any, anyTrue); err != nil {
-		return err
-	}
-	return logic(registry, "all", all, allTrue)
-}
-
-// registerRange is the only source of a sequence that does not come from the
-// host. Its arguments must be constant, so the length of what it produces is
-// known when the rule is compiled and the bounds in docs/termination.md hold
-// unchanged.
-func registerRange(registry *funroute.Registry) error {
-	for _, form := range []struct {
-		labels []string
-		bounds func([]funroute.Value) (int64, int64, int64)
-	}{
-		{[]string{"个数"}, func(args []funroute.Value) (int64, int64, int64) { return 0, argInt(args, 0), 1 }},
-		{[]string{"起点", "终点"}, func(args []funroute.Value) (int64, int64, int64) {
-			return argInt(args, 0), argInt(args, 1), 1
-		}},
-		{[]string{"起点", "终点", "步长"}, func(args []funroute.Value) (int64, int64, int64) {
-			return argInt(args, 0), argInt(args, 1), argInt(args, 2)
-		}},
-	} {
-		params := make([]funroute.Type, len(form.labels))
-		for i := range params {
-			params[i] = funroute.IntType
-		}
-		if err := register(registry, rangeSpec(params, form.labels, form.bounds)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func rangeSpec(params []funroute.Type, labels []string, bounds func([]funroute.Value) (int64, int64, int64)) funroute.FunctionSpec {
-	return funroute.FunctionSpec{
-		Name:   "range",
-		Params: params,
-		Result: funroute.ArrayOf(funroute.IntType),
-		Eval: func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-			start, stop, step := bounds(args)
-			return sequence(start, stop, step)
-		},
-		Doc: funroute.Doc{Constexpr: true,
-			Label:       "整数序列",
-			Description: "生成一段整数：range(3) 是 [0,1,2]，range(1,4) 是 [1,2,3]，第三个参数是步长。参数的规模必须由输入界定 —— 字面量、len(容器) 或两者的算术组合，所以 range(len(fees)) 可以，range(某个入参) 不行。",
-			BoundedArgs: true,
+func quantifierSpecs() []funroute.FunctionSpec {
+	return []funroute.FunctionSpec{
+		logic("any", funroute.Doc{
+			Label:       "任一为真",
+			Description: "数组里只要有一个 true 就是 true；空数组是 false。",
 			Category:    "聚合",
-			Cost:        8,
-			Params:      labels,
-			Result:      "整数数组",
-		},
+			Cost:        3,
+			Params:      []string{"布尔数组"},
+			Result:      "是否存在",
+		}, anyTrue),
+		logic("all", funroute.Doc{
+			Label:       "全部为真",
+			Description: "数组里每一个都是 true 才是 true；空数组是 true。",
+			Category:    "聚合",
+			Cost:        3,
+			Params:      []string{"布尔数组"},
+			Result:      "是否全部满足",
+		}, allTrue),
 	}
+}
+
+// rangeSpecs are the only source of a sequence that does not come from the
+// host. Their arguments must be constant, so the length of what they produce
+// is known when the rule is compiled and the bounds in docs/termination.md
+// hold unchanged.
+func rangeSpecs() []funroute.FunctionSpec {
+	specs := make([]funroute.FunctionSpec, 0, 3)
+	for _, labels := range [][]string{{"个数"}, {"起点", "终点"}, {"起点", "终点", "步长"}} {
+		specs = append(specs, funroute.FunctionSpec{
+			Name:   "range",
+			Params: slices.Repeat([]funroute.Type{funroute.IntType}, len(labels)),
+			Result: funroute.ArrayOf(funroute.IntType),
+			Eval:   evalRange,
+			Doc: funroute.Doc{
+				Label:       "整数序列",
+				Description: "生成一段整数：range(3) 是 [0,1,2]，range(1,4) 是 [1,2,3]，第三个参数是步长。参数的规模必须由输入界定 —— 字面量、len(容器) 或两者的算术组合，所以 range(len(fees)) 可以，range(某个入参) 不行。",
+				BoundedArgs: true,
+				Category:    "聚合",
+				Cost:        8,
+				Params:      labels,
+				Result:      "整数数组",
+			},
+		})
+	}
+	return specs
+}
+
+// evalRange reads its bounds from how many arguments it has: range(stop),
+// range(start, stop) or range(start, stop, step).
+func evalRange(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+	start, step := int64(0), int64(1)
+	if len(args) > 1 {
+		start = argInt(args, 0)
+	}
+	if len(args) > 2 {
+		step = argInt(args, 2)
+	}
+	return sequence(start, argInt(args, min(len(args)-1, 1)), step)
 }
 
 func argInt(args []funroute.Value, index int) int64 {
@@ -162,7 +168,7 @@ func argInt(args []funroute.Value, index int) int64 {
 
 func sequence(start, stop, step int64) (funroute.Value, error) {
 	if step == 0 {
-		return funroute.Value{}, fmt.Errorf("range step must not be zero")
+		return funroute.Value{}, errors.New("range step must not be zero")
 	}
 	items := []int64{}
 	for value := start; step > 0 && value < stop || step < 0 && value > stop; value += step {
@@ -178,7 +184,7 @@ func sumInts(items []int64) (int64, error) {
 	total := int64(0)
 	for _, item := range items {
 		if item > 0 && total > math.MaxInt64-item || item < 0 && total < math.MinInt64-item {
-			return 0, fmt.Errorf("%w: integer overflow in sum", funroute.ErrArithmetic)
+			return 0, errIntegerOverflow
 		}
 		total += item
 	}
@@ -191,31 +197,34 @@ func sumFloats(items []float64) (float64, error) {
 		total += item
 	}
 	if math.IsNaN(total) || math.IsInf(total, 0) {
-		return 0, fmt.Errorf("%w: non-finite float result in sum", funroute.ErrArithmetic)
+		return 0, errNotFinite
 	}
 	return total, nil
 }
 
-func minOf[T int64 | float64 | string](items []T) (T, error) {
-	return extremeOf(items, "min", func(candidate, best T) bool { return candidate < best })
-}
-
-func maxOf[T int64 | float64 | string](items []T) (T, error) {
-	return extremeOf(items, "max", func(candidate, best T) bool { return candidate > best })
-}
-
-func extremeOf[T int64 | float64 | string](items []T, name string, better func(T, T) bool) (T, error) {
-	var best T
-	if len(items) == 0 {
-		return best, fmt.Errorf("%s of an empty array", name)
+// extremeOf builds the min or max body for one element type.
+func extremeOf[T cmp.Ordered](name string, smallest bool) func([]T) (T, error) {
+	return func(items []T) (T, error) {
+		at, ok := best(items, smallest)
+		if !ok {
+			var zero T
+			return zero, fmt.Errorf("%s of an empty array", name)
+		}
+		return items[at], nil
 	}
-	best = items[0]
-	for _, item := range items[1:] {
-		if better(item, best) {
-			best = item
+}
+
+// best is the position of the smallest item, or the largest, the first of
+// equal ones; false when there are none. min, max, arg_min, arg_max and the
+// pairs are all this one comparison.
+func best[T cmp.Ordered](items []T, smallest bool) (int, bool) {
+	at := 0
+	for i, item := range items {
+		if smallest && item < items[at] || !smallest && item > items[at] {
+			at = i
 		}
 	}
-	return best, nil
+	return at, len(items) > 0
 }
 
 func anyTrue(items []bool) (bool, error) {
@@ -236,29 +245,19 @@ func allTrue(items []bool) (bool, error) {
 	return true, nil
 }
 
-// logic and register are how the pack registers: funroute.Logic and
-// Registry.Register with the name's examples (examples.go) in the doc, so
-// every overload of a name shows the same uses.
-func logic(registry *funroute.Registry, name string, doc funroute.Doc, fn any) error {
-	doc.Examples = examples[name]
-	return funroute.Logic(registry, name, doc, fn)
-}
-
-func register(registry *funroute.Registry, spec funroute.FunctionSpec) error {
-	spec.Doc.Examples = examples[spec.Name]
-	return registry.Register(spec)
+// logic is a Go function as a spec.
+func logic(name string, doc funroute.Doc, fn any) funroute.FunctionSpec {
+	return funroute.FunctionSpec{Name: name, Doc: doc, Go: fn}
 }
 
 // eachType registers one name for every element type it serves. The language
 // has no type classes, so a function that works on int, float and string is
-// three registrations — that is the signature, not repetition. What this takes
-// out is the error check that used to be written once per type, and what it
-// buys back is a single place to read how many types a name covers.
-func eachType(registry *funroute.Registry, name string, doc funroute.Doc, implementations ...any) error {
-	for _, implementation := range implementations {
-		if err := logic(registry, name, doc, implementation); err != nil {
-			return err
-		}
+// three registrations — that is the signature, not repetition. What it buys
+// is a single place to read how many types a name covers.
+func eachType(name string, doc funroute.Doc, implementations ...any) []funroute.FunctionSpec {
+	specs := make([]funroute.FunctionSpec, len(implementations))
+	for i, implementation := range implementations {
+		specs[i] = logic(name, doc, implementation)
 	}
-	return nil
+	return specs
 }

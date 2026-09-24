@@ -2,7 +2,6 @@ package compile
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -19,9 +18,13 @@ func foldRegistry(t *testing.T) *machine.Registry {
 	}
 	// An extension that always fails, to show that a failing extension is not
 	// a compile error the way a failing kernel expression is.
-	err := machine.Logic(registry, "fold.boom_v1", machine.Doc{
-		Label: "总是失败", Category: "演示", Cost: 1, Params: []string{"值"}, Result: "值",
-	}, func(value int64) (int64, error) { return 0, fmt.Errorf("boom") })
+	err := registry.Register(machine.FunctionSpec{
+		Name: "fold.boom_v1",
+		Doc: machine.Doc{
+			Label: "总是失败", Category: "演示", Cost: 1, Params: []string{"值"}, Result: "值",
+		},
+		Go: func(value int64) (int64, error) { return 0, errors.New("boom") },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

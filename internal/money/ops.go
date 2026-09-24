@@ -1,6 +1,7 @@
 package money
 
 import (
+	"cmp"
 	"fmt"
 )
 
@@ -56,11 +57,11 @@ func (m Money) Cmp(other Money) (int, error) {
 	if _, err := m.meet(other); err != nil {
 		return 0, err
 	}
-	return compareOrdered(m.minor, other.minor), nil
+	return cmp.Compare(m.minor, other.minor), nil
 }
 
 // Sign is -1, 0 or 1.
-func (m Money) Sign() int { return compareOrdered(m.minor, 0) }
+func (m Money) Sign() int { return cmp.Compare(m.minor, 0) }
 
 // IsZero reports an amount of nothing, in any currency or none.
 func (m Money) IsZero() bool { return m.minor == 0 }
@@ -149,36 +150,14 @@ func meet(a, b string) (string, error) {
 	}
 }
 
-// compareOrdered is -1, 0 or 1 as left is below, at or above right.
-func compareOrdered(left, right int64) int {
-	switch {
-	case left < right:
-		return -1
-	case left > right:
-		return 1
-	default:
-		return 0
-	}
-}
-
 // addInt64 is a + sign·b, refusing to wrap.
 func addInt64(a, b, sign int64) (int64, error) {
-	if sign < 0 {
-		if (b < 0 && a > maxInt64+b) || (b > 0 && a < minInt64+b) {
-			return 0, errFixedOverflow
-		}
-		return a - b, nil
-	}
-	if (b > 0 && a > maxInt64-b) || (b < 0 && a < minInt64-b) {
+	sum, fits := add64(a, b, sign)
+	if !fits {
 		return 0, errFixedOverflow
 	}
-	return a + b, nil
+	return sum, nil
 }
-
-const (
-	maxInt64 = 1<<63 - 1
-	minInt64 = -1 << 63
-)
 
 // mulInt64 is a·b, refusing to wrap.
 func mulInt64(a, b int64) (int64, error) {

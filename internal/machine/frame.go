@@ -57,7 +57,6 @@ type frame struct {
 	args      []Value
 	stack     []Value
 	locals    []Value
-	localSet  []bool
 	loops     []loopFrame
 	fallbacks []fallbackFrame
 	// fxQuotes are the quotes of every using the run is inside, and
@@ -98,10 +97,10 @@ func (f *frame) reset(runtime *Runtime, args []Value, fuel *uint64, maxStack int
 	}
 	f.fxQuotes, f.fxMarks = f.fxQuotes[:0], f.fxMarks[:0]
 	f.fxCtx.frame = f
-	// The compiler knows how deep the stack gets. Reserving it here is what
-	// lets push skip its bounds check; a run whose limit is below the figure
-	// keeps the per-push check instead.
-	f.reserved = runtime.artifact.parts.MaxStack
+	// Loading proved how deep the stack gets. Reserving it here is what lets
+	// push skip its bounds check; a run whose limit is below the figure keeps
+	// the per-push check instead.
+	f.reserved = runtime.depth
 	if f.reserved > maxStack {
 		f.reserved = 0
 	}
@@ -115,16 +114,12 @@ func (f *frame) reset(runtime *Runtime, args []Value, fuel *uint64, maxStack int
 		// Constant folding leaves many programs with no locals at all; there
 		// is nothing to clear.
 		f.locals = f.locals[:0]
-		f.localSet = f.localSet[:0]
 		return
 	}
 	if cap(f.locals) < locals {
 		f.locals = make([]Value, locals)
-		f.localSet = make([]bool, locals)
 	}
 	f.locals = f.locals[:locals]
-	f.localSet = f.localSet[:locals]
-	clear(f.localSet)
 }
 
 // argSpace returns storage for n top-level arguments, using the frame's inline
@@ -214,16 +209,12 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 		return pc + 1, f.loadLocal(instruction)
 	case OpStoreLocal:
 		return pc + 1, f.storeLocal(instruction)
-	case OpMakeArray:
-		return pc + 1, f.makeArray(instruction)
-	case OpMakeDict:
-		return pc + 1, f.makeDict(instruction)
-	case OpMakeRecord:
-		return pc + 1, f.makeRecord(instruction)
+	case OpMakeArray, OpMakeDict, OpMakeRecord:
+		return pc + 1, f.makeValue(instruction)
 	case OpField:
 		return pc + 1, f.field(instruction)
 	case OpRecordWith:
-		return pc + 1, f.recordWith(pc, instruction)
+		return pc + 1, f.recordWith(pc)
 	case OpEqual:
 		return pc + 1, f.equal()
 	case OpCall:
@@ -247,7 +238,8 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 	case OpFxPush:
 		return pc + 1, f.pushScope(instruction)
 	case OpFxPop:
-		return pc + 1, f.popScope()
+		f.popScope()
+		return pc + 1, nil
 	default:
 		return 0, fmt.Errorf("unknown opcode %q", instruction.Op)
 	}
@@ -261,15 +253,12 @@ func (f *frame) beginFallback(pc int, instruction Instruction) (int, error) {
 }
 
 func (f *frame) endFallback(pc int) (int, error) {
-	if len(f.fallbacks) == 0 {
-		return 0, fmt.Errorf("fallback stack underflow")
-	}
 	f.fallbacks = f.fallbacks[:len(f.fallbacks)-1]
 	return pc + 1, nil
 }
 
 func (f *frame) catchFallback(err error) (int, bool) {
-	if len(f.fallbacks) == 0 || (!errors.Is(err, ErrExtension) && !errors.Is(err, ErrDeadline) && !errors.Is(err, ErrNoFxRate)) || errors.Is(err, ErrCurrency) || errors.Is(err, ErrArithmetic) {
+	if class, _ := classOf(err); len(f.fallbacks) == 0 || !class.fallback {
 		return 0, false
 	}
 	last := len(f.fallbacks) - 1
@@ -285,16 +274,8 @@ func (f *frame) catchFallback(err error) (int, bool) {
 	return handler.target, true
 }
 
-func (f *frame) result() (Value, error) {
-	if len(f.stack) != 1 {
-		return Value{}, fmt.Errorf("program finished with %d stack values", len(f.stack))
-	}
-	result := f.stack[0]
-	if !result.hasType(f.runtime.artifact.parts.Result) {
-		return Value{}, fmt.Errorf("program returned %s, artifact declares %s", result.Type(), f.runtime.artifact.parts.Result)
-	}
-	return result, nil
-}
+// result is what the program left: loading proved it is its result alone.
+func (f *frame) result() (Value, error) { return f.stack[0], nil }
 
 func (f *frame) push(value Value) error {
 	// Within the reserved depth the bound is already proven, so the common
@@ -330,7 +311,7 @@ func (f *frame) popN(count int) ([]Value, error) {
 
 func (f *frame) pop1() (Value, error) {
 	if len(f.stack) == 0 {
-		return Value{}, fmt.Errorf("stack underflow: need 1 value, have 0")
+		return Value{}, errors.New("stack underflow: need 1 value, have 0")
 	}
 	last := len(f.stack) - 1
 	value := f.stack[last]
@@ -338,20 +319,14 @@ func (f *frame) pop1() (Value, error) {
 	return value, nil
 }
 
-// loopKeys checks the source's shape and, for a dictionary walk, lists its
-// keys in sorted order: the language guarantees a program replays identically
-// and Go's map order does not. An array walk needs no key list.
-func loopKeys(source Value, keySlot int) ([]string, error) {
+// loopKeys lists a dictionary walk's keys in sorted order: the language
+// guarantees a program replays identically and Go's map order does not. An
+// array walk needs no key list.
+func loopKeys(source Value, keySlot int) []string {
 	if keySlot == NoKey {
-		if source.kind != ArrayKind {
-			return nil, fmt.Errorf("loop source is %s, want array", source.Type())
-		}
-		return nil, nil
+		return nil
 	}
-	if source.kind != DictKind {
-		return nil, fmt.Errorf("loop source is %s, want dictionary", source.Type())
-	}
-	return source.keys(), nil
+	return source.keys()
 }
 
 // bindItem binds the loop's value variable, plus its key variable when walking
@@ -363,17 +338,10 @@ func (f *frame) bindItem(loop *loopFrame, index int) {
 	}
 }
 
-func (f *frame) bindLocal(slot int, value Value) {
-	f.locals[slot] = value
-	f.localSet[slot] = true
-}
+func (f *frame) bindLocal(slot int, value Value) { f.locals[slot] = value }
 
-func (f *frame) loadLocal(instruction Instruction) error {
-	if !f.localSet[instruction.A] {
-		return fmt.Errorf("local %d is not bound", instruction.A)
-	}
-	return f.push(f.locals[instruction.A])
-}
+// loadLocal pushes a local, which loading proved bound wherever it is read.
+func (f *frame) loadLocal(instruction Instruction) error { return f.push(f.locals[instruction.A]) }
 
 // storeLocal binds a let binding's value to its slot.
 func (f *frame) storeLocal(instruction Instruction) error {
@@ -385,60 +353,55 @@ func (f *frame) storeLocal(instruction Instruction) error {
 	return nil
 }
 
-func (f *frame) makeArray(instruction Instruction) error {
+// makeValue builds an array, a dictionary or a record from the top A values.
+func (f *frame) makeValue(instruction Instruction) error {
 	items, err := f.popN(instruction.A)
 	if err != nil {
 		return err
 	}
-	value, err := Array(*instruction.Type.elem, items)
-	if err != nil {
-		return fmt.Errorf("make array: %w", err)
+	// Loading proved every item of the type it goes in as, so nothing is
+	// checked on the way.
+	switch instruction.Op {
+	case OpMakeArray:
+		builder := newArrayBuilder(*instruction.Type.elem, len(items))
+		for _, item := range items {
+			builder.add(item)
+		}
+		return f.push(builder.finish())
+	case OpMakeDict:
+		return f.push(packDict(*instruction.Type.elem, zipEntries(instruction.Keys, items)))
 	}
-	return f.push(value)
+	return f.push(Value{kind: RecordKind, box: &recordValue{typ: *instruction.Type, fields: slices.Clone(items)}})
 }
 
-func (f *frame) makeDict(instruction Instruction) error {
-	items, err := f.popN(instruction.A)
-	if err != nil {
-		return err
+// zipEntries pairs keys with values, one for one.
+func zipEntries(keys []string, values []Value) map[string]Value {
+	entries := make(map[string]Value, len(values))
+	for i, value := range values {
+		entries[keys[i]] = value
 	}
-	entries := make(map[string]Value, len(items))
-	for i, item := range items {
-		entries[instruction.Keys[i]] = item
-	}
-	value, err := Dict(*instruction.Type.elem, entries)
-	if err != nil {
-		return fmt.Errorf("make dictionary: %w", err)
-	}
-	return f.push(value)
-}
-
-func (f *frame) makeRecord(instruction Instruction) error {
-	fields, err := f.popN(instruction.A)
-	if err != nil {
-		return err
-	}
-	value, err := Record(*instruction.Type, fields)
-	if err != nil {
-		return fmt.Errorf("make record: %w", err)
-	}
-	return f.push(value)
+	return entries
 }
 
 func (f *frame) field(instruction Instruction) error {
-	record, err := f.pop1()
+	value, err := f.pop1()
 	if err != nil {
 		return err
 	}
-	if record.kind != RecordKind {
-		return fmt.Errorf("field access needs a record")
+	record, ok := value.box.(*recordValue)
+	if !ok {
+		return errNotARecord
 	}
-	return f.push(record.Field(instruction.A))
+	return f.push(record.fields[instruction.A])
 }
+
+// errNotARecord is a field read or an update of what is not a record, which
+// loading proved no program does.
+var errNotARecord = errors.New("internal error: not a record")
 
 // recordWith copies the record's fields once and replaces the ones named. The
 // copy shares the record's type: the type does not change, so neither does it.
-func (f *frame) recordWith(pc int, instruction Instruction) error {
+func (f *frame) recordWith(pc int) error {
 	indexes := f.runtime.updates[pc]
 	values, err := f.popN(len(indexes))
 	if err != nil {
@@ -448,19 +411,14 @@ func (f *frame) recordWith(pc int, instruction Instruction) error {
 	if err != nil {
 		return err
 	}
-	// The loader checked the indexes against the instruction's type and the
-	// compiler typed the base, so the shape is all there is left to confirm —
-	// a full type comparison here would be paid by every item of a loop.
+	// Loading proved the base the instruction's record and each value its
+	// field's type.
 	record, ok := base.box.(*recordValue)
-	if !ok || len(record.fields) != len(instruction.Type.fields) {
-		return fmt.Errorf("record update needs %s, got %s", instruction.Type.Summary(), base.Type().Summary())
+	if !ok {
+		return errNotARecord
 	}
 	fields := slices.Clone(record.fields)
 	for i, index := range indexes {
-		if !values[i].hasType(record.typ.fields[index].typ) {
-			return fmt.Errorf("field %q takes %s, got %s", record.typ.fields[index].name,
-				record.typ.fields[index].typ.Summary(), values[i].Type().Summary())
-		}
 		fields[index] = values[i]
 	}
 	return f.push(Value{kind: RecordKind, box: &recordValue{typ: record.typ, fields: fields}})
@@ -488,10 +446,7 @@ func (f *frame) loopInit(pc int, instruction Instruction) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	keys, err := loopKeys(values[0], instruction.D)
-	if err != nil {
-		return 0, err
-	}
+	keys := loopKeys(values[0], instruction.D)
 	seed, err := f.loopSeed(instruction, values, folds)
 	if err != nil {
 		return 0, err
@@ -527,24 +482,15 @@ func (f *frame) loopSeed(instruction Instruction, values []Value, folds bool) (V
 		}
 		return Array(*instruction.Type.elem, nil)
 	}
-	if !values[1].hasType(*instruction.Type) {
-		return Value{}, fmt.Errorf("loop init is %s, want %s", values[1].Type(), *instruction.Type)
-	}
 	return values[1], nil
 }
 
 // loopCollect stores one body result: folded into the accumulator, or appended
 // to the output array.
 func (f *frame) loopCollect(instruction Instruction) error {
-	if len(f.loops) == 0 {
-		return fmt.Errorf("loop collect without active loop")
-	}
 	value, err := f.pop1()
 	if err != nil {
 		return err
-	}
-	if !value.hasType(*instruction.Type) {
-		return fmt.Errorf("loop body returned %s, want %s", value.Type(), *instruction.Type)
 	}
 	loop := &f.loops[len(f.loops)-1]
 	if loop.folds() {
@@ -556,11 +502,7 @@ func (f *frame) loopCollect(instruction Instruction) error {
 		if err != nil {
 			return err
 		}
-		text, ok := key.String()
-		if !ok {
-			return fmt.Errorf("a dictionary comprehension needs a string key, got %s", key.Type().Summary())
-		}
-		loop.collected = append(loop.collected, text)
+		loop.collected = append(loop.collected, key.s)
 	}
 	loop.output.add(value)
 	return nil
@@ -570,29 +512,16 @@ func (f *frame) loopCollect(instruction Instruction) error {
 // is the whole array the inner loop built, and its elements — not it — belong
 // in the output. Every element was already produced by an iteration that spent
 // its own fuel, so splicing them costs no more steps than collecting them.
-func (f *frame) loopSpread(instruction Instruction) error {
-	if len(f.loops) == 0 {
-		return fmt.Errorf("loop spread without active loop")
-	}
+func (f *frame) loopSpread(Instruction) error {
 	value, err := f.pop1()
 	if err != nil {
 		return err
 	}
-	if !value.hasType(*instruction.Type) {
-		return fmt.Errorf("nested loop body returned %s, want %s", value.Type(), *instruction.Type)
-	}
-	loop := &f.loops[len(f.loops)-1]
-	if loop.folds() {
-		return fmt.Errorf("a fold cannot spread")
-	}
-	loop.output.addAll(value)
+	f.loops[len(f.loops)-1].output.addAll(value)
 	return nil
 }
 
 func (f *frame) loopNext(pc int, instruction Instruction) (int, error) {
-	if len(f.loops) == 0 {
-		return 0, fmt.Errorf("loop next without active loop")
-	}
 	index := len(f.loops) - 1
 	loop := &f.loops[index]
 	loop.index++
@@ -603,13 +532,6 @@ func (f *frame) loopNext(pc int, instruction Instruction) (int, error) {
 	result, err := f.loopResult(loop)
 	if err != nil {
 		return 0, err
-	}
-	f.localSet[loop.local] = false
-	if loop.keyLocal != NoKey {
-		f.localSet[loop.keyLocal] = false
-	}
-	if loop.folds() {
-		f.localSet[loop.acc] = false
 	}
 	f.loops = f.loops[:index]
 	return pc + 1, f.push(result)
@@ -642,11 +564,7 @@ func (f *frame) jumpIfFalse(pc int, instruction Instruction) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	condition, ok := value.Bool()
-	if !ok {
-		return 0, fmt.Errorf("if condition is %s, want bool", value.Type())
-	}
-	if condition {
+	if value.b {
 		return pc + 1, nil
 	}
 	return instruction.A, nil

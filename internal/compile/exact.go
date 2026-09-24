@@ -66,8 +66,13 @@ func (w exactness) of(expr syntax.Expr) (bool, error) {
 
 // children requires every child of expr to be plain.
 func (w exactness) children(expr syntax.Expr, where string) error {
-	for _, child := range syntax.Children(expr) {
-		if err := w.plain(child, where); err != nil {
+	return w.plainAll(syntax.Children(expr), where)
+}
+
+// plainAll requires every one of exprs to be plain.
+func (w exactness) plainAll(exprs []syntax.Expr, where string) error {
+	for _, expr := range exprs {
+		if err := w.plain(expr, where); err != nil {
 			return err
 		}
 	}
@@ -143,9 +148,9 @@ func (w exactness) call(node *syntax.CallExpr) (bool, error) {
 		if err := w.plain(node.Args[0], "a condition"); err != nil {
 			return false, err
 		}
-		return w.any(node.Args[1:])
+		fallthrough
 	case function.IsLazyFallback():
-		return w.any(node.Args)
+		return w.any(lazyResults(node, function))
 	case !function.TakesExact():
 		return false, w.children(node, node.Name)
 	case function.IsExactStep() && *w.rounds == 0:
@@ -169,21 +174,18 @@ func (w exactness) operands(node *syntax.CallExpr, function *machine.RegisteredF
 	if function.IsExactStep() || roundsAtOnce(function) {
 		amount = firstMoney(function.Params)
 	}
-	exact := false
-	for i, arg := range node.Args {
-		if amount >= 0 && i != amount {
-			if err := w.plain(arg, node.Name+"'s other operands"); err != nil {
-				return false, err
-			}
-			continue
-		}
-		one, err := w.of(arg)
-		if err != nil {
-			return false, err
-		}
-		exact = exact || one
+	if amount < 0 {
+		return w.any(node.Args)
 	}
-	return exact, nil
+	where := node.Name + "'s other operands"
+	if err := w.plainAll(node.Args[:amount], where); err != nil {
+		return false, err
+	}
+	exact, err := w.of(node.Args[amount])
+	if err != nil {
+		return false, err
+	}
+	return exact, w.plainAll(node.Args[amount+1:], where)
 }
 
 // resultStaysExact reports whether what function makes of exact operands is
@@ -227,4 +229,16 @@ func containerName(expr syntax.Expr) string {
 		return "a field read"
 	}
 	return "this"
+}
+
+// lazyResults is the arguments a lazy form returns its value from: an if's
+// two branches, every candidate of a fallback. It is nil for any other call.
+func lazyResults(node *syntax.CallExpr, function *machine.RegisteredFunction) []syntax.Expr {
+	switch {
+	case function.IsLazyIf():
+		return node.Args[1:]
+	case function.IsLazyFallback():
+		return node.Args
+	}
+	return nil
 }

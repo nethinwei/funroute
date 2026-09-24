@@ -2,6 +2,7 @@ package machine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -135,7 +136,7 @@ func evalStringMember(_ context.Context, args []Value) (Value, error) {
 
 func evalArrayMember(_ context.Context, args []Value) (Value, error) {
 	item, container := args[0], args[1]
-	for i := 0; i < container.length(); i++ {
+	for i := range container.length() {
 		equal, err := compareEqual(container.at(i), item)
 		if err != nil {
 			return Value{}, err
@@ -155,7 +156,7 @@ func evalDictMember(_ context.Context, args []Value) (Value, error) {
 func evalLength(_ context.Context, args []Value) (Value, error) {
 	length, ok := args[0].Length()
 	if !ok {
-		return Value{}, fmt.Errorf("len needs an array or a dictionary")
+		return Value{}, errors.New("len needs an array or a dictionary")
 	}
 	return Int(int64(length)), nil
 }

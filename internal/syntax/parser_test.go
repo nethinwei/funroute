@@ -83,7 +83,7 @@ func collectSpans(expr Expr, source string, out map[string]bool) {
 }
 
 func keys(set map[string]bool) []string {
-	var out []string
+	out := make([]string, 0, len(set))
 	for key := range set {
 		out = append(out, key)
 	}

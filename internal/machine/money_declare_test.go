@@ -2,7 +2,6 @@ package machine
 
 import (
 	"encoding/json"
-	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -156,9 +155,6 @@ func TestAnUndeclaredRegistryHasNoMoney(t *testing.T) {
 	if _, ok := registry.Money(); ok {
 		t.Fatal("Money() on an undeclared registry reported a spec")
 	}
-	if err := DeclaredCurrency(registry, "USD"); err == nil || !strings.Contains(err.Error(), "not declared for this registry") {
-		t.Fatalf("DeclaredCurrency(USD) error = %v, want money not declared", err)
-	}
 	if _, err := ParseMoneyAmount(registry, "USD", "1.70"); err == nil || !strings.Contains(err.Error(), "not declared for this registry") {
 		t.Fatalf("ParseMoneyAmount(USD, 1.70) error = %v, want money not declared", err)
 	}
@@ -186,9 +182,6 @@ func TestMoneyReportsACopyOfTheSpec(t *testing.T) {
 func TestDeclaredCurrenciesAndAmounts(t *testing.T) {
 	t.Parallel()
 	registry := declared(t, money.CurrencySpec{Code: "USD", Digits: 2}, money.CurrencySpec{Code: "JPY", Digits: 0}, money.CurrencySpec{Code: "KWD", Digits: 3})
-	if err := DeclaredCurrency(registry, "GBP"); !errors.Is(err, ErrCurrency) {
-		t.Fatalf("DeclaredCurrency(GBP) error = %v, want ErrCurrency", err)
-	}
 	for name, test := range map[string]struct {
 		code, amount string
 		want         int64

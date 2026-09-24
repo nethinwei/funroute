@@ -1,7 +1,9 @@
 package compile
 
 import (
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -181,5 +183,55 @@ func TestTypeErrorsDoNotShowInferenceVariables(t *testing.T) {
 		if err == nil || numbered.MatchString(err.Error()) || !strings.Contains(err.Error(), want) {
 			t.Errorf("CompileExpr(%q) error = %v, want one naming %s and no numbered variable", source, err, want)
 		}
+	}
+}
+
+// chain is n variables joined by op, which nothing but the operators types.
+func chain(n int, op string) string {
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = fmt.Sprintf("x%d", i)
+	}
+	return strings.Join(parts, op)
+}
+
+// A long expression with no contract types in time proportional to its
+// length: every operator is overloaded, and a reading per combination of
+// overloads would never finish.
+func TestAnUncontractedChainTypesWithoutEnumerating(t *testing.T) {
+	t.Parallel()
+	registry := moneyRegistry(t)
+	for _, test := range []struct{ op, want string }{
+		{" + ", "int"}, {" * ", "int"}, {" < 1 && ", "bool"},
+	} {
+		t.Run(test.op, func(t *testing.T) {
+			t.Parallel()
+			artifact, err := CompileExpr(chain(300, test.op), registry, CompileOptions{})
+			if err != nil {
+				t.Fatalf("CompileExpr(x0%s…x299) error = %v", test.op, err)
+			}
+			if got := artifact.Result().String(); got != test.want || artifact.Args()[0].Type().String() != "int" {
+				t.Fatalf("CompileExpr(x0%s…x299) = %v -> %s, want int arguments -> %s", test.op, artifact.Args()[0].Type(), got, test.want)
+			}
+		})
+	}
+}
+
+func BenchmarkInferChain(b *testing.B) {
+	registry := moneyRegistry(b)
+	for _, n := range []int{10, 100, 1000} {
+		source := chain(n, " + ")
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
+			for b.Loop() {
+				mustCompile(b, source, registry)
+			}
+		})
+	}
+}
+
+func mustCompile(b *testing.B, source string, registry *machine.Registry) {
+	b.Helper()
+	if _, err := CompileExpr(source, registry, CompileOptions{}); err != nil {
+		b.Fatal(err)
 	}
 }

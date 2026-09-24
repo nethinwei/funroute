@@ -100,8 +100,9 @@ func TestAUsingIsNotFolded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompileExpr(%q) error = %v", source, err)
 	}
-	var ops []machine.OpCode
-	for _, instruction := range machine.PartsOf(artifact).Instructions {
+	instructions := machine.PartsOf(artifact).Instructions
+	ops := make([]machine.OpCode, 0, len(instructions))
+	for _, instruction := range instructions {
 		ops = append(ops, instruction.Op)
 	}
 	for _, op := range []machine.OpCode{machine.OpFxPush, machine.OpCall, machine.OpFxPop} {

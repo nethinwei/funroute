@@ -295,9 +295,13 @@ func TestSwitchEvaluatesItsSubjectOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls int
-	if err := machine.Logic(registry, "probe_v1", machine.Doc{Cost: 1}, func(value int64) (int64, error) {
-		calls++
-		return value, nil
+	if err := registry.Register(machine.FunctionSpec{
+		Name: "probe_v1",
+		Doc:  machine.Doc{Cost: 1},
+		Go: func(value int64) (int64, error) {
+			calls++
+			return value, nil
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -380,11 +384,11 @@ func assertCallDoesNotAllocate(t *testing.T, registry *machine.Registry, source 
 }
 
 // consoleRegistry is the operator console: the kernel plus the lazy forms an
-// operator may use. Extra forms model a higher-privilege console.
-func consoleRegistry(t *testing.T, extra ...machine.Form) *machine.Registry {
+// operator may use.
+func consoleRegistry(t *testing.T) *machine.Registry {
 	t.Helper()
 	registry := machine.CoreRegistry()
-	if err := registry.EnableForm(append([]machine.Form{machine.SwitchForm, machine.ForForm, machine.ReduceForm}, extra...)...); err != nil {
+	if err := registry.EnableForm(machine.SwitchForm, machine.ForForm, machine.ReduceForm); err != nil {
 		t.Fatal(err)
 	}
 	return registry
@@ -434,13 +438,16 @@ func TestFallbackIsLazyOnSuccess(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
 	called := 0
-	if err := machine.Logic(registry, "default_v1", machine.Doc{}, func(value int64) (int64, error) {
-		called++
-		return 9, nil
+	if err := registry.Register(machine.FunctionSpec{
+		Name: "default_v1",
+		Go: func(value int64) (int64, error) {
+			called++
+			return 9, nil
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	value, err := compileAndRunInt(t, `fallback(x, default_v1(x))`, registry, 100)
+	value, err := compileAndRunInt(t, `fallback(x, default_v1(x))`, registry)
 	if err != nil || value != 3 || called != 0 {
 		t.Fatalf("result = %d, calls = %d, err = %v, want 3 with no calls", value, called, err)
 	}
@@ -451,12 +458,15 @@ func TestFallbackTriesAnyNumberOfCandidatesInOrder(t *testing.T) {
 	registry := machine.CoreRegistry()
 	var calls []string
 	register := func(name string, succeed bool) {
-		err := machine.Logic(registry, name, machine.Doc{}, func(value int64) (int64, error) {
-			calls = append(calls, name)
-			if !succeed {
-				return 0, errors.New("provider unavailable")
-			}
-			return value + 10, nil
+		err := registry.Register(machine.FunctionSpec{
+			Name: name,
+			Go: func(value int64) (int64, error) {
+				calls = append(calls, name)
+				if !succeed {
+					return 0, errors.New("provider unavailable")
+				}
+				return value + 10, nil
+			},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -466,16 +476,16 @@ func TestFallbackTriesAnyNumberOfCandidatesInOrder(t *testing.T) {
 	register("second_v1", false)
 	register("third_v1", true)
 	register("unused_v1", true)
-	value, err := compileAndRunInt(t, `fallback(first_v1(x),second_v1(x),third_v1(x),unused_v1(x))`, registry, 100)
+	value, err := compileAndRunInt(t, `fallback(first_v1(x),second_v1(x),third_v1(x),unused_v1(x))`, registry)
 	if err != nil || value != 13 || strings.Join(calls, ",") != "first_v1,second_v1,third_v1" {
 		t.Fatalf("result = %d, calls = %v, err = %v, want 13 after first_v1,second_v1,third_v1", value, calls, err)
 	}
 	calls = nil
-	value, err = compileAndRunInt(t, `fallback(first_v1(x),second_v1(x),x + 9)`, registry, 100)
+	value, err = compileAndRunInt(t, `fallback(first_v1(x),second_v1(x),x + 9)`, registry)
 	if err != nil || value != 12 || strings.Join(calls, ",") != "first_v1,second_v1" {
 		t.Fatalf("final result = %d, calls = %v, err = %v, want 12 after first_v1,second_v1", value, calls, err)
 	}
-	if _, err := compileAndRunInt(t, `fallback(first_v1(x),second_v1(x))`, registry, 100); !errors.Is(err, machine.ErrExtension) {
+	if _, err := compileAndRunInt(t, `fallback(first_v1(x),second_v1(x))`, registry); !errors.Is(err, machine.ErrExtension) {
 		t.Fatalf("last candidate error = %v, want ErrExtension", err)
 	}
 	if _, err := CompileExpr(`fallback(x)`, registry, CompileOptions{}); err == nil || !strings.Contains(err.Error(), "at least 2") {
@@ -486,7 +496,8 @@ func TestFallbackTriesAnyNumberOfCandidatesInOrder(t *testing.T) {
 	}
 }
 
-func compileAndRunInt(t *testing.T, source string, registry *machine.Registry, fuel uint64) (int64, error) {
+// compileAndRunInt compiles source over x = 3 and runs it with a fuel of 100.
+func compileAndRunInt(t *testing.T, source string, registry *machine.Registry) (int64, error) {
 	t.Helper()
 	artifact, err := CompileExpr(source, registry, CompileOptions{
 		Args: []ArgSpec{{Name: "x", Type: machine.IntType}},
@@ -498,7 +509,7 @@ func compileAndRunInt(t *testing.T, source string, registry *machine.Registry, f
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), map[string]any{"x": int64(3)}, machine.RunOptions{Fuel: fuel})
+	value, err := runtime.Run(t.Context(), map[string]any{"x": int64(3)}, machine.RunOptions{Fuel: 100})
 	if err != nil {
 		return 0, err
 	}

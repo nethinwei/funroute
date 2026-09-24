@@ -2,6 +2,7 @@ package money
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -58,7 +59,7 @@ func (m *Money) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if shape.Currency == nil || shape.Minor == nil {
-		return fmt.Errorf("money needs a \"currency\" and a \"minor\"")
+		return errors.New("money needs a \"currency\" and a \"minor\"")
 	}
 	parsed := newMoney(*shape.Currency, *shape.Minor)
 	if err := parsed.wellFormed(); err != nil {
@@ -67,10 +68,6 @@ func (m *Money) UnmarshalJSON(data []byte) error {
 	*m = parsed
 	return nil
 }
-
-// WellFormed is what an amount must be to exist at all: a currency code, or
-// no currency and zero.
-func WellFormed(m Money) error { return m.wellFormed() }
 
 func (m Money) wellFormed() error {
 	switch {

@@ -78,12 +78,12 @@ func (p *parser) parseExpr() (Expr, error) {
 
 // enumReference splits @member and @enum.member; which enum a bare member
 // belongs to is decided by the contract at compile time, not here.
-func enumReference(id int, tok token) Expr {
-	enum, member, qualified := strings.Cut(tok.text, ".")
+func enumReference(node Node, text string) Expr {
+	enum, member, qualified := strings.Cut(text, ".")
 	if !qualified {
-		return &EnumExpr{ID: id, Pos: tok.pos, Member: enum}
+		return &EnumExpr{Node: node, Member: enum}
 	}
-	return &EnumExpr{ID: id, Pos: tok.pos, Enum: enum, Member: member}
+	return &EnumExpr{Node: node, Enum: enum, Member: member}
 }
 
 // node finishes a constructed node: the same normalisation and checks the
@@ -99,22 +99,22 @@ func (p *parser) node(at token, expr Expr) (Expr, error) {
 
 // parseBinary is precedence climbing. An operator is left associative
 // unless the table says otherwise: see follows.
-func (p *parser) parseBinary(min int) (Expr, error) {
+func (p *parser) parseBinary(lowest int) (Expr, error) {
 	left, err := p.parseUnary()
 	if err != nil {
 		return nil, err
 	}
-	return p.climb(left, min)
+	return p.climb(left, lowest)
 }
 
 // climb reads the infix operators after left, whose precedence is at least
-// min.
-func (p *parser) climb(left Expr, min int) (Expr, error) {
+// lowest.
+func (p *parser) climb(left Expr, lowest int) (Expr, error) {
 	var last *operatorSpec
 	for {
 		operator := p.peek()
 		spec, ok := p.infixOperator(operator)
-		if !ok || spec.precedence < min {
+		if !ok || spec.precedence < lowest {
 			return left, nil
 		}
 		if err := p.follows(last, spec, operator); err != nil {
@@ -164,11 +164,7 @@ func (p *parser) rightOperand(spec operatorSpec) (Expr, error) {
 // infixOperator finds the operator a token starts, whether it is punctuation
 // (+, %) or a word (in).
 func (p *parser) infixOperator(tok token) (operatorSpec, bool) {
-	if tok.kind == tokenIdentifier {
-		spec, ok := keywordOperators[tok.text]
-		return spec, ok
-	}
-	spec, ok := binaryOperators[tok.kind]
+	spec, ok := binaryOperators[keyOf(tok.kind, tok.text)]
 	return spec, ok
 }
 
@@ -211,7 +207,7 @@ func (p *parser) parseUnary() (Expr, error) {
 
 func (p *parser) unary() (Expr, error) {
 	operator := p.peek()
-	spec, ok := unaryOperators[operator.kind]
+	spec, ok := unaryOperators[keyOf(operator.kind, operator.text)]
 	if !ok {
 		primary, err := p.parsePrimary()
 		if err != nil {
@@ -240,42 +236,30 @@ func (p *parser) unary() (Expr, error) {
 func (p *parser) parsePostfix(base Expr) (Expr, error) {
 	start := base.Extent().Start
 	for {
-		switch p.peek().kind {
-		case tokenLeftBracket:
-			indexed, err := p.parseSubscript(base)
-			if err != nil {
-				return nil, err
-			}
-			base = p.stamp(start, indexed)
-		case tokenDot:
-			field, err := p.parseFieldRead(base)
-			if err != nil {
-				return nil, err
-			}
-			base = p.stamp(start, field)
-		case tokenIdentifier:
-			if !p.keyword("with") {
-				return base, nil
-			}
-			updated, err := p.parseWith(base)
-			if err != nil {
-				return nil, err
-			}
-			base = p.stamp(start, updated)
+		var next Expr
+		var err error
+		switch {
+		case p.peek().kind == tokenLeftBracket:
+			next, err = p.parseSubscript(base)
+		case p.peek().kind == tokenDot:
+			next, err = p.parseFieldRead(base)
+		case p.keyword("with"):
+			next, err = p.parseWith(base)
 		default:
 			return base, nil
 		}
+		if err != nil {
+			return nil, err
+		}
+		base = p.stamp(start, next)
 	}
 }
 
 func (p *parser) parseSubscript(base Expr) (Expr, error) {
 	bracket := p.peek()
 	p.index++
-	index, err := p.parseExpr()
+	index, err := p.exprThen(tokenRightBracket, "']' after the index")
 	if err != nil {
-		return nil, err
-	}
-	if err := p.expect(tokenRightBracket, "']' after the index"); err != nil {
 		return nil, err
 	}
 	return p.call(bracket, "at", base, index), nil
@@ -291,17 +275,28 @@ func (p *parser) parseFieldRead(base Expr) (Expr, error) {
 	p.index++
 	// The lexer keeps a name and the dots in it together, so f(x).a.b arrives
 	// as one name "a.b": it is two reads, as order.a.b is.
-	start, at, expr := base.Extent().Start, dot.pos, base
-	for field := range strings.SplitSeq(name.text, ".") {
-		if err := validName(field, "text"); err != nil {
-			return nil, p.errorf(name, "%v", err)
+	return p.fieldChain(base, dot, dot.pos, name.text, true)
+}
+
+// fieldChain reads the dotted field names in fields off expr, the first
+// after the dot at at. Each read covers the source from expr's start through
+// its name, and its errors are placed at from. A postfix read, f(x).a.b,
+// points at its own dot and marks its name as it goes; the fields of a
+// dotted name, order.a.b, point at the name, which is already marked.
+func (p *parser) fieldChain(expr Expr, from token, at int, fields string, postfix bool) (Expr, error) {
+	start := expr.Extent().Start
+	for field := range strings.SplitSeq(fields, ".") {
+		end := at + 1 + len(field)
+		pos := from.pos
+		if postfix {
+			pos = at
+			p.markSpan(at+1, end, RoleField)
 		}
-		p.markSpan(at+1, at+1+len(field), RoleField)
-		node, err := p.node(dot, &FieldExpr{ID: p.id(), Pos: at, Span: Span{start, at + 1 + len(field)}, Value: expr, Field: field})
+		node, err := p.node(from, &FieldExpr{Node: Node{ID: p.id(), Pos: pos, Span: Span{start, end}}, Value: expr, Field: field})
 		if err != nil {
 			return nil, err
 		}
-		at, expr = at+1+len(field), node
+		at, expr = end, node
 	}
 	return expr, nil
 }
@@ -309,7 +304,7 @@ func (p *parser) parseFieldRead(base Expr) (Expr, error) {
 // call and boolean build the nodes an operator expands into. What has no
 // source of its own — the false in a && b — covers the operator.
 func (p *parser) call(at token, name string, args ...Expr) Expr {
-	return &CallExpr{ID: p.id(), Pos: at.pos, Span: tokenSpan(at), Name: name, Args: args}
+	return &CallExpr{Node: Node{ID: p.id(), Pos: at.pos, Span: tokenSpan(at)}, Name: name, Args: args}
 }
 
 func (p *parser) pick(at token, condition, whenTrue, whenFalse Expr) Expr {
@@ -317,7 +312,7 @@ func (p *parser) pick(at token, condition, whenTrue, whenFalse Expr) Expr {
 }
 
 func (p *parser) boolean(at token, value bool) Expr {
-	return &LiteralExpr{ID: p.id(), Pos: at.pos, Span: tokenSpan(at), Value: machine.Bool(value)}
+	return &LiteralExpr{Node: Node{ID: p.id(), Pos: at.pos, Span: tokenSpan(at)}, Value: machine.Bool(value)}
 }
 
 func tokenSpan(tok token) Span { return Span{Start: tok.pos, End: tok.end} }
@@ -365,6 +360,18 @@ func (p *parser) expect(kind tokenKind, what string) error {
 	return nil
 }
 
+// exprThen reads an expression and the token that has to follow it.
+func (p *parser) exprThen(kind tokenKind, what string) (Expr, error) {
+	expr, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expect(kind, what); err != nil {
+		return nil, err
+	}
+	return expr, nil
+}
+
 // parsePrimary reads one primary and stamps it with all it was read from:
 // (a + b) covers its parentheses.
 func (p *parser) parsePrimary() (Expr, error) {
@@ -392,11 +399,11 @@ func (p *parser) primary() (Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.String(value)}, nil
+		return &LiteralExpr{Node: p.at(tok.pos), Value: machine.String(value)}, nil
 	case tokenEnum:
 		p.index++
 		p.mark(tok, RoleEnumMember)
-		return p.node(tok, enumReference(p.id(), tok))
+		return p.node(tok, enumReference(p.at(tok.pos), tok.text))
 	case tokenRatio:
 		p.index++
 		return p.ratioLiteral(tok)
@@ -422,14 +429,14 @@ func (p *parser) name(tok token) (Expr, error) {
 	}
 	if tok.text == "true" || tok.text == "false" {
 		p.mark(tok, RoleLiteral)
-		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.Bool(tok.text == "true")}, nil
+		return &LiteralExpr{Node: p.at(tok.pos), Value: machine.Bool(tok.text == "true")}, nil
 	}
 	if p.peek().kind == tokenLeftParen {
 		return p.parseCall(tok)
 	}
 	if money.IsCurrencyCode(tok.text) {
 		p.mark(tok, RoleCurrency)
-		return p.node(tok, &CurrencyExpr{ID: p.id(), Pos: tok.pos, Code: tok.text})
+		return p.node(tok, &CurrencyExpr{Node: p.at(tok.pos), Code: tok.text})
 	}
 	// A dotted name that is not being called is a variable and the fields
 	// read off it: order.amount is at(order).amount, never one name. A call
@@ -441,76 +448,63 @@ func (p *parser) name(tok token) (Expr, error) {
 // parseGroup reads (e), which is only there to override infix precedence.
 func (p *parser) parseGroup() (Expr, error) {
 	p.index++
-	inner, err := p.parseExpr()
-	if err != nil {
-		return nil, err
-	}
-	if err := p.expect(tokenRightParen, "')'"); err != nil {
-		return nil, err
-	}
-	return inner, nil
+	return p.exprThen(tokenRightParen, "')'")
 }
 
 // variableWithFields splits name.field.field into a variable and the field
 // accesses on it, checking each part is a usable name.
 func (p *parser) variableWithFields(tok token) (Expr, error) {
-	parts := strings.Split(tok.text, ".")
-	if money.IsCurrencyCode(parts[0]) {
-		return nil, p.errorf(tok, "%s is a currency, and a currency has no fields", parts[0])
+	name, fields, dotted := strings.Cut(tok.text, ".")
+	if money.IsCurrencyCode(name) {
+		return nil, p.errorf(tok, "%s is a currency, and a currency has no fields", name)
 	}
-	for i, offset := 0, tok.pos; i < len(parts); i++ {
-		role := RoleField
-		if i == 0 {
-			role = RoleVariable
+	offset, role := tok.pos, RoleVariable
+	for part := range strings.SplitSeq(tok.text, ".") {
+		// An empty part (a..b) is no name to mark; the field read refuses it.
+		if part != "" {
+			p.markSpan(offset, offset+len(part), role)
 		}
-		// An empty part (a..b) is no name to mark; validName refuses it below.
-		if parts[i] != "" {
-			p.markSpan(offset, offset+len(parts[i]), role)
-		}
-		offset += len(parts[i]) + 1
+		offset, role = offset+len(part)+1, RoleField
 	}
-	if err := validName(parts[0], "var"); err != nil {
+	if err := validName(name, "var"); err != nil {
 		return nil, p.errorf(tok, "%v", err)
 	}
-	end := tok.pos + len(parts[0])
-	var expr Expr = &VariableExpr{ID: p.id(), Pos: tok.pos, Span: Span{tok.pos, end}, Name: parts[0]}
-	for _, field := range parts[1:] {
-		if err := validName(field, "text"); err != nil {
-			return nil, p.errorf(tok, "%v", err)
-		}
-		end += 1 + len(field)
-		node, err := p.node(tok, &FieldExpr{ID: p.id(), Pos: tok.pos, Span: Span{tok.pos, end}, Value: expr, Field: field})
-		if err != nil {
-			return nil, err
-		}
-		expr = node
+	end := tok.pos + len(name)
+	var expr Expr = &VariableExpr{Node: Node{ID: p.id(), Pos: tok.pos, Span: Span{tok.pos, end}}, Name: name}
+	if !dotted {
+		return expr, nil
 	}
-	return expr, nil
+	return p.fieldChain(expr, tok, end, fields, false)
+}
+
+// callForm is the rule that reads a form written like a call, name(…), and
+// nil for a name that is not one.
+func callForm(name string) func(*parser, token) (Expr, error) {
+	switch name {
+	case "reduce":
+		return (*parser).parseReduceCall
+	case "switch":
+		return (*parser).parseSwitchCall
+	case "let":
+		return (*parser).parseLetCall
+	case "using":
+		return (*parser).parseUsingCall
+	}
+	return nil
 }
 
 func (p *parser) parseCall(name token) (Expr, error) {
 	p.index++ // (
 	p.mark(name, RoleFunction)
-	if name.text == "reduce" || name.text == "switch" || name.text == "let" || name.text == "using" {
+	if form := callForm(name.text); form != nil {
 		p.mark(name, RoleForm)
-	}
-	if name.text == "reduce" {
-		return p.parseReduceCall(name)
-	}
-	if name.text == "switch" {
-		return p.parseSwitchCall(name)
-	}
-	if name.text == "let" {
-		return p.parseLetCall(name)
-	}
-	if name.text == "using" {
-		return p.parseUsingCall(name)
+		return form(p, name)
 	}
 	args, err := p.parseList(tokenRightParen)
 	if err != nil {
 		return nil, err
 	}
-	return &CallExpr{ID: p.id(), Pos: name.pos, Name: name.text, Args: args}, nil
+	return &CallExpr{Node: p.at(name.pos), Name: name.text, Args: args}, nil
 }
 
 // parseLetCall reads let(x = e1, y = e2, body). Bindings are ordered: a later
@@ -521,14 +515,11 @@ func (p *parser) parseLetCall(name token) (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, err := p.parseExpr()
+	body, err := p.exprThen(tokenRightParen, "')'")
 	if err != nil {
 		return nil, err
 	}
-	if err := p.expect(tokenRightParen, "')'"); err != nil {
-		return nil, err
-	}
-	return p.node(name, &LetExpr{ID: p.id(), Pos: name.pos, Bindings: bindings, Body: body})
+	return p.node(name, &LetExpr{Node: p.at(name.pos), Bindings: bindings, Body: body})
 }
 
 func (p *parser) letBindings(name token) ([]LetBinding, error) {
@@ -539,14 +530,11 @@ func (p *parser) letBindings(name token) ([]LetBinding, error) {
 			return nil, err
 		}
 		p.index++ // =
-		value, err := p.parseExpr()
+		value, err := p.exprThen(tokenComma, "',' after a let binding")
 		if err != nil {
 			return nil, err
 		}
 		bindings = append(bindings, LetBinding{Name: local, Value: value})
-		if err := p.expect(tokenComma, "',' after a let binding"); err != nil {
-			return nil, err
-		}
 	}
 	if len(bindings) == 0 {
 		return nil, p.errorf(name, "let needs at least one binding, as in let(x = e, body)")
@@ -566,7 +554,7 @@ func (p *parser) startsBinding() bool {
 // The local names are part of the syntax, so they cannot be mistaken for
 // expressions, and there is nothing to disambiguate.
 func (p *parser) parseReduceCall(name token) (Expr, error) {
-	key, value, err := p.loopVariables(name)
+	key, value, err := p.loopVariables()
 	if err != nil {
 		return nil, p.errorf(name, "reduce starts with its element name: reduce(item in source, acc = init, body)")
 	}
@@ -575,11 +563,7 @@ func (p *parser) parseReduceCall(name token) (Expr, error) {
 }
 
 func (p *parser) reduceKeywordForm(name token, key, variable string) (Expr, error) {
-	source, err := p.parseExpr()
-	if err != nil {
-		return nil, err
-	}
-	where, err := p.loopFilter()
+	source, where, err := p.loopSource()
 	if err != nil {
 		return nil, err
 	}
@@ -590,23 +574,17 @@ func (p *parser) reduceKeywordForm(name token, key, variable string) (Expr, erro
 	if err != nil {
 		return nil, err
 	}
-	if err := p.expect(tokenComma, "',' before the reduce body"); err != nil {
-		return nil, err
-	}
-	body, err := p.parseExpr()
+	body, err := p.exprThen(tokenRightParen, "')'")
 	if err != nil {
 		return nil, err
 	}
-	if err := p.expect(tokenRightParen, "')'"); err != nil {
-		return nil, err
-	}
 	return p.node(name, &ReduceExpr{
-		ID: p.id(), Pos: name.pos, Source: source, Variable: variable,
+		Node: p.at(name.pos), Source: source, Variable: variable,
 		KeyVariable: key, Where: where, Accumulator: accumulator, Init: init, Body: body,
 	})
 }
 
-// parseAccumulator reads "total = 0", the shape a let binding already has.
+// parseAccumulator reads "total = 0,", the shape a let binding already has.
 func (p *parser) parseAccumulator() (string, Expr, error) {
 	if !p.startsBinding() {
 		return "", nil, p.errorf(p.peek(), "reduce needs an accumulator and its initial value: acc = init")
@@ -616,7 +594,7 @@ func (p *parser) parseAccumulator() (string, Expr, error) {
 		return "", nil, err
 	}
 	p.index++ // =
-	init, err := p.parseExpr()
+	init, err := p.exprThen(tokenComma, "',' before the reduce body")
 	if err != nil {
 		return "", nil, err
 	}
@@ -628,7 +606,7 @@ func (p *parser) parseArray() (Expr, error) {
 	p.index++
 	if p.peek().kind == tokenRightBracket {
 		p.index++
-		return &ArrayExpr{ID: p.id(), Pos: start.pos}, nil
+		return &ArrayExpr{Node: p.at(start.pos)}, nil
 	}
 	first, err := p.parseExpr()
 	if err != nil {
@@ -641,7 +619,7 @@ func (p *parser) parseArray() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ArrayExpr{ID: p.id(), Pos: start.pos, Items: items}, nil
+	return &ArrayExpr{Node: p.at(start.pos), Items: items}, nil
 }
 
 // localIdentifier consumes one identifier and checks it can name a local.
@@ -671,24 +649,36 @@ func (p *parser) parseList(end tokenKind) ([]Expr, error) {
 // parsed. A trailing comma before the closing delimiter is allowed.
 func (p *parser) parseRest(first Expr, end tokenKind) ([]Expr, error) {
 	items := []Expr{first}
+	err := p.rest(end, true, "',' or closing delimiter", func() error {
+		item, err := p.parseExpr()
+		items = append(items, item)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// rest reads the items after the first of a comma separated list, each
+// with item, and consumes the closing end. trailing lets a comma come right
+// before end; missing is what is expected where neither a comma nor end is.
+func (p *parser) rest(end tokenKind, trailing bool, missing string, item func() error) error {
 	for {
 		if p.peek().kind == end {
 			p.index++
-			return items, nil
+			return nil
 		}
-		if p.peek().kind != tokenComma {
-			return nil, p.errorf(p.peek(), "expected ',' or closing delimiter")
+		if err := p.expect(tokenComma, missing); err != nil {
+			return err
 		}
-		p.index++
-		if p.peek().kind == end {
+		if trailing && p.peek().kind == end {
 			p.index++
-			return items, nil
+			return nil
 		}
-		item, err := p.parseExpr()
-		if err != nil {
-			return nil, err
+		if err := item(); err != nil {
+			return err
 		}
-		items = append(items, item)
 	}
 }
 
@@ -697,6 +687,9 @@ func (p *parser) id() int {
 	p.nextID++
 	return id
 }
+
+// at is a new node's Node: the next ID, with messages pointing at pos.
+func (p *parser) at(pos int) Node { return Node{ID: p.id(), Pos: pos} }
 
 func (p *parser) peek() token { return p.peekN(0) }
 

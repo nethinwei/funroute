@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -58,7 +59,7 @@ type Currencies struct {
 // NewCurrencies builds a table from a spec, checking every currency.
 func NewCurrencies(spec MoneySpec) (*Currencies, error) {
 	if len(spec.Currencies) == 0 {
-		return nil, fmt.Errorf("money: declare at least one currency")
+		return nil, errors.New("money: declare at least one currency")
 	}
 	table := &Currencies{digits: map[string]int{}, pairs: map[[2]string]*Pair{}}
 	for _, currency := range spec.Currencies {

@@ -2,6 +2,7 @@ package machine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -31,6 +32,12 @@ func (f specialForm) String() string {
 	return [...]string{specialNone: "", specialIf: "if", specialFallback: "fallback"}[f]
 }
 
+// wrap is how the lazy function takes in an expression written where it
+// goes, $ marking the place, as a form's wrap does.
+func (f specialForm) wrap() string {
+	return [...]string{specialNone: "", specialIf: "if($, then_value, else_value)", specialFallback: "fallback($, backup)"}[f]
+}
+
 // cloneDoc copies a Doc so a description handed out cannot reach the
 // registry's own through its slice.
 func cloneDoc(doc Doc) Doc {
@@ -44,16 +51,30 @@ func cloneDoc(doc Doc) Doc {
 // arguments; the result has one value per request, in the same order.
 type BatchEvalFunc func(ctx context.Context, calls [][]Value) ([]Value, error)
 
-// FunctionSpec defines a pure host function. The evaluator receives the values
-// themselves — read-only, never copied — and no ambient runtime capabilities.
-// EvalBatch is optional: a Batch runs it for the calls it can hoist out of the
-// per-request programs, and falls back to Eval for the rest.
+// FunctionSpec defines a pure host function, and Registry.Register is the one
+// way to add it. The evaluator receives the values themselves — read-only,
+// never copied — and no ambient runtime capabilities. EvalBatch is optional: a
+// Batch runs it for the calls it can hoist out of the per-request programs,
+// and falls back to Eval for the rest.
+//
+// Go names a Go function in place of Params, Result and Eval, its signature
+// read once by reflection; GoBatch is its batch form, in place of EvalBatch.
+// That costs a call a few hundred nanoseconds; the kernel's own functions
+// write Params, Result and Eval and do not pay it.
+//
+//	registry.Register(funroute.FunctionSpec{
+//	    Name: "risk.score_v1",
+//	    Doc:  funroute.Doc{Label: "风险评分", Cost: 25},
+//	    Go:   func(country string, amount int64) float64 { … },
+//	})
 type FunctionSpec struct {
 	Name      string
 	Params    []Type
 	Result    Type
 	Eval      EvalFunc
 	EvalBatch BatchEvalFunc
+	Go        any
+	GoBatch   any
 	// Doc is everything a host says about this function: what to call it, what
 	// it costs, how long one call may take. It is also what the catalog hands
 	// a front end, so there is one structure rather than an input shape and a
@@ -168,7 +189,7 @@ func NewRegistry() *Registry {
 }
 
 // DefineHandle declares that Go values of type T cross the boundary as
-// handle<name>: functions registered with Logic and Model then accept and
+// handle<name>: functions registered by their Go signature then accept and
 // return T directly, wrapping and unwrapping the payload without copying it.
 // The name has the shape of a function name so it can carry a namespace and a
 // version.
@@ -225,12 +246,9 @@ const (
 	ReduceForm Form = "reduce"
 )
 
-// knownForms is also the display order of the catalog.
-var knownForms = []Form{SwitchForm, ForForm, ReduceForm}
-
 func (r *Registry) EnableForm(forms ...Form) error {
 	for _, form := range forms {
-		if !slices.Contains(knownForms, form) {
+		if !slices.Contains(OptionalForms(), form) {
 			return fmt.Errorf("unknown form %q", string(form))
 		}
 	}
@@ -319,15 +337,13 @@ func (r *Registry) Register(spec FunctionSpec) error {
 	if IsReservedName(spec.Name) {
 		return fmt.Errorf("function name %q is reserved", spec.Name)
 	}
+	if err := r.reflectSpec(&spec); err != nil {
+		return err
+	}
 	if spec.Doc.Cost == 0 {
 		spec.Doc.Cost = 1
 	}
-	params := make([]Type, len(spec.Params))
-	for i := range spec.Params {
-		params[i] = CloneType(spec.Params[i])
-	}
-	spec.Params = params
-	spec.Result = CloneType(spec.Result)
+	spec.Params = cloneTypes(spec.Params)
 	spec.Doc.Params = append([]string(nil), spec.Doc.Params...)
 	if spec.Eval == nil && spec.special == specialNone {
 		return fmt.Errorf("function %s has no evaluator", spec.Name)
@@ -410,7 +426,7 @@ func validateTypePattern(t Type, vars map[string]bool) error {
 		return nil
 	case VarKind:
 		if t.name == "" {
-			return fmt.Errorf("unnamed type variable")
+			return errors.New("unnamed type variable")
 		}
 		vars[t.name] = true
 		return nil

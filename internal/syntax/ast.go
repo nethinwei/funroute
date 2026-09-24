@@ -17,6 +17,10 @@ import (
 // collecting free variables, scope and the syntax tree all follow from the
 // definition — there is no second list to keep in step.
 //
+//	kind:"name"        on the embedded Node: the ExprJSON node tag, with
+//	                   ",form" for a form — a node that branches, binds names
+//	                   or scopes what is inside it — and ",optional" for a
+//	                   form a registry can turn off
 //	json:"name"        the ExprJSON field, with omitempty for an optional one
 //	role:"..."         what a string field holds: var, fn, local or text
 //	binds:"a,b"        the fields (of this node) in which a local name is visible;
@@ -30,15 +34,30 @@ type Expr interface {
 	// Extent is the source the node was read from.
 	Extent() Span
 	setExtent(Span)
-	// kind is the ExprJSON node tag.
-	kind() string
 }
+
+// Node is what every node carries besides its own fields: its ID, where a
+// message about it points and the source it was read from. Every node embeds
+// one, untagged for ExprJSON, so ExprJSON and the digest never see it; its
+// kind tag names the node.
+type Node struct {
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
+}
+
+func (*Node) exprNode() {}
+
+// NodeID is the node's ID, unique within one parse or import.
+func (n *Node) NodeID() int { return n.ID }
+
+// Position is where a message about the node points.
+func (n *Node) Position() int { return n.Pos }
 
 // Span is the source a node was read from: bytes Start up to End, the
 // parentheses around it included. Position is where a message about the node
 // points; the span is all of it. A node imported from ExprJSON has no source,
-// and its span is empty. Every node embeds one, untagged, so ExprJSON and the
-// digest never see it.
+// and its span is empty.
 type Span struct {
 	Start, End int
 }
@@ -61,55 +80,35 @@ type checker interface {
 	check() error
 }
 
-// former is implemented by a node that is a lazy form the registry can turn
-// off. The compiler refuses the node when its form is not enabled.
-type former interface {
-	Form() machine.Form
-}
-
 // LiteralExpr is exchanged as {"node":"int","int":1} and the like: the node
 // tag is the value's kind and the field carries the value, so it is the one
 // node the walker does not describe from tags.
+//
+// A decimal is the number it was written as, Decimal, exactly; Value is the
+// float64 nearest to it. Which one the literal is depends on what its
+// context reads it as: a ratio is the decimal, and a float is Value only when
+// Value is the decimal (Float), so no literal is ever rounded on its way to
+// being a float or a ratio.
 type LiteralExpr struct {
-	ID  int
-	Pos int
-	Span
-	Value machine.Value
+	Node
+	Value   machine.Value
+	Decimal money.Decimal
 }
-
-func (*LiteralExpr) exprNode()       {}
-func (e *LiteralExpr) NodeID() int   { return e.ID }
-func (e *LiteralExpr) Position() int { return e.Pos }
-func (e *LiteralExpr) kind() string  { return e.Value.Kind().String() }
 
 type VariableExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node `kind:"var"`
 	Name string `json:"name" role:"var"`
 }
-
-func (*VariableExpr) exprNode()       {}
-func (e *VariableExpr) NodeID() int   { return e.ID }
-func (e *VariableExpr) Position() int { return e.Pos }
-func (*VariableExpr) kind() string    { return "var" }
 
 // EnumExpr is a member of a host-declared enum, written @adyen, or
 // @channel.adyen when the member name alone is ambiguous. The member set lives
 // in the contract, so the node carries names only; the compiler resolves which
 // enum it belongs to and emits the member string as a constant.
 type EnumExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node   `kind:"enum"`
 	Enum   string `json:"enum,omitempty" role:"text"`
 	Member string `json:"member" role:"text"`
 }
-
-func (*EnumExpr) exprNode()       {}
-func (e *EnumExpr) NodeID() int   { return e.ID }
-func (e *EnumExpr) Position() int { return e.Pos }
-func (*EnumExpr) kind() string    { return "enum" }
 
 // Source reprints the reference the way it was written.
 func (e *EnumExpr) Source() string {
@@ -132,16 +131,9 @@ func (e *EnumExpr) check() error {
 }
 
 type ArrayExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node  `kind:"array"`
 	Items []Expr `json:"items,omitempty"`
 }
-
-func (*ArrayExpr) exprNode()       {}
-func (e *ArrayExpr) NodeID() int   { return e.ID }
-func (e *ArrayExpr) Position() int { return e.Pos }
-func (*ArrayExpr) kind() string    { return "array" }
 
 type DictEntryExpr struct {
 	Key   string `json:"key" role:"text"`
@@ -152,16 +144,9 @@ type DictEntryExpr struct {
 // language semantics and the canonical JSON must not depend on how the
 // program was written.
 type DictExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node    `kind:"dict"`
 	Entries []DictEntryExpr `json:"entries,omitempty" sort:"key"`
 }
-
-func (*DictExpr) exprNode()       {}
-func (e *DictExpr) NodeID() int   { return e.ID }
-func (e *DictExpr) Position() int { return e.Pos }
-func (*DictExpr) kind() string    { return "dict" }
 
 func (e *DictExpr) check() error {
 	seen := make(map[string]bool, len(e.Entries))
@@ -187,16 +172,9 @@ type RecordFieldExpr struct {
 // ({"a": 1}) and every value shares one type; a record writes them as names
 // and every field has its own.
 type RecordExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node   `kind:"record"`
 	Fields []RecordFieldExpr `json:"fields" min:"1"`
 }
-
-func (*RecordExpr) exprNode()       {}
-func (e *RecordExpr) NodeID() int   { return e.ID }
-func (e *RecordExpr) Position() int { return e.Pos }
-func (*RecordExpr) kind() string    { return "record" }
 
 func (e *RecordExpr) check() error { return checkRecordFields(e.Fields) }
 
@@ -220,25 +198,17 @@ func checkRecordFields(fields []RecordFieldExpr) error {
 // every field named must be one of Base's, with a value of that field's type.
 // A nested field is replaced by nesting: b with {customer: b.customer with {amount: 1}}.
 type RecordUpdateExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node   `kind:"record_update"`
 	Base   Expr              `json:"base"`
 	Fields []RecordFieldExpr `json:"fields" min:"1"`
 }
 
-func (*RecordUpdateExpr) exprNode()       {}
-func (e *RecordUpdateExpr) NodeID() int   { return e.ID }
-func (e *RecordUpdateExpr) Position() int { return e.Pos }
-func (*RecordUpdateExpr) kind() string    { return "record_update" }
-func (e *RecordUpdateExpr) check() error  { return checkRecordFields(e.Fields) }
+func (e *RecordUpdateExpr) check() error { return checkRecordFields(e.Fields) }
 
 // FieldExpr is r.field. The field name is resolved to a position in the
 // record's type at compile time, so nothing is looked up while the rule runs.
 type FieldExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node  `kind:"field"`
 	Value Expr   `json:"value"`
 	Field string `json:"field" role:"text"`
 }
@@ -250,23 +220,11 @@ func (e *FieldExpr) check() error {
 	return nil
 }
 
-func (*FieldExpr) exprNode()       {}
-func (e *FieldExpr) NodeID() int   { return e.ID }
-func (e *FieldExpr) Position() int { return e.Pos }
-func (*FieldExpr) kind() string    { return "field" }
-
 type CallExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node `kind:"call"`
 	Name string `json:"name" role:"fn"`
 	Args []Expr `json:"args,omitempty"`
 }
-
-func (*CallExpr) exprNode()       {}
-func (e *CallExpr) NodeID() int   { return e.ID }
-func (e *CallExpr) Position() int { return e.Pos }
-func (*CallExpr) kind() string    { return "call" }
 
 // SwitchCaseExpr holds one branch. Match lists the values (subject mode) or the
 // conditions (subjectless mode) that select this branch; any of them matching
@@ -279,19 +237,11 @@ type SwitchCaseExpr struct {
 // SwitchExpr is switch(...). A nil Value is the subjectless form: each branch's
 // Match entries are boolean conditions, which replaces a chain of nested ifs.
 type SwitchExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node    `kind:"switch,form,optional"`
 	Value   Expr             `json:"value,omitempty"`
 	Cases   []SwitchCaseExpr `json:"cases" min:"1"`
 	Default Expr             `json:"default,omitempty"`
 }
-
-func (*SwitchExpr) exprNode()          {}
-func (e *SwitchExpr) NodeID() int      { return e.ID }
-func (e *SwitchExpr) Position() int    { return e.Pos }
-func (*SwitchExpr) kind() string       { return "switch" }
-func (*SwitchExpr) Form() machine.Form { return machine.SwitchForm }
 
 // ForExpr is [yield for variable in source if where], or
 // {yield_key: yield for variable in source if where} when it builds a
@@ -299,9 +249,7 @@ func (*SwitchExpr) Form() machine.Form { return machine.SwitchForm }
 // KeyVariable is set for a dictionary walk ([e for k, v in d]) and empty for
 // an array.
 type ForExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node        `kind:"for,form,optional"`
 	Source      Expr   `json:"source"`
 	Variable    string `json:"variable" role:"local" binds:"where,yield_key,yield"`
 	KeyVariable string `json:"key_variable,omitempty" role:"local" binds:"where,yield_key,yield"`
@@ -317,12 +265,6 @@ type ForExpr struct {
 	Flatten bool `json:"flatten,omitempty"`
 }
 
-func (*ForExpr) exprNode()          {}
-func (e *ForExpr) NodeID() int      { return e.ID }
-func (e *ForExpr) Position() int    { return e.Pos }
-func (*ForExpr) kind() string       { return "for" }
-func (*ForExpr) Form() machine.Form { return machine.ForForm }
-
 func (e *ForExpr) check() error { return distinctNames(e.KeyVariable, e.Variable) }
 
 // ReduceExpr is reduce(variable in source if where, accumulator = init, body):
@@ -331,9 +273,7 @@ func (e *ForExpr) check() error { return distinctNames(e.KeyVariable, e.Variable
 // sees the loop variables but not the accumulator, because an item is filtered
 // before it is folded.
 type ReduceExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node        `kind:"reduce,form,optional"`
 	Source      Expr   `json:"source"`
 	Variable    string `json:"variable" role:"local" binds:"where,body"`
 	KeyVariable string `json:"key_variable,omitempty" role:"local" binds:"where,body"`
@@ -342,12 +282,6 @@ type ReduceExpr struct {
 	Init        Expr   `json:"init"`
 	Body        Expr   `json:"body"`
 }
-
-func (*ReduceExpr) exprNode()          {}
-func (e *ReduceExpr) NodeID() int      { return e.ID }
-func (e *ReduceExpr) Position() int    { return e.Pos }
-func (*ReduceExpr) kind() string       { return "reduce" }
-func (*ReduceExpr) Form() machine.Form { return machine.ReduceForm }
 
 func (e *ReduceExpr) check() error {
 	return distinctNames(e.KeyVariable, e.Variable, e.Accumulator)
@@ -363,17 +297,10 @@ type LetBinding struct {
 // LetExpr is let(x = e1, y = e2, body). The names are local and never become
 // program arguments.
 type LetExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node     `kind:"let,form"`
 	Bindings []LetBinding `json:"bindings" min:"1"`
 	Body     Expr         `json:"body"`
 }
-
-func (*LetExpr) exprNode()       {}
-func (e *LetExpr) NodeID() int   { return e.ID }
-func (e *LetExpr) Position() int { return e.Pos }
-func (*LetExpr) kind() string    { return "let" }
 
 func (e *LetExpr) check() error {
 	names := make([]string, len(e.Bindings))
@@ -404,17 +331,10 @@ func distinctNames(names ...string) error {
 // depends on the currency's places, which are the registry's, and ExprJSON
 // must not depend on a registry.
 type MoneyExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node     `kind:"money"`
 	Currency string `json:"currency" role:"text"`
 	Amount   string `json:"amount" role:"text"`
 }
-
-func (*MoneyExpr) exprNode()       {}
-func (e *MoneyExpr) NodeID() int   { return e.ID }
-func (e *MoneyExpr) Position() int { return e.Pos }
-func (*MoneyExpr) kind() string    { return "money" }
 
 func (e *MoneyExpr) check() error {
 	if !money.IsCurrencyCode(e.Currency) {
@@ -433,17 +353,10 @@ func (e *MoneyExpr) check() error {
 // RatioExpr is a ratio written with its unit: 2.9% or 25bps. Like money it
 // keeps the decimal it was written as.
 type RatioExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node  `kind:"ratio"`
 	Value string `json:"value" role:"text"`
 	Unit  string `json:"unit" role:"text"`
 }
-
-func (*RatioExpr) exprNode()       {}
-func (e *RatioExpr) NodeID() int   { return e.ID }
-func (e *RatioExpr) Position() int { return e.Pos }
-func (*RatioExpr) kind() string    { return "ratio" }
 
 func (e *RatioExpr) check() error {
 	if e.Unit != "%" && e.Unit != "bps" {
@@ -471,31 +384,16 @@ func plainDecimal(text string) bool {
 }
 
 func digitsOnly(text string) bool {
-	if text == "" {
-		return false
-	}
-	for i := 0; i < len(text); i++ {
-		if text[i] < '0' || text[i] > '9' {
-			return false
-		}
-	}
-	return true
+	return text != "" && strings.Trim(text, "0123456789") == ""
 }
 
 // CurrencyExpr is a currency, written as its code: USD. Currencies are the
 // language's own, not an enum a contract brings, so a name shaped like a code
 // is always one, and no variable may take such a name.
 type CurrencyExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node `kind:"currency"`
 	Code string `json:"code" role:"text"`
 }
-
-func (*CurrencyExpr) exprNode()       {}
-func (e *CurrencyExpr) NodeID() int   { return e.ID }
-func (e *CurrencyExpr) Position() int { return e.Pos }
-func (*CurrencyExpr) kind() string    { return "currency" }
 
 func (e *CurrencyExpr) check() error {
 	if !money.IsCurrencyCode(e.Code) {
@@ -508,18 +406,11 @@ func (e *CurrencyExpr) check() error {
 // JPY / USD: one USD buys 150 JPY. It is a rate, not two amounts, so its
 // figure takes as many places as the quote has.
 type FxRateExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node  `kind:"fxrate"`
 	Rate  string `json:"rate" role:"text"`
 	Quote string `json:"quote" role:"text"`
 	Base  string `json:"base" role:"text"`
 }
-
-func (*FxRateExpr) exprNode()       {}
-func (e *FxRateExpr) NodeID() int   { return e.ID }
-func (e *FxRateExpr) Position() int { return e.Pos }
-func (*FxRateExpr) kind() string    { return "fxrate" }
 
 func (e *FxRateExpr) check() error {
 	if !money.IsCurrencyCode(e.Quote) || !money.IsCurrencyCode(e.Base) {
@@ -539,18 +430,11 @@ func (e *FxRateExpr) check() error {
 // quote is an fxrate or an array<fxrate>, a later one over an earlier. A
 // rate from an outer using is carried in by reading it: using(fx(USD, JPY), …).
 type UsingExpr struct {
-	ID  int `json:"-"`
-	Pos int `json:"-"`
-	Span
+	Node `kind:"using,form"`
 	// Quotes are the exchange rates, in the order written.
 	Quotes []Expr `json:"quotes" min:"1"`
 	Body   Expr   `json:"body"`
 }
-
-func (*UsingExpr) exprNode()       {}
-func (e *UsingExpr) NodeID() int   { return e.ID }
-func (e *UsingExpr) Position() int { return e.Pos }
-func (*UsingExpr) kind() string    { return "using" }
 
 // nodeTypes lists every node the walker knows, by its ExprJSON tag. A literal
 // has four tags, one per value kind; the others have one each.

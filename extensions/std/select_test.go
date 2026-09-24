@@ -57,8 +57,8 @@ func TestSelectingAmongCandidates(t *testing.T) {
 func TestCuttingWhereARunEnds(t *testing.T) {
 	t.Parallel()
 	amounts := funroute.ArgSpec{Name: "amounts", Type: funroute.ArrayOf(funroute.IntType)}
-	cap := funroute.ArgSpec{Name: "cap", Type: funroute.IntType}
-	specs := []funroute.ArgSpec{amounts, cap}
+	capArg := funroute.ArgSpec{Name: "cap", Type: funroute.IntType}
+	specs := []funroute.ArgSpec{amounts, capArg}
 	args := map[string]any{"amounts": []any{300, 400, 500, 200}, "cap": 800}
 	running := `[t <= cap for t in cumsum(amounts)]`
 	for _, test := range []struct {

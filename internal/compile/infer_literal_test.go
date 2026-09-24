@@ -157,25 +157,10 @@ func TestSettleLiteralsRefusesDifferentlyWrittenLiterals(t *testing.T) {
 	if err := state.settleLiterals(); err == nil || !strings.Contains(err.Error(), "cannot share") {
 		t.Fatalf("settleLiterals() of 0 and 0.5 sharing a type = %v, want the literals cannot share a type", err)
 	}
-	if forks := state.forkLiteral(zero); len(forks) != 0 {
-		t.Fatalf("forkLiteral of 0 and 0.5 sharing a type = %d readings, want none", len(forks))
-	}
 }
 
-// literalKinds is each candidate forkLiteral makes: the kind the literal
-// became and the ratio-literal count it paid.
-func literalKinds(t *testing.T, value machine.Value, money bool) string {
-	t.Helper()
-	state := newInferState()
-	term := state.literalTerm(value, money)
-	var out []string
-	for _, candidate := range state.forkLiteral(term) {
-		out = append(out, fmt.Sprintf("%s/%d", candidate.deref(term).kind, candidate.convertedLiterals))
-	}
-	return strings.Join(out, " ")
-}
-
-func TestForkLiteralSettlesOncePerKind(t *testing.T) {
+// A literal's type may become the kinds money lets it be, and nothing else.
+func TestLiteralKindsFollowMoney(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		name  string
@@ -183,40 +168,29 @@ func TestForkLiteralSettlesOncePerKind(t *testing.T) {
 		money bool
 		want  string
 	}{
-		{"a decimal with money", machine.Float(0.5), true, "float/0 ratio/1"},
-		{"zero with money", machine.Int(0), true, "int/0 ratio/1 money/1"},
-		{"another int is only an int", machine.Int(7), true, "int/0"},
-		{"a string is only a string", machine.String("x"), true, "string/0"},
-		{"a decimal without money", machine.Float(0.5), false, "float/0"},
-		{"zero without money", machine.Int(0), false, "int/0"},
+		{"a decimal with money", machine.Float(0.5), true, "float|ratio"},
+		{"zero with money", machine.Int(0), true, "int|ratio|money"},
+		{"another int is only an int", machine.Int(7), true, "int"},
+		{"a string is only a string", machine.String("x"), true, "string"},
+		{"a decimal without money", machine.Float(0.5), false, "float"},
+		{"zero without money", machine.Int(0), false, "int"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if got := literalKinds(t, test.value, test.money); got != test.want {
-				t.Fatalf("forkLiteral(%v, money %v) = %s, want %s", test.value.Any(), test.money, got, test.want)
+			state := newInferState()
+			if got := state.describe(state.literalTerm(test.value, test.money)); got != test.want {
+				t.Fatalf("literalTerm(%v, money %v) = %s, want %s", test.value.Any(), test.money, got, test.want)
 			}
 		})
 	}
-}
-
-// forkLiteral leaves a literal the context already settled alone.
-func TestForkLiteralKeepsASettledLiteral(t *testing.T) {
-	t.Parallel()
 	state := newInferState()
-	term := state.literalTerm(machine.Float(0.5), true)
-	if err := state.unify(term, scalarTerm(machine.RatioKind)); err != nil {
-		t.Fatal(err)
-	}
-	if forks := state.forkLiteral(term); len(forks) != 1 || forks[0] != state {
-		t.Fatalf("forkLiteral of a settled literal = %d states, want the state itself", len(forks))
-	}
 	if err := state.unify(state.literalTerm(machine.Int(0), true), scalarTerm(machine.FloatKind)); err == nil {
 		t.Fatal("0 unified with float, want a literal that cannot be float")
 	}
 }
 
-// settleLiterals gives an open literal its plain kind and counts the
-// decimals that became ratios.
+// settleLiterals gives an open literal its plain kind, and a literal the
+// context read as another kind is counted.
 func TestSettleLiteralsCountsRatios(t *testing.T) {
 	t.Parallel()
 	state := newInferState()
@@ -227,7 +201,7 @@ func TestSettleLiteralsCountsRatios(t *testing.T) {
 	if err := state.settleLiterals(); err != nil {
 		t.Fatal(err)
 	}
-	got := fmt.Sprint(state.deref(open).kind, state.deref(rate).kind, state.deref(zero).kind, state.convertedLiterals)
+	got := fmt.Sprint(state.deref(open).kind, state.deref(rate).kind, state.deref(zero).kind, state.converted)
 	if want := "float ratio int 1"; got != want {
 		t.Fatalf("settled = %s, want %s", got, want)
 	}

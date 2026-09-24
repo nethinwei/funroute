@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { commonIndent, dedent, indent, Text, argsText, isCard, isPlain, wrap } from "./projection.ts";
+import { Text } from "@codemirror/state";
+import { commonIndent, dedent, indent, argsText, children, isCard, isPlain, slice, wrap } from "./projection.ts";
 import { decodeTokens } from "./tokens.ts";
 import type { Tree } from "./protocol.ts";
 
 const at = (line: number, character: number) => ({ line, character });
-const node = (kind: string, fields: Tree["fields"] = [], operator?: string): Tree => ({ node: kind, range: { start: at(0, 0), end: at(0, 0) }, fields, operator });
+const node = (kind: string, fields: Tree["fields"] = [], operator?: string, form?: boolean): Tree => ({ node: kind, range: { start: at(0, 0), end: at(0, 0) }, fields, operator, form });
 
 test("cards are forms and lazy calls, operators are text", () => {
   const lazy = new Set(["if", "fallback"]);
   const call = (name: string, operator?: string) => node("call", [{ name: "name", text: name }], operator);
-  assert.equal(isCard(node("let"), lazy), true);
-  assert.equal(isCard(node("using"), lazy), true);
+  assert.equal(isCard(node("let", [], undefined, true), lazy), true);
+  assert.equal(isCard(node("array"), lazy), false);
   assert.equal(isCard(call("if"), lazy), true);
   assert.equal(isCard(call("if", "&&"), lazy), false);
   assert.equal(isCard(call("add", "+"), lazy), false);
@@ -19,15 +20,26 @@ test("cards are forms and lazy calls, operators are text", () => {
   assert.equal(isPlain(node("array", [{ name: "items", nodes: [call("add", "+")] }]), lazy), true);
 });
 
+// A node that is not a card shows each of its parts, the ones inside items
+// too: the entries of a record hold theirs there, not in nodes.
+test("the parts of a node are every node below it, items included", () => {
+  const lazy = new Set(["if"]);
+  const block = node("call", [{ name: "name", text: "if" }]);
+  const value = node("ident");
+  const record = node("record", [{ name: "entries", items: [[{ name: "key", text: "a" }, { name: "value", nodes: [block] }], [{ name: "value", nodes: [value] }]] }]);
+  assert.deepEqual(children(record), [block, value]);
+  assert.equal(isPlain(record, lazy), false);
+});
+
 test("positions count UTF-16 units, as the server's default does", () => {
-  const text = new Text('{"好😀": x,\n  y}');
-  assert.equal(text.slice({ start: at(0, 8), end: at(0, 9) }), "x");
-  assert.equal(text.slice({ start: at(1, 2), end: at(1, 3) }), "y");
+  const text = Text.of(['{"好😀": x,', "  y}"]);
+  assert.equal(slice(text, { start: at(0, 8), end: at(0, 9) }), "x");
+  assert.equal(slice(text, { start: at(1, 2), end: at(1, 3) }), "y");
 });
 
 test("a block wraps what it is dropped on", () => {
-  assert.equal(wrap("if", " amount > 1 "), "if(amount > 1, then_value, else_value)");
-  assert.equal(wrap("let", ""), "let(name = value, value)");
+  assert.equal(wrap("if($, then_value, else_value)", " amount > 1 "), "if(amount > 1, then_value, else_value)");
+  assert.equal(wrap("let(name = value, $)", ""), "let(name = value, value)");
 });
 
 test("arguments go as the text that was typed", () => {

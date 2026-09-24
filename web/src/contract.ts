@@ -2,23 +2,36 @@
 // arguments, written as text. The result is declared in the test run, beside
 // the value it describes. It sends what was written; the language server
 // reads it and says in its diagnostics what is wrong with it.
-import { LitElement, css, html } from "lit";
+import { LitElement, css, html, nothing } from "lit";
+import { state } from "lit/decorators.js";
 import type { ArgSpec, TextContract } from "./protocol.ts";
-import { define, fieldStyles, labelStyles } from "./ui.ts";
+import { define, emit, fieldStyles, labelStyles } from "./ui.ts";
 
 // A type row is a name and its type text; an argument row is an ArgSpec.
 type Row = ArgSpec;
 
-export class ContractPanel extends LitElement {
-  static properties = { types: { state: true }, args: { state: true } };
-  declare types: Row[];
-  declare args: Row[];
+// A column is one input of a row, with what stands before it, if anything.
+type Column = { key: keyof Row; label: string; placeholder: string; wide?: boolean; before?: string };
 
-  constructor() {
-    super();
-    this.types = [];
-    this.args = [];
-  }
+// A section is the rows of one list, each with a button that removes it, and
+// a button that adds a blank row.
+type Section = { rows: "types" | "args"; title: string; blank: Row; columns: Column[] };
+
+const SECTIONS: Section[] = [
+  { rows: "types", title: "类型", blank: { name: "", type: "" }, columns: [
+    { key: "name", label: "类型名", placeholder: "名字" },
+    { key: "type", label: "类型定义", placeholder: "record{amount: int}", wide: true, before: "=" },
+  ] },
+  { rows: "args", title: "参数", blank: { name: "", type: "", doc: "" }, columns: [
+    { key: "name", label: "参数名", placeholder: "名字" },
+    { key: "type", label: "参数类型", placeholder: "类型，如 int、money、array<fxrate>" },
+    { key: "doc", label: "参数说明", placeholder: "说明", wide: true },
+  ] },
+];
+
+export class ContractPanel extends LitElement {
+  @state() accessor types: Row[] = [];
+  @state() accessor args: Row[] = [];
 
   set contract(contract: TextContract) {
     this.types = Object.entries(contract.types ?? {}).map(([name, type]) => ({ name, type }));
@@ -38,11 +51,11 @@ export class ContractPanel extends LitElement {
   // changed tells the page; it reads contract for what changed.
   private changed() {
     this.requestUpdate();
-    this.dispatchEvent(new Event("contract-change", { bubbles: true, composed: true }));
+    emit(this, "contract-change");
   }
 
-  private field(row: Row, key: keyof Row, label: string, placeholder: string, wide = false) {
-    return html`<input class=${wide ? "wide" : ""} .value=${row[key] ?? ""} placeholder=${placeholder} aria-label=${label} spellcheck="false"
+  private field(row: Row, { key, label, placeholder, wide, before }: Column) {
+    return html`${before ? html`<span>${before}</span>` : nothing}<input class=${wide ? "wide" : ""} .value=${row[key] ?? ""} placeholder=${placeholder} aria-label=${label} spellcheck="false"
       @change=${(event: Event) => { row[key] = (event.target as HTMLInputElement).value; this.changed(); }}>`;
   }
 
@@ -53,20 +66,16 @@ export class ContractPanel extends LitElement {
     }}>−</button>`;
   }
 
+  private section({ rows, title, blank, columns }: Section) {
+    return html`<section>
+      <h3 class="label">${title}</h3>
+      ${this[rows].map((row) => html`<div class="row">${columns.map((column) => this.field(row, column))}${this.removeButton(this[rows], row, title)}</div>`)}
+      <button class="add" @click=${() => { this[rows] = [...this[rows], { ...blank }]; }}>+ ${title}</button>
+    </section>`;
+  }
+
   render() {
-    return html`<div class="panel">
-      <section>
-        <h3 class="label">类型</h3>
-        ${this.types.map((row) => html`<div class="row">${this.field(row, "name", "类型名", "名字")}<span>=</span>
-          ${this.field(row, "type", "类型定义", "record{amount: int}", true)}${this.removeButton(this.types, row, "类型")}</div>`)}
-        <button class="add" @click=${() => { this.types = [...this.types, { name: "", type: "" }]; }}>+ 类型</button>
-      </section>
-      <section>
-        <h3 class="label">参数</h3>
-        ${this.args.map((row) => html`<div class="row">${this.field(row, "name", "参数名", "名字")}${this.field(row, "type", "参数类型", "类型，如 int、money、array<fxrate>")}
-          ${this.field(row, "doc", "参数说明", "说明", true)}${this.removeButton(this.args, row, "参数")}</div>`)}
-        <button class="add" @click=${() => { this.args = [...this.args, { name: "", type: "", doc: "" }]; }}>+ 参数</button>
-      </section></div>`;
+    return html`<div class="panel">${SECTIONS.map((section) => this.section(section))}</div>`;
   }
 
   static styles = [fieldStyles, labelStyles, css`
@@ -79,7 +88,6 @@ export class ContractPanel extends LitElement {
     input { flex: 0 1 150px; }
     input.wide { flex: 1 1 260px; }
     button { padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-3); background: var(--surface); cursor: pointer; }
-    button:focus-visible { outline: 3px solid var(--ring); }
     button.add { font-size: 11px; font-weight: 700; }
   `];
 }

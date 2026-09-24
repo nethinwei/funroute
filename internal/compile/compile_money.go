@@ -7,7 +7,6 @@ package compile
 import (
 	"fmt"
 	"slices"
-	"strconv"
 
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
@@ -15,30 +14,29 @@ import (
 )
 
 // literalValue is the value a literal compiles to: what it was written as,
-// unless inference read a decimal or 0 as a ratio, or 0 as money.
+// unless inference read a decimal or 0 as a ratio, or 0 as money. A decimal
+// becomes a ratio from its digits, never through a float64.
 func (c *bytecodeCompiler) literalValue(node *syntax.LiteralExpr) (machine.Value, error) {
-	typ, ok := c.inferred.NodeTypes[node.ID]
-	if !ok || typ.Kind() == node.Value.Kind() {
-		return node.Value, nil
+	written := node.Value.Kind()
+	kind := written
+	if typ, ok := c.inferred.NodeTypes[node.ID]; ok {
+		kind = typ.Kind()
 	}
-	switch typ.Kind() {
-	case machine.RatioKind:
-		if node.Value.Kind() == machine.IntKind {
-			return machine.RatioValue(money.Ratio{}), nil // only 0 may be read as a rate
-		}
-		// Exact: a decimal literal is refused unless the float64 is what was
-		// written (syntax.exactFloat), so its shortest text is the literal's.
-		written, _ := node.Value.Float()
-		ratio, err := money.ParseRatio(strconv.FormatFloat(written, 'f', -1, 64))
+	switch {
+	case kind == machine.MoneyKind:
+		return machine.MoneyValue(0, ""), nil
+	case kind == machine.RatioKind && written == machine.IntKind:
+		return machine.RatioValue(money.Ratio{}), nil // only 0 may be read as a rate
+	case kind == machine.RatioKind:
+		ratio, err := node.Decimal.Ratio()
 		if err != nil {
 			return machine.Value{}, syntax.Around(node, "type error: %v", err)
 		}
 		return machine.RatioValue(ratio), nil
-	case machine.MoneyKind:
-		return machine.MoneyValue(0, ""), nil
-	default:
-		return node.Value, nil
+	case written == machine.FloatKind:
+		return node.Float()
 	}
+	return node.Value, nil
 }
 
 // moneyLiteral is the value USD 1.70, 2.9% or 150 JPY / USD stands for,
@@ -49,43 +47,37 @@ func moneyLiteral(expr syntax.Expr, registry *machine.Registry) (machine.Value, 
 	if _, declared := registry.Money(); !declared {
 		return machine.Value{}, syntax.Around(expr, "type error: this registry declares no money")
 	}
+	var value machine.Value
+	var err error
 	switch node := expr.(type) {
 	case *syntax.MoneyExpr:
-		value, err := machine.ParseMoneyAmount(registry, node.Currency, node.Amount)
-		if err != nil {
-			return machine.Value{}, syntax.Around(node, "type error: %v", err)
-		}
-		return value, nil
+		value, err = machine.ParseMoneyAmount(registry, node.Currency, node.Amount)
 	case *syntax.RatioExpr:
-		ratio, err := money.ParseRatioIn(node.Value, node.Scale())
-		if err != nil {
-			return machine.Value{}, syntax.Around(node, "type error: %v", err)
-		}
-		return machine.RatioValue(ratio), nil
+		var ratio money.Ratio
+		ratio, err = money.ParseRatioIn(node.Value, node.Scale())
+		value = machine.RatioValue(ratio)
 	case *syntax.FxRateExpr:
-		value, err := machine.FxRateLiteral(registry, node.Rate, node.Quote, node.Base)
-		if err != nil {
-			return machine.Value{}, syntax.Around(node, "type error: %v", err)
-		}
-		return value, nil
+		value, err = machine.FxRateLiteral(registry, node.Rate, node.Quote, node.Base)
 	case *syntax.CurrencyExpr:
 		table, _ := registry.Currencies()
-		if _, err := table.Currency(node.Code); err != nil {
-			return machine.Value{}, syntax.Around(node, "type error: %v", err)
-		}
-		return machine.CurrencyValue(node.Code), nil
+		_, err = table.Currency(node.Code)
+		value = machine.CurrencyValue(node.Code)
 	default:
 		return machine.Value{}, fmt.Errorf("internal error: %T is not a money literal", expr)
 	}
+	if err != nil {
+		return machine.Value{}, syntax.Around(expr, "type error: %v", err)
+	}
+	return value, nil
 }
 
 // inferMoneyLiteral types a money or ratio literal by its value.
-func inferMoneyLiteral(expr syntax.Expr, state *inferState, context inferContext) ([]inferResult, error) {
+func inferMoneyLiteral(expr syntax.Expr, state *inferState, context inferContext) (typeTerm, error) {
 	value, err := moneyLiteral(expr, context.registry)
 	if err != nil {
-		return nil, err
+		return typeTerm{}, err
 	}
-	return record(expr, []inferResult{{typ: state.concrete(value.Type()), state: state}}), nil
+	return record(expr, state, state.concrete(value.Type())), nil
 }
 
 // enumValue is what @member compiles to: an enum's run-time value is its
@@ -129,14 +121,14 @@ func validateMoneyContract(options CompileOptions, registry *machine.Registry) e
 	})
 	_, declared := registry.Money()
 	for _, typ := range types {
-		if err := validateMoneyType(typ, registry, declared); err != nil {
+		if err := validateMoneyType(typ, declared); err != nil {
 			return contractErrorf("%v", err)
 		}
 	}
 	return nil
 }
 
-func validateMoneyType(typ machine.Type, registry *machine.Registry, declared bool) error {
+func validateMoneyType(typ machine.Type, declared bool) error {
 	return machine.WalkTypes(typ, func(inner machine.Type) error {
 		if inner.Kind() == machine.EnumKind && isRegistryEnum(inner.Name()) && declared {
 			return fmt.Errorf("enum<%s> is the registry's; name the contract's enum something else", inner.Name())

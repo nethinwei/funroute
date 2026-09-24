@@ -32,6 +32,9 @@ func TestEveryOpcodeIsExecutableAndNamed(t *testing.T) {
 		if !stepHandles(op) {
 			t.Fatalf("%s has a table row but no case in step", spec.name)
 		}
+		if !verifierTypes(op) {
+			t.Fatalf("%s has a table row but no rule in the verifier", spec.name)
+		}
 	}
 }
 
@@ -47,5 +50,18 @@ func stepHandles(op OpCode) (handled bool) {
 	}()
 	f := &frame{}
 	_, err := f.step(0, Instruction{Op: op})
+	return err == nil || !strings.Contains(err.Error(), "unknown opcode")
+}
+
+// verifierTypes reports whether the verifier has a rule for op, the way
+// stepHandles does for step.
+func verifierTypes(op OpCode) (typed bool) {
+	defer func() {
+		if recover() != nil {
+			typed = true
+		}
+	}()
+	v := &verifier{artifact: &Artifact{parts: ArtifactParts{Instructions: []Instruction{{Op: op}}}}}
+	_, err := v.step(0, &vstate{})
 	return err == nil || !strings.Contains(err.Error(), "unknown opcode")
 }

@@ -99,10 +99,7 @@ func (e ExactMoney) Round(mode Rounding) (Money, error) {
 // ConvertExact is m, in fx's base currency, in its quote currency, exactly:
 // Convert without the rounding, for a conversion inside round(…).
 func (c *Currencies) ConvertExact(m ExactMoney, fx FxRate) (ExactMoney, error) {
-	if err := fx.checked(); err != nil {
-		return ExactMoney{}, err
-	}
-	if _, err := c.pairOf(fx.pair.Base, fx.pair.Quote); err != nil {
+	if err := c.declared(fx); err != nil {
 		return ExactMoney{}, err
 	}
 	return c.convertExactAt(m, fx)

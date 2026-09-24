@@ -2,6 +2,7 @@ package machine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -59,48 +60,41 @@ type Example struct {
 	Result string `json:"result"`
 }
 
-// Logic registers a host function by its Go signature. fn is any func whose
-// parameters are Go types the boundary knows — bool, the int and float kinds,
-// string, slices and string-keyed maps of those at any depth, and types the
-// registry has DefineHandle'd — optionally preceded by a context.Context, and
-// whose results are (R, error) for such an R. The signature, the argument
-// conversions and the result conversion are derived by reflection once, at
-// registration; a call then goes through reflect.Call, which costs a few
-// hundred nanoseconds. The kernel's own functions are FunctionSpecs and do not
-// pay that; a host function that must not either can be one too.
-//
-//	funroute.Logic(registry, "risk.score_v1", funroute.Doc{Label: "风险评分", Cost: 25},
-//	    func(country string, amount int64) (float64, error) { … })
-func Logic(registry *Registry, name string, doc Doc, fn any) error {
-	return Model(registry, name, doc, fn, nil)
-}
-
-// Model registers a function with a batch implementation as well. batch takes
-// every request's arguments as slices — one per parameter of fn, in order,
-// after the optional context — and answers one result per request, the way
-// an inference engine is called. A Batch uses it; a plain Run uses fn.
-//
-//	funroute.Model(registry, "model.fraud_v3", doc,
-//	    func(ctx context.Context, emb *ort.Tensor) (float64, error) { … },
-//	    func(ctx context.Context, embs []*ort.Tensor) ([]float64, error) { … })
-func Model(registry *Registry, name string, doc Doc, fn, batch any) error {
-	single, err := reflectSignature(registry, fn)
-	if err != nil {
-		return fmt.Errorf("function %s: %w", name, err)
-	}
-	spec := FunctionSpec{
-		Name: name, Params: single.params, Result: single.result,
-		Eval: single.call,
-		Doc:  doc,
-	}
-	if batch != nil {
-		batched, err := reflectBatch(batch, single)
-		if err != nil {
-			return fmt.Errorf("function %s batch: %w", name, err)
+// reflectSpec fills Params, Result and Eval — and EvalBatch — from Go and
+// GoBatch, the Go functions a spec may name in their place. Go is any func
+// whose parameters are Go types the boundary knows — bool, the int and float
+// kinds, string, slices and string-keyed maps of those at any depth, and types
+// the registry has DefineHandle'd — optionally preceded by a context.Context,
+// and whose results are R, or (R, error), for such an R. The signature and the
+// conversions are derived by reflection once, here; a call then goes through
+// reflect.Call, which costs a few hundred nanoseconds. GoBatch takes every
+// request's arguments as slices — one per parameter of Go, in order, after the
+// optional context — and answers one result per request, the way an inference
+// engine is called: a Batch uses it, a plain Run uses Go.
+func (r *Registry) reflectSpec(spec *FunctionSpec) error {
+	if spec.Go == nil {
+		if spec.GoBatch != nil {
+			return fmt.Errorf("function %s: GoBatch needs Go", spec.Name)
 		}
-		spec.EvalBatch = batched.callBatch
+		return nil
 	}
-	return registry.Register(spec)
+	if spec.Params != nil || spec.Result.kind != InvalidKind || spec.Eval != nil || spec.EvalBatch != nil {
+		return fmt.Errorf("function %s: Go takes the place of Params, Result, Eval and EvalBatch", spec.Name)
+	}
+	single, err := reflectSignature(r, spec.Go)
+	if err != nil {
+		return fmt.Errorf("function %s: %w", spec.Name, err)
+	}
+	spec.Params, spec.Result, spec.Eval = single.params, single.result, single.call
+	if spec.GoBatch == nil {
+		return nil
+	}
+	batched, err := reflectBatch(spec.GoBatch, single)
+	if err != nil {
+		return fmt.Errorf("function %s batch: %w", spec.Name, err)
+	}
+	spec.EvalBatch = batched.callBatch
+	return nil
 }
 
 // reflected is a Go function with its FunRoute signature and the converters
@@ -108,6 +102,7 @@ func Model(registry *Registry, name string, doc Doc, fn, batch any) error {
 type reflected struct {
 	fn      reflect.Value
 	ctx     bool // whether the first Go parameter is a context.Context
+	fails   bool // whether the Go function returns an error after its result
 	params  []Type
 	result  Type
 	into    []func(Value) (reflect.Value, error)
@@ -126,15 +121,13 @@ func reflectSignature(registry *Registry, fn any) (*reflected, error) {
 	if typ.Kind() != reflect.Func {
 		return nil, fmt.Errorf("want a func, got %T", fn)
 	}
-	if typ.NumOut() != 2 || typ.Out(1) != errorType {
-		return nil, fmt.Errorf("must return (result, error)")
+	fails, ok := resultShape(typ)
+	if !ok {
+		return nil, errors.New("must return a result, or (result, error)")
 	}
-	out := &reflected{fn: value}
-	start := 0
-	if typ.NumIn() > 0 && typ.In(0) == contextType {
-		out.ctx = true
-		start = 1
-	}
+	out := &reflected{fn: value, fails: fails}
+	var start int
+	out.ctx, start = leadingContext(typ)
 	for i := start; i < typ.NumIn(); i++ {
 		param, err := reflectType(registry, typ.In(i))
 		if err != nil {
@@ -159,15 +152,13 @@ func reflectSignature(registry *Registry, fn any) (*reflected, error) {
 func reflectBatch(batch any, single *reflected) (*reflected, error) {
 	value := reflect.ValueOf(batch)
 	typ := value.Type()
-	if typ.Kind() != reflect.Func || typ.NumOut() != 2 || typ.Out(1) != errorType {
-		return nil, fmt.Errorf("must be a func returning (results, error)")
+	fails, ok := resultShape(typ)
+	if !ok {
+		return nil, errors.New("must be a func returning results, or (results, error)")
 	}
-	out := &reflected{fn: value, params: single.params, result: single.result, into: single.into, outOf: single.outOf, goTypes: single.goTypes}
-	start := 0
-	if typ.NumIn() > 0 && typ.In(0) == contextType {
-		out.ctx = true
-		start = 1
-	}
+	out := &reflected{fn: value, fails: fails, params: single.params, result: single.result, into: single.into, outOf: single.outOf, goTypes: single.goTypes}
+	var start int
+	out.ctx, start = leadingContext(typ)
 	if typ.NumIn()-start != len(single.goTypes) {
 		return nil, fmt.Errorf("takes %d parameters, the single form takes %d", typ.NumIn()-start, len(single.goTypes))
 	}
@@ -180,6 +171,28 @@ func reflectBatch(batch any, single *reflected) (*reflected, error) {
 		return nil, fmt.Errorf("result must be []%s, got %s", single.fn.Type().Out(0), got)
 	}
 	return out, nil
+}
+
+// leadingContext reports whether a Go function's first parameter is a
+// context.Context, and where the parameters the language passes start.
+func leadingContext(typ reflect.Type) (bool, int) {
+	if typ.NumIn() > 0 && typ.In(0) == contextType {
+		return true, 1
+	}
+	return false, 0
+}
+
+// resultShape reads a Go function's results: R alone, or R and an error.
+func resultShape(typ reflect.Type) (fails, ok bool) {
+	switch {
+	case typ.Kind() != reflect.Func:
+		return false, false
+	case typ.NumOut() == 1 && typ.Out(0) != errorType:
+		return false, true
+	case typ.NumOut() == 2 && typ.Out(0) != errorType && typ.Out(1) == errorType:
+		return true, true
+	}
+	return false, false
 }
 
 // call is the EvalFunc: convert, reflect.Call, convert back.
@@ -196,10 +209,19 @@ func (r *reflected) call(ctx context.Context, args []Value) (Value, error) {
 		in = append(in, converted)
 	}
 	results := r.fn.Call(in)
-	if err, _ := reflect.TypeAssert[error](results[1]); err != nil {
+	if err := r.failure(results); err != nil {
 		return Value{}, err
 	}
 	return r.outOf(results[0])
+}
+
+// failure is the error a call returned, if the function returns one.
+func (r *reflected) failure(results []reflect.Value) error {
+	if !r.fails {
+		return nil
+	}
+	err, _ := reflect.TypeAssert[error](results[1])
+	return err
 }
 
 // callBatch is the BatchEvalFunc: one slice per parameter, one call.
@@ -220,7 +242,7 @@ func (r *reflected) callBatch(ctx context.Context, calls [][]Value) ([]Value, er
 		in = append(in, column)
 	}
 	results := r.fn.Call(in)
-	if err, _ := reflect.TypeAssert[error](results[1]); err != nil {
+	if err := r.failure(results); err != nil {
 		return nil, err
 	}
 	list := results[0]

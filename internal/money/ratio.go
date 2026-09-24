@@ -1,7 +1,9 @@
 package money
 
 import (
+	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/bits"
@@ -90,11 +92,14 @@ func (r Ratio) Cmp(other Ratio) int {
 func compareProducts(a, b, c, d int64) int {
 	left, right := productSign(a, b), productSign(c, d)
 	if left != right || left == 0 {
-		return compareOrdered(int64(left), int64(right))
+		return cmp.Compare(left, right)
 	}
 	hi1, lo1 := bits.Mul64(magnitude(a), magnitude(b))
 	hi2, lo2 := bits.Mul64(magnitude(c), magnitude(d))
-	return compare128(hi1, lo1, hi2, lo2) * left
+	if hi1 != hi2 {
+		return cmp.Compare(hi1, hi2) * left
+	}
+	return cmp.Compare(lo1, lo2) * left
 }
 
 func productSign(a, b int64) int {
@@ -108,19 +113,8 @@ func productSign(a, b int64) int {
 	}
 }
 
-func compare128(hi1, lo1, hi2, lo2 uint64) int {
-	switch {
-	case hi1 != hi2 && hi1 > hi2, hi1 == hi2 && lo1 > lo2:
-		return 1
-	case hi1 == hi2 && lo1 == lo2:
-		return 0
-	default:
-		return -1
-	}
-}
-
 // Sign is -1, 0 or 1.
-func (r Ratio) Sign() int { return compareOrdered(r.num, 0) }
+func (r Ratio) Sign() int { return cmp.Compare(r.num, 0) }
 
 // IsZero reports the ratio 0.
 func (r Ratio) IsZero() bool { return r.num == 0 }
@@ -188,7 +182,7 @@ func parseFraction(top, bottom string) (Ratio, error) {
 		return Ratio{}, err
 	}
 	if den == 0 {
-		return Ratio{}, fmt.Errorf("has a zero denominator")
+		return Ratio{}, errors.New("has a zero denominator")
 	}
 	return ratioOf(num, den)
 }
@@ -199,7 +193,7 @@ func parsePlainDecimal(text string) (Ratio, error) {
 	whole, fraction, _ := strings.Cut(text, ".")
 	fraction = strings.TrimRight(fraction, "0")
 	if whole+fraction == "" && !strings.Contains(text, "0") {
-		return Ratio{}, fmt.Errorf("is not a decimal or a fraction of integers")
+		return Ratio{}, errors.New("is not a decimal or a fraction of integers")
 	}
 	if len(fraction) > 18 {
 		return Ratio{}, fmt.Errorf("has %d decimal places, at most 18 fit", len(fraction))
@@ -218,7 +212,7 @@ func parsePlainDecimal(text string) (Ratio, error) {
 // parseDigits reads plain digits into an int64: no sign, no separators.
 func parseDigits(text string) (int64, error) {
 	if text == "" || strings.Trim(text, "0123456789") != "" {
-		return 0, fmt.Errorf("is not a decimal or a fraction of integers")
+		return 0, errors.New("is not a decimal or a fraction of integers")
 	}
 	n, err := strconv.ParseInt(text, 10, 64)
 	if err != nil {
@@ -264,7 +258,7 @@ func (r Ratio) plus(other Ratio, sign int64) (Ratio, error) {
 	g := int64(gcd(uint64(b), uint64(d)))
 	left, leftFits := mul64(a, d/g)
 	right, rightFits := mul64(sign*c, b/g)
-	sum, sumFits := add64(left, right)
+	sum, sumFits := add64(left, right, 1)
 	if !leftFits || !rightFits || !sumFits {
 		return Ratio{}, errRatioOverflow
 	}
@@ -332,8 +326,13 @@ func mul64(a, b int64) (int64, bool) {
 	return c, c/b == a && (c < 0) == ((a < 0) != (b < 0))
 }
 
-// add64 is a+b and whether it fits an int64.
-func add64(a, b int64) (int64, bool) {
+// add64 is a + sign·b, sign being 1 or -1, and whether it fits an int64:
+// a result that wrapped lands on the wrong side of a.
+func add64(a, b, sign int64) (int64, bool) {
+	if sign < 0 {
+		c := a - b
+		return c, (c < a) == (b > 0)
+	}
 	c := a + b
-	return c, !(a > 0 && b > 0 && c < 0) && !(a < 0 && b < 0 && c >= 0)
+	return c, (c > a) == (b > 0)
 }

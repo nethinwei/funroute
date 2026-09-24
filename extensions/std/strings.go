@@ -1,6 +1,7 @@
 package std
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -13,7 +14,8 @@ import (
 // and putting reason codes back together. Everything here counts in characters
 // (UTF-8 code points), not bytes, because that is what someone reading a rule
 // means by "the first six".
-func registerStrings(registry *funroute.Registry) error {
+func caseSpecs() []funroute.FunctionSpec {
+	specs := make([]funroute.FunctionSpec, 0, 3)
 	for _, fn := range []struct {
 		name, label, description, param, result string
 		apply                                   func(string) string
@@ -22,27 +24,20 @@ func registerStrings(registry *funroute.Registry) error {
 		{"lower", "转小写", "把字符串转成小写。", "文本", "小写文本", strings.ToLower},
 		{"trim", "去空白", "去掉字符串两端的空白字符。", "文本", "去掉空白的文本", strings.TrimSpace},
 	} {
-		doc := funroute.Doc{Constexpr: true,
+		doc := funroute.Doc{
 			Label: fn.label, Description: fn.description, Category: "字符串", Cost: 3,
 			Params: []string{fn.param}, Result: fn.result,
 		}
 		apply := fn.apply
-		if err := logic(registry, fn.name, doc, func(text string) (string, error) {
+		specs = append(specs, logic(fn.name, doc, func(text string) (string, error) {
 			return apply(text), nil
-		}); err != nil {
-			return err
-		}
+		}))
 	}
-	if err := registerStringTests(registry); err != nil {
-		return err
-	}
-	if err := registerStringParts(registry); err != nil {
-		return err
-	}
-	return registerPadding(registry)
+	return specs
 }
 
-func registerStringTests(registry *funroute.Registry) error {
+func testSpecs() []funroute.FunctionSpec {
+	specs := make([]funroute.FunctionSpec, 0, 3)
 	for _, fn := range []struct {
 		name, label, description string
 		test                     func(string, string) bool
@@ -51,60 +46,55 @@ func registerStringTests(registry *funroute.Registry) error {
 		{"starts_with", "以此开头", "文本是不是以这个前缀开头，卡 BIN 与号段判断用它。", strings.HasPrefix},
 		{"ends_with", "以此结尾", "文本是不是以这个后缀结尾。", strings.HasSuffix},
 	} {
-		doc := funroute.Doc{Constexpr: true,
+		doc := funroute.Doc{
 			Label: fn.label, Description: fn.description, Category: "字符串", Cost: 3,
 			Params: []string{"文本", "子串"}, Result: "是否命中",
 		}
 		test := fn.test
-		if err := logic(registry, fn.name, doc, func(text, part string) (bool, error) {
+		specs = append(specs, logic(fn.name, doc, func(text, part string) (bool, error) {
 			return test(text, part), nil
-		}); err != nil {
-			return err
-		}
+		}))
 	}
-	return nil
+	return specs
 }
 
-func registerStringParts(registry *funroute.Registry) error {
-	if err := logic(registry, "slice", funroute.Doc{Constexpr: true,
-		Label:       "取子串",
-		Description: "按字符位置取一段，从 start 到 end（不含 end），下标从 0 开始；越界报错，不静默截断。",
-		Category:    "字符串", Cost: 4,
-		Params: []string{"文本", "起点", "终点"}, Result: "子串",
-	}, sliceString); err != nil {
-		return err
+func partSpecs() []funroute.FunctionSpec {
+	return []funroute.FunctionSpec{
+		logic("slice", funroute.Doc{
+			Label:       "取子串",
+			Description: "按字符位置取一段，从 start 到 end（不含 end），下标从 0 开始；越界报错，不静默截断。",
+			Category:    "字符串", Cost: 4,
+			Params: []string{"文本", "起点", "终点"}, Result: "子串",
+		}, sliceString),
+		logic("split", funroute.Doc{
+			Label:       "拆分",
+			Description: "按分隔符把文本拆成数组；分隔符为空是错误。",
+			Category:    "字符串", Cost: 5,
+			Params: []string{"文本", "分隔符"}, Result: "各段",
+		}, splitString),
+		logic("join", funroute.Doc{
+			Label:       "拼接",
+			Description: "用分隔符把一组文本连起来，拼原因码用它。",
+			Category:    "字符串", Cost: 5,
+			Params: []string{"各段", "分隔符"}, Result: "文本",
+		}, func(parts []string, separator string) (string, error) {
+			return strings.Join(parts, separator), nil
+		}),
+		logic("replace", funroute.Doc{
+			Label:       "替换",
+			Description: "把文本里出现的每一处 old 换成 new。",
+			Category:    "字符串", Cost: 5,
+			Params: []string{"文本", "被替换", "替换为"}, Result: "替换后的文本",
+		}, func(text, old, replacement string) (string, error) {
+			return strings.ReplaceAll(text, old, replacement), nil
+		}),
 	}
-	if err := logic(registry, "split", funroute.Doc{Constexpr: true,
-		Label:       "拆分",
-		Description: "按分隔符把文本拆成数组；分隔符为空是错误。",
-		Category:    "字符串", Cost: 5,
-		Params: []string{"文本", "分隔符"}, Result: "各段",
-	}, splitString); err != nil {
-		return err
-	}
-	if err := logic(registry, "join", funroute.Doc{Constexpr: true,
-		Label:       "拼接",
-		Description: "用分隔符把一组文本连起来，拼原因码用它。",
-		Category:    "字符串", Cost: 5,
-		Params: []string{"各段", "分隔符"}, Result: "文本",
-	}, func(parts []string, separator string) (string, error) {
-		return strings.Join(parts, separator), nil
-	}); err != nil {
-		return err
-	}
-	return logic(registry, "replace", funroute.Doc{Constexpr: true,
-		Label:       "替换",
-		Description: "把文本里出现的每一处 old 换成 new。",
-		Category:    "字符串", Cost: 5,
-		Params: []string{"文本", "被替换", "替换为"}, Result: "替换后的文本",
-	}, func(text, old, replacement string) (string, error) {
-		return strings.ReplaceAll(text, old, replacement), nil
-	})
 }
 
-// registerPadding is for the places a payment file or an order number has a
+// paddingSpecs are for the places a payment file or an order number has a
 // fixed width: 00001234, a 20-character reconciliation column.
-func registerPadding(registry *funroute.Registry) error {
+func paddingSpecs() []funroute.FunctionSpec {
+	specs := make([]funroute.FunctionSpec, 0, 2)
 	for _, side := range []struct {
 		name, label, side string
 		left              bool
@@ -113,18 +103,16 @@ func registerPadding(registry *funroute.Registry) error {
 		{"pad_right", "右侧补齐", "右侧", false},
 	} {
 		doc := funroute.Doc{
-			Constexpr: true, Label: side.label, Category: "字符串", Cost: 4,
+			Label: side.label, Category: "字符串", Cost: 4,
 			Description: "把文本补到指定的字符数（至多 10000），在" + side.side + "补；填充串必须是一个字符。已经够长就原样返回 —— 截断会悄悄丢掉数据。",
 			Params:      []string{"文本", "宽度", "填充"}, Result: "补齐后的文本",
 		}
 		left := side.left
-		if err := logic(registry, side.name, doc, func(text string, width int64, fill string) (string, error) {
+		specs = append(specs, logic(side.name, doc, func(text string, width int64, fill string) (string, error) {
 			return padTo(text, width, fill, left)
-		}); err != nil {
-			return err
-		}
+		}))
 	}
-	return nil
+	return specs
 }
 
 // maxPadWidth caps the width a padding call builds. A fixed-width field in a
@@ -162,7 +150,7 @@ func sliceString(text string, start, end int64) (string, error) {
 
 func splitString(text, separator string) ([]string, error) {
 	if separator == "" {
-		return nil, fmt.Errorf("split needs a separator")
+		return nil, errors.New("split needs a separator")
 	}
 	return strings.Split(text, separator), nil
 }

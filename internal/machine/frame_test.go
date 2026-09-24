@@ -53,19 +53,29 @@ func assertFallsBackTo(t *testing.T, registry *machine.Registry, source string, 
 func failingRegistry(t *testing.T) *machine.Registry {
 	t.Helper()
 	registry := machine.CoreRegistry()
-	if err := machine.Logic(registry, "fail_v1", machine.Doc{}, func(value int64) (int64, error) {
-		return 0, errors.New("engine unavailable")
+	if err := registry.Register(machine.FunctionSpec{
+		Name: "fail_v1",
+		Go: func(value int64) (int64, error) {
+			return 0, errors.New("engine unavailable")
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := machine.Logic(registry, "panic_v1", machine.Doc{}, func(value int64) (int64, error) {
-		panic("engine panic")
+	if err := registry.Register(machine.FunctionSpec{
+		Name: "panic_v1",
+		Go: func(value int64) (int64, error) {
+			panic("engine panic")
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := machine.Logic(registry, "slow_v1", machine.Doc{Timeout: time.Millisecond}, func(ctx context.Context, value int64) (int64, error) {
-		<-ctx.Done()
-		return 0, ctx.Err()
+	if err := registry.Register(machine.FunctionSpec{
+		Name: "slow_v1",
+		Doc:  machine.Doc{Timeout: time.Millisecond},
+		Go: func(ctx context.Context, value int64) (int64, error) {
+			<-ctx.Done()
+			return 0, ctx.Err()
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}

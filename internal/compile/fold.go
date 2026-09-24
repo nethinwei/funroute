@@ -29,28 +29,22 @@ const foldStack = 256
 // tryFold evaluates expr at compile time and emits its value as a constant.
 // It reports whether it did.
 func (c *bytecodeCompiler) tryFold(expr syntax.Expr) (bool, error) {
-	if !c.foldable(expr) {
-		return false, nil
-	}
-	value, err := c.evaluate(expr)
-	if err != nil {
-		// Folding only ran this because every call in it is constexpr and it
-		// reads no argument, so it computes the same thing every time: the
-		// failure is a certainty, including inside a branch that happens not
-		// to be taken — the way a constant division by zero is an error in Go
-		// even under `if false`.
+	// Folding only runs expr when every call in it is constexpr and it reads
+	// no argument, so it computes the same thing every time: a failure is a
+	// certainty, including inside a branch that happens not to be taken — the
+	// way a constant division by zero is an error in Go even under `if false`.
+	value, ok, err := c.foldValue(expr)
+	if err != nil || !ok {
 		return false, err
 	}
-	if value == nil {
-		return false, nil
+	// A value with no constant form — exact money inside a round — is left
+	// for the caller to emit as the work that computes it.
+	index, ok := c.addConstant(value, c.inferred.NodeTypes[expr.NodeID()])
+	if ok {
+		c.emit(machine.Instruction{Op: machine.OpConstant, A: index})
+		c.folded++
 	}
-	index, ok := c.intern(*value)
-	if !ok {
-		return false, nil
-	}
-	c.emit(machine.Instruction{Op: machine.OpConstant, A: index})
-	c.folded++
-	return true, nil
+	return ok, nil
 }
 
 // constexprOnly reports whether every call in expr may run while compiling.
@@ -80,42 +74,45 @@ func constexprOnly(expr syntax.Expr, inferred *inference, registry *machine.Regi
 	return true
 }
 
-// intern puts a compile-time value in the constant pool. Arrays and
-// dictionaries have no constant form, so they report false and the caller
-// emits the work instead.
-func (c *bytecodeCompiler) intern(value machine.Value) (int, bool) {
-	constant, err := machine.ConstantFromValue(value)
-	if err != nil {
+// addConstant puts value, of the static type typ, in the constant pool and
+// returns its index, or false for a value with no constant form.
+func (c *bytecodeCompiler) addConstant(value machine.Value, typ machine.Type) (int, bool) {
+	constant, ok := machine.ConstantOf(value, typ)
+	if !ok {
 		return 0, false
 	}
-	index := len(c.constants)
 	c.constants = append(c.constants, constant)
-	return index, true
+	return len(c.constants) - 1, true
 }
 
-// foldBinding evaluates a let binding at compile time and interns its value,
-// without emitting anything: a constant binding needs no local slot.
+// foldBinding evaluates a let binding at compile time and puts its value in
+// the constant pool, without emitting anything: a constant binding needs no
+// local slot. It reports false for a value that does not fold or has no
+// constant form.
 func (c *bytecodeCompiler) foldBinding(value syntax.Expr) (int, bool, error) {
+	var folded machine.Value
+	var ok bool
+	var err error
 	if literal, isLiteral := value.(*syntax.LiteralExpr); isLiteral {
-		written, err := c.literalValue(literal)
-		if err != nil {
-			return 0, false, err
-		}
-		index, ok := c.intern(written)
-		return index, ok, nil
+		folded, err = c.literalValue(literal)
+		ok = err == nil
+	} else {
+		folded, ok, err = c.foldValue(value)
 	}
-	if !c.foldable(value) {
-		return 0, false, nil
-	}
-	folded, err := c.evaluate(value)
-	if err != nil {
+	if err != nil || !ok {
 		return 0, false, err
 	}
-	if folded == nil {
-		return 0, false, nil
-	}
-	index, ok := c.intern(*folded)
+	index, ok := c.addConstant(folded, c.inferred.NodeTypes[value.NodeID()])
 	return index, ok, nil
+}
+
+// foldValue is expr's value at compile time and true, false when it is not
+// folded for a reason that is not a failure, or the failure itself.
+func (c *bytecodeCompiler) foldValue(expr syntax.Expr) (machine.Value, bool, error) {
+	if !c.foldable(expr) {
+		return machine.Value{}, false, nil
+	}
+	return c.evaluate(expr)
 }
 
 // foldable reports whether expr is worth trying to fold. It must read nothing
@@ -144,6 +141,9 @@ func (c *bytecodeCompiler) constantExpr(expr syntax.Expr) bool {
 	if _, literal := expr.(*syntax.LiteralExpr); literal {
 		return true
 	}
+	if c.readsArgument[expr.NodeID()] {
+		return false
+	}
 	for _, name := range syntax.FreeVariables(expr) {
 		if len(c.constIndex[name]) == 0 {
 			return false
@@ -154,15 +154,41 @@ func (c *bytecodeCompiler) constantExpr(expr syntax.Expr) bool {
 
 // evaluate compiles expr on its own and runs it. The nested compiler has
 // folding disabled, so a fold never recurses into another fold.
-// evaluate returns the value expr has at compile time, a nil value when it
+// evaluate returns the value expr has at compile time and true, false when it
 // cannot be folded for a reason that is not a failure, or the failure itself.
-func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (*machine.Value, error) {
+func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (machine.Value, bool, error) {
 	// The runtime checks the value it produced against the declared result
 	// type, so a node whose type inference left open is not folded.
 	result, ok := c.inferred.NodeTypes[expr.NodeID()]
 	if !ok {
-		return nil, nil
+		return machine.Value{}, false, nil
 	}
+	sub, ok := c.compileNested(expr)
+	if !ok {
+		return machine.Value{}, false, nil
+	}
+	value, err := machine.EvaluateClosed(sub.artifact(result), c.registry, foldFuel, foldStack)
+	if err != nil {
+		// Running out of the fold budget says nothing about the program: it is
+		// this pass that stopped, not the expression that failed.
+		if errors.Is(err, machine.ErrFuel) {
+			return machine.Value{}, false, nil
+		}
+		return machine.Value{}, false, syntax.AroundError(expr, err)
+	}
+	// Exact money has no constant form, and the round around it still has
+	// its rounding to do: the steps are left to run.
+	if machine.IsExact(value) {
+		return machine.Value{}, false, nil
+	}
+	c.roundSteps += sub.roundSteps
+	return value, true, nil
+}
+
+// compileNested compiles expr on a nested compiler with folding disabled. It
+// reports false when that compiler rejects expr: such an expression is simply
+// not folded, and the real compile reports whatever is wrong with it.
+func (c *bytecodeCompiler) compileNested(expr syntax.Expr) (*bytecodeCompiler, bool) {
 	sub := newBytecodeCompiler(c.registry, c.inferred)
 	sub.folding = true
 	// The nested compiler inherits the constant pool and the constant bindings,
@@ -170,26 +196,9 @@ func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (*machine.Value, error) {
 	// round(…) it sits in.
 	sub.constants = c.constants
 	sub.constIndex = c.constIndex
+	sub.readsArgument = c.readsArgument
 	sub.inRound = c.inRound
-	if err := sub.compile(expr); err != nil {
-		return nil, nil
-	}
-	value, err := machine.EvaluateClosed(sub.artifact(result), c.registry, foldFuel, foldStack)
-	if err != nil {
-		// Running out of the fold budget says nothing about the program: it is
-		// this pass that stopped, not the expression that failed.
-		if errors.Is(err, machine.ErrFuel) {
-			return nil, nil
-		}
-		return nil, syntax.AroundError(expr, err)
-	}
-	// Exact money has no constant form, and the round around it still has
-	// its rounding to do: the steps are left to run.
-	if machine.IsExact(value) {
-		return nil, nil
-	}
-	c.roundSteps += sub.roundSteps
-	return &value, nil
+	return sub, sub.compile(expr) == nil
 }
 
 // artifact wraps what the compiler has emitted so far, for a compile-time run.
@@ -200,7 +209,24 @@ func (c *bytecodeCompiler) artifact(result machine.Type) machine.ArtifactParts {
 		Constants:    c.constants,
 		Calls:        c.calls,
 		Locals:       c.nextLocal,
-		MaxStack:     maxStackDepth(c.instructions),
 		Instructions: c.instructions,
 	}
+}
+
+// argumentReaders is every node of the program whose subtree reads one of
+// its arguments, found in one walk up from the reads.
+func argumentReaders(program syntax.Expr) map[int]bool {
+	reads := syntax.FreeReads(program)
+	out := map[int]bool{}
+	var mark func(syntax.Expr) bool
+	mark = func(expr syntax.Expr) bool {
+		hit := reads[expr.NodeID()]
+		for _, child := range syntax.Children(expr) {
+			hit = mark(child) || hit
+		}
+		out[expr.NodeID()] = hit
+		return hit
+	}
+	mark(program)
+	return out
 }

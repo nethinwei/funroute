@@ -2,6 +2,7 @@ package hosttest
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/funroute"
@@ -82,5 +83,51 @@ func TestHostTellsAMissingRateApart(t *testing.T) {
 		if (err == nil) != caught || (!caught && !errors.Is(err, funroute.ErrNoFxRate)) {
 			t.Errorf("Run(%q) with no rates error = %v, want caught: %v, else => ErrNoFxRate", source, err, caught)
 		}
+	}
+}
+
+// quotaError is a host's own error type, with what the host needs from it.
+type quotaError struct{ retryAfter int }
+
+func (e *quotaError) Error() string { return "quota exhausted" }
+
+// An extension's own error is classed and kept: errors.Is answers the class,
+// and the host still finds its sentinel and its type behind it.
+func TestHostFindsItsOwnErrorBehindTheClass(t *testing.T) {
+	t.Parallel()
+	errDown := errors.New("pricing service down")
+	for name, test := range map[string]struct {
+		returned error
+		find     func(error) bool
+		want     string
+	}{
+		"a sentinel": {errDown, func(err error) bool { return errors.Is(err, errDown) }, "extension failed: pricing service down"},
+		"a type": {&quotaError{retryAfter: 30}, func(err error) bool {
+			var quota *quotaError
+			return errors.As(err, &quota) && quota.retryAfter == 30
+		}, "extension failed: quota exhausted"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			registry := funroute.CoreRegistry()
+			if err := registry.Register(funroute.FunctionSpec{
+				Name: "pricing.quote_v1",
+				Go:   func(int64) (int64, error) { return 0, test.returned },
+			}); err != nil {
+				t.Fatal(err)
+			}
+			artifact, err := funroute.CompileExpr(`pricing.quote_v1(1)`, registry, funroute.CompileOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime, err := funroute.Instantiate(artifact, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = runtime.Run(t.Context(), nil, funroute.RunOptions{})
+			if !errors.Is(err, funroute.ErrExtension) || !test.find(err) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("pricing.quote_v1 returning %v: error = %v, want ErrExtension with the host's error behind it, reading %q", test.returned, err, test.want)
+			}
+		})
 	}
 }

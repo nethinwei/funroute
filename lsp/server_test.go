@@ -12,11 +12,11 @@ import (
 func TestInitializeAgreesOnAnEncoding(t *testing.T) {
 	t.Parallel()
 	utf8 := newSession(t, standard(t), `{"capabilities":{"general":{"positionEncodings":["utf-16","utf-8"]}}}`)
-	if got := utf8.out[0]["result"].(map[string]any)["capabilities"].(map[string]any)["positionEncoding"]; got != "utf-8" {
+	if got := as[map[string]any](t, as[map[string]any](t, utf8.out[0]["result"])["capabilities"])["positionEncoding"]; got != "utf-8" {
 		t.Errorf("offered utf-16 and utf-8, agreed on %v, want utf-8", got)
 	}
 	utf16 := newSession(t, standard(t), `{}`)
-	if got := utf16.out[0]["result"].(map[string]any)["capabilities"].(map[string]any)["positionEncoding"]; got != "utf-16" {
+	if got := as[map[string]any](t, as[map[string]any](t, utf16.out[0]["result"])["capabilities"])["positionEncoding"]; got != "utf-16" {
 		t.Errorf("offered nothing, agreed on %v, want utf-16", got)
 	}
 }
@@ -60,6 +60,16 @@ func (s *session) request(method string, params any) any {
 	return nil
 }
 
+// as is v as a T, and fails the test when v is something else.
+func as[T any](t *testing.T, v any) T {
+	t.Helper()
+	got, ok := v.(T)
+	if !ok {
+		t.Fatalf("%#v is not a %T", v, got)
+	}
+	return got
+}
+
 func (s *session) notify(method string, params any) {
 	s.send(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
 }
@@ -81,7 +91,7 @@ func (s *session) diagnostics(uri string) []any {
 	for _, message := range slices.Backward(s.out) {
 		params, _ := message["params"].(map[string]any)
 		if message["method"] == "textDocument/publishDiagnostics" && params["uri"] == uri {
-			return params["diagnostics"].([]any)
+			return as[[]any](s.t, params["diagnostics"])
 		}
 	}
 	s.t.Fatalf("nothing was published for %s", uri)

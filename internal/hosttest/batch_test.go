@@ -25,20 +25,27 @@ func modelRegistry(t *testing.T, batches *int) *funroute.Registry {
 	if err := funroute.DefineHandle[*tensor](registry, "engine.tensor"); err != nil {
 		t.Fatal(err)
 	}
-	err := funroute.Model(registry, "model.embed_v1", funroute.Doc{Cost: 10},
-		func(features []float64) (*tensor, error) { return &tensor{rows: [][]float64{features}}, nil },
-		func(features [][]float64) ([]*tensor, error) {
+	err := registry.Register(funroute.FunctionSpec{
+		Name: "model.embed_v1",
+		Doc:  funroute.Doc{Cost: 10},
+		Go:   func(features []float64) (*tensor, error) { return &tensor{rows: [][]float64{features}}, nil },
+		GoBatch: func(features [][]float64) ([]*tensor, error) {
 			*batches++
 			out := make([]*tensor, len(features))
 			for i, row := range features {
 				out[i] = &tensor{rows: [][]float64{row}}
 			}
 			return out, nil
-		})
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = funroute.Logic(registry, "model.score_v1", funroute.Doc{Cost: 10}, func(t *tensor) (float64, error) { return t.rows[0][0], nil })
+	err = registry.Register(funroute.FunctionSpec{
+		Name: "model.score_v1",
+		Doc:  funroute.Doc{Cost: 10},
+		Go:   func(t *tensor) (float64, error) { return t.rows[0][0], nil },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,15 +41,16 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 - AST 不公开，程序一律用 ExprJSON 交换。`internal/hosttest/value_test.go` 的类型断言块把每个公开类型写一遍。
 
 **值的边界：零拷贝、零分配**
-- 容器的 backing 就是原生 Go 值（`[]float64`、`map[string]int64`、`[]Money`），交给 `Value` 与从 `Value` 取出的都不复制，从那一刻起**只读**。新增取值入口必须保持"交出 backing、注释写明只读"。唯一的映射表是 `machine/container.go`，唯一的 Go 类型清单是 `machine/convert.go` 的 `fromGo`。
+- 容器的 backing 就是原生 Go 值（`[]float64`、`map[string]int64`、`[]Money`），交给 `Value` 与从 `Value` 取出的都不复制，从那一刻起**只读**。新增取值入口必须保持"交出 backing、注释写明只读"。唯一的 backing 表是 `machine/container.go` 的 `natives`；读 backing 的 switch（容器操作、`fromGo`、`host_access.go`）为了热路径不改成间接调用，由 `TestEveryBackingIsHandledEverywhere` 逐项对照。
 - 不变量在值诞生处确立（NaN/Inf、币种已声明），使用处不复查；深度扫描会让大向量每次多花微秒级时间。金额容器在边界上做一次只读 O(n) 扫描，这是唯一的例外。
 - 边界上不许分配：`TestArgumentChecksDoNotAllocate`、`TestProgramScalarsDoNotAllocate`、`BenchmarkVectorPassThrough`（耗时与长度无关）守着。`machine/host_access.go` 是唯一用 `unsafe` 的文件。
 
 **金额**（规则见 README「金额」，取舍见 roadmap）
 - 金额运算只写在 `internal/money` 的 Go 方法里，内核与 std 只做 Value 转换，所以宿主与规则永远同一个答案。语言能做而 Go 做不到的运算就是缺口。
 - 一律 int64（比例、汇率、精确金额都是约分的分子/分母，中间积 128 位），不用 `math/big`；放不下是 `ErrArithmetic`，从不悄悄舍入。
+- 金额类永不经过 float：小数字面量是 `money.Decimal`（`LiteralExpr.Decimal`），读作比例用 `Decimal.Ratio()`，读作 float 用 `LiteralExpr.Float()`（不精确就报错）；边界上 float64 进不了金额类（`money_coerce.go` 的 `exactInput`）。
 - 没有默认舍入：落到最小单位之间的内核运算注册两次（`registerRounded`），不带模式的标 `exactStep`，只能写在 `round(…, @mode)` 里；精确值不出 `round`（`compile/exact.go`），不折叠进常量。
-- 换汇只在 `using` 里；`using` 永远隔离、单跳、同一货币对后写的赢；找不到是 `ErrNoFxRate`。币种在运算处检查（`money.Meet`），契约不约束币种。
+- 换汇只在 `using` 里；`using` 永远隔离、单跳、同一货币对后写的赢；找不到是 `ErrNoFxRate`。币种在运算处检查（`money` 的 `meet`），契约不约束币种。
 - 不用金额的程序 digest 逐字节不变（`TestMoneyCapabilityKeepsDigests`）。
 
 **终止性与成本**
@@ -74,6 +75,7 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 **执行性能**
 - 不要为一个 opcode 给 `Instruction` 加字段：解释循环按值复制指令，多一个切片头就让所有程序慢约 7%。操作数放进已有字段，需要换算的在装载时算好放进 `Runtime`。
 - 改了 `Instruction` 或 `frame.step`，与改动前交替跑 `BenchmarkDispatch`/`BenchmarkCall` 对照。
+- 类型在装载时由 `machine/verify.go` 证明一次，执行路径不再检查内核运算的结果、容器的元素、循环收集的值与局部槽是否绑定；只检查宿主函数的回答。新增会产生值的执行路径，先让验证器能证明它的类型。
 
 **Go 只做语言**
 - Go 只输出语言事实（词法、语法、类型、诊断、格式化），不输出颜色、布局、控件、文案。前端只经 LSP 拿事实，不理解 ExprJSON、不写语法规则；结构视图的每次修改都是对原文区间的替换。
@@ -86,11 +88,11 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 
 | 改了什么 | 还要动哪里 |
 |---|---|
-| 新增 opcode | `machine/opcode.go` 表一行 + `frame.step` 一个 case（`TestEveryOpcodeIsExecutableAndNamed` 兜底） |
-| 新增惰性形式 | `machine/registry.go` 的 `knownForms`、节点的 `Form()`、`machine/catalog.go` 的 `formDescriptors`、termination.md |
-| 新增 ExprJSON 节点 | `syntax/ast.go`（带 tag，加进 `nodeTypes`）；语义在 `compile/infer_expr.go`、`compiler.go`；打印在 `syntax/print.go`、`format.go`；按节点分派的还有 `compile/enum.go`、`fold.go`；示例要用到它（`lsp/funroute_test.go` 检查） |
+| 新增 opcode | `machine/opcode.go` 表一行 + `verify.go` 的类型规则 + `frame.step` 一个 case（`TestEveryOpcodeIsExecutableAndNamed` 兜底） |
+| 新增形式 | `machine/catalog.go` 的 `languageForms` 一行（可开关的写 `optional`，能包进表达式的写 `wrap` 模板）；节点的 kind tag 写 `,form`（可开关的再写 `,optional`，`TestTheOptionalFormsAreTheMachines` 对照）；termination.md |
+| 新增 ExprJSON 节点 | `syntax/ast.go`（嵌入 `Node` 并写 `kind` tag，字段带 tag，加进 `nodeTypes`）；语义在 `compile/infer_expr.go`、`compiler.go`；打印在 `syntax/print.go`、`format.go`；按节点分派的还有 `compile/enum.go`、`fold.go`；示例要用到它（`lsp/funroute_test.go` 检查） |
 | 改语法 | README 附录 A 的文法；跑 `go test ./internal/syntax -run XXX -fuzz FuzzFormatRoundTrip -fuzztime 60s` |
-| 新增函数 | 只注册 `FunctionSpec` 或 `Logic`/`Model`，目录与 LSP 自动生效；`Doc` 是唯一的函数元数据结构；ABI 版本写进名字（`route.score_v1`） |
+| 新增函数 | 只经 `Registry.Register` 注册 `FunctionSpec`（手写 `Params`/`Result`/`Eval`，或填 `Go`/`GoBatch` 按 Go 签名反射），目录与 LSP 自动生效；`Doc` 是唯一的函数元数据结构；ABI 版本写进名字（`route.score_v1`） |
 | 新增官方函数或重载 | 补案例（内核 `machine/examples.go`，std `extensions/std/examples.go`），测试要求案例选中每个重载；一个名字服务多种元素类型用 std 的 `eachType` 并在 `TestNamesCoverEveryElementTypeTheyClaim` 加一行 |
 | 新增纯函数 | 标 `Doc.Constexpr` |
 | 新增凭空造容器的函数 | 标 `Doc.BoundedArgs`，理由写进 termination.md 定理 B 之后 |
@@ -98,18 +100,20 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 | 新增金额函数 | 先在 `internal/money` 的 Go 方法上实现；会舍入的内核运算用 `registerRounded`；非内核函数自己检查容器里币种一致（std 的 `amountsOf`）；宿主先 `DeclareMoney` 再注册 std |
 | 改 `Doc` 里影响编译的字段 | `machine/manifest.go` 的 `ManifestFunction` |
 | `Kind` 加值 | `kindNames`；有运行时表示的还有 `Value.hasType`/`Type()`/`Any()`、`compile/infer.go` 的 `typeTerm`、`implicitTypeScore`、`ParseType` |
-| `reflectType`/`fromGo` 新增 Go 类型 | `machine/host_plan.go` 的 `newCodecFor` 与 `host_access.go` |
+| 新增原生 backing | `machine/container.go` 的 `natives` 一行与 `host_plan.go` 的 `native` 常量；`TestEveryBackingIsHandledEverywhere` 指出每个还要补的 switch |
+| `reflectType`/`fromGo` 新增非容器的 Go 类型 | `machine/host_plan.go` 的 `newCodecFor` 与 `host_access.go` |
 | 新增公开 API | `funroute.go` 对应的一节；新类型进 `internal/hosttest/value_test.go` 的断言块，并在 `internal/hosttest` 以宿主视角用一次。能不加就不加 |
 | 新增例子 | 只改 `web/funroute-examples.json`（源码 + 契约 + 入参 + 期望值）；示例合起来要覆盖演示注册表的全部函数、形式、运算符与节点 |
 | 新增语言服务能力 | `lsp/`：标准方法优先，专有的用 `funroute/*` 或 `workspace/executeCommand`；`web/wasm` 只是传输 |
 | 新增颜色 | 只在 `web/tokens.css`，用 `light-dark(浅, 深)`；组件只消费 token |
-| 新增前端代码 | `web/src/*.ts`；组件经 `ui.ts` 的 `define` 注册并加进 `package.json` 入口；位置一律按 UTF-16 数（`editor.ts` 的 `offsetAt`）；运行时依赖只加实际导入的包 |
+| 新增前端代码 | `web/src/*.ts`；组件经 `ui.ts` 的 `define` 注册并加进 `package.json` 入口；位置一律按 UTF-16 数（`projection.ts` 的 `offsetAt`）；运行时依赖只加实际导入的包 |
+| 新增错误类别 | `machine/errors.go` 的 `errorClasses` 一行（最具体的在前，写明 `fallback` 接不接）与 README 的错误表（`TestTheReadmeTableIsTheErrorClasses` 对照） |
 | 新的设计决策 | `docs/roadmap.md` 的「关键设计决策」 |
 
 ## 命令
 
 ```bash
-make ci        # 提交前必须全过：格式、import、前端检查与构建、vet、staticcheck、modernize（均含 js/wasm）、lint、build、wasm、Go 与 JS 测试
+make ci        # 提交前必须全过：格式、import、前端检查与构建、vet、staticcheck、modernize、golangci-lint（均含 js/wasm）、deadcode、lint、build、wasm、Go 与 JS 测试
 make test | make lint | make vet | make fmt
 make wasm      # web/dist/funroute.wasm
 make web       # web/dist/*.js（先在 web/ 里 npm install；产物不提交）
@@ -119,13 +123,14 @@ go test ./internal/machine -bench . -benchtime 2000x              # VM 基准
 go run ./cmd/funroute run -expr 'let(bps = 250, amount * bps / 10000)' -types 'amount=int' -args '{"amount":100000}'
 ```
 
-检查工具（staticcheck、modernize、goimports）按 Makefile 顶部的固定版本装进 `.tools/`，不是依赖。
+检查工具（staticcheck、modernize、goimports、deadcode、golangci-lint）按 Makefile 顶部的固定版本装进 `.tools/`，不是依赖；golangci-lint 启用哪些检查见 `.golangci.yml`。
 
 ## 代码规范
 
 - `make lint`（`tools/lint`，只用标准库）强制：函数 ≤ **50 行**，嵌套 ≤ **3 层**（函数字面量也算一层），文件 ≤ **800 行**。超限就拆，不放宽阈值。
-- staticcheck 开全部检查：每个包有包注释（internal 包写在 `doc.go`），导出标识符的注释以名字开头。有意的例外用 `//lint:ignore <检查> <原因>` 就地说明。编译期断言用包级 `var _ T`。
+- staticcheck 开全部检查：每个包有包注释（internal 包写在 `doc.go`），导出标识符的注释以名字开头。编译期断言用包级 `var _ T`。
 - modernize：用当前 Go 更直接的写法。
+- **检查工具报出的每一条都要处理，没有"有意为之"**：`make ci`（含 golangci-lint 与 `deadcode -test`）与 gopls/IDE 诊断都算。不用 `//lint:ignore`、`//nolint` 遮盖。处理必须**绝对无害**：行为、`errors.Is` 的结果、错误文案、输出（含 nil 与空切片的区别）、digest 都不变，分配与耗时不变差；对外能力（公开包走得到的 API）不因"仓库里没人调"而删，补测试。做不到无害就停下来说明，不为消一条告警改语义。
 - import 两组：标准库、空行、本模块，组内按字母序（`goimports -local github.com/nethinwei/funroute`）。
 
 ## 测试规范

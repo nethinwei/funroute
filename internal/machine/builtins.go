@@ -22,19 +22,22 @@ func CoreRegistry() *Registry {
 	return r
 }
 
-// registerComparisons adds the four ordering predicates. The remaining
-// operators are pure sugar over these and if: a != b is if(eq(a,b),false,true),
-// a && b is if(a,b,false), a || b is if(a,true,b), !a is if(a,false,true).
+// comparisons are the four ordering predicates, here and in the money kernel.
+// The remaining operators are pure sugar over these and if: a != b is
+// if(eq(a,b),false,true), a && b is if(a,b,false), a || b is if(a,true,b), !a
+// is if(a,false,true).
+var comparisons = []struct {
+	name, label string
+	accept      func(int) bool
+}{
+	{"lt", "小于", func(order int) bool { return order < 0 }},
+	{"le", "小于等于", func(order int) bool { return order <= 0 }},
+	{"gt", "大于", func(order int) bool { return order > 0 }},
+	{"ge", "大于等于", func(order int) bool { return order >= 0 }},
+}
+
 func registerComparisons(registry *Registry) {
-	for _, comparison := range []struct {
-		name, label string
-		accept      func(int) bool
-	}{
-		{"lt", "小于", func(order int) bool { return order < 0 }},
-		{"le", "小于等于", func(order int) bool { return order <= 0 }},
-		{"gt", "大于", func(order int) bool { return order > 0 }},
-		{"ge", "大于等于", func(order int) bool { return order >= 0 }},
-	} {
+	for _, comparison := range comparisons {
 		registerComparison(registry, comparison.name, comparison.label, comparison.accept)
 	}
 }

@@ -32,3 +32,9 @@ func WithPrefetched(options RunOptions, prefetched map[int]Prefetched) RunOption
 // ArtifactWith is an unsealed artifact over parts, for the table tests of
 // how an instruction is checked on load.
 func ArtifactWith(parts ArtifactParts) *Artifact { return &Artifact{parts: parts} }
+
+// ConstantValue reads a constant back, as Instantiate does.
+func ConstantValue(c Constant) (Value, error) { return c.value() }
+
+// StackDepth is how deep loading found the runtime's stack gets.
+func StackDepth(r *Runtime) int { return r.depth }

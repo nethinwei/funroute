@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -11,7 +12,7 @@ import (
 func TestDiagnosticsFollowTheText(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, standard(t), `{}`)
-	s.notify("github.com/nethinwei/funroute/setContract", contract("fee:int", "x:int"))
+	s.notify("funroute/setContract", contract("fee:int", "x:int"))
 	s.open("file:///a.fr", "let(rate = fee * 2, rate + x)")
 	if got := s.diagnostics("file:///a.fr"); len(got) != 0 {
 		t.Fatalf("a correct program has diagnostics %v, want none", got)
@@ -24,19 +25,20 @@ func TestDiagnosticsFollowTheText(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("diagnostics after reading y = %v, want one", got)
 	}
-	diagnostic := got[0].(map[string]any)
+	diagnostic := as[map[string]any](t, got[0])
 	want := map[string]any{"start": map[string]any{"line": 1.0, "character": 9.0}, "end": map[string]any{"line": 1.0, "character": 10.0}}
-	if fmt.Sprint(diagnostic["range"]) != fmt.Sprint(want) || !strings.Contains(diagnostic["message"].(string), `"y"`) {
+	if fmt.Sprint(diagnostic["range"]) != fmt.Sprint(want) || !strings.Contains(as[string](t, diagnostic["message"]), `"y"`) {
 		t.Errorf("the undeclared read is reported as %v, want range %v and a message naming \"y\"", diagnostic, want)
 	}
-	s.notify("github.com/nethinwei/funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{{"name": "fee", "type": "nope"}}}})
+	s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{{"name": "fee", "type": "nope"}}}})
 	if got := s.diagnostics("file:///a.fr"); len(got) != 1 || !strings.Contains(fmt.Sprint(got), "argument") {
 		t.Errorf("a broken contract is reported as %v, want one diagnostic about the argument", got)
 	}
 }
 
 func contract(args ...string) map[string]any {
-	var declared []map[string]string
+	// No args stay nil, so the contract sends null as it always has.
+	declared := slices.Grow([]map[string]string(nil), len(args))
 	for _, arg := range args {
 		name, typ, _ := strings.Cut(arg, ":")
 		declared = append(declared, map[string]string{"name": name, "type": typ, "doc": name + " 的说明"})
@@ -79,7 +81,7 @@ func TestMoneyDiagnosticsCoverWhatTheyAreAbout(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			s := newSession(t, withMoney(t), `{}`)
-			s.notify("github.com/nethinwei/funroute/setContract", contract(test.args...))
+			s.notify("funroute/setContract", contract(test.args...))
 			s.open("file:///a.fr", test.text)
 			checkOneDiagnostic(t, s, test.text, test.message, test.want)
 		})
@@ -102,13 +104,13 @@ func TestMoneyWithoutADeclarationIsReported(t *testing.T) {
 		t.Run(test.text, func(t *testing.T) {
 			t.Parallel()
 			s := newSession(t, standard(t), `{}`)
-			s.notify("github.com/nethinwei/funroute/setContract", contract("x:int"))
+			s.notify("funroute/setContract", contract("x:int"))
 			s.open("file:///a.fr", test.text)
 			checkOneDiagnostic(t, s, test.text, "declares no money", test.want)
 		})
 	}
 	s := newSession(t, standard(t), `{}`)
-	s.notify("github.com/nethinwei/funroute/setContract", contract("x:money"))
+	s.notify("funroute/setContract", contract("x:money"))
 	s.open("file:///b.fr", "x")
 	if got := s.diagnostics("file:///b.fr"); len(got) != 1 || !strings.Contains(fmt.Sprint(got), "declares money") {
 		t.Errorf("a money contract without money declared is reported as %v, want one diagnostic saying money is not declared", got)
@@ -123,8 +125,8 @@ func checkOneDiagnostic(t *testing.T, s *session, text, message string, want [4]
 	if len(got) != 1 {
 		t.Fatalf("%q: diagnostics = %v, want one", text, got)
 	}
-	diagnostic := got[0].(map[string]any)
-	if !strings.Contains(diagnostic["message"].(string), message) {
+	diagnostic := as[map[string]any](t, got[0])
+	if !strings.Contains(as[string](t, diagnostic["message"]), message) {
 		t.Errorf("%q: message = %q, want it to contain %q", text, diagnostic["message"], message)
 	}
 	checkRange(t, text, diagnostic["range"], want[0], want[1], want[2], want[3])

@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -47,10 +48,8 @@ func tokenOf(lexeme syntax.Lexeme) (int, int, bool) {
 	if lexeme.Role == syntax.RoleLocal {
 		modifiers = 1
 	}
-	for i, typ := range tokenTypes {
-		if typ == name {
-			return i, modifiers, true
-		}
+	if i := slices.Index(tokenTypes, name); i >= 0 {
+		return i, modifiers, true
 	}
 	return 0, 0, false
 }

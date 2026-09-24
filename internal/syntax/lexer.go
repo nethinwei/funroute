@@ -263,34 +263,36 @@ func (l *lexer) number() (token, error) {
 	if l.pos < len(l.source) && l.source[l.pos] == '.' {
 		kind = tokenFloat
 		l.pos++
-		if !l.startsDigit() {
+		if !l.startsDigitAt(l.pos) {
 			return token{}, At(start, "syntax error: float requires digits after '.'")
 		}
 		l.digits()
 	}
-	if l.pos < len(l.source) && (l.source[l.pos] == 'e' || l.source[l.pos] == 'E') {
+	exponent := l.pos < len(l.source) && (l.source[l.pos] == 'e' || l.source[l.pos] == 'E')
+	if exponent {
 		kind = tokenFloat
 		l.pos++
 		if l.pos < len(l.source) && (l.source[l.pos] == '+' || l.source[l.pos] == '-') {
 			l.pos++
 		}
-		if !l.startsDigit() {
+		if !l.startsDigitAt(l.pos) {
 			return token{}, At(start, "syntax error: exponent requires digits")
 		}
 		l.digits()
+	}
+	// 1_000_000 reads as a million; the separator never reaches strconv.
+	text := strings.ReplaceAll(l.source[start:l.pos], "_", "")
+	unit := l.ratioUnit()
+	switch {
+	case unit == "":
+		return token{kind: kind, text: text, pos: start}, nil
+	case exponent:
 		// A % or bps against a number is a ratio's unit, this one's too: and
 		// a ratio is written plainly, never with an exponent.
-		if unit := l.ratioUnit(); unit != "" {
-			return token{}, At(start, "syntax error: %s is a ratio with an exponent: a ratio is a plain decimal, such as 1000%%", l.source[start:l.pos])
-		}
-		// 1_000_000 reads as a million; the separator never reaches strconv.
-		return token{kind: kind, text: strings.ReplaceAll(l.source[start:l.pos], "_", ""), pos: start}, nil
-	}
-	text := strings.ReplaceAll(l.source[start:l.pos], "_", "")
-	if unit := l.ratioUnit(); unit != "" {
+		return token{}, At(start, "syntax error: %s is a ratio with an exponent: a ratio is a plain decimal, such as 1000%%", l.source[start:l.pos])
+	default:
 		return token{kind: tokenRatio, text: text + unit, pos: start}, nil
 	}
-	return token{kind: kind, text: text, pos: start}, nil
 }
 
 // ratioUnit reads the unit a ratio is written with right after its number:
@@ -308,10 +310,6 @@ func (l *lexer) ratioUnit() string {
 		return "%"
 	}
 	return ""
-}
-
-func (l *lexer) startsDigit() bool {
-	return l.pos < len(l.source) && l.source[l.pos] >= '0' && l.source[l.pos] <= '9'
 }
 
 // digits consumes digits and the _ separators between them.

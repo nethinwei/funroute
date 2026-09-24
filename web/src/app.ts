@@ -3,13 +3,14 @@
 // this file only moves them between the pieces.
 import { html, nothing, render } from "lit";
 import type { EditorView } from "@codemirror/view";
+import { formatDocument } from "@codemirror/lsp-client";
 import { startClient } from "./lsp.ts";
-import { createEditor, formatDocument, offsetAt, replaceAll } from "./editor.ts";
-import { Text, argsText } from "./projection.ts";
-import type { ArgSpec, Catalog, Diagnostic, MoneySpec, RunResult, TextContract, Tree } from "./protocol.ts";
+import { createEditor, replaceAll } from "./editor.ts";
+import { argsText, offsetAt } from "./projection.ts";
+import type { Argument, Catalog, Diagnostic, Doc, MoneySpec, RunResult, TextContract, Tree } from "./protocol.ts";
 import type { ContractPanel } from "./contract.ts";
 import type { RunPanel } from "./runner.ts";
-import type { Block, Edit, StructureView } from "./canvas.ts";
+import type { Edit, StructureView } from "./canvas.ts";
 import { switchRefusal, type Checked, type View } from "./views.ts";
 import "./contract.ts";
 import "./runner.ts";
@@ -47,32 +48,33 @@ async function showDiagnostics(diagnostics: Diagnostic[]) {
   if (first) setStatus(said, first.severity === 1 ? "error" : "warning");
   else setStatus("编译通过", "ok");
   client.sync();
-  const text = editor.state.doc.toString();
+  const doc = editor.state.doc;
   const [tree, args] = await Promise.all([
     client.request<object, Tree | null>("funroute/syntaxTree", DOC),
-    client.request<object, ArgSpec[]>("funroute/arguments", DOC),
+    client.request<object, Argument[]>("funroute/arguments", DOC),
   ]);
-  if (text !== editor.state.doc.toString()) return;
-  structure.text = new Text(text);
+  if (doc !== editor.state.doc) return;
+  structure.text = doc;
   structure.tree = tree;
   runner.args = args;
   $<HTMLElement>("#tree").textContent = JSON.stringify(tree, null, 2);
-  checked = { source: text, error: first?.severity === 1 ? said : undefined };
+  checked = { source: doc.toString(), error: first?.severity === 1 ? said : undefined };
   markTabs();
 }
 
 // The two views of the expression. checked is what the server last said of
 // the text; the other tab is offered only while that text is sound.
+const VIEWS: View[] = ["code", "structure"];
+const other = (view: View): View => (view === "code" ? "structure" : "code");
 let view: View = "code";
 let checked: Checked | null = null;
 const tabs: Record<View, HTMLElement> = { code: $("#tab-code"), structure: $("#tab-structure") };
 const panels: Record<View, HTMLElement> = { code: $("#editor"), structure: $("#structure") };
 
 function markTabs() {
-  const other: View = view === "code" ? "structure" : "code";
   const refusal = switchRefusal(checked, editor.state.doc.toString());
-  tabs[other].setAttribute("aria-disabled", String(refusal !== ""));
-  tabs[other].title = refusal;
+  tabs[other(view)].setAttribute("aria-disabled", String(refusal !== ""));
+  tabs[other(view)].title = refusal;
 }
 
 function showView(next: View) {
@@ -83,7 +85,7 @@ function showView(next: View) {
     return;
   }
   view = next;
-  for (const name of ["code", "structure"] as View[]) {
+  for (const name of VIEWS) {
     const on = name === view;
     tabs[name].setAttribute("aria-selected", String(on));
     tabs[name].tabIndex = on ? 0 : -1;
@@ -97,21 +99,19 @@ function showView(next: View) {
   }
 }
 
-for (const name of ["code", "structure"] as View[]) {
+for (const name of VIEWS) {
   tabs[name].addEventListener("click", () => showView(name));
   tabs[name].addEventListener("keydown", (event) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    const next: View = name === "code" ? "structure" : "code";
-    showView(next);
+    showView(other(name));
     tabs[view].focus();
   });
 }
 
 structure.addEventListener("edit", (event) => {
   const { range, text, source } = (event as CustomEvent<Edit>).detail;
-  const doc = editor.state.doc;
-  if (doc.toString() !== source) return;
-  editor.dispatch({ changes: { from: offsetAt(doc, range.start), to: offsetAt(doc, range.end), insert: text } });
+  if (editor.state.doc !== source) return;
+  editor.dispatch({ changes: { from: offsetAt(source, range.start), to: offsetAt(source, range.end), insert: text } });
 });
 
 // The contract is two panels' work: the types and arguments are the contract
@@ -132,7 +132,8 @@ async function run() {
     const args = argsText(runner.entries());
     const started = performance.now();
     const result = await client.request<object, RunResult>("workspace/executeCommand", { command: "funroute.run", arguments: [{ uri: URI, args }] });
-    runner.done(result, performance.now() - started);
+    runner.elapsed = performance.now() - started;
+    runner.result = result;
   } catch (error) {
     failed("运行没有完成")(error);
   } finally {
@@ -164,9 +165,8 @@ function pick(example: Example) {
 }
 
 function showExamples(examples: Example[]) {
-  const categories = [...new Set(examples.map((example) => example.category))];
-  render(categories.map((category) => html`<div class="example-group"><span class="example-group__label">${category}</span>
-    <div class="example-group__items">${examples.filter((example) => example.category === category).map((example) => html`
+  render(Object.entries(Object.groupBy(examples, (example) => example.category)).map(([category, group]) => html`<div class="example-group"><span class="example-group__label">${category}</span>
+    <div class="example-group__items">${group!.map((example) => html`
       <button class="example" title=${example.description} @click=${() => pick(example)}>${example.label}</button>`)}</div></div>`),
   $("#examples"));
 }
@@ -174,13 +174,16 @@ function showExamples(examples: Example[]) {
 function showCatalog(catalog: Catalog) {
   $("#version").textContent = `artifact v${catalog.artifact_version}`;
   structure.lazy = new Set(catalog.functions.filter((item) => item.special).map((item) => item.name));
-  const blocks = new Map<string, Block>();
+  const blocks = new Map<string, Doc>();
+  const wraps = new Map<string, string>();
   for (const item of [...catalog.special_forms, ...catalog.functions]) {
-    if (!blocks.has(item.name)) blocks.set(item.name, { label: item.doc.label, description: item.doc.description ?? "" });
+    if (!blocks.has(item.name)) blocks.set(item.name, item.doc);
+    if (item.wrap) wraps.set(item.name, item.wrap);
   }
   structure.blocks = blocks;
-  const categories = [...new Set(catalog.functions.map((item) => item.doc.category))].sort();
-  render(html`${moneySection(catalog.money)}${categories.map((category) => html`<h4>${category}</h4><dl>${catalog.functions.filter((item) => item.doc.category === category).map((item) => html`
+  structure.wraps = wraps;
+  const groups = Object.groupBy(catalog.functions, (item) => item.doc.category);
+  render(html`${moneySection(catalog.money)}${Object.keys(groups).sort().map((category) => html`<h4>${category}</h4><dl>${groups[category]!.map((item) => html`
     <dt><code>${item.signature}</code></dt><dd>${item.doc.label}${item.doc.description ? `：${item.doc.description}` : ""}</dd>`)}</dl>`)}`,
   $("#reference"));
 }
@@ -196,17 +199,22 @@ function moneySection(money?: MoneySpec) {
 
 // The theme follows the system until someone picks one. The page's own
 // state is the truth; localStorage only remembers it, and may refuse to.
-const THEMES = ["system", "light", "dark"];
-const THEME_NAMES: Record<string, string> = { system: "跟随系统", light: "浅色", dark: "深色" };
+// Following the system, each theme-color keeps the colour the page gives it
+// for its media query, so the browser follows the system too; a theme picked
+// is the colour of both.
+const THEMES: Record<string, string> = { system: "跟随系统", light: "浅色", dark: "深色" };
 function applyTheme(theme: string) {
   if (theme === "system") delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = theme;
-  $("#theme").setAttribute("aria-label", `主题：${THEME_NAMES[theme]}，点击切换`);
-  const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
-  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.setAttribute("content", dark ? "#0d1017" : "#ffffff");
+  $("#theme").setAttribute("aria-label", `主题：${THEMES[theme]}，点击切换`);
+  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+    meta.dataset.system ??= meta.content;
+    meta.content = theme === "system" ? meta.dataset.system : theme === "dark" ? "#0d1017" : "#ffffff";
+  }
 }
 $("#theme").addEventListener("click", () => {
-  const next = THEMES[(THEMES.indexOf(document.documentElement.dataset.theme ?? "system") + 1) % THEMES.length];
+  const order = Object.keys(THEMES);
+  const next = order[(order.indexOf(document.documentElement.dataset.theme ?? "system") + 1) % order.length];
   try { localStorage.setItem("funroute:theme", next); } catch { /* the switch still works, unremembered */ }
   applyTheme(next);
 });

@@ -45,13 +45,6 @@ func ReadFxRate(base, quote, text string) (FxRate, error) { return readFxRate(ba
 // PairOf is the table's one Pair for two declared currencies.
 func PairOf(c *Currencies, base, quote string) (*Pair, error) { return c.pairOf(base, quote) }
 
-// Meet is the currency two amounts combine in: theirs when they agree, the
-// other's when one is the currency-less zero.
-func Meet(a, b string) (string, error) { return meet(a, b) }
-
-// MulDivRound is a·b/d rounded once by mode, 128 bits wide in between.
-func MulDivRound(a, b, d int64, mode Rounding) (int64, error) { return mulDivRound(a, b, d, mode) }
-
 // CheckFxRate refuses the zero FxRate, which is no exchange rate.
 func CheckFxRate(fx FxRate) error { return fx.checked() }
 

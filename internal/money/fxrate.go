@@ -1,6 +1,7 @@
 package money
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -121,11 +122,8 @@ func (f FxRate) Inverse() (FxRate, error) {
 // Chain is f and then next: base to quote, then quote onward. The chain from
 // a currency back to itself is no exchange rate.
 func (f FxRate) Chain(next FxRate) (FxRate, error) {
-	if err := f.checked(); err != nil {
-		return FxRate{}, err
-	}
-	if err := next.checked(); err != nil {
-		return FxRate{}, err
+	if f.pair == nil || next.pair == nil {
+		return FxRate{}, cmp.Or(f.checked(), next.checked())
 	}
 	if f.pair.Quote != next.pair.Base {
 		return FxRate{}, fmt.Errorf("%w: %s→%s cannot follow %s→%s", ErrCurrency, next.pair.Base, next.pair.Quote, f.pair.Base, f.pair.Quote)
@@ -161,11 +159,8 @@ func (f FxRate) MulRatio(r Ratio) (FxRate, error) {
 
 // Cmp orders two rates of one pair: which buys more of the quote currency.
 func (f FxRate) Cmp(other FxRate) (int, error) {
-	if err := f.checked(); err != nil {
-		return 0, err
-	}
-	if err := other.checked(); err != nil {
-		return 0, err
+	if f.pair == nil || other.pair == nil {
+		return 0, cmp.Or(f.checked(), other.checked())
 	}
 	if !f.samePair(other) {
 		return 0, fmt.Errorf("%w: %s→%s and %s→%s", ErrCurrency, f.pair.Base, f.pair.Quote, other.pair.Base, other.pair.Quote)
@@ -215,7 +210,7 @@ func readFxRate(base, quote, text string) (FxRate, error) {
 	}
 	r, err := parseRatio(text)
 	if err != nil {
-		return FxRate{}, fmt.Errorf("%w: exchange rate %q %v", ErrArithmetic, text, err)
+		return FxRate{}, Classify(ErrArithmetic, fmt.Sprintf("exchange rate %q ", text), err)
 	}
 	return newFxRate(&Pair{Base: base, Quote: quote}, r)
 }
@@ -233,7 +228,7 @@ func (c *Currencies) FxRate(base, quote, rate string) (FxRate, error) {
 	}
 	parsed, err := parseRatio(rate)
 	if err != nil {
-		return FxRate{}, fmt.Errorf("%w: %s→%s: exchange rate %q %v", ErrArithmetic, base, quote, rate, err)
+		return FxRate{}, Classify(ErrArithmetic, fmt.Sprintf("%s→%s: exchange rate %q ", base, quote, rate), err)
 	}
 	return newFxRate(pair, parsed)
 }
@@ -273,13 +268,20 @@ func (c *Currencies) Implied(over, under Money) (FxRate, error) {
 // between their places and rounded once by mode. The currency-less zero is
 // zero in the quote currency.
 func (c *Currencies) Convert(m Money, fx FxRate, mode Rounding) (Money, error) {
-	if err := fx.checked(); err != nil {
-		return Money{}, err
-	}
-	if _, err := c.pairOf(fx.pair.Base, fx.pair.Quote); err != nil {
+	if err := c.declared(fx); err != nil {
 		return Money{}, err
 	}
 	return c.convertAt(m, fx, mode)
+}
+
+// declared refuses the zero FxRate and a rate between currencies the table
+// does not declare.
+func (c *Currencies) declared(fx FxRate) error {
+	if err := fx.checked(); err != nil {
+		return err
+	}
+	_, err := c.pairOf(fx.pair.Base, fx.pair.Quote)
+	return err
 }
 
 // convertAt is m converted at fx, whose currencies are declared.

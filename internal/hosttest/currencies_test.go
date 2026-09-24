@@ -217,8 +217,9 @@ func TestAHostComputesBesideTheRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var amounts []funroute.Money
-	for _, text := range []string{"USD 1.00", "USD 2.00", "USD 4.00"} {
+	texts := []string{"USD 1.00", "USD 2.00", "USD 4.00"}
+	amounts := make([]funroute.Money, 0, len(texts))
+	for _, text := range texts {
 		amount, err := table.Parse(text)
 		if err != nil {
 			t.Fatal(err)

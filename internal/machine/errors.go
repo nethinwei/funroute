@@ -36,6 +36,46 @@ var (
 	ErrNoFxRate = money.ErrNoFxRate
 )
 
+// errorClass is one class an error can have: its sentinel, the name a
+// language service reports it by, and whether fallback moves past it.
+type errorClass struct {
+	err      error
+	name     string
+	fallback bool
+}
+
+// errorClasses is every class, the most specific first. An error is its most
+// specific class: that names it, and decides whether fallback takes it —
+// data not yet at hand is taken, the rule's or the data's own error never.
+var errorClasses = []errorClass{
+	{ErrUnavailable, "unavailable", true},
+	{ErrNoFxRate, "nofxrate", true},
+	{ErrCurrency, "currency", false},
+	{ErrArithmetic, "arithmetic", false},
+	{ErrContract, "contract", false},
+	{ErrCompile, "compile", false},
+	{ErrFuel, "fuel", false},
+	{ErrDeadline, "deadline", true},
+	{ErrExtension, "extension", true},
+}
+
+// classOf is err's most specific class, and false for an error with none.
+func classOf(err error) (errorClass, bool) {
+	for _, class := range errorClasses {
+		if errors.Is(err, class.err) {
+			return class, true
+		}
+	}
+	return errorClass{}, false
+}
+
+// ClassName is the name of err's most specific class, such as "currency",
+// and "" for an error that has none.
+func ClassName(err error) string {
+	class, _ := classOf(err)
+	return class.name
+}
+
 // errDivisionByZero is every division by zero the machine refuses.
 var errDivisionByZero = fmt.Errorf("%w: division by zero", ErrArithmetic)
 

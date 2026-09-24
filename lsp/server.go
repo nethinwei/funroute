@@ -14,10 +14,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/nethinwei/funroute/internal/compile"
 	"github.com/nethinwei/funroute/internal/machine"
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // Server is one client's session: the documents it opened, the contract it
@@ -50,17 +52,17 @@ type requestHandler func(*Server, json.RawMessage) (any, error)
 type notificationHandler func(*Server, json.RawMessage) error
 
 var requests = map[string]requestHandler{
-	"initialize":                               (*Server).initialize,
-	"shutdown":                                 func(*Server, json.RawMessage) (any, error) { return nil, nil },
-	"textDocument/semanticTokens/full":         (*Server).semanticTokens,
-	"textDocument/formatting":                  (*Server).formatting,
-	"textDocument/hover":                       (*Server).hover,
-	"textDocument/completion":                  (*Server).completion,
-	"textDocument/signatureHelp":               (*Server).signatureHelp,
-	"github.com/nethinwei/funroute/syntaxTree": (*Server).syntaxTree,
-	"github.com/nethinwei/funroute/catalog":    (*Server).catalog,
-	"github.com/nethinwei/funroute/arguments":  (*Server).argumentList,
-	"workspace/executeCommand":                 (*Server).executeCommand,
+	"initialize":                       (*Server).initialize,
+	"shutdown":                         func(*Server, json.RawMessage) (any, error) { return null, nil },
+	"textDocument/semanticTokens/full": (*Server).semanticTokens,
+	"textDocument/formatting":          (*Server).formatting,
+	"textDocument/hover":               (*Server).hover,
+	"textDocument/completion":          (*Server).completion,
+	"textDocument/signatureHelp":       (*Server).signatureHelp,
+	"funroute/syntaxTree":              (*Server).syntaxTree,
+	"funroute/catalog":                 (*Server).catalog,
+	"funroute/arguments":               (*Server).argumentList,
+	"workspace/executeCommand":         (*Server).executeCommand,
 }
 
 var notifications = map[string]notificationHandler{
@@ -69,7 +71,7 @@ var notifications = map[string]notificationHandler{
 	"textDocument/didOpen":   (*Server).didOpen,
 	"textDocument/didChange": (*Server).didChange,
 	"textDocument/didClose":  (*Server).didClose,
-	"github.com/nethinwei/funroute/setContract": (*Server).setContract,
+	"funroute/setContract":   (*Server).setContract,
 }
 
 // Handle processes one message. A request is answered through send; a
@@ -161,7 +163,7 @@ func errorCode(err error) int {
 
 func decode(params json.RawMessage, into any) error {
 	if err := json.Unmarshal(params, into); err != nil {
-		return fmt.Errorf("%w: %v", errInvalidParams, err)
+		return money.Classify(errInvalidParams, "", err)
 	}
 	return nil
 }
@@ -182,10 +184,8 @@ func (s *Server) initialize(params json.RawMessage) (any, error) {
 	if err := decode(params, &in); err != nil {
 		return nil, err
 	}
-	for _, encoding := range in.Capabilities.General.PositionEncodings {
-		if encoding == utf8Encoding {
-			s.encoding = utf8Encoding
-		}
+	if slices.Contains(in.Capabilities.General.PositionEncodings, utf8Encoding) {
+		s.encoding = utf8Encoding
 	}
 	s.applyContract(in.InitializationOptions.Contract)
 	return map[string]any{"capabilities": s.capabilities(), "serverInfo": map[string]string{"name": "funroute"}}, nil

@@ -18,16 +18,13 @@ func (s *Server) formatting(params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A text that cannot be formatted is left as it is: the diagnostics
-	// already say why, and a failed request would only add a popup.
-	formatted, err := syntax.FormatSource(doc.text)
-	if err != nil {
-		return []textEdit{}, nil
+	if formatted, err := syntax.FormatSource(doc.text); err == nil && formatted != doc.text {
+		return []textEdit{{Range: doc.whole(s.encoding), NewText: formatted}}, nil
 	}
-	if formatted == doc.text {
-		return []textEdit{}, nil
-	}
-	return []textEdit{{Range: doc.whole(s.encoding), NewText: formatted}}, nil
+	// A text that cannot be formatted is left as it is, like one already
+	// formatted: the diagnostics already say why, and a failed request would
+	// only add a popup.
+	return []textEdit{}, nil
 }
 
 // at is the open document and the byte a position request names.
@@ -53,18 +50,20 @@ func (s *Server) hover(params json.RawMessage) (any, error) {
 	}
 	analysis, _ := s.analysisOf(doc)
 	if analysis == nil {
-		return nil, nil
+		return null, nil
 	}
 	fact, ok := analysis.At(offset)
 	if !ok {
-		return nil, nil
+		return null, nil
 	}
 	text := doc.text[fact.Span.Start:fact.Span.End]
 	if fact.Type != nil {
 		text += ": " + fact.Type.String()
 	}
-	lines := []string{"```funroute\n" + text + "\n```"}
-	lines = append(lines, s.explain(fact, doc.text[fact.Span.Start:fact.Span.End])...)
+	explained := s.explain(fact, doc.text[fact.Span.Start:fact.Span.End])
+	lines := make([]string, 0, 1+len(explained))
+	lines = append(lines, "```funroute\n"+text+"\n```")
+	lines = append(lines, explained...)
 	span := doc.rangeOf(fact.Span, s.encoding)
 	return hover{Contents: markupContent{Kind: "markdown", Value: strings.Join(lines, "\n\n")}, Range: &span}, nil
 }
@@ -233,27 +232,26 @@ func completionCandidates(text string, offset int) []string {
 	}
 }
 
+var closerOf = map[string]byte{"(": ')', "[": ']', "{": '}'}
+
 // openBrackets is what closes the brackets prefix leaves open, innermost first.
 func openBrackets(prefix string) string {
 	lexemes, _ := syntax.Lexemes(prefix)
-	var open []byte
+	var closers []byte
 	for _, lexeme := range lexemes {
 		if lexeme.Class != syntax.ClassPunctuation {
 			continue
 		}
 		switch text := prefix[lexeme.Start:lexeme.End]; text {
 		case "(", "[", "{":
-			open = append(open, text[0])
+			closers = append(closers, closerOf[text])
 		case ")", "]", "}":
-			if len(open) > 0 {
-				open = open[:len(open)-1]
+			if len(closers) > 0 {
+				closers = closers[:len(closers)-1]
 			}
 		}
 	}
-	closers := make([]byte, len(open))
-	for i := range open {
-		closers[i] = map[byte]byte{'(': ')', '[': ']', '{': '}'}[open[len(open)-1-i]]
-	}
+	slices.Reverse(closers)
 	return string(closers)
 }
 
@@ -282,14 +280,11 @@ func (s *Server) buildCallables() []completionItem {
 		documentation := describe(function.Doc()) + examples(s.namedExamples(function.Name()))
 		items = append(items, completionItem{Label: function.Name(), Kind: kindFunction, SortText: "2" + function.Name(), Detail: detail, Documentation: markdown(documentation)})
 	}
-	forms := map[string]machine.Doc{}
+	// A form written like a call, switch(…) or let(…), completes as its
+	// keyword; the others are operators and brackets.
 	for _, form := range s.registry.Catalog().SpecialForms() {
-		forms[form.Name()] = form.Doc()
-	}
-	for _, form := range append(s.registry.EnabledForms(), "let") {
-		if form != machine.ForForm {
-			doc := forms[string(form)]
-			items = append(items, completionItem{Label: string(form), Kind: kindKeyword, SortText: "3" + string(form), Documentation: markdown(describe(doc) + examples(doc.Examples))})
+		if name, doc := form.Name(), form.Doc(); strings.HasPrefix(form.Syntax(), name+"(") {
+			items = append(items, completionItem{Label: name, Kind: kindKeyword, SortText: "3" + name, Documentation: markdown(describe(doc) + examples(doc.Examples))})
 		}
 	}
 	return items
@@ -343,23 +338,16 @@ func (s *Server) signatureHelp(params json.RawMessage) (any, error) {
 	}
 	lexemes := lexemesOf(doc)
 	name, active, ok := enclosingCall(doc.text, lexemes, offset)
-	if !ok {
-		return nil, nil
-	}
 	overloads := s.registry.Overloads(name)
-	if len(overloads) == 0 {
-		return nil, nil
+	if !ok || len(overloads) == 0 {
+		return null, nil
 	}
-	help := signatureHelp{ActiveParameter: active}
 	// The active signature is the first that has the argument being typed.
-	help.ActiveSignature = -1
-	for i, function := range overloads {
+	first := slices.IndexFunc(overloads, func(function *machine.RegisteredFunction) bool { return len(function.Params) > active })
+	help := signatureHelp{ActiveSignature: max(first, 0), ActiveParameter: active}
+	for _, function := range overloads {
 		help.Signatures = append(help.Signatures, signatureOf(function))
-		if help.ActiveSignature < 0 && len(function.Params) > active {
-			help.ActiveSignature = i
-		}
 	}
-	help.ActiveSignature = max(help.ActiveSignature, 0)
 	return help, nil
 }
 

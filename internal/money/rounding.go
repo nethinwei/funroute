@@ -41,21 +41,33 @@ var roundingNames = [...]string{"", "half_even", "half_up", "half_down", "down",
 // of the rounding enum.
 func RoundingModes() []string { return append([]string(nil), roundingNames[1:]...) }
 
-func (r Rounding) String() string {
-	if int(r) < len(roundingNames) && r != 0 {
-		return roundingNames[r]
+func (r Rounding) String() string { return nameOf(roundingNames[:], r) }
+
+// ParseRounding reads a mode's name.
+func ParseRounding(name string) (Rounding, error) {
+	if mode, ok := valueOf[Rounding](roundingNames[:], name); ok {
+		return mode, nil
+	}
+	return 0, fmt.Errorf("unknown rounding %q (want one of half_even, half_up, half_down, down, up, ceiling, floor)", name)
+}
+
+// nameOf is the name of an enumeration's value, "invalid" for one it does
+// not name; names[i] is the name of value i, "" for no value.
+func nameOf[T ~uint8](names []string, value T) string {
+	if int(value) < len(names) && names[value] != "" {
+		return names[value]
 	}
 	return "invalid"
 }
 
-// ParseRounding reads a mode's name.
-func ParseRounding(name string) (Rounding, error) {
-	for i, known := range roundingNames {
-		if i > 0 && known == name {
-			return Rounding(i), nil
+// valueOf is the value an enumeration's name names, as nameOf spells it.
+func valueOf[T ~uint8](names []string, name string) (T, bool) {
+	for i, known := range names {
+		if known == name && known != "" {
+			return T(i), true
 		}
 	}
-	return 0, fmt.Errorf("unknown rounding %q (want one of half_even, half_up, half_down, down, up, ceiling, floor)", name)
+	return 0, false
 }
 
 var errFixedOverflow = fmt.Errorf("%w: amount overflows int64", ErrArithmetic)

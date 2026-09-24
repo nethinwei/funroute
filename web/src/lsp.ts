@@ -32,7 +32,7 @@ const editorFeatures = [
   serverDiagnostics(),
 ];
 
-export function workerTransport(worker: Worker): Transport {
+function workerTransport(worker: Worker): Transport {
   const handlers = new Set<(message: string) => void>();
   worker.addEventListener("message", (event: MessageEvent<string>) => {
     for (const handler of handlers) handler(event.data);
@@ -48,8 +48,8 @@ export function workerTransport(worker: Worker): Transport {
 const defaultWorker = () => new Worker(new URL("../funroute-lsp-worker.js", import.meta.url));
 
 // The client asks for no position encoding, so the server counts UTF-16
-// units — what JavaScript strings count, and what editor.ts offsetAt and
-// projection.ts Text assume.
+// units — what JavaScript strings count, and what projection.ts offsetAt
+// assumes.
 //
 // startClient connects a client to a fresh server. listen hears every
 // notification the server sends, before the editor's own handlers do.

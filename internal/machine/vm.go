@@ -3,8 +3,12 @@ package machine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"sync"
+
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 type Runtime struct {
@@ -17,7 +21,9 @@ type Runtime struct {
 	updates [][]int
 	// money is what the runtime knows about the currencies its arguments
 	// carry; empty for a program without money.
-	money  moneyPlan
+	money moneyPlan
+	// depth is how deep the stack gets, which loading proved.
+	depth  int
 	frames sync.Pool
 }
 
@@ -35,7 +41,7 @@ type RunOptions struct {
 // signatures to the supplied registry.
 func Instantiate(artifact *Artifact, registry *Registry) (*Runtime, error) {
 	if artifact == nil || registry == nil {
-		return nil, fmt.Errorf("artifact and registry are required")
+		return nil, errors.New("artifact and registry are required")
 	}
 	snapshot, err := snapshotArtifact(artifact)
 	if err != nil {
@@ -44,23 +50,36 @@ func Instantiate(artifact *Artifact, registry *Registry) (*Runtime, error) {
 	if err := validateArtifact(snapshot); err != nil {
 		return nil, err
 	}
-	constants, err := loadConstants(snapshot)
-	if err != nil {
-		return nil, err
-	}
-	functions, err := bindFunctions(snapshot, registry)
+	runtime, err := newRuntime(snapshot, registry)
 	if err != nil {
 		return nil, err
 	}
 	if err := checkMoneyStamp(snapshot, registry); err != nil {
 		return nil, err
 	}
-	if err := declaredConstants(constants, registry); err != nil {
+	if err := declaredConstants(runtime.constants, registry); err != nil {
+		return nil, err
+	}
+	return runtime, nil
+}
+
+// newRuntime loads a validated artifact's constants and binds its calls.
+func newRuntime(artifact *Artifact, registry *Registry) (*Runtime, error) {
+	constants, err := loadConstants(artifact)
+	if err != nil {
+		return nil, err
+	}
+	functions, err := bindFunctions(artifact, registry)
+	if err != nil {
+		return nil, err
+	}
+	depth, err := verify(artifact, functions)
+	if err != nil {
 		return nil, err
 	}
 	return &Runtime{
-		artifact: snapshot, registry: registry, constants: constants, functions: functions,
-		updates: resolveUpdates(snapshot), money: newMoneyPlan(snapshot, registry),
+		artifact: artifact, registry: registry, constants: constants, functions: functions, depth: depth,
+		updates: resolveUpdates(artifact), money: newMoneyPlan(artifact, registry),
 	}, nil
 }
 
@@ -110,31 +129,22 @@ func resolveUpdates(artifact *Artifact) [][]int {
 //
 // It skips what Instantiate checks — the digest, and the JSON snapshot — because
 // this artifact was built moments ago in this process and never left it. Its
-// bytecode is still validated.
+// bytecode is still validated. fuel and maxStack are the limits themselves:
+// the compiler always passes both, so zero is not the default a run's is.
 func EvaluateClosed(parts ArtifactParts, registry *Registry, fuel uint64, maxStack int) (Value, error) {
-	ctx := context.Background()
 	if registry == nil {
-		return Value{}, fmt.Errorf("a registry is required")
+		return Value{}, errors.New("a registry is required")
 	}
 	artifact := &Artifact{parts: parts}
-	for i, instruction := range artifact.parts.Instructions {
-		if err := validateInstruction(i, instruction, artifact); err != nil {
-			return Value{}, err
-		}
+	if err := validateInstructions(artifact); err != nil {
+		return Value{}, err
 	}
-	constants, err := loadConstants(artifact)
+	runtime, err := newRuntime(artifact, registry)
 	if err != nil {
 		return Value{}, err
 	}
-	functions, err := bindFunctions(artifact, registry)
-	if err != nil {
-		return Value{}, err
-	}
-	runtime := &Runtime{
-		artifact: artifact, registry: registry, constants: constants, functions: functions,
-		updates: resolveUpdates(artifact), money: newMoneyPlan(artifact, registry),
-	}
-	return runtime.execute(ctx, nil, &fuel, maxStack)
+	f := runtime.acquireFrame()
+	return runtime.runFrame(context.Background(), f, nil, RunOptions{Fuel: fuel, MaxStack: maxStack})
 }
 
 // snapshotArtifact round-trips the artifact through JSON so the runtime owns an
@@ -170,21 +180,39 @@ func validateArtifact(artifact *Artifact) error {
 			return fmt.Errorf("artifact argument is invalid: %s:%s", param.name, param.typ)
 		}
 	}
-	if artifact.parts.MaxStack < 1 {
-		return fmt.Errorf("artifact is missing its stack depth")
-	}
 	// A frame makes its locals before the program runs, so their count is
 	// bounded here: every slot is written by an instruction, and none writes
 	// more than a loop's variable, key and accumulator.
 	if artifact.parts.Locals < 0 || artifact.parts.Locals > 3*len(artifact.parts.Instructions) {
 		return fmt.Errorf("artifact claims %d locals for %d instructions", artifact.parts.Locals, len(artifact.parts.Instructions))
 	}
+	return validateInstructions(artifact)
+}
+
+// validateInstructions checks each instruction against the artifact it
+// belongs to, using the opcode table: there is no switch here to fall out of
+// sync.
+func validateInstructions(artifact *Artifact) error {
 	for i, instruction := range artifact.parts.Instructions {
 		if err := validateInstruction(i, instruction, artifact); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func validateInstruction(index int, instruction Instruction, artifact *Artifact) error {
+	fail := func(format string, args ...any) error {
+		return fmt.Errorf("invalid instruction %d: %s", index, fmt.Sprintf(format, args...))
+	}
+	spec := instruction.Op.spec()
+	if instruction.Op == OpInvalid || spec.name == opcodes[OpInvalid].name {
+		return fail("unknown opcode %q", instruction.Op)
+	}
+	if spec.validate == nil {
+		return nil
+	}
+	return spec.validate(instruction, artifact, fail)
 }
 
 func loadConstants(artifact *Artifact) ([]Value, error) {
@@ -217,25 +245,6 @@ func bindFunctions(artifact *Artifact, registry *Registry) ([]*RegisteredFunctio
 }
 
 type failFunc func(format string, args ...any) error
-
-// validateInstruction checks one instruction against the artifact it belongs
-// to, using the opcode table: there is no switch here to fall out of sync.
-func validateInstruction(index int, instruction Instruction, artifact *Artifact) error {
-	fail := func(format string, args ...any) error {
-		return fmt.Errorf("invalid instruction %d: %s", index, fmt.Sprintf(format, args...))
-	}
-	spec := instruction.Op.spec()
-	if spec.name == opcodes[OpInvalid].name && instruction.Op != OpInvalid {
-		return fail("unknown opcode %q", instruction.Op)
-	}
-	if instruction.Op == OpInvalid {
-		return fail("unknown opcode %q", instruction.Op)
-	}
-	if spec.validate == nil {
-		return nil
-	}
-	return spec.validate(instruction, artifact, fail)
-}
 
 func validateMakeInstruction(instruction Instruction, _ *Artifact, fail failFunc) error {
 	if instruction.Op == OpMakeArray {
@@ -310,7 +319,7 @@ func validateLoopInstruction(instruction Instruction, artifact *Artifact, fail f
 	}
 	if instruction.C == NoAccumulator {
 		// A comprehension builds an array, or a dictionary when it has a key.
-		if !isArrayType(instruction.Type) && !isDictType(instruction.Type) {
+		if kind := instruction.Type.kind; instruction.Type.elem == nil || kind != ArrayKind && kind != DictKind {
 			return fail("malformed loop result type")
 		}
 		return nil
@@ -321,23 +330,11 @@ func validateLoopInstruction(instruction Instruction, artifact *Artifact, fail f
 	return nil
 }
 
-func isDictType(typ *Type) bool {
-	return typ != nil && typ.kind == DictKind && typ.elem != nil
-}
-
-func isArrayType(typ *Type) bool {
-	return typ != nil && typ.kind == ArrayKind && typ.elem != nil
-}
-
 func (r *Runtime) Args() []Parameter {
-	out := make([]Parameter, len(r.artifact.parts.Args))
-	for i, param := range r.artifact.parts.Args {
-		out[i] = Parameter{name: param.name, typ: CloneType(param.typ)}
-	}
-	return out
+	return cloneParameters(r.artifact.parts.Args)
 }
 
-func (r *Runtime) ResultType() Type { return CloneType(r.artifact.parts.Result) }
+func (r *Runtime) ResultType() Type { return r.artifact.parts.Result }
 
 // Run binds the arguments and executes the program. The activation frame comes
 // from a pool, and the arguments are bound inside it, so a call allocates only
@@ -359,7 +356,7 @@ func (r *Runtime) Run(ctx context.Context, rawArgs map[string]any, options RunOp
 		// Nothing ran, so the frame would not clear what was bound.
 		clearValues(args)
 		r.releaseFrame(f)
-		return Value{}, fmt.Errorf("%w: %w", ErrContract, err)
+		return Value{}, money.Classify(ErrContract, "", err)
 	}
 	return r.runFrame(ctx, f, args, options)
 }
@@ -368,47 +365,30 @@ func (r *Runtime) Run(ctx context.Context, rawArgs map[string]any, options RunOp
 // checks each against its declared type — a wrong type is a host bug, not
 // something to trust — but does no name lookup and no conversion.
 func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOptions) (Value, error) {
-	if len(args) != len(r.artifact.parts.Args) {
-		return Value{}, fmt.Errorf("%w: expected %d arguments, got %d", ErrContract, len(r.artifact.parts.Args), len(args))
+	// No invariant re-check here. A Value cannot hold a NaN in the first
+	// place: every public constructor rejects one where it enters —
+	// funroute.Float is CheckedFloat, ToValue goes through checkFloats, and
+	// Array/Dict/Record validate what they pack. Scanning again on every
+	// call made a 65536-element vector cost 16µs instead of 200ns, and it
+	// never protected the one case it could not see anyway — a host that
+	// mutates a backing it promised to treat as read-only can do that just
+	// as well after this line.
+	if err := r.checkKinds(args, false); err != nil {
+		return Value{}, err
 	}
 	f := r.acquireFrame()
 	space := f.argSpace(len(args))
-	for i, param := range r.artifact.parts.Args {
-		if !args[i].hasType(param.typ) {
-			clearValues(space)
-			r.releaseFrame(f)
-			return Value{}, argumentError(param, args[i])
-		}
-		// No invariant re-check here. A Value cannot hold a NaN in the first
-		// place: every public constructor rejects one where it enters —
-		// funroute.Float is CheckedFloat, ToValue goes through checkFloats, and
-		// Array/Dict/Record validate what they pack. Scanning again on every
-		// call made a 65536-element vector cost 16µs instead of 200ns, and it
-		// never protected the one case it could not see anyway — a host that
-		// mutates a backing it promised to treat as read-only can do that just
-		// as well after this line.
-		space[i] = args[i]
-	}
+	copy(space, args)
 	return r.runFrame(ctx, f, space, options)
 }
 
-// argumentError is a typed argument that is not its parameter's type. Money
-// of the right kind in the wrong currency is also an ErrCurrency, as the same
-// amount is when it comes through Run as JSON.
 // admit checks a request's arguments as a run would — their kinds unless a
 // Codec built them, their currencies always — without running it: a Batch
 // asks before it hands the arguments to an engine, which must never see what
 // the program itself would refuse.
 func (r *Runtime) admit(args []Value, typed bool) error {
-	if len(args) != len(r.artifact.parts.Args) {
-		return fmt.Errorf("%w: expected %d arguments, got %d", ErrContract, len(r.artifact.parts.Args), len(args))
-	}
-	if !typed {
-		for i, param := range r.artifact.parts.Args {
-			if !args[i].hasType(param.typ) {
-				return argumentError(param, args[i])
-			}
-		}
+	if err := r.checkKinds(args, typed); err != nil {
+		return err
 	}
 	if !r.money.any {
 		return nil
@@ -416,12 +396,30 @@ func (r *Runtime) admit(args []Value, typed bool) error {
 	return r.checkUnits(args)
 }
 
+// checkKinds holds typed arguments to the contract: their number, and each
+// one's type unless a Codec built them.
+func (r *Runtime) checkKinds(args []Value, typed bool) error {
+	params := r.artifact.parts.Args
+	if len(args) != len(params) {
+		return fmt.Errorf("%w: expected %d arguments, got %d", ErrContract, len(params), len(args))
+	}
+	for i := 0; !typed && i < len(params); i++ {
+		if !args[i].hasType(params[i].typ) {
+			return argumentError(params[i], args[i])
+		}
+	}
+	return nil
+}
+
+// argumentError is a typed argument that is not its parameter's type. Money
+// of the right kind in the wrong currency is also an ErrCurrency, as the same
+// amount is when it comes through Run as JSON.
 func argumentError(param Parameter, value Value) error {
 	err := fmt.Errorf("argument %q: expected %s, got %s", param.name, param.typ.Summary(), value.Type().Summary())
 	if value.kind == param.typ.kind && IsUnitKind(value.kind) {
-		return fmt.Errorf("%w: %w: %w", ErrContract, ErrCurrency, err)
+		err = money.Classify(ErrCurrency, "", err)
 	}
-	return fmt.Errorf("%w: %w", ErrContract, err)
+	return money.Classify(ErrContract, "", err)
 }
 
 // runTyped runs arguments a Codec produced. They are typed by construction,
@@ -478,35 +476,11 @@ func (r *Runtime) bindArgs(args []Value, rawArgs map[string]any) error {
 		return nil
 	}
 	for name := range rawArgs {
-		if !r.hasArg(name) {
+		if !slices.ContainsFunc(r.artifact.parts.Args, func(param Parameter) bool { return param.name == name }) {
 			return fmt.Errorf("unknown argument %q", name)
 		}
 	}
 	return nil
-}
-
-func (r *Runtime) hasArg(name string) bool {
-	for _, param := range r.artifact.parts.Args {
-		if param.name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *Runtime) execute(ctx context.Context, args []Value, fuel *uint64, maxStack int) (Value, error) {
-	f := r.acquireFrame()
-	f.reset(r, args, fuel, maxStack)
-	f.ctx = ctx
-	if r.money.any {
-		if err := r.checkUnits(args); err != nil {
-			r.releaseFrame(f)
-			return Value{}, err
-		}
-	}
-	value, err := f.guardedRun()
-	r.releaseFrame(f)
-	return value, err
 }
 
 func (r *Runtime) acquireFrame() *frame {

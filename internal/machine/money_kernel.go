@@ -56,57 +56,42 @@ func registerExactOp(registry *Registry, name string, params []Type, result Type
 }
 
 func (k moneyKernel) registerAdditive(registry *Registry) {
-	for _, name := range []string{"add", "sub"} {
-		sign := int64(1)
-		if name == "sub" {
-			sign = -1
-		}
-		registerExactOp(registry, name, []Type{MoneyType, MoneyType}, MoneyType,
-			moneyDoc(name, "同币种金额相加减；币种不同是错误，不会悄悄换算。", "左值", "右值"), addMoney(sign))
-		registerMoneyOp(registry, name, []Type{RatioType, RatioType}, RatioType,
-			moneyDoc(name, "两个比例相加减。", "左值", "右值"), addRatios(sign))
+	for _, op := range []struct {
+		name  string
+		exact func(money.ExactMoney, money.ExactMoney) (money.ExactMoney, error)
+		whole func(money.Money, money.Money) (money.Money, error)
+		ratio func(money.Ratio, money.Ratio) (money.Ratio, error)
+	}{
+		{"add", money.ExactMoney.Add, money.Money.Add, money.Ratio.Add},
+		{"sub", money.ExactMoney.Sub, money.Money.Sub, money.Ratio.Sub},
+	} {
+		registerExactOp(registry, op.name, []Type{MoneyType, MoneyType}, MoneyType,
+			moneyDoc(op.name, "同币种金额相加减；币种不同是错误，不会悄悄换算。", "左值", "右值"), addMoney(op.exact, op.whole))
+		registerMoneyOp(registry, op.name, []Type{RatioType, RatioType}, RatioType,
+			moneyDoc(op.name, "两个比例相加减。", "左值", "右值"), ratioOp(op.ratio))
 	}
 }
 
 // addMoney adds or subtracts two amounts, exactly when either is exact.
-func addMoney(sign int64) EvalFunc {
+func addMoney(exact func(money.ExactMoney, money.ExactMoney) (money.ExactMoney, error), whole func(money.Money, money.Money) (money.Money, error)) EvalFunc {
 	return func(_ context.Context, args []Value) (Value, error) {
 		if IsExact(args[0]) || IsExact(args[1]) {
-			left, right := exactOf(args[0]), exactOf(args[1])
-			if sign < 0 {
-				return exactResult(left.Sub(right))
-			}
-			return exactResult(left.Add(right))
+			return exactResult(exact(exactOf(args[0]), exactOf(args[1])))
 		}
-		left, right := moneyOf(args[0]), moneyOf(args[1])
-		if sign < 0 {
-			return moneyResult(left.Sub(right))
-		}
-		return moneyResult(left.Add(right))
+		return moneyResult(whole(moneyOf(args[0]), moneyOf(args[1])))
 	}
 }
 
-func addRatios(sign int64) EvalFunc {
+// ratioOp is an operation of two ratios.
+func ratioOp(op func(money.Ratio, money.Ratio) (money.Ratio, error)) EvalFunc {
 	return func(_ context.Context, args []Value) (Value, error) {
-		left, right := ratioFrom(args[0]), ratioFrom(args[1])
-		sum, err := left.Add(right)
-		if sign < 0 {
-			sum, err = left.Sub(right)
-		}
-		return RatioValue(sum), err
+		result, err := op(ratioFrom(args[0]), ratioFrom(args[1]))
+		return RatioValue(result), err
 	}
 }
 
 func (k moneyKernel) registerOrdering(registry *Registry) {
-	for _, comparison := range []struct {
-		name   string
-		accept func(int) bool
-	}{
-		{"lt", func(order int) bool { return order < 0 }},
-		{"le", func(order int) bool { return order <= 0 }},
-		{"gt", func(order int) bool { return order > 0 }},
-		{"ge", func(order int) bool { return order >= 0 }},
-	} {
+	for _, comparison := range comparisons {
 		accept := comparison.accept
 		for _, params := range [][]Type{{MoneyType, MoneyType}, {RatioType, RatioType}, {FxRateType, FxRateType}} {
 			doc := moneyDoc(comparison.name, "比较两笔同币种金额、两个比例，或同一货币对的两个汇率（哪个换到的更多）；币种或货币对不同是错误。", "左值", "右值")

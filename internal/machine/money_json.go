@@ -22,8 +22,10 @@ func (r *Registry) EncodeJSON(value Value) ([]byte, error) {
 // readable is value with its money written out as text, containers and
 // records walked; a record keeps its field order.
 func readable(t *money.Currencies, value Value) any {
-	switch value.kind {
-	case MoneyKind:
+	return jsonTree(value, isComposite, func(value Value) any {
+		if value.kind != MoneyKind {
+			return value
+		}
 		if value.s == "" && value.i == 0 {
 			return value.i
 		}
@@ -33,24 +35,11 @@ func readable(t *money.Currencies, value Value) any {
 			return map[string]any{"currency": value.s, "minor": value.i}
 		}
 		return text
-	case ArrayKind:
-		items := make([]any, value.length())
-		for i := range items {
-			items[i] = readable(t, value.at(i))
-		}
-		return items
-	case DictKind:
-		entries := make(map[string]any, value.length())
-		for _, key := range value.keys() {
-			entry, _ := value.lookup(key)
-			entries[key] = readable(t, entry)
-		}
-		return entries
-	case RecordKind:
-		return readableRecord(t, value)
-	default:
-		return value
-	}
+	})
+}
+
+func isComposite(v Value) bool {
+	return v.kind == ArrayKind || v.kind == DictKind || v.kind == RecordKind
 }
 
 // orderedFields is a record written in its type's field order.
@@ -76,17 +65,4 @@ func (o orderedFields) MarshalJSON() ([]byte, error) {
 		out = append(append(append(out, key...), ':'), item...)
 	}
 	return append(out, '}'), nil
-}
-
-func readableRecord(t *money.Currencies, value Value) any {
-	record, ok := value.box.(*recordValue)
-	if !ok {
-		return nil
-	}
-	out := orderedFields{names: make([]string, len(record.fields)), values: make([]any, len(record.fields))}
-	for i, field := range record.fields {
-		out.names[i] = record.typ.fields[i].name
-		out.values[i] = readable(t, field)
-	}
-	return out
 }

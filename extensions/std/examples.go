@@ -2,7 +2,7 @@ package std
 
 import "github.com/nethinwei/funroute"
 
-// examples are the pack's uses, by name: logic and register give each
+// examples are the pack's uses, by name: Register gives each
 // overload of a name the same list. Between them a name's examples choose
 // every one of its overloads (a test in internal/machine runs each and
 // asks the compiler what it chose). They are closed expressions over the

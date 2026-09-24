@@ -15,7 +15,7 @@ func TestPositionsCountTheAgreedUnits(t *testing.T) {
 			s := newSession(t, standard(t), capabilities)
 			s.open("file:///a.fr", text)
 			got := s.diagnostics("file:///a.fr")
-			start := got[0].(map[string]any)["range"].(map[string]any)["start"].(map[string]any)["character"]
+			start := as[map[string]any](t, as[map[string]any](t, as[map[string]any](t, got[0])["range"])["start"])["character"]
 			if start != want {
 				t.Errorf("%s: the error starts at %v, want %v", capabilities, start, want)
 			}
@@ -49,10 +49,7 @@ func TestPositionsCountTheAgreedUnits(t *testing.T) {
 	}
 }
 
-func at(line, character int) map[string]int {
-	return map[string]int{"line": line, "character": character}
-}
-
-func position(uri string, line, character int) map[string]any {
-	return map[string]any{"textDocument": map[string]string{"uri": uri}, "position": at(line, character)}
+// position names a character on the first line of the document at uri.
+func position(uri string, character int) map[string]any {
+	return map[string]any{"textDocument": map[string]string{"uri": uri}, "position": map[string]int{"line": 0, "character": character}}
 }

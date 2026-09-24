@@ -6,13 +6,14 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -41,11 +42,8 @@ func main() {
 	if len(violations) == 0 {
 		return
 	}
-	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].file != violations[j].file {
-			return violations[i].file < violations[j].file
-		}
-		return violations[i].line < violations[j].line
+	slices.SortFunc(violations, func(a, b violation) int {
+		return cmp.Or(strings.Compare(a.file, b.file), cmp.Compare(a.line, b.line))
 	})
 	for _, item := range violations {
 		fmt.Printf("%s:%d: %s\n", item.file, item.line, item.message)
@@ -112,11 +110,7 @@ func checkFileLength(path string, source []byte) []violation {
 	if lines <= maxFileLines {
 		return nil
 	}
-	return []violation{{
-		file:    path,
-		line:    1,
-		message: fmt.Sprintf("file has %d lines, limit is %d", lines, maxFileLines),
-	}}
+	return []violation{{path, 1, fmt.Sprintf("file has %d lines, limit is %d", lines, maxFileLines)}}
 }
 
 func checkGoFunctions(root, module, path string, source []byte) ([]violation, error) {
@@ -125,102 +119,51 @@ func checkGoFunctions(root, module, path string, source []byte) ([]violation, er
 	if err != nil {
 		return nil, err
 	}
+	test := strings.HasSuffix(path, "_test.go")
 	var violations []violation
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
 		if !ok || function.Body == nil {
 			continue
 		}
-		position := fileSet.Position(function.Pos())
-		violations = append(violations, checkFunction(path, position, fileSet, function)...)
+		violations = append(violations, checkFunction(path, fileSet, function)...)
+		if test {
+			violations = append(violations, checkTestFunction(path, fileSet, function)...)
+		}
 	}
 	line := func(node ast.Node) int { return fileSet.Position(node.Pos()).Line }
 	violations = append(violations, checkInternalImports(root, module, path, file, line)...)
-	if strings.HasSuffix(path, "_test.go") {
+	if test {
 		violations = append(violations, checkTestPairing(path)...)
-		violations = append(violations, checkTestFile(path, fileSet, file)...)
 	}
 	return violations, nil
 }
 
-func checkFunction(path string, position token.Position, fileSet *token.FileSet, function *ast.FuncDecl) []violation {
+func checkFunction(path string, fileSet *token.FileSet, function *ast.FuncDecl) []violation {
 	var violations []violation
-	lines := fileSet.Position(function.End()).Line - position.Line + 1
-	if lines > maxFuncLines {
-		violations = append(violations, violation{
-			file:    path,
-			line:    position.Line,
-			message: fmt.Sprintf("func %s has %d lines, limit is %d", function.Name.Name, lines, maxFuncLines),
-		})
+	start := fileSet.Position(function.Pos()).Line
+	name := function.Name.Name
+	if lines := fileSet.Position(function.End()).Line - start + 1; lines > maxFuncLines {
+		violations = append(violations, violation{path, start, fmt.Sprintf("func %s has %d lines, limit is %d", name, lines, maxFuncLines)})
 	}
-	if depth := blockDepth(function.Body, 0); depth > maxNestingDepth {
-		violations = append(violations, violation{
-			file:    path,
-			line:    position.Line,
-			message: fmt.Sprintf("func %s nests %d levels deep, limit is %d", function.Name.Name, depth, maxNestingDepth),
-		})
+	if depth := blockDepth(function.Body); depth > maxNestingDepth {
+		violations = append(violations, violation{path, start, fmt.Sprintf("func %s nests %d levels deep, limit is %d", name, depth, maxNestingDepth)})
 	}
 	return violations
 }
 
-// nestedChild is a child node that opens a new nesting level, together with
-// the cost of entering it: `else if` continues the current level and costs 0.
-type nestedChild struct {
-	node ast.Node
-	cost int
-}
-
-func nestingChildren(node ast.Node) ([]nestedChild, bool) {
-	switch statement := node.(type) {
-	case *ast.IfStmt:
-		children := []nestedChild{{node: statement.Body, cost: 1}}
-		if statement.Else != nil {
-			cost := 1
-			if _, isElseIf := statement.Else.(*ast.IfStmt); isElseIf {
-				cost = 0
-			}
-			children = append(children, nestedChild{node: statement.Else, cost: cost})
-		}
-		return children, true
-	case *ast.ForStmt:
-		return []nestedChild{{node: statement.Body, cost: 1}}, true
-	case *ast.RangeStmt:
-		return []nestedChild{{node: statement.Body, cost: 1}}, true
-	case *ast.SwitchStmt:
-		return []nestedChild{{node: statement.Body, cost: 1}}, true
-	case *ast.TypeSwitchStmt:
-		return []nestedChild{{node: statement.Body, cost: 1}}, true
-	case *ast.SelectStmt:
-		return []nestedChild{{node: statement.Body, cost: 1}}, true
-	case *ast.FuncLit:
-		return []nestedChild{{node: statement.Body, cost: 1}}, true
-	}
-	return nil, false
-}
-
-// blockDepth reports the deepest nesting level reached inside node.
-func blockDepth(node ast.Node, current int) int {
-	deepest := current
-	keep := func(found int) {
-		if found > deepest {
-			deepest = found
-		}
-	}
-	if children, ok := nestingChildren(node); ok {
-		for _, child := range children {
-			keep(blockDepth(child.node, current+child.cost))
-		}
-		return deepest
-	}
+// blockDepth reports how deeply blocks nest inside node, not counting node
+// itself: each block — an if, else, for, switch or select body, a function
+// literal, a bare block — is one level. `else if` continues the level of its
+// if, since the else holds the next if, not a block.
+func blockDepth(node ast.Node) int {
+	deepest := 0
 	ast.Inspect(node, func(child ast.Node) bool {
-		if child == nil || child == node {
-			return true
+		if block, ok := child.(*ast.BlockStmt); ok && child != node {
+			deepest = max(deepest, 1+blockDepth(block))
+			return false
 		}
-		if _, ok := nestingChildren(child); !ok {
-			return true
-		}
-		keep(blockDepth(child, current))
-		return false
+		return true
 	})
 	return deepest
 }

@@ -3,42 +3,29 @@
 // one thing it lacks is semantic highlighting, which is the plugin below.
 import { EditorView, Decoration, ViewPlugin } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
-import { RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
-import type { Text as Doc } from "@codemirror/state";
-import { formatDocument } from "@codemirror/lsp-client";
+import { RangeSetBuilder } from "@codemirror/state";
 import type { LSPClient } from "@codemirror/lsp-client";
 import { decodeTokens } from "./tokens.ts";
 import { editingSetup } from "./setup.ts";
-import type { Position } from "./protocol.ts";
-
-// offsetAt is where a server position falls in the editor's text. Both count
-// UTF-16 units, the server's default, so the character is the column.
-export function offsetAt(doc: Doc, position: Position): number {
-  return doc.line(position.line + 1).from + position.character;
-}
-
-const setTokens = StateEffect.define<DecorationSet>();
-
-const tokenField = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(decorations, transaction) {
-    for (const effect of transaction.effects) if (effect.is(setTokens)) return effect.value;
-    return decorations.map(transaction.changes);
-  },
-  provide: (field) => EditorView.decorations.from(field),
-});
+import { offsetAt } from "./projection.ts";
 
 // semanticTokens asks the server what each piece of the text is and marks
 // it with fr-tok-<type>; how each type looks is the stylesheet's business.
+// Until the answer for a new text comes, the marks move with the edits.
 function semanticTokens(client: LSPClient, uri: string) {
   return ViewPlugin.fromClass(class {
+    decorations: DecorationSet = Decoration.none;
     private timer = 0;
     readonly view: EditorView;
     constructor(view: EditorView) {
       this.view = view;
       this.schedule();
     }
-    update(update: ViewUpdate) { if (update.docChanged) this.schedule(); }
+    update(update: ViewUpdate) {
+      if (!update.docChanged) return;
+      this.decorations = this.decorations.map(update.changes);
+      this.schedule();
+    }
     destroy() { clearTimeout(this.timer); }
     schedule() {
       clearTimeout(this.timer);
@@ -57,9 +44,11 @@ function semanticTokens(client: LSPClient, uri: string) {
         const kind = token.declaration ? `${token.type} fr-tok-declaration` : token.type;
         builder.add(from, from + token.length, Decoration.mark({ class: `fr-tok-${kind}` }));
       }
-      this.view.dispatch({ effects: setTokens.of(builder.finish()) });
+      this.decorations = builder.finish();
+      // An empty transaction has the view read the marks again.
+      this.view.dispatch({});
     }
-  });
+  }, { decorations: (plugin) => plugin.decorations });
 }
 
 // The editor's look, from the palette in tokens.css, so it needs nothing of
@@ -126,7 +115,7 @@ const editorTheme = EditorView.theme({
   ".fr-tok-comment": { color: "var(--tok-comment)", fontStyle: "italic" },
 });
 
-export type EditorOptions = { client: LSPClient; uri: string; parent: HTMLElement; onRun?: () => void };
+type EditorOptions = { client: LSPClient; uri: string; parent: HTMLElement; onRun?: () => void };
 
 export function createEditor({ client, uri, parent, onRun }: EditorOptions): EditorView {
   return new EditorView({
@@ -135,14 +124,11 @@ export function createEditor({ client, uri, parent, onRun }: EditorOptions): Edi
       editingSetup(() => onRun?.()),
       editorTheme,
       client.plugin(uri, "funroute"),
-      tokenField,
       semanticTokens(client, uri),
       EditorView.lineWrapping,
     ],
   });
 }
-
-export { formatDocument };
 
 // replaceAll sets the whole text, as picking an example does.
 export function replaceAll(view: EditorView, text: string) {

@@ -67,28 +67,29 @@ var sourceOperators = []operatorSpec{
 var binaryOperators = operatorMap("infix")
 var unaryOperators = operatorMap("prefix")
 
-func operatorMap(fixity string) map[tokenKind]operatorSpec {
-	out := make(map[tokenKind]operatorSpec)
+// opKey is how an operator is found from its token: punctuation by its kind,
+// a word — in — by its text too, since its kind is the one every name has.
+type opKey struct {
+	kind tokenKind
+	text string
+}
+
+func keyOf(kind tokenKind, text string) opKey {
+	if kind != tokenIdentifier {
+		return opKey{kind: kind}
+	}
+	return opKey{kind: kind, text: text}
+}
+
+func operatorMap(fixity string) map[opKey]operatorSpec {
+	out := make(map[opKey]operatorSpec)
 	for _, spec := range sourceOperators {
-		if spec.fixity == fixity && !spec.spelledAsWord() {
-			out[spec.kind] = spec
+		if spec.fixity == fixity {
+			out[keyOf(spec.kind, spec.token)] = spec
 		}
 	}
 	return out
 }
-
-// keywordOperators holds the infix operators written as words. They cannot be
-// indexed by token kind, because that kind is "identifier" — the same kind a
-// variable has — so the parser looks them up by text.
-var keywordOperators = func() map[string]operatorSpec {
-	out := make(map[string]operatorSpec)
-	for _, spec := range sourceOperators {
-		if spec.fixity == "infix" && spec.spelledAsWord() {
-			out[spec.token] = spec
-		}
-	}
-	return out
-}()
 
 // leftLevel is the precedence an infix operator's left operand must reach
 // to go without parentheses: its own, or one more when it does not chain.
@@ -112,14 +113,14 @@ func (s operatorSpec) rightLevel() int {
 // spelledAsWord reports an operator whose token is a word, not punctuation.
 func (s operatorSpec) spelledAsWord() bool { return s.kind == tokenIdentifier }
 
-func lexedOperators() []struct {
+// lexedOperator is a symbol the lexer matches and the token it makes.
+type lexedOperator struct {
 	text string
 	kind tokenKind
-} {
-	out := []struct {
-		text string
-		kind tokenKind
-	}{{"=>", tokenFatArrow}, {"=", tokenAssign}}
+}
+
+func lexedOperators() []lexedOperator {
+	out := []lexedOperator{{"=>", tokenFatArrow}, {"=", tokenAssign}}
 	seen := map[string]bool{"=>": true, "=": true}
 	for _, spec := range sourceOperators {
 		// Words are lexed as identifiers and "[]" is punctuation the lexer
@@ -128,10 +129,7 @@ func lexedOperators() []struct {
 			continue
 		}
 		seen[spec.token] = true
-		out = append(out, struct {
-			text string
-			kind tokenKind
-		}{spec.token, spec.kind})
+		out = append(out, lexedOperator{spec.token, spec.kind})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return len(out[i].text) > len(out[j].text) })
 	return out
@@ -163,7 +161,10 @@ func (s operatorSpec) read(expr Expr) ([]Expr, bool) {
 	switch s.expansion {
 	case expandNotEqual:
 		equal, isEqual := args[0].(*CallExpr)
-		return equalArgs(equal), isEqual && equal.Name == "eq" && len(equal.Args) == 2 && isBool(args[1], false) && isBool(args[2], true)
+		if !isEqual || equal.Name != "eq" || len(equal.Args) != 2 {
+			return nil, false
+		}
+		return equal.Args, isBool(args[1], false) && isBool(args[2], true)
 	case expandAnd:
 		return args[:2], isBool(args[2], false)
 	case expandOr:
@@ -171,13 +172,6 @@ func (s operatorSpec) read(expr Expr) ([]Expr, bool) {
 	default: // expandNot
 		return args[:1], isBool(args[1], false) && isBool(args[2], true)
 	}
-}
-
-func equalArgs(equal *CallExpr) []Expr {
-	if equal == nil {
-		return nil
-	}
-	return equal.Args
 }
 
 // specificity orders the readings of one node: sub(0, x) is both 0 - x and
@@ -196,30 +190,27 @@ func (s operatorSpec) specificity() int {
 	}
 }
 
+// literalOf is expr's value when it is a literal, and no value otherwise.
+func literalOf(expr Expr) machine.Value {
+	if literal, ok := expr.(*LiteralExpr); ok {
+		return literal.Value
+	}
+	return machine.Value{}
+}
+
 func isBool(expr Expr, want bool) bool {
-	literal, ok := expr.(*LiteralExpr)
-	flag, isFlag := literal.valueOr().Bool()
-	return ok && isFlag && flag == want
+	flag, ok := literalOf(expr).Bool()
+	return ok && flag == want
 }
 
 func isInt(expr Expr, want int64) bool {
-	literal, ok := expr.(*LiteralExpr)
-	number, isInt := literal.valueOr().Int()
-	return ok && isInt && number == want
+	number, ok := literalOf(expr).Int()
+	return ok && number == want
 }
 
 func isNumber(expr Expr) bool {
-	literal, ok := expr.(*LiteralExpr)
-	kind := literal.valueOr().Kind()
-	return ok && (kind == machine.IntKind || kind == machine.FloatKind)
-}
-
-// valueOr is the literal's value, or nothing when there is no literal.
-func (e *LiteralExpr) valueOr() machine.Value {
-	if e == nil {
-		return machine.Value{}
-	}
-	return e.Value
+	kind := literalOf(expr).Kind()
+	return kind == machine.IntKind || kind == machine.FloatKind
 }
 
 // Operators lists every operator as its fixity and spelling, fixity:token,

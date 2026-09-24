@@ -12,8 +12,19 @@ import (
 // money, however deep in a container or record it is.
 func TestAnArtifactUsesMoneyWhereverItStatesIt(t *testing.T) {
 	t.Parallel()
-	whole, minor, code := int64(5), int64(170), "USD"
-	amount := Constant{Type: MoneyKind, Int: &minor, String: &code}
+	constant := func(value Value, err error) Constant {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, ok := ConstantOf(value, value.Type())
+		if !ok {
+			t.Fatalf("%v has no constant form", value.Any())
+		}
+		return c
+	}
+	fees := RecordOf(Field{name: "fee", typ: MoneyType})
+	fee := constant(Record(fees, []Value{MoneyValue(170, "USD")}))
 	arrayOfMoney := ArrayOf(MoneyType)
 	order := RecordOf(Field{name: "fee", typ: RatioType})
 	for name, test := range map[string]struct {
@@ -28,10 +39,10 @@ func TestAnArtifactUsesMoneyWhereverItStatesIt(t *testing.T) {
 		"a currency result":       {Artifact{parts: ArtifactParts{Result: CurrencyType}}, true},
 		"an instruction's type":   {Artifact{parts: ArtifactParts{Result: IntType, Instructions: []Instruction{{Op: OpMakeArray, Type: &arrayOfMoney}}}}, true},
 		"an instruction's ints":   {Artifact{parts: ArtifactParts{Result: IntType, Instructions: []Instruction{{Op: OpMakeArray, Type: new(ArrayOf(IntType))}}}}, false},
-		"a ratio constant":        {Artifact{parts: ArtifactParts{Result: IntType, Constants: []Constant{{Type: RatioKind, Int: &whole}}}}, true},
-		"money deep in constants": {Artifact{parts: ArtifactParts{Result: IntType, Constants: []Constant{{Type: ArrayKind, Items: []Constant{{Type: RecordKind, Items: []Constant{amount}}}}}}}, true},
-		"an empty money array":    {Artifact{parts: ArtifactParts{Result: IntType, Constants: []Constant{{Type: ArrayKind, Elem: &arrayOfMoney}}}}, true},
-		"an int constant":         {Artifact{parts: ArtifactParts{Result: IntType, Constants: []Constant{{Type: IntKind, Int: &whole}}}}, false},
+		"a ratio constant":        {Artifact{parts: ArtifactParts{Result: IntType, Constants: []Constant{constant(RatioValue(ratio(1, 2)), nil)}}}, true},
+		"money deep in constants": {Artifact{parts: ArtifactParts{Result: IntType, Constants: []Constant{constant(Array(fees, []Value{fee.mustValue(t)}))}}}, true},
+		"an empty money array":    {Artifact{parts: ArtifactParts{Result: IntType, Constants: []Constant{constant(Array(MoneyType, nil))}}}, true},
+		"an int constant":         {Artifact{parts: ArtifactParts{Result: IntType, Constants: []Constant{constant(Int(5), nil)}}}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -86,23 +97,39 @@ func TestTheMoneyStampIsCheckedOnLoad(t *testing.T) {
 // a currency's, an exchange rate's two, an array's items; a type names none.
 func TestMoneyCodesAreEveryCodeTheArtifactNames(t *testing.T) {
 	t.Parallel()
-	jpy, usd, eur, gbp := "JPY", "USD", "EUR", "GBP"
-	minor := int64(1)
+	constants := make([]Constant, 0, 3)
+	euros, err := Array(MoneyType, []Value{MoneyValue(1, "EUR")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []Value{FxRateValue(money.FxRateFrom(&money.Pair{Base: "USD", Quote: "JPY"}, ratio(150, 1))), euros, CurrencyValue("GBP")} {
+		constant, ok := ConstantOf(value, value.Type())
+		if !ok {
+			t.Fatalf("%v has no constant form", value.Any())
+		}
+		constants = append(constants, constant)
+	}
 	artifact := &Artifact{parts: ArtifactParts{
-		Args:   []Parameter{{name: "m", typ: MoneyType}, {name: "r", typ: FxRateType}},
-		Result: ArrayOf(MoneyType),
-		Constants: []Constant{
-			{Type: FxRateKind, String: &usd, Keys: []string{jpy, "150"}},
-			{Type: ArrayKind, Items: []Constant{{Type: MoneyKind, Int: &minor, String: &eur}}},
-			{Type: CurrencyKind, String: &gbp},
-		},
+		Args:      []Parameter{{name: "m", typ: MoneyType}, {name: "r", typ: FxRateType}},
+		Result:    ArrayOf(MoneyType),
+		Constants: constants,
 	}}
 	want := []string{"EUR", "GBP", "JPY", "USD"}
-	if got := moneyCodes(artifact); !slices.Equal(got, want) {
-		t.Fatalf("moneyCodes = %v, want %v", got, want)
+	if got, err := moneyCodes(artifact); err != nil || !slices.Equal(got, want) {
+		t.Fatalf("moneyCodes = %v, %v, want %v", got, err, want)
 	}
 	stamp := stampFor(declared(t, money.CurrencySpec{Code: "USD", Digits: 2}, money.CurrencySpec{Code: "JPY", Digits: 0}).currencies(), want)
 	if len(stamp.Currencies) != 2 || stamp.Currencies[0].Code != "JPY" || stamp.Currencies[1].Code != "USD" {
 		t.Fatalf("stampFor = %+v, want the declared codes among them, JPY then USD", stamp)
 	}
+}
+
+// mustValue reads a constant back, for a test that builds one from another.
+func (c Constant) mustValue(t *testing.T) Value {
+	t.Helper()
+	value, err := c.value()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }

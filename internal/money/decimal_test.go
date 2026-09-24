@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"math/rand/v2"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -111,6 +112,58 @@ func TestDecimalsRoundTrip(t *testing.T) {
 		text := FormatDecimal(scaled, digits, trim)
 		if back, err := ParseDecimal(text, digits); err != nil || back != scaled {
 			t.Fatalf("ParseDecimal(FormatDecimal(%d, %d, %v) = %q) = %d, %v", scaled, digits, trim, text, back, err)
+		}
+	}
+}
+
+// A decimal literal writes back as FormatFloat writes the float64 holding
+// it exactly, so a program without ratios keeps its bytes; one no float64
+// holds writes its own digits the same way.
+func TestADecimalWritesAsItsFloatWould(t *testing.T) {
+	t.Parallel()
+	for _, value := range []float64{0.1, 2, 1e6, 1234567, 100000, 123456.7, 0.0001, 0.00001, 1e21, 5e-324, -2.5, 1.5e300} {
+		text := strconv.FormatFloat(value, 'g', -1, 64)
+		decimal, err := ParseDecimalLiteral(text)
+		if err != nil || decimal.String() != text {
+			t.Errorf("ParseDecimalLiteral(%q) = %v, %v, want it written back as %s", text, decimal, err, text)
+		}
+	}
+	for text, want := range map[string]string{
+		"1.50": "1.5", "15e-1": "1.5", "0.15e1": "1.5", "0.000": "0", "-0.0": "-0", "+2.0": "2",
+		"0.123456789012345678": "0.123456789012345678", "1e-999999999": "1e-999999999", "12345678.0": "1.2345678e+07",
+	} {
+		if decimal, err := ParseDecimalLiteral(text); err != nil || decimal.String() != want {
+			t.Errorf("ParseDecimalLiteral(%q) = %v, %v, want %s", text, decimal, err, want)
+		}
+	}
+	for _, text := range []string{"", ".", "nan", "inf", "0x1p-2", "1_000.5", "1e", "1e+", "1.2.3", "1e99999999999999999999", "--1"} {
+		if _, err := ParseDecimalLiteral(text); err == nil {
+			t.Errorf("ParseDecimalLiteral(%q) = nil error, want it refused", text)
+		}
+	}
+}
+
+// A decimal is a ratio exactly, as far as 18 places and an int64 go.
+func TestADecimalIsARatioExactly(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]string{
+		"0.123456789012345678": "0.123456789012345678", "2.5e-3": "0.0025", "-0.029": "-0.029", "9e18": "9000000000000000000", "0": "0",
+	} {
+		decimal, err := ParseDecimalLiteral(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ratio, err := decimal.Ratio(); err != nil || ratio.String() != want {
+			t.Errorf("Decimal(%s).Ratio() = %v, %v, want %s", text, ratio, err, want)
+		}
+	}
+	for _, text := range []string{"1e-19", "0.1234567890123456789", "1e19", "1e999999999"} {
+		decimal, err := ParseDecimalLiteral(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ratio, err := decimal.Ratio(); err == nil {
+			t.Errorf("Decimal(%s).Ratio() = %v, want it refused", text, ratio)
 		}
 	}
 }

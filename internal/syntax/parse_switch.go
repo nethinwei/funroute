@@ -10,11 +10,8 @@ func (p *parser) parseSwitchCall(name token) (Expr, error) {
 	if p.keyword("case") {
 		return p.switchBranches(name, nil)
 	}
-	subject, err := p.parseExpr()
+	subject, err := p.exprThen(tokenComma, "',' after the switch subject")
 	if err != nil {
-		return nil, err
-	}
-	if err := p.expect(tokenComma, "',' after the switch subject"); err != nil {
 		return nil, err
 	}
 	if p.keyword("case") {
@@ -49,29 +46,26 @@ func (p *parser) switchBranches(name token, subject Expr) (Expr, error) {
 	if len(cases) == 0 {
 		return nil, p.errorf(name, "switch needs at least one case")
 	}
+	var fallback Expr
 	if p.keyword("else") {
 		p.takeKeyword()
 		// Every branch leads to its result with =>: "else => r" as a case
 		// reads "case m => r". There is no second spelling.
-		if arrow := p.peek(); arrow.kind == tokenFatArrow {
-			p.index++
-			p.mark(arrow, RoleOperator)
-		} else {
+		arrow := p.peek()
+		if arrow.kind != tokenFatArrow {
 			return nil, p.errorf(arrow, "expected '=>' after else: a switch reads switch(subject, case m => r, else => d)")
 		}
-		fallback, err := p.parseExpr()
-		if err != nil {
+		p.index++
+		p.mark(arrow, RoleOperator)
+		var err error
+		if fallback, err = p.parseExpr(); err != nil {
 			return nil, err
 		}
-		if err := p.expect(tokenRightParen, "')'"); err != nil {
-			return nil, err
-		}
-		return &SwitchExpr{ID: p.id(), Pos: name.pos, Value: subject, Cases: cases, Default: fallback}, nil
 	}
 	if err := p.expect(tokenRightParen, "')'"); err != nil {
 		return nil, err
 	}
-	return &SwitchExpr{ID: p.id(), Pos: name.pos, Value: subject, Cases: cases}, nil
+	return &SwitchExpr{Node: p.at(name.pos), Value: subject, Cases: cases, Default: fallback}, nil
 }
 
 // caseMatches reads "m1, m2, m3 =>"; any of them selects the branch.

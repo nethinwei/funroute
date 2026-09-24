@@ -1,8 +1,10 @@
 package hosttest
 
 import (
+	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/funroute"
@@ -45,8 +47,9 @@ func routeBinding(t *testing.T) *funroute.Binding[RouteIn, RouteOut] {
 func TestBindingRunsOnHostTypes(t *testing.T) {
 	t.Parallel()
 	binding := routeBinding(t)
-	names := []string{}
-	for _, arg := range binding.Options().Args {
+	args := binding.Options().Args
+	names := make([]string, 0, len(args))
+	for _, arg := range args {
 		names = append(names, arg.Name)
 	}
 	if !slices.Equal(names, []string{"country", "amount", "order", "scores", "lines"}) {
@@ -223,7 +226,8 @@ func TestBindingUpdatesARecordItWasGiven(t *testing.T) {
 	}
 }
 
-// The two batch shapes, as a host names them.
+// A batch reads each request where the host keeps it and writes each result
+// where the host wants it: here, a slice in and each request's own response.
 func TestBindingRunsBatches(t *testing.T) {
 	t.Parallel()
 	program, err := routeBinding(t).Compile(`{channel: country, net: amount, score: 0.5, skus: [country]}`)
@@ -231,33 +235,114 @@ func TestBindingRunsBatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	requests := []RouteIn{{Country: "SG", Amount: 1}, {Country: "HK", Amount: 2}}
-	outs := program.RunBatch(t.Context(), requests, funroute.RunOptions{}, func(i int, err error) {
-		t.Errorf("request %d failed: %v", i, err)
-	})
-	if outs[0].Channel != "SG" || outs[1].Net != 2 {
-		t.Fatalf("outs = %+v, want channel SG first and net 2 second", outs)
-	}
 	decisions := []*RouteOut{{}, {}}
-	program.RunBatchInto(t.Context(), requests, decisions, funroute.RunOptions{}, func(i int, err error) {
-		t.Errorf("request %d failed: %v", i, err)
-	})
-	if decisions[0].Channel != "SG" || decisions[1].Channel != "HK" {
-		t.Fatalf("decisions = %+v %+v, want channels SG and HK", *decisions[0], *decisions[1])
-	}
-	nets := make([]int32, len(requests))
-	program.RunBatchFunc(t.Context(), len(requests), func(i int) *RouteIn { return &requests[i] },
+	program.RunBatch(t.Context(), len(requests), func(i int) *RouteIn { return &requests[i] },
 		func(i int) *RouteOut { return decisions[i] }, funroute.RunOptions{}, func(i int, err error) {
 			t.Errorf("request %d failed: %v", i, err)
 		})
-	for i, decision := range decisions {
-		nets[i] = decision.Net
-	}
-	if nets[0] != 1 || nets[1] != 2 {
-		t.Fatalf("nets = %v, want [1 2]", nets)
+	if decisions[0].Channel != "SG" || decisions[1].Channel != "HK" || decisions[0].Net != 1 || decisions[1].Net != 2 {
+		t.Fatalf("decisions = %+v %+v, want SG with net 1 and HK with net 2", *decisions[0], *decisions[1])
 	}
 	batch := program.Batch(funroute.BatchOptions{MaxSize: 1})
 	defer batch.Close()
 	if out, err := batch.Run(t.Context(), &requests[1]); err != nil || out.Channel != "HK" {
 		t.Fatalf("batch.Run(requests[1]) = %+v, %v; want channel HK", out, err)
+	}
+}
+
+// A binding compiles the document a front end edits as it compiles text, and
+// refuses one of another contract or one that is not a document at all.
+func TestBindingCompilesADocument(t *testing.T) {
+	t.Parallel()
+	binding := routeBinding(t)
+	document, err := funroute.ParseToJSON(routeSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.CompileJSON(document)
+	if err != nil {
+		t.Fatalf("CompileJSON(%s) error = %v", document, err)
+	}
+	in := RouteIn{Country: "SG", Amount: 30, Order: Order{Amount: 1000, CurrencyCode: "SGD"}, Scores: []float64{0.1, 0.7}}
+	out, err := program.Run(t.Context(), &in, funroute.RunOptions{})
+	if err != nil || out.Channel != "adyen" || out.Net != 970 || out.Score != 0.7 || len(out.SKUs) != 0 {
+		t.Fatalf("Run = %+v, %v, want channel adyen, net 970, score 0.7, no skus", out, err)
+	}
+	other, err := funroute.ParseToJSON(`amount`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		document []byte
+		want     string
+	}{
+		"another result": {other, "the contract returns record"},
+		"not a document": {[]byte(`{`), "decode expression JSON"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := binding.CompileJSON(test.document); !errors.Is(err, funroute.ErrCompile) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("CompileJSON(%s) error = %v, want ErrCompile containing %q", test.document, err, test.want)
+			}
+		})
+	}
+}
+
+// A program hands out the runtime it runs on, for a host that also runs it
+// on values it did not bind.
+func TestProgramHandsOutItsRuntime(t *testing.T) {
+	t.Parallel()
+	binding, err := funroute.Bind[OrderIn, Order](funroute.CoreRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(`order with {amount: order.amount - 30}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := program.Runtime()
+	if got, want := runtime.ResultType().String(), binding.Options().Result.String(); got != want {
+		t.Fatalf("Runtime().ResultType() = %s, want %s", got, want)
+	}
+	value, err := runtime.Run(t.Context(), map[string]any{"order": Order{Amount: 1200, CurrencyCode: "SGD", Tags: []string{"vip"}}}, funroute.RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(value)
+	if want := `{"amount":1170,"currency_code":"SGD","tags":["vip"]}`; err != nil || string(encoded) != want {
+		t.Fatalf("Runtime().Run = %s, %v, want %s", encoded, err, want)
+	}
+}
+
+// A dictionary of exchange rates crosses a binding both ways intact: no
+// backing holds exchange rates by key, so each one is carried as a value.
+func TestBindingCarriesADictionaryOfRates(t *testing.T) {
+	t.Parallel()
+	registry := funroute.CoreRegistry()
+	if err := registry.DeclareMoney(funroute.MoneySpec{Currencies: []funroute.CurrencySpec{{Code: "USD", Digits: 2}, {Code: "JPY", Digits: 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	type in struct {
+		Rates map[string]funroute.FxRate `funroute:"rates"`
+	}
+	binding, err := funroute.Bind[in, map[string]funroute.FxRate](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(`rates`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table, _ := registry.Currencies()
+	rate, err := table.FxRate("USD", "JPY", "150.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := program.Run(t.Context(), &in{Rates: map[string]funroute.FxRate{"card": rate}}, funroute.RunOptions{})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("rates round trip = %v, %v, want one rate", got, err)
+	}
+	if order, err := got["card"].Cmp(rate); err != nil || order != 0 || got["card"].Base() != "USD" {
+		t.Fatalf("rates round trip gave card %v (%v), want %v", got["card"], err, rate)
 	}
 }

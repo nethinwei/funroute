@@ -28,8 +28,11 @@ func TestHostChecksArtifactIdentity(t *testing.T) {
 	if err := funroute.DefineHandle[*tensor](registry, "demo.tensor"); err != nil {
 		t.Fatal(err)
 	}
-	if err := funroute.Logic(registry, "demo.size_v1", funroute.Doc{Label: "尺寸", Cost: 2},
-		func(value *tensor) (int64, error) { return int64(len(value.Values)), nil }); err != nil {
+	if err := registry.Register(funroute.FunctionSpec{
+		Name: "demo.size_v1",
+		Doc:  funroute.Doc{Label: "尺寸", Cost: 2},
+		Go:   func(value *tensor) (int64, error) { return int64(len(value.Values)), nil },
+	}); err != nil {
 		t.Fatal(err)
 	}
 	result := funroute.IntType

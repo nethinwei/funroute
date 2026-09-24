@@ -10,13 +10,23 @@ export function define(name: string, component: CustomElementConstructor) {
   if (!customElements.get(name)) customElements.define(name, component);
 }
 
+// emit tells the page something happened in a component: an event that
+// leaves its shadow root, carrying detail when there is any.
+export function emit(target: EventTarget, type: string, detail?: unknown) {
+  target.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
+}
+
 // Inputs are filled, like the editor: a tinted field, no border until focus.
+// A button measures its border in, and shows the same ring when focused from
+// the keyboard.
 export const fieldStyles = css`
-  input, textarea { box-sizing: border-box; min-width: 0; padding: 7px 9px; border: 1px solid transparent; border-radius: 8px;
+  input, textarea, button { box-sizing: border-box; }
+  input, textarea { min-width: 0; padding: 7px 9px; border: 1px solid transparent; border-radius: 8px;
     color: var(--ink-2); background: var(--field); font: 12px/1.5 var(--mono); }
   input:hover, textarea:hover { background: var(--field-hover); }
   input:focus, textarea:focus { outline: 3px solid var(--ring); border-color: var(--violet-edge); background: var(--field); }
   input::placeholder, textarea::placeholder { color: var(--muted-2); }
+  button:focus-visible { outline: 3px solid var(--ring); }
 `;
 
 // A section's label: small, spaced capitals in the muted ink.

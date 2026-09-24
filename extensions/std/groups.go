@@ -12,44 +12,27 @@ import (
 // Grouping, ranking and running totals: the three things a rule does to a list
 // that a single fold cannot express. They keep the same two-lists shape as the
 // selection functions — the values and the key each is filed under.
-func registerGroups(registry *funroute.Registry) error {
-	item := funroute.TypeVar("T")
-	list := funroute.ArrayOf(item)
-	if err := register(registry, funroute.FunctionSpec{
+func groupSpecs() []funroute.FunctionSpec {
+	list := funroute.ArrayOf(funroute.TypeVar("T"))
+	return slices.Concat([]funroute.FunctionSpec{{
 		Name:   "group_by",
 		Params: []funroute.Type{list, funroute.ArrayOf(funroute.StringType)},
 		Result: funroute.DictOf(list),
 		Eval:   groupByKeys,
 		Doc: funroute.Doc{
-			Constexpr: true, Label: "分组", Category: "选择", Cost: 10,
+			Label: "分组", Category: "选择", Cost: 10,
 			Description: `按第二个数组的键把第一个数组分组，键相同的排在一组里、保持原顺序；两者长度必须相同。每组再聚合就是一句推导式：{k: sum(v) for k, v in group_by(amounts, channels)}。`,
 			Params:      []string{"值", "键"}, Result: "分组结果",
 		},
-	}); err != nil {
-		return err
-	}
-	if err := registerRank(registry); err != nil {
-		return err
-	}
-	return registerCumulative(registry)
-}
-
-func registerRank(registry *funroute.Registry) error {
-	doc := funroute.Doc{
-		Constexpr: true, Label: "名次", Category: "选择", Cost: 9,
+	}}, eachType("rank", funroute.Doc{
+		Label: "名次", Category: "选择", Cost: 9,
 		Description: "每个元素的升序名次，从 1 开始；并列同名次，其后跳号（1,1,3），和 SQL 的 RANK 一样。要降序就先 reverse。",
 		Params:      []string{"键"}, Result: "名次数组",
-	}
-	return eachType(registry, "rank", doc, rankOf[int64], rankOf[float64], rankOf[string])
-}
-
-func registerCumulative(registry *funroute.Registry) error {
-	doc := funroute.Doc{
-		Constexpr: true, Label: "累计和", Category: "聚合", Cost: 8,
+	}, rankOf[int64], rankOf[float64], rankOf[string]), eachType("cumsum", funroute.Doc{
+		Label: "累计和", Category: "聚合", Cost: 8,
 		Description: "逐项累加出的序列：第 i 项是前 i+1 项之和。配下标就能找出累计超限的那一笔：first([i for i in indices(xs) if cumsum(xs)[i] > limit])。",
 		Params:      []string{"数组"}, Result: "累计序列",
-	}
-	return eachType(registry, "cumsum", doc, cumulativeInts, cumulativeFloats)
+	}, cumulativeInts, cumulativeFloats))
 }
 
 func groupByKeys(_ context.Context, args []funroute.Value) (funroute.Value, error) {

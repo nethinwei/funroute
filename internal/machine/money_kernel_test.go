@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -266,7 +267,7 @@ func TestEveryComparisonOrdersEveryPairOfKinds(t *testing.T) {
 		for operator, holds := range accept {
 			t.Run(name+" "+operator, func(t *testing.T) {
 				t.Parallel()
-				want := fmt.Sprint(holds(pair.order))
+				want := strconv.FormatBool(holds(pair.order))
 				expectValue(t, moneyCase{"a " + operator + " b", pair.contract, []machine.Value{pair.left, pair.right}, want})
 			})
 		}

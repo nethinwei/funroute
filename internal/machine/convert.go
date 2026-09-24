@@ -12,7 +12,7 @@ import (
 
 // The host boundary, in both directions, with one list of Go types.
 //
-// fromGo is that list. ToValue, the Go functions Logic and Model register
+// fromGo is that list. ToValue, the Go functions a FunctionSpec names in Go
 // and Run's argument binding all go through it, and goType derives a function's
 // signature from it, so a Go type is supported everywhere or nowhere. A
 // container is wrapped, not converted: the Value holds the caller's slice.
@@ -179,7 +179,10 @@ func FromValue[T any](value Value) (T, error) {
 	case *money.Currency:
 		code, ok := value.Currency()
 		*target = code
-		return out, kindError(ok, value, out)
+		if !ok {
+			return out, fmt.Errorf("argument is %s, want %T", value.Type(), out)
+		}
+		return out, nil
 	}
 	if boxed, ok := value.box.(T); ok {
 		return boxed, nil
@@ -205,7 +208,8 @@ func fromRecord[T any](value Value) (T, error) {
 	if err != nil {
 		return out, err
 	}
-	return filled.Interface().(T), nil
+	target.Set(filled)
+	return out, nil
 }
 
 func assign[T any](target *T, get func(Value) (T, bool), value Value) error {
@@ -402,7 +406,7 @@ func coerceFloat(input any) (Value, error) {
 
 func coerceArray(input any, expected Type, table *money.Currencies) (Value, error) {
 	if expected.elem == nil {
-		return Value{}, fmt.Errorf("array type is missing its element type")
+		return Value{}, errors.New("array type is missing its element type")
 	}
 	raw, err := anySlice(input, expected)
 	if err != nil {
@@ -424,25 +428,26 @@ func anySlice(input any, expected Type) ([]any, error) {
 	case []any:
 		return values, nil
 	case []Value:
-		raw := make([]any, len(values))
-		for i := range values {
-			raw[i] = values[i]
-		}
-		return raw, nil
+		return toAnys(values), nil
 	case []string:
-		raw := make([]any, len(values))
-		for i := range values {
-			raw[i] = values[i]
-		}
-		return raw, nil
+		return toAnys(values), nil
 	default:
 		return nil, fmt.Errorf("got %T, want %s", input, expected.Summary())
 	}
 }
 
+// toAnys boxes each item, the []any a decoder would have produced.
+func toAnys[T any](values []T) []any {
+	raw := make([]any, len(values))
+	for i := range values {
+		raw[i] = values[i]
+	}
+	return raw
+}
+
 func coerceDict(input any, expected Type, table *money.Currencies) (Value, error) {
 	if expected.elem == nil {
-		return Value{}, fmt.Errorf("dictionary type is missing its value type")
+		return Value{}, errors.New("dictionary type is missing its value type")
 	}
 	raw, err := anyMap(input, expected)
 	if err != nil {

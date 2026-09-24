@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -15,8 +16,11 @@ import (
 func TestDocOnlyCarriesWhatAHostMustSay(t *testing.T) {
 	t.Parallel()
 	registry := funroute.CoreRegistry()
-	if err := funroute.Logic(registry, "payout.settle_v1", funroute.Doc{Label: "结算"},
-		func(amount int64) (int64, error) { return amount, nil }); err != nil {
+	if err := registry.Register(funroute.FunctionSpec{
+		Name: "payout.settle_v1",
+		Doc:  funroute.Doc{Label: "结算"},
+		Go:   func(amount int64) (int64, error) { return amount, nil },
+	}); err != nil {
 		t.Fatal(err)
 	}
 	var settle funroute.FunctionDescriptor
@@ -101,5 +105,32 @@ func TestHostNamesTheCatalogTypes(t *testing.T) {
 	form := catalog.SpecialForms()[0]
 	if function.Signature() == "" || form.Syntax() == "" || form.Doc().Label == "" {
 		t.Fatalf("catalog entries are unlabelled: %+v %+v", function, form)
+	}
+}
+
+// The catalog says what each function returns, and which of them are the
+// kernel's lazy constructs rather than ordinary calls.
+func TestCatalogNamesResultsAndSpecials(t *testing.T) {
+	t.Parallel()
+	results := map[string]string{}
+	specials := map[string]string{}
+	for _, function := range funroute.CoreRegistry().Catalog().Functions() {
+		results[function.Signature()] = function.Result().String()
+		if function.Special() != "" {
+			specials[function.Name()] = function.Special()
+		}
+	}
+	for signature, want := range map[string]string{
+		"add(int,int)->int":     "int",
+		"add(float,int)->float": "float",
+		"if(bool,T,T)->T":       "T",
+		"fallback(T,T,...)->T":  "T",
+	} {
+		if got := results[signature]; got != want {
+			t.Errorf("%s: Result() = %q, want %q", signature, got, want)
+		}
+	}
+	if want := map[string]string{"if": "if", "fallback": "fallback"}; !maps.Equal(specials, want) {
+		t.Fatalf("Special() = %v, want %v", specials, want)
 	}
 }

@@ -16,8 +16,9 @@ func TestCompileUsingOpensAndClosesTheScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ops []string
-	for _, in := range machine.PartsOf(artifact).Instructions {
+	instructions := machine.PartsOf(artifact).Instructions
+	ops := make([]string, 0, len(instructions))
+	for _, in := range instructions {
 		ops = append(ops, in.Op.String())
 		if in.Op == machine.OpFxPush && (in.A != 0 || in.B != 3 || in.C != 0 || in.Keys != nil) {
 			t.Errorf("%s: fx_push = %+v, want B 3 and nothing else", source, in)

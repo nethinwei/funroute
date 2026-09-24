@@ -69,7 +69,7 @@ func assertHandlesAreOpaque(t *testing.T, registry *machine.Registry) {
 	}
 }
 
-// gridTotal has the shape Logic must read: a context, several parameters of
+// gridTotal has the shape Go must read: a context, several parameters of
 // Go's other scalar kinds, containers nested to any depth, a map result.
 func gridTotal(ctx context.Context, rows [][]int32, weights map[string][]float64, scale int) (map[string]float64, error) {
 	if ctx == nil {
@@ -86,11 +86,11 @@ func gridTotal(ctx context.Context, rows [][]int32, weights map[string][]float64
 	return out, nil
 }
 
-// Logic reads any Go signature.
-func TestLogicReflectsArbitrarySignatures(t *testing.T) {
+// Go reads any Go signature.
+func TestGoReflectsArbitrarySignatures(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
-	if err := machine.Logic(registry, "grid.total_v1", machine.Doc{Cost: 5}, gridTotal); err != nil {
+	if err := registry.Register(machine.FunctionSpec{Name: "grid.total_v1", Doc: machine.Doc{Cost: 5}, Go: gridTotal}); err != nil {
 		t.Fatal(err)
 	}
 	function := registry.Overloads("grid.total_v1")[0]
@@ -119,27 +119,17 @@ func TestLogicReflectsArbitrarySignatures(t *testing.T) {
 	if want := float64((1+2)*1*2 + 3*10*2); err != nil || totals["a"] != want {
 		t.Fatalf("totals = %v, %v, want a: %v", totals, err, want)
 	}
-	// What the boundary cannot express is refused at registration, not at
-	// the first call.
-	if err := machine.Logic(registry, "bad_v1", machine.Doc{}, func(m map[int]string) (int, error) { return 0, nil }); err == nil ||
-		!strings.Contains(err.Error(), "keys must be strings") {
-		t.Fatalf("map key error = %v, want keys must be strings", err)
-	}
-	if err := machine.Logic(registry, "bad_v2", machine.Doc{}, func(x int) int { return x }); err == nil ||
-		!strings.Contains(err.Error(), "(result, error)") {
-		t.Fatalf("result shape error = %v, want one naming (result, error)", err)
-	}
-	if err := machine.Model(registry, "bad_v3", machine.Doc{}, func(x int) (int, error) { return x, nil },
-		func(xs []string) ([]int, error) { return nil, nil }); err == nil || !strings.Contains(err.Error(), "must be []int") {
-		t.Fatalf("batch shape error = %v, want must be []int", err)
-	}
 }
 
-// BenchmarkLogicCall is the price of reflection at the boundary, next to the
+// BenchmarkGoCall is the price of reflection at the boundary, next to the
 // kernel's typed add in BenchmarkCall.
-func BenchmarkLogicCall(b *testing.B) {
+func BenchmarkGoCall(b *testing.B) {
 	registry := benchRegistry(b)
-	if err := machine.Logic(registry, "host.add_v1", machine.Doc{Cost: 2}, func(a, c int64) (int64, error) { return a + c, nil }); err != nil {
+	if err := registry.Register(machine.FunctionSpec{
+		Name: "host.add_v1",
+		Doc:  machine.Doc{Cost: 2},
+		Go:   func(a, c int64) (int64, error) { return a + c, nil },
+	}); err != nil {
 		b.Fatal(err)
 	}
 	artifact, err := compile.CompileExpr(`host.add_v1(a, b)`, registry, compile.CompileOptions{})
@@ -165,9 +155,9 @@ type quoteArgs struct {
 	items []money.Money
 }
 
-// Logic reads the money types' Go forms as money, their units unknown, and
+// Go reads the money types' Go forms as money, their units unknown, and
 // hands an array of money over without a copy.
-func TestLogicTakesAndGivesMoney(t *testing.T) {
+func TestGoTakesAndGivesMoney(t *testing.T) {
 	t.Parallel()
 	registry := moneyRegistry(t)
 	var seen quoteArgs
@@ -176,7 +166,7 @@ func TestLogicTakesAndGivesMoney(t *testing.T) {
 		converted, err := m.MulRatio(r, money.RoundDown)
 		return machine.NewMoney(c.Code(), converted.Minor()+int64(len(xs))), err
 	}
-	if err := machine.Logic(registry, "fees.quote_v1", machine.Doc{Cost: 5}, quote); err != nil {
+	if err := registry.Register(machine.FunctionSpec{Name: "fees.quote_v1", Doc: machine.Doc{Cost: 5}, Go: quote}); err != nil {
 		t.Fatal(err)
 	}
 	function := registry.Overloads("fees.quote_v1")[0]
@@ -203,7 +193,57 @@ func TestLogicTakesAndGivesMoney(t *testing.T) {
 	if len(seen.items) != 2 || &seen.items[0] != &items[0] {
 		t.Fatal("the array of money was copied on its way to the function")
 	}
-	if err := machine.Logic(machine.CoreRegistry(), "fees.quote_v1", machine.Doc{}, quote); err == nil || !strings.Contains(err.Error(), "declares no money") {
-		t.Fatalf("Logic with money before DeclareMoney: error = %v, want declares no money", err)
+	if err := machine.CoreRegistry().Register(machine.FunctionSpec{Name: "fees.quote_v1", Go: quote}); err == nil || !strings.Contains(err.Error(), "declares no money") {
+		t.Fatalf("Register with money before DeclareMoney: error = %v, want declares no money", err)
+	}
+}
+
+// A Go function may return its result alone; one that returns an error too
+// has the error reported. Go takes the place of a written signature, so a
+// spec gives one or the other, a batch form needs its single form, and a
+// signature the boundary cannot carry is refused.
+func TestGoReturnsAResultWithOrWithoutAnError(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	for name, fn := range map[string]any{
+		"double_v1": func(x int64) int64 { return 2 * x },
+		"halve_v1":  func(x int64) (int64, error) { return x / 2, nil },
+	} {
+		if err := registry.Register(machine.FunctionSpec{Name: "g." + name, Go: fn}); err != nil {
+			t.Fatalf("Register(g.%s) error = %v", name, err)
+		}
+	}
+	artifact, err := compile.CompileExpr(`g.double_v1(g.halve_v1(10))`, registry, compile.CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := runtime.RunValues(t.Context(), nil, machine.RunOptions{}); err != nil || got.Any() != int64(10) {
+		t.Fatalf("g.double_v1(g.halve_v1(10)) = %v, %v, want 10", got.Any(), err)
+	}
+	// What the boundary cannot express is refused at registration, not at
+	// the first call.
+	for name, test := range map[string]struct {
+		spec machine.FunctionSpec
+		want string
+	}{
+		"a map keyed by int": {machine.FunctionSpec{Name: "g.keys_v1", Go: func(map[int]string) int { return 0 }}, "keys must be strings"},
+		"two results":        {machine.FunctionSpec{Name: "g.pair_v1", Go: func(x int) (int, int) { return x, x }}, "a result, or (result, error)"},
+		"a batch of another type": {machine.FunctionSpec{
+			Name: "g.mismatch_v1", Go: func(x int) int { return x }, GoBatch: func([]string) []int { return nil },
+		}, "must be []int"},
+		"Go beside Eval":     {machine.FunctionSpec{Name: "g.both_v1", Go: func(int64) int64 { return 0 }, Eval: machine.CoreRegistry().Overloads("add")[0].Eval}, "Go takes the place of"},
+		"Go beside a Result": {machine.FunctionSpec{Name: "g.typed_v1", Go: func(int64) int64 { return 0 }, Result: machine.IntType}, "Go takes the place of"},
+		"GoBatch alone":      {machine.FunctionSpec{Name: "g.batch_v1", GoBatch: func([]int64) []int64 { return nil }}, "GoBatch needs Go"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := machine.CoreRegistry().Register(test.spec); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Register(%s) error = %v, want one containing %q", test.spec.Name, err, test.want)
+			}
+		})
 	}
 }

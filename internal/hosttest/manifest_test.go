@@ -22,7 +22,11 @@ func TestManifestStandsInForTheHostsFunctions(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := funroute.Doc{Label: "风险分", Cost: 25, Params: []string{"国家", "金额"}}
-	if err := funroute.Logic(host, "risk.score_v1", doc, func(country string, amount int64) (float64, error) { return 0.9, nil }); err != nil {
+	if err := host.Register(funroute.FunctionSpec{
+		Name: "risk.score_v1",
+		Doc:  doc,
+		Go:   func(country string, amount int64) (float64, error) { return 0.9, nil },
+	}); err != nil {
 		t.Fatal(err)
 	}
 	encoded, err := json.Marshal(host.Manifest())
@@ -65,11 +69,11 @@ func checkUnavailableCall(t *testing.T, artifact *funroute.Artifact, browser, ho
 	if err != nil || value.Any() != false || !slices.Equal(calls(), []string{"risk.score_v1"}) {
 		t.Fatalf("in the browser: %v, %v, calls %v; want false, no error, calls [risk.score_v1]", value.Any(), err, calls())
 	}
-	real, err := funroute.Instantiate(artifact, host)
+	hosted, err := funroute.Instantiate(artifact, host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value, err := real.Run(t.Context(), args, funroute.RunOptions{Fuel: 1000}); err != nil || value.Any() != true {
+	if value, err := hosted.Run(t.Context(), args, funroute.RunOptions{Fuel: 1000}); err != nil || value.Any() != true {
 		t.Fatalf("at the host: %v, %v; want true", value.Any(), err)
 	}
 	bare, err := funroute.CompileExpr(`risk.score_v1("SG", 1)`, browser, funroute.CompileOptions{})
@@ -79,6 +83,30 @@ func checkUnavailableCall(t *testing.T, artifact *funroute.Artifact, browser, ho
 	direct, _ := funroute.Instantiate(bare, browser)
 	if _, err := direct.Run(t.Context(), nil, funroute.RunOptions{Fuel: 1000}); !errors.Is(err, funroute.ErrUnavailable) || !errors.Is(err, funroute.ErrExtension) {
 		t.Fatalf("Run(risk.score_v1(\"SG\", 1)) error = %v, want ErrUnavailable and ErrExtension", err)
+	}
+}
+
+// raiseAddCost sets the cost of add in a manifest's JSON document to 99.
+func raiseAddCost(t *testing.T, document map[string]any) {
+	t.Helper()
+	functions, ok := document["functions"].([]any)
+	if !ok {
+		t.Fatalf("manifest functions = %T, want an array", document["functions"])
+	}
+	for _, function := range functions {
+		entry, ok := function.(map[string]any)
+		if !ok {
+			t.Fatalf("manifest function = %T, want an object", function)
+		}
+		if entry["name"] != "add" {
+			continue
+		}
+		doc, ok := entry["doc"].(map[string]any)
+		if !ok {
+			t.Fatalf("add's doc = %T, want an object", entry["doc"])
+		}
+		doc["cost"] = 99.0
+		return
 	}
 }
 
@@ -103,14 +131,7 @@ func TestManifestRefusesADisagreement(t *testing.T) {
 		}
 		return manifest
 	}
-	costlier := edited(func(document map[string]any) {
-		for _, function := range document["functions"].([]any) {
-			if entry := function.(map[string]any); entry["name"] == "add" {
-				entry["doc"].(map[string]any)["cost"] = 99.0
-				return
-			}
-		}
-	})
+	costlier := edited(func(document map[string]any) { raiseAddCost(t, document) })
 	if err := costlier.Apply(withStandard(t)); err == nil {
 		t.Fatal("a manifest that disagrees on a cost was applied")
 	}
@@ -132,4 +153,12 @@ func withStandard(t *testing.T) *funroute.Registry {
 		t.Fatal(err)
 	}
 	return registry
+}
+
+// A manifest says which shape it is.
+func TestManifestNamesItsVersion(t *testing.T) {
+	t.Parallel()
+	if got := withStandard(t).Manifest().Version(); got != funroute.ManifestVersion {
+		t.Fatalf("Manifest().Version() = %d, want %d", got, funroute.ManifestVersion)
+	}
 }

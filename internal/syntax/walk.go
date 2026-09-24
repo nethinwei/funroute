@@ -41,19 +41,28 @@ type fieldPlan struct {
 	item     *structPlan
 }
 
-// structPlan is a node type or a list item type. binds says whether anything
-// in it, or in its list items, binds a name — most nodes do not, and the walk
-// skips the bookkeeping for them.
+// structPlan is a node type or a list item type. kind is a node's ExprJSON
+// tag, isForm whether it is a form, and form the form a registry may turn
+// off, if it is one, all from the kind tag on its Node. binds says whether anything in it, or in its list items, binds a
+// name — most nodes do not, and the walk skips the bookkeeping for them. rest
+// says whether one of its own fields binds "@rest", the items after it in a
+// list.
 type structPlan struct {
 	typ    reflect.Type
+	id     []int // where a node's ID is, for the importer to set
+	kind   string
+	isForm bool
+	form   machine.Form
 	fields []fieldPlan
 	binds  bool
+	rest   bool
 }
 
 var (
 	plans   = map[reflect.Type]*structPlan{}
 	byKind  = map[string]reflect.Type{}
 	exprTyp = reflect.TypeFor[Expr]()
+	nodeTyp = reflect.TypeFor[Node]()
 )
 
 func init() {
@@ -65,15 +74,26 @@ func init() {
 			}
 			continue
 		}
-		byKind[node.kind()] = typ
-		plans[typ] = planStruct(typ)
+		plan := planStruct(typ)
+		id, _ := typ.FieldByName("ID")
+		plan.id = id.Index
+		byKind[plan.kind] = typ
+		plans[typ] = plan
 	}
 }
 
 func planStruct(typ reflect.Type) *structPlan {
 	plan := &structPlan{typ: typ}
-	for i := 0; i < typ.NumField(); i++ {
+	for i := range typ.NumField() {
 		field := typ.Field(i)
+		if field.Type == nodeTyp {
+			flags := strings.Split(field.Tag.Get("kind"), ",")
+			plan.kind, plan.isForm = flags[0], slices.Contains(flags, "form")
+			if slices.Contains(flags, "optional") {
+				plan.form = machine.Form(plan.kind)
+			}
+			continue
+		}
 		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		if name == "" || name == "-" {
 			continue
@@ -81,6 +101,7 @@ func planStruct(typ reflect.Type) *structPlan {
 		planned := planField(i, name, field)
 		plan.fields = append(plan.fields, planned)
 		plan.binds = plan.binds || len(planned.binds) > 0 || (planned.item != nil && planned.item.binds)
+		plan.rest = plan.rest || slices.Contains(planned.binds, "@rest")
 	}
 	return plan
 }
@@ -199,14 +220,11 @@ func walkChildren(expr Expr, bound scope, visit func(Expr, scope)) {
 	}
 	for _, field := range plan.fields {
 		inner := bound.with(binds[field.name])
-		switch field.kind {
-		case fieldExpr:
-			visitExpr(value.Field(field.index), inner, visit)
-		case fieldExprs:
-			visitExprs(value.Field(field.index), inner, visit)
-		case fieldList:
+		if field.kind == fieldList {
 			walkList(value.Field(field.index), field.item, inner, visit)
+			continue
 		}
+		visitField(value.Field(field.index), field.kind, inner, visit)
 	}
 }
 
@@ -221,7 +239,7 @@ func collectBinds(value reflect.Value, plan *structPlan, binds map[string][]stri
 			addBinds(binds, value.Field(field.index).String(), field.binds)
 		case fieldList:
 			list := value.Field(field.index)
-			for i := 0; i < list.Len(); i++ {
+			for i := range list.Len() {
 				collectBinds(list.Index(i), field.item, binds)
 			}
 		}
@@ -243,17 +261,18 @@ func addBinds(binds map[string][]string, name string, targets []string) {
 // bind "@rest" are visible in the items after it; what they bind into the
 // parent's fields was already gathered by collectBinds.
 func walkList(list reflect.Value, plan *structPlan, bound scope, visit func(Expr, scope)) {
-	var rest []string
-	for i := 0; i < list.Len(); i++ {
+	// Only items that bind "@rest" gather names, one a let binding; any other
+	// list gathers none, and a zero capacity allocates nothing.
+	size := 0
+	if plan.rest {
+		size = list.Len()
+	}
+	rest := make([]string, 0, size)
+	for i := range list.Len() {
 		item := list.Index(i)
 		inner := bound.with(rest)
 		for _, field := range plan.fields {
-			switch field.kind {
-			case fieldExpr:
-				visitExpr(item.Field(field.index), inner, visit)
-			case fieldExprs:
-				visitExprs(item.Field(field.index), inner, visit)
-			}
+			visitField(item.Field(field.index), field.kind, inner, visit)
 		}
 		rest = append(rest, itemBinds(item, plan, "@rest")...)
 	}
@@ -270,17 +289,37 @@ func itemBinds(item reflect.Value, plan *structPlan, target string) []string {
 	return names
 }
 
+// visitField visits the expressions a field holds: its one, or each of its
+// list. A name or a flag holds none.
+func visitField(field reflect.Value, kind fieldKind, bound scope, visit func(Expr, scope)) {
+	switch kind {
+	case fieldExpr:
+		visitExpr(field, bound, visit)
+	case fieldExprs:
+		for i := range field.Len() {
+			visitExpr(field.Index(i), bound, visit)
+		}
+	}
+}
+
 func visitExpr(field reflect.Value, bound scope, visit func(Expr, scope)) {
 	if field.IsNil() {
 		return
 	}
-	visit(field.Interface().(Expr), bound)
+	visit(heldExpr(field), bound)
 }
 
-func visitExprs(field reflect.Value, bound scope, visit func(Expr, scope)) {
-	for i := 0; i < field.Len(); i++ {
-		visitExpr(field.Index(i), bound, visit)
+// heldExpr is the expression value holds: a new node, or a node's Expr field
+// or list element. A node type always is an Expr, so only a nil field could
+// fail the assertion, and no caller reaches one (absent optional fields are
+// skipped first); were one to slip through, it panics as the unchecked
+// assertion did.
+func heldExpr(value reflect.Value) Expr {
+	expr, ok := reflect.TypeAssert[Expr](value)
+	if !ok {
+		panic("syntax: " + value.Type().String() + " holds no expression")
 	}
+	return expr
 }
 
 // FreeVariables returns the free variables in the order they first appear,
@@ -294,6 +333,18 @@ func FreeVariables(expr Expr) []string {
 		names[i] = read.Name
 	}
 	return names
+}
+
+// FreeReads is every read of a free variable in expr, by node ID: the reads
+// no let, for or reduce inside expr binds.
+func FreeReads(expr Expr) map[int]bool {
+	out := map[int]bool{}
+	eachVariable(expr, func(variable *VariableExpr, local bool) {
+		if !local {
+			out[variable.ID] = true
+		}
+	})
+	return out
 }
 
 // FirstReads is where each free variable is first read, in that order: the
@@ -329,9 +380,10 @@ func eachVariable(root Expr, visit func(variable *VariableExpr, local bool)) {
 // NodeKinds lists every node's ExprJSON tag: the four literal kinds and one
 // per node type.
 func NodeKinds() []string {
-	out := []string{"int", "float", "string", "bool"}
+	out := make([]string, 0, 4+len(nodeTypes)-1)
+	out = append(out, "int", "float", "string", "bool")
 	for _, node := range nodeTypes[1:] {
-		out = append(out, node.kind())
+		out = append(out, planOf(node).kind)
 	}
 	return out
 }
@@ -339,9 +391,19 @@ func NodeKinds() []string {
 // FormOf reports the lazy form a node belongs to, for nodes a registry can
 // switch off.
 func FormOf(expr Expr) (machine.Form, bool) {
-	node, ok := expr.(former)
-	if !ok {
+	plan := planOf(expr)
+	if plan == nil || plan.form == "" {
 		return "", false
 	}
-	return node.Form(), true
+	return plan.form, true
+}
+
+// kindOf is a node's ExprJSON tag, given its plan: a literal's, which has
+// none, is its value's kind.
+func kindOf(expr Expr, plan *structPlan) string {
+	if plan != nil {
+		return plan.kind
+	}
+	literal, _ := expr.(*LiteralExpr)
+	return literal.Value.Kind().String()
 }

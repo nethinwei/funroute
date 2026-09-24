@@ -1,8 +1,12 @@
 package syntax
 
 import (
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nethinwei/funroute/internal/machine"
 )
 
 // The scope rules live in the binds tags: for and reduce bind into their
@@ -30,13 +34,19 @@ func TestFreeVariablesFollowTheBindsTags(t *testing.T) {
 // Children is the one traversal the compiler's structural passes use.
 func TestChildrenAreListedInDefinitionOrder(t *testing.T) {
 	t.Parallel()
-	expr, err := Parse(`switch(s, case p, q => r, else => t)`)
+	const source = `switch(s, case p, q => r, else => t)`
+	expr, err := Parse(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
-	for _, child := range Children(expr) {
-		names = append(names, child.(*VariableExpr).Name)
+	children := Children(expr)
+	names := make([]string, 0, len(children))
+	for _, child := range children {
+		variable, ok := child.(*VariableExpr)
+		if !ok {
+			t.Fatalf("Children(Parse(%q)) has a %T, want only variables", source, child)
+		}
+		names = append(names, variable.Name)
 	}
 	if got := strings.Join(names, ","); got != "s,p,q,r,t" {
 		t.Fatalf("children = %s, want s,p,q,r,t", got)
@@ -52,6 +62,24 @@ func TestNodeKindsListEveryNode(t *testing.T) {
 	want := "int float string bool var enum array dict call record field switch for reduce let record_update money ratio using fxrate currency"
 	if got := strings.Join(NodeKinds(), " "); got != want {
 		t.Fatalf("node kinds = %s, want %s", got, want)
+	}
+}
+
+// A form is named by the kind tag, so its machine.Form constant must be
+// spelled as the node's kind: the three nodes a registry can turn off are
+// the three forms it knows, and no other node is one.
+func TestFormsAreNamedAsTheirNodeKinds(t *testing.T) {
+	t.Parallel()
+	want := map[string]machine.Form{"switch": machine.SwitchForm, "for": machine.ForForm, "reduce": machine.ReduceForm}
+	for _, node := range nodeTypes {
+		form, ok := FormOf(node)
+		kind := kindOf(node, planOf(node))
+		if _, literal := node.(*LiteralExpr); literal {
+			kind = "literal"
+		}
+		if wanted, isForm := want[kind]; ok != isForm || form != wanted {
+			t.Errorf("FormOf(%s) = %q, %v, want %q, %v", kind, form, ok, wanted, isForm)
+		}
 	}
 }
 
@@ -113,7 +141,7 @@ func checkLeaf(t *testing.T, source string, node Tree, kind, text string, fields
 	if node.Node != kind || source[node.Span.Start:node.Span.End] != text {
 		t.Errorf("%q: node %s over %q, want %s over %q", source, node.Node, source[node.Span.Start:node.Span.End], kind, text)
 	}
-	var got []string
+	got := make([]string, 0, len(node.Fields))
 	for _, field := range node.Fields {
 		got = append(got, field.Name+"="+field.Text)
 		if len(field.Nodes) != 0 || len(field.Items) != 0 {
@@ -122,5 +150,40 @@ func checkLeaf(t *testing.T, source string, node Tree, kind, text string, fields
 	}
 	if strings.Join(got, " ") != strings.Join(fields, " ") {
 		t.Errorf("%q: %s fields = %v, want %v", source, kind, got, fields)
+	}
+}
+
+// The forms a node's tag marks optional are the forms a registry can turn
+// on, in the machine's order: one list, read from both sides.
+func TestTheOptionalFormsAreTheMachines(t *testing.T) {
+	t.Parallel()
+	var tagged []machine.Form
+	for _, node := range nodeTypes {
+		if plan := plans[reflect.TypeOf(node).Elem()]; plan != nil && plan.form != "" {
+			tagged = append(tagged, plan.form)
+		}
+	}
+	if want := machine.OptionalForms(); !slices.Equal(tagged, want) {
+		t.Fatalf("the nodes tag %v optional, the machine turns on %v", tagged, want)
+	}
+}
+
+// FreeReads is every read no form inside binds, not only the first of each
+// name.
+func TestFreeReadsAreEveryUnboundRead(t *testing.T) {
+	t.Parallel()
+	expr, err := Parse("let(y = x, x + y + [z for z in x])")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	reads := FreeReads(expr)
+	eachVariable(expr, func(variable *VariableExpr, _ bool) {
+		if reads[variable.ID] {
+			got = append(got, variable.Name)
+		}
+	})
+	if want := []string{"x", "x", "x"}; !slices.Equal(got, want) {
+		t.Fatalf("FreeReads reads %v, want %v", got, want)
 	}
 }

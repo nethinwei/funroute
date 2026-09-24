@@ -23,7 +23,7 @@ func (p *parser) negate(operator token) (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	zero := &LiteralExpr{ID: p.id(), Pos: operator.pos, Span: tokenSpan(operator), Value: machine.Int(0)}
+	zero := &LiteralExpr{Node: Node{ID: p.id(), Pos: operator.pos, Span: tokenSpan(operator)}, Value: machine.Int(0)}
 	return p.call(operator, "sub", zero, operand), nil
 }
 
@@ -76,7 +76,7 @@ func (p *parser) moneyLiteral(code token) (Expr, error) {
 	if strings.ContainsAny(amount.text, "eE") {
 		return nil, p.errorf(amount, "an amount is written as a plain decimal, not with an exponent")
 	}
-	return p.node(code, &MoneyExpr{ID: p.id(), Pos: code.pos, Currency: code.text, Amount: sign + amount.text})
+	return p.node(code, &MoneyExpr{Node: p.at(code.pos), Currency: code.text, Amount: sign + amount.text})
 }
 
 // ratioLiteral splits 2.9% or 25bps into its value and unit.
@@ -90,7 +90,7 @@ func (p *parser) ratioLiteral(tok token) (Expr, error) {
 	if next := p.peek(); unit == "%" && next.pos == tok.pos+len(tok.text) && touchingOperand(next) {
 		return nil, p.errorf(next, "%s is a ratio: a %% against a number is always one; a remainder has a space before the %%, %s %% …", tok.text, value)
 	}
-	return p.node(tok, &RatioExpr{ID: p.id(), Pos: tok.pos, Value: value, Unit: unit})
+	return p.node(tok, &RatioExpr{Node: p.at(tok.pos), Value: value, Unit: unit})
 }
 
 // touchingOperand is what, written against a ratio, shows its writer meant a
@@ -118,17 +118,34 @@ func (p *parser) numberLiteral(tok token, negative bool) (Expr, error) {
 		if err != nil {
 			return nil, p.errorf(tok, "integer is outside int64 range")
 		}
-		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.Int(value)}, nil
+		return &LiteralExpr{Node: p.at(tok.pos), Value: machine.Int(value)}, nil
 	}
-	value, err := exactFloat(text)
+	literal, err := decimalLiteral(text)
 	if err != nil {
 		return nil, p.errorf(tok, "%v", err)
 	}
-	checked, err := machine.CheckedFloat(value)
+	literal.Node = p.at(tok.pos)
+	return literal, nil
+}
+
+// decimalLiteral is the literal a decimal written as text stands for: the
+// decimal itself, and the float64 nearest it. One too large for any float64
+// is refused; one a float64 only approximates is refused where it is read as
+// a float.
+func decimalLiteral(text string) (*LiteralExpr, error) {
+	decimal, err := money.ParseDecimalLiteral(text)
 	if err != nil {
-		return nil, p.errorf(tok, "%v", err)
+		return nil, fmt.Errorf("invalid float: %w", err)
 	}
-	return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: checked}, nil
+	nearest, err := strconv.ParseFloat(decimal.String(), 64)
+	if err != nil {
+		return nil, fmt.Errorf("float %s is out of float64's range", decimal)
+	}
+	value, err := machine.CheckedFloat(nearest)
+	if err != nil {
+		return nil, err
+	}
+	return &LiteralExpr{Value: value, Decimal: decimal}, nil
 }
 
 // unquote reads a string token's text. Text is UTF-8: a byte that is not,
@@ -182,56 +199,17 @@ func (p *parser) fxRateLiteral(figure token) (Expr, error) {
 	if strings.ContainsAny(figure.text, "eE") {
 		return nil, p.errorf(figure, "an exchange rate's figure is a plain decimal, not written with an exponent")
 	}
-	return p.node(figure, &FxRateExpr{ID: p.id(), Pos: figure.pos, Span: Span{Start: figure.pos, End: base.end}, Rate: figure.text, Quote: quote.text, Base: base.text})
+	return p.node(figure, &FxRateExpr{Node: Node{ID: p.id(), Pos: figure.pos, Span: Span{Start: figure.pos, End: base.end}}, Rate: figure.text, Quote: quote.text, Base: base.text})
 }
 
-// exactFloat reads a decimal literal as the float64 it is, refusing one that
-// float64 cannot hold as written: 0.30000000000000001 would be 0.3, and a
-// rule would say one thing and compute another — worse where the literal is
-// read as an exact ratio. What a float64 holds is what its shortest text
-// says, so the literal is compared with that, digit by digit and exponent by
-// exponent, without arithmetic on the exponent: 1e-999999999 must not be
-// worked out to be refused.
-func exactFloat(text string) (float64, error) {
-	value, err := strconv.ParseFloat(text, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid float %s", text)
+// Float is a decimal literal read as a float: its value when the float64 is
+// the decimal as written, and otherwise the refusal, naming the float64 it
+// would have been. 0.30000000000000001 would be 0.3, and a rule would say
+// one thing and compute another.
+func (e *LiteralExpr) Float() (machine.Value, error) {
+	number, _ := e.Value.Float()
+	if nearest := strconv.FormatFloat(number, 'g', -1, 64); nearest != e.Decimal.String() {
+		return machine.Value{}, Around(e, "type error: float %s is not a float64 as written: the nearest one is %s", e.Decimal, nearest)
 	}
-	shortest := strconv.FormatFloat(value, 'g', -1, 64)
-	written, ok := decimalDigits(text)
-	held, _ := decimalDigits(shortest)
-	if !ok || written != held {
-		return 0, fmt.Errorf("float %s is not a float64 as written: the nearest one is %s", text, shortest)
-	}
-	return value, nil
-}
-
-// normalDecimal is a decimal's significant digits and the power of ten that
-// scales them, so 1.50, 15e-1 and 0.15e1 are one; zero has no digits.
-type normalDecimal struct {
-	digits   string
-	exponent int
-}
-
-// decimalDigits normalises a decimal written as float syntax — sign, digits,
-// a point, an exponent — and reports false for one whose exponent is past
-// int.
-func decimalDigits(text string) (normalDecimal, bool) {
-	mantissa, power, _ := strings.Cut(strings.ToLower(text), "e")
-	exponent := 0
-	if power != "" {
-		parsed, err := strconv.Atoi(power)
-		if err != nil {
-			return normalDecimal{}, false
-		}
-		exponent = parsed
-	}
-	mantissa = strings.TrimLeft(mantissa, "+-")
-	whole, fraction, _ := strings.Cut(mantissa, ".")
-	digits := strings.TrimLeft(whole+fraction, "0")
-	trimmed := strings.TrimRight(digits, "0")
-	if trimmed == "" {
-		return normalDecimal{}, true
-	}
-	return normalDecimal{digits: trimmed, exponent: exponent - len(fraction) + len(digits) - len(trimmed)}, true
+	return e.Value, nil
 }

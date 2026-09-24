@@ -59,9 +59,13 @@ func TestProgramPassesVectorsThrough(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
 	var received []float64
-	err := machine.Logic(registry, "model.score_v1", machine.Doc{Cost: 10}, func(xs []float64) (float64, error) {
-		received = xs
-		return xs[0], nil
+	err := registry.Register(machine.FunctionSpec{
+		Name: "model.score_v1",
+		Doc:  machine.Doc{Cost: 10},
+		Go: func(xs []float64) (float64, error) {
+			received = xs
+			return xs[0], nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -130,8 +134,12 @@ func TestProgramCarriesHandlesAndMaps(t *testing.T) {
 	if err := machine.DefineHandle[*tensor](registry, "onnx.tensor"); err != nil {
 		t.Fatal(err)
 	}
-	err := machine.Logic(registry, "model.norm_v1", machine.Doc{Cost: 10}, func(x *tensor) (float64, error) {
-		return x.norm, nil
+	err := registry.Register(machine.FunctionSpec{
+		Name: "model.norm_v1",
+		Doc:  machine.Doc{Cost: 10},
+		Go: func(x *tensor) (float64, error) {
+			return x.norm, nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,13 +178,17 @@ type codeIn struct {
 	Limits map[code]int64 `funroute:"limits"`
 }
 
-// A map keyed by a named string type crosses both ways, through a Logic
+// A map keyed by a named string type crosses both ways, through a Go
 // function and out of a Program, without reflect refusing the key.
 func TestNamedMapKeysCross(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
-	err := machine.Logic(registry, "limit.of_v1", machine.Doc{Cost: 1}, func(limits map[code]int64) (int64, error) {
-		return limits["a"], nil
+	err := registry.Register(machine.FunctionSpec{
+		Name: "limit.of_v1",
+		Doc:  machine.Doc{Cost: 1},
+		Go: func(limits map[code]int64) (int64, error) {
+			return limits["a"], nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +219,8 @@ func TestFailedResultIsZero(t *testing.T) {
 		t.Fatalf("Run(%+v) = %+v, %v, want the zero value and ErrContract", in, out, err)
 	}
 	errs, failed := failures()
-	outs := program.RunBatch(t.Context(), []scalarIn{{Amount: 1}, in}, machine.RunOptions{}, failed)
+	requests, outs := []scalarIn{{Amount: 1}, in}, make([]narrowOut, 2)
+	program.RunBatch(t.Context(), 2, func(i int) *scalarIn { return &requests[i] }, func(i int) *narrowOut { return &outs[i] }, machine.RunOptions{}, failed)
 	if len(errs) != 1 || outs[0] != (narrowOut{Amount: 1, Small: 1}) || errs[1] == nil || outs[1] != (narrowOut{}) {
 		t.Fatalf("outs = %+v, errs = %v, want [{1 1} {}] and one error at 1", outs, errs)
 	}

@@ -1,10 +1,17 @@
 package compile
 
+// Inference reads a program once. Every node gets one type term; what the
+// program leaves open is a type variable, a variable may be held to a set
+// of kinds (a literal: infer_literal.go), and a call with several overloads
+// that fit is a choice decided once everything certain is known
+// (infer_solve.go). Every change goes on a trail, so trying a candidate and
+// taking it back costs what the candidate touched, never a copy of the
+// state.
+
 import (
+	"errors"
 	"fmt"
-	"maps"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/nethinwei/funroute/internal/machine"
@@ -15,60 +22,213 @@ type typeTerm struct {
 	kind   machine.Kind
 	id     int
 	elem   *typeTerm
-	name   string // a handle's host name; empty otherwise
+	name   string // a handle's or an enum's name; empty otherwise
 	values []string
-	// record is a record type as a whole. Its fields are already concrete
-	// wherever one appears — a record comes from the contract or from a
-	// literal whose field values have types — so unification compares the
-	// type rather than unifying field by field.
-	record *machine.Type
+	// fields is a record's, in order: a record unifies field by field, so a
+	// literal in a record literal's field settles the way any literal does.
+	fields []fieldTerm
+}
+
+type fieldTerm struct {
+	name string
+	term typeTerm
+}
+
+// varInfo is what a variable may still become, and how many literals
+// written as an int or a float have it as their type.
+type varInfo struct {
+	domain       kindSet
+	ints, floats int
+}
+
+// forced is how many of the variable's literals can no longer be what they
+// were written as.
+func (v varInfo) forced() int {
+	n := 0
+	if !v.domain.has(machine.IntKind) {
+		n += v.ints
+	}
+	if !v.domain.has(machine.FloatKind) {
+		n += v.floats
+	}
+	return n
 }
 
 type inferState struct {
 	nextVar    int
 	subst      map[int]typeTerm
+	info       map[int]varInfo
 	nodeTypes  map[int]typeTerm
 	selections map[int]string
-	mixed      int
-	// allowed is the kinds each open literal may still become, and written
-	// the kind each literal was written as (infer_literal.go). Both stay nil
-	// in a program without money.
-	allowed           map[int]kindSet
-	written           map[int]machine.Kind
-	convertedLiterals int
+	// converted is how many literals became something other than what they
+	// were written as: allowed, never preferred.
+	converted int
+	literals  []int
+	choices   []*choice
+	deferred  []*deferred
+	// watchers is the open choices each variable's binding may narrow,
+	// queue the ones to narrow again, and probing how deep inside a trial
+	// the state is: a trial is taken back, so it narrows nothing.
+	watchers map[int][]*choice
+	queue    []*choice
+	probing  int
+	// checks run once everything is decided: what can only be proven of
+	// settled types.
+	checks []func() error
+	trail  []undo
 }
+
+// undo is one change on the trail, with what it replaced.
+type undo struct {
+	op        undoOp
+	id        int
+	term      typeTerm
+	info      varInfo
+	had       bool
+	key       string
+	converted int
+	choice    *choice
+	deferred  *deferred
+	open      []*machine.RegisteredFunction
+}
+
+type undoOp uint8
+
+const (
+	undoSubst undoOp = iota
+	undoInfo
+	undoSelection
+	undoConverted
+	undoChoice
+	undoDeferred
+)
 
 func newInferState() *inferState {
 	return &inferState{
 		nextVar:    1,
 		subst:      map[int]typeTerm{},
+		info:       map[int]varInfo{},
 		nodeTypes:  map[int]typeTerm{},
 		selections: map[int]string{},
+		watchers:   map[int][]*choice{},
 	}
 }
 
-func (s *inferState) clone() *inferState {
-	out := &inferState{
-		nextVar:           s.nextVar,
-		mixed:             s.mixed,
-		convertedLiterals: s.convertedLiterals,
-		subst:             make(map[int]typeTerm, len(s.subst)),
-		nodeTypes:         make(map[int]typeTerm, len(s.nodeTypes)),
-		selections:        make(map[int]string, len(s.selections)),
-		allowed:           maps.Clone(s.allowed),
-		written:           maps.Clone(s.written),
+// mark is a point on the trail to come back to.
+func (s *inferState) mark() int { return len(s.trail) }
+
+// undoTo takes back every change made since mark.
+func (s *inferState) undoTo(mark int) {
+	for len(s.trail) > mark {
+		entry := s.trail[len(s.trail)-1]
+		s.trail = s.trail[:len(s.trail)-1]
+		s.revert(entry)
 	}
-	maps.Copy(out.subst, s.subst)
-	maps.Copy(out.nodeTypes, s.nodeTypes)
-	maps.Copy(out.selections, s.selections)
-	return out
+}
+
+func (s *inferState) revert(entry undo) {
+	switch entry.op {
+	case undoSubst:
+		restore(s.subst, entry.id, entry.term, entry.had)
+	case undoInfo:
+		restore(s.info, entry.id, entry.info, entry.had)
+	case undoSelection:
+		restore(s.selections, entry.id, entry.key, entry.had)
+	case undoConverted:
+		s.converted = entry.converted
+	case undoChoice:
+		entry.choice.open = entry.open
+	case undoDeferred:
+		entry.deferred.done = false
+	}
+}
+
+func restore[V any](m map[int]V, id int, old V, had bool) {
+	if had {
+		m[id] = old
+	} else {
+		delete(m, id)
+	}
+}
+
+func (s *inferState) bind(id int, term typeTerm) {
+	old, had := s.subst[id]
+	s.trail = append(s.trail, undo{op: undoSubst, id: id, term: old, had: had})
+	s.subst[id] = term
+	if s.probing > 0 {
+		return
+	}
+	s.touch(id)
+	for _, v := range s.freeVars(term, nil) {
+		s.watchers[v] = append(s.watchers[v], s.watchers[id]...)
+	}
+}
+
+func (s *inferState) setInfo(id int, info varInfo) {
+	old, had := s.info[id]
+	s.trail = append(s.trail, undo{op: undoInfo, id: id, info: old, had: had})
+	s.info[id] = info
+	if s.probing == 0 {
+		s.touch(id)
+	}
+}
+
+// touch queues the open choices watching variable id.
+func (s *inferState) touch(id int) {
+	for _, c := range s.watchers[id] {
+		if c.open != nil && !c.queued {
+			c.queued = true
+			s.queue = append(s.queue, c)
+		}
+	}
+}
+
+// freeVars appends the open variables term holds to vars.
+func (s *inferState) freeVars(term typeTerm, vars []int) []int {
+	term = s.deref(term)
+	switch {
+	case term.kind == machine.VarKind:
+		return append(vars, term.id)
+	case term.elem != nil:
+		return s.freeVars(*term.elem, vars)
+	}
+	for _, field := range term.fields {
+		vars = s.freeVars(field.term, vars)
+	}
+	return vars
+}
+
+func (s *inferState) selectKey(node int, key string) {
+	old, had := s.selections[node]
+	s.trail = append(s.trail, undo{op: undoSelection, id: node, key: old, had: had})
+	s.selections[node] = key
+}
+
+func (s *inferState) convert(delta int) {
+	if delta == 0 {
+		return
+	}
+	s.trail = append(s.trail, undo{op: undoConverted, converted: s.converted})
+	s.converted += delta
+}
+
+// infoOf is what variable id may become; a variable nothing restricts may
+// become anything.
+func (s *inferState) infoOf(id int) varInfo {
+	if info, ok := s.info[id]; ok {
+		return info
+	}
+	return varInfo{domain: allKinds}
 }
 
 func (s *inferState) fresh() typeTerm {
-	term := typeTerm{kind: machine.VarKind, id: s.nextVar}
+	term := varTerm(s.nextVar)
 	s.nextVar++
 	return term
 }
+
+// varTerm is the term of type variable id.
+func varTerm(id int) typeTerm { return typeTerm{kind: machine.VarKind, id: id} }
 
 func scalarTerm(kind machine.Kind) typeTerm { return typeTerm{kind: kind} }
 
@@ -77,12 +237,7 @@ func containerTerm(kind machine.Kind, elem typeTerm) typeTerm {
 }
 
 func (s *inferState) deref(term typeTerm) typeTerm {
-	seen := map[int]bool{}
 	for term.kind == machine.VarKind {
-		if seen[term.id] {
-			return term
-		}
-		seen[term.id] = true
 		next, ok := s.subst[term.id]
 		if !ok {
 			return term
@@ -93,63 +248,84 @@ func (s *inferState) deref(term typeTerm) typeTerm {
 }
 
 func (s *inferState) unify(left, right typeTerm) error {
-	left = s.deref(left)
-	right = s.deref(right)
-	if left.kind == machine.VarKind {
-		if right.kind == machine.VarKind && left.id == right.id {
-			return nil
-		}
-		if err := s.constrain(left, right); err != nil {
-			return err
-		}
-		if s.occurs(left.id, right) {
-			return fmt.Errorf("recursive type")
-		}
-		s.subst[left.id] = right
-		return nil
-	}
-	if right.kind == machine.VarKind {
-		return s.unify(right, left)
-	}
-	if anyEnumPair(left, right) {
-		return nil
-	}
-	if left.kind != right.kind || left.name != right.name || !slices.Equal(left.values, right.values) {
+	left, right = s.deref(left), s.deref(right)
+	switch {
+	case left.kind == machine.VarKind:
+		return s.bindVar(left, right)
+	case right.kind == machine.VarKind:
+		return s.bindVar(right, left)
+	case left.kind != right.kind || left.name != right.name || !slices.Equal(left.values, right.values):
 		return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
-	}
-	if left.kind == machine.ArrayKind || left.kind == machine.DictKind {
-		if left.elem == nil || right.elem == nil {
-			return fmt.Errorf("malformed container type")
-		}
+	case left.kind == machine.RecordKind:
+		return s.unifyFields(left, right)
+	case left.elem != nil && right.elem != nil:
 		return s.unify(*left.elem, *right.elem)
-	}
-	if left.kind == machine.RecordKind && !s.unifyRecords(left, right) {
-		return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
 	}
 	return nil
 }
 
-// anyEnumPair matches the enum wildcard in a signature against a declared
-// enum. Only a signature can hold the wildcard, so two declared enums with
-// different names still refuse to unify.
-func anyEnumPair(left, right typeTerm) bool {
-	if left.kind != machine.EnumKind || right.kind != machine.EnumKind {
-		return false
+// unifyFields unifies two records: the same names in the same order, and
+// each field's type.
+func (s *inferState) unifyFields(left, right typeTerm) error {
+	if len(left.fields) != len(right.fields) {
+		return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
 	}
-	return (left.name == "" && len(left.values) == 0) || (right.name == "" && len(right.values) == 0)
+	for i, field := range left.fields {
+		if field.name != right.fields[i].name {
+			return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
+		}
+		if err := s.unify(field.term, right.fields[i].term); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// bindVar binds an open variable to term, keeping what the variable may
+// become: two variables meet in what both may become, and a variable meets
+// a type only if that type's kind is one it may be.
+func (s *inferState) bindVar(variable, term typeTerm) error {
+	if term.kind == machine.VarKind && term.id == variable.id {
+		return nil
+	}
+	mine := s.infoOf(variable.id)
+	if term.kind == machine.VarKind {
+		theirs := s.infoOf(term.id)
+		merged := varInfo{domain: mine.domain & theirs.domain, ints: mine.ints + theirs.ints, floats: mine.floats + theirs.floats}
+		if merged.domain == 0 {
+			return errors.New("the literals cannot share a type")
+		}
+		if merged != theirs {
+			s.setInfo(term.id, merged)
+		}
+		s.convert(merged.forced() - mine.forced() - theirs.forced())
+		s.bind(variable.id, term)
+		return nil
+	}
+	if !mine.domain.has(term.kind) {
+		return fmt.Errorf("a literal cannot be %s", s.describe(term))
+	}
+	if s.occurs(variable.id, term) {
+		return errors.New("recursive type")
+	}
+	s.convert(varInfo{domain: kindsOf(term.kind), ints: mine.ints, floats: mine.floats}.forced() - mine.forced())
+	s.bind(variable.id, term)
+	return nil
 }
 
 func (s *inferState) occurs(id int, term typeTerm) bool {
 	term = s.deref(term)
-	if term.kind == machine.VarKind {
+	switch {
+	case term.kind == machine.VarKind:
 		return term.id == id
-	}
-	if term.elem != nil {
+	case term.elem != nil:
 		return s.occurs(id, *term.elem)
 	}
-	return false
+	return slices.ContainsFunc(term.fields, func(field fieldTerm) bool { return s.occurs(id, field.term) })
 }
 
+// instantiate is a signature's type with its type variables replaced by the
+// call's, one fresh variable per name.
 func (s *inferState) instantiate(t machine.Type, vars map[string]typeTerm) typeTerm {
 	switch t.Kind() {
 	case machine.VarKind:
@@ -161,24 +337,54 @@ func (s *inferState) instantiate(t machine.Type, vars map[string]typeTerm) typeT
 		return fresh
 	case machine.ArrayKind, machine.DictKind:
 		if !hasElem(t) {
-			return typeTerm{kind: machine.InvalidKind}
+			return scalarTerm(machine.InvalidKind)
 		}
 		return containerTerm(t.Kind(), s.instantiate(elemOf(t), vars))
+	case machine.EnumKind:
+		if t.Name() == "" {
+			// The wildcard a signature writes for any enum is a variable
+			// only an enum can fill.
+			fresh := s.fresh()
+			s.setInfo(fresh.id, varInfo{domain: kindsOf(machine.EnumKind)})
+			return fresh
+		}
+	}
+	return s.concrete(t)
+}
+
+// concrete is the term of a known type.
+func (s *inferState) concrete(t machine.Type) typeTerm {
+	switch t.Kind() {
+	case machine.ArrayKind, machine.DictKind:
+		return containerTerm(t.Kind(), s.concrete(elemOf(t)))
+	case machine.RecordKind:
+		fields := make([]fieldTerm, len(t.Fields()))
+		for i, field := range t.Fields() {
+			fields[i] = fieldTerm{name: field.Name(), term: s.concrete(field.Type())}
+		}
+		return typeTerm{kind: machine.RecordKind, fields: fields}
 	default:
-		return s.concrete(t)
+		return typeTerm{kind: t.Kind(), name: t.Name(), values: t.Values()}
 	}
 }
 
+// publicType is the type term stands for, and false while any part of it is
+// open.
 func (s *inferState) publicType(term typeTerm) (machine.Type, bool) {
 	term = s.deref(term)
 	switch term.kind {
 	case machine.VarKind, machine.InvalidKind:
 		return machine.Type{}, false
 	case machine.RecordKind:
-		if term.record == nil {
-			return machine.Type{}, false
+		fields := make([]machine.Field, len(term.fields))
+		for i, field := range term.fields {
+			typ, ok := s.publicType(field.term)
+			if !ok {
+				return machine.Type{}, false
+			}
+			fields[i] = machine.FieldOf(field.name, typ)
 		}
-		return machine.CloneType(*term.record), true
+		return machine.RecordOf(fields...), true
 	case machine.ArrayKind, machine.DictKind:
 		if term.elem == nil {
 			return machine.Type{}, false
@@ -201,35 +407,19 @@ func (s *inferState) describe(term typeTerm) string {
 	if typ, ok := s.publicType(term); ok {
 		return typ.String()
 	}
-	if term.kind == machine.VarKind {
+	switch {
+	case term.kind == machine.VarKind:
 		return s.describeOpen(term)
-	}
-	if term.elem != nil {
+	case term.elem != nil:
 		return fmt.Sprintf("%s<%s>", term.kind, s.describe(*term.elem))
+	case term.kind == machine.RecordKind:
+		fields := make([]string, len(term.fields))
+		for i, field := range term.fields {
+			fields[i] = field.name + ": " + s.describe(field.term)
+		}
+		return "record{" + strings.Join(fields, ", ") + "}"
 	}
 	return term.kind.String()
-}
-
-// describeOpen names a type inference has not settled the way a reader can
-// use: a literal by the kinds it may still be, anything else as unknown. The
-// variable's number is inference's bookkeeping, not the program's.
-func (s *inferState) describeOpen(term typeTerm) string {
-	set, literal := s.allowed[term.id]
-	if !literal {
-		return "?"
-	}
-	var kinds []string
-	for _, kind := range []machine.Kind{machine.IntKind, machine.FloatKind, machine.RatioKind, machine.MoneyKind} {
-		if set.has(kind) {
-			kinds = append(kinds, kind.String())
-		}
-	}
-	return strings.Join(kinds, "|")
-}
-
-type inferResult struct {
-	typ   typeTerm
-	state *inferState
 }
 
 type inference struct {
@@ -253,109 +443,64 @@ type inferContext struct {
 	enums map[string]machine.Type
 }
 
-type programCandidate struct {
-	key       string
-	result    inferResult
-	params    []machine.Parameter
-	resultTyp machine.Type
-}
-
 // inferProgram infers the argument and result types.
 //
 // order, when non-nil, replaces the appearance order of the free variables as
 // the argument order: that is how the host's contract pins the ABI down, and it
 // is also what lets a declared-but-unused argument stay in the signature.
 //
-// ret, when non-nil, is unified with the result rather than compared to it
-// afterwards, so a declared float result settles `1 + 2` as float arithmetic instead of
-// rejecting it.
+// ret, when non-nil, is unified with the result before anything is decided,
+// so a declared float result settles `1 + 2` as float arithmetic instead of
+// rejecting it, and every node the result flows from — the items of an
+// array, the branches of an if — is typed by it.
 func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string]machine.Type, order []string, ret *machine.Type) (*inference, error) {
 	names := syntax.FreeVariables(expr)
 	if order != nil {
 		names = order
 	}
-	initial := newInferState()
-	context := newInferContext(initial, names, registry)
+	state := newInferState()
+	context := newInferContext(state, names, registry)
 	context.hints = hints
 	if err := collectEnums(context.enums, hints, ret); err != nil {
 		return nil, err
 	}
 	addRegistryEnums(context.enums, registry)
-	if err := applyHints(initial, context.args, hints); err != nil {
+	if err := applyHints(state, context.args, hints); err != nil {
 		return nil, err
 	}
-	results, err := inferExpr(expr, initial, context)
+	result, err := inferExpr(expr, state, context)
 	if err != nil {
 		return nil, err
 	}
-	results, err = applyResultType(expr, results, ret)
+	if err := applyResultType(expr, state, result, ret); err != nil {
+		return nil, err
+	}
+	if err := state.solve(); err != nil {
+		return nil, syntax.Around(expr, "type error: %v", err)
+	}
+	inferred, err := state.inference(names, context.args, result)
 	if err != nil {
 		return nil, err
 	}
-	results, err = settleCandidates(expr, results)
-	if err != nil {
-		return nil, err
-	}
-	candidates, unresolved := programCandidates(results, names, context.args)
-	chosen, err := chooseCandidate(candidates, unresolved)
-	if err != nil {
-		return nil, err
-	}
-	inferred := buildInference(chosen)
 	if ret != nil {
 		// The declared result is the ABI.
-		inferred.Result = machine.CloneType(*ret)
-	}
-	if err := validateEnumResult(expr, inferred, registry); err != nil {
-		return nil, err
+		inferred.Result = *ret
 	}
 	return inferred, nil
 }
 
-// settleCandidates settles the literals of every reading, dropping the ones
-// whose literals cannot settle; none settling is the program's type error.
-func settleCandidates(expr syntax.Expr, results []inferResult) ([]inferResult, error) {
-	var kept []inferResult
-	var failure error
-	for _, result := range results {
-		result.state = result.state.clone()
-		if err := result.state.settleLiterals(); err != nil {
-			failure = err
-			continue
-		}
-		kept = append(kept, result)
-	}
-	if len(kept) == 0 && failure != nil {
-		return nil, syntax.Around(expr, "type error: %v", failure)
-	}
-	return kept, nil
-}
-
-// applyResultType keeps the candidates whose result unifies with the declared
-// type. Dropping the rest before scoring is what makes the contract's result
-// disambiguating rather than merely checking.
-func applyResultType(expr syntax.Expr, results []inferResult, ret *machine.Type) ([]inferResult, error) {
+// applyResultType unifies the result with the declared type before anything
+// is decided, which is what makes the contract's result disambiguating
+// rather than merely checking.
+func applyResultType(expr syntax.Expr, state *inferState, result typeTerm, ret *machine.Type) error {
 	if ret == nil {
-		return results, nil
+		return nil
 	}
-	kept := make([]inferResult, 0, len(results))
-	var rejected string
-	for _, result := range results {
-		state := result.state.clone()
-		target := state.concrete(*ret)
-		if err := state.unify(result.typ, target); err != nil {
-			rejected = result.state.describe(result.typ)
-			continue
-		}
-		kept = append(kept, inferResult{typ: target, state: state})
+	found := state.describe(result)
+	if err := state.unify(result, state.concrete(*ret)); err != nil {
+		return syntax.Around(expr, "type error: the contract returns %s but the expression returns %s", ret, found)
 	}
-	if len(kept) == 0 {
-		if rejected == "" {
-			rejected = "nothing"
-		}
-		return nil, syntax.Around(expr, "type error: the contract returns %s but the expression returns %s", ret, rejected)
-	}
-	return kept, nil
+	return nil
 }
 
 // newInferContext allocates one type variable per free variable, in the order
@@ -378,152 +523,31 @@ func applyHints(state *inferState, args map[string]typeTerm, hints map[string]ma
 	return nil
 }
 
-func programCandidates(results []inferResult, names []string, args map[string]typeTerm) (map[string]programCandidate, []string) {
-	byKey := map[string]programCandidate{}
-	var unresolved []string
-	for _, result := range results {
-		params, missing := candidateParams(result, names, args)
-		if missing != "" {
-			unresolved = append(unresolved, missing)
-			continue
-		}
-		resultType, ok := result.state.publicType(result.typ)
-		if !ok {
-			unresolved = append(unresolved, "result")
-			continue
-		}
-		key := candidateKey(params, resultType)
-		// One program read two ways keeps the reading that got there with
-		// the fewest promotions.
-		if existing, exists := byKey[key]; !exists || candidatePenalty(result.state) < candidatePenalty(existing.result.state) {
-			byKey[key] = programCandidate{key: key, result: result, params: params, resultTyp: resultType}
+// inference is what the solved state says of the program: every argument's
+// type, the result's, every node's and every call's function.
+func (s *inferState) inference(names []string, args map[string]typeTerm, result typeTerm) (*inference, error) {
+	for _, check := range s.checks {
+		if err := check(); err != nil {
+			return nil, err
 		}
 	}
-	return byKey, unresolved
-}
-
-// candidateParams returns the resolved parameters, or the name of the first
-// argument whose type stayed open.
-func candidateParams(result inferResult, names []string, args map[string]typeTerm) ([]machine.Parameter, string) {
 	params := make([]machine.Parameter, len(names))
 	for i, name := range names {
-		typ, ok := result.state.publicType(args[name])
+		typ, ok := s.publicType(args[name])
 		if !ok {
-			return nil, name
+			return nil, fmt.Errorf("cannot infer a concrete type for %s; provide a compile-time type hint", name)
 		}
 		params[i] = machine.NewParameter(name, typ, "")
 	}
-	return params, ""
-}
-
-func candidateKey(params []machine.Parameter, result machine.Type) string {
-	parts := make([]string, len(params))
-	for i, param := range params {
-		parts[i] = param.Name() + ":" + param.Type().String()
+	resultType, ok := s.publicType(result)
+	if !ok {
+		return nil, errors.New("cannot infer a concrete type for result; provide a compile-time type hint")
 	}
-	return strings.Join(parts, ",") + "->" + result.String()
-}
-
-func chooseCandidate(byKey map[string]programCandidate, unresolved []string) (programCandidate, error) {
-	if len(byKey) == 0 {
-		sort.Strings(unresolved)
-		name := "expression"
-		if len(unresolved) > 0 {
-			name = unresolved[0]
-		}
-		return programCandidate{}, fmt.Errorf("cannot infer a concrete type for %s; provide a compile-time type hint", name)
-	}
-	best := cheapestCandidates(byKey)
-	if len(best) == 1 {
-		return best[0], nil
-	}
-	keys := make([]string, 0, len(best))
-	for _, item := range best {
-		keys = append(keys, item.key)
-	}
-	sort.Strings(keys)
-	return programCandidate{}, fmt.Errorf("ambiguous expression type (%s); use int(...), float(...), string(...), bool(...), or provide a type hint", strings.Join(keys, " | "))
-}
-
-func cheapestCandidates(byKey map[string]programCandidate) []programCandidate {
-	bestScore := int(^uint(0) >> 1)
-	var best []programCandidate
-	for _, item := range byKey {
-		score := implicitCandidateScore(item.params, item.resultTyp) + candidatePenalty(item.result.state)
-		if score < bestScore {
-			bestScore = score
-			best = []programCandidate{item}
-		} else if score == bestScore {
-			best = append(best, item)
-		}
-	}
-	return best
-}
-
-func buildInference(chosen programCandidate) *inference {
-	state := chosen.result.state
-	nodeTypes := make(map[int]machine.Type, len(state.nodeTypes))
-	for id, term := range state.nodeTypes {
-		if typ, ok := state.publicType(term); ok {
+	nodeTypes := make(map[int]machine.Type, len(s.nodeTypes))
+	for id, term := range s.nodeTypes {
+		if typ, ok := s.publicType(term); ok {
 			nodeTypes[id] = typ
 		}
 	}
-	return &inference{
-		Params:     chosen.params,
-		Result:     chosen.resultTyp,
-		NodeTypes:  nodeTypes,
-		Selections: state.selections,
-	}
-}
-
-// mixedPenalty makes a mixed-numeric overload the last resort: for `risk < 0.5`
-// the cheap-by-type choice would be risk:int promoted to float, which is almost
-// never what the author meant. Writing the mixed form explicitly still works —
-// it only loses when a same-type reading exists.
-const mixedPenalty = 100
-
-func implicitCandidateScore(params []machine.Parameter, result machine.Type) int {
-	score := implicitTypeScore(result)
-	for _, param := range params {
-		score += implicitTypeScore(param.Type())
-	}
-	return score
-}
-
-func implicitTypeScore(typ machine.Type) int {
-	switch typ.Kind() {
-	case machine.IntKind:
-		return 0
-	case machine.BoolKind:
-		return 1
-	case machine.FloatKind:
-		return 10
-	case machine.StringKind:
-		return 20
-	case machine.EnumKind:
-		return 20
-	case machine.HandleKind:
-		return 30
-	case machine.ArrayKind, machine.DictKind:
-		if !hasElem(typ) {
-			return 100
-		}
-		return 2 + implicitTypeScore(elemOf(typ))
-	case machine.RecordKind:
-		// A record matches only itself, so it never competes with a numeric
-		// promotion; the score just has to be worse than the scalars'.
-		return 30
-	case machine.RatioKind:
-		// A ratio is a float that happens to be exact: allowed wherever it
-		// types, never the reading of an unconstrained number.
-		return 12
-	case machine.CurrencyKind:
-		return 20
-	case machine.MoneyKind:
-		return 40
-	case machine.FxRateKind:
-		return 50
-	default:
-		return 100
-	}
+	return &inference{Params: params, Result: resultType, NodeTypes: nodeTypes, Selections: s.selections}, nil
 }

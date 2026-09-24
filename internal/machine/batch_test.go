@@ -44,14 +44,19 @@ func modelRegistry(t testing.TB, single, batched *atomic.Int64) *machine.Registr
 		}
 		return out, nil
 	}
-	if err := machine.Model(registry, "model.embed_v1", machine.Doc{Cost: 10}, embed, embedBatch); err != nil {
+	if err := registry.Register(machine.FunctionSpec{
+		Name:    "model.embed_v1",
+		Doc:     machine.Doc{Cost: 10},
+		Go:      embed,
+		GoBatch: embedBatch,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	fraud := func(e *embedding) (float64, error) {
 		single.Add(1)
 		return e.features[0], nil
 	}
-	if err := machine.Logic(registry, "model.fraud_v1", machine.Doc{Cost: 10}, fraud); err != nil {
+	if err := registry.Register(machine.FunctionSpec{Name: "model.fraud_v1", Doc: machine.Doc{Cost: 10}, Go: fraud}); err != nil {
 		t.Fatal(err)
 	}
 	return registry
@@ -157,9 +162,12 @@ func TestBatchFlushesOnTheTimerAndCloses(t *testing.T) {
 func TestBatchErrorsSurfaceAtTheCall(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
-	err := machine.Model(registry, "model.flaky_v1", machine.Doc{Cost: 1},
-		func(x float64) (float64, error) { return x, nil },
-		func(xs []float64) ([]float64, error) { return nil, fmt.Errorf("engine down") })
+	err := registry.Register(machine.FunctionSpec{
+		Name:    "model.flaky_v1",
+		Doc:     machine.Doc{Cost: 1},
+		Go:      func(x float64) (float64, error) { return x, nil },
+		GoBatch: func(xs []float64) ([]float64, error) { return nil, errors.New("engine down") },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,9 +204,12 @@ func floatRuntime(t *testing.T, registry *machine.Registry, source string) *mach
 func TestBatchPanicsAreContainedAndTyped(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
-	err := machine.Model(registry, "model.panic_v1", machine.Doc{Cost: 1},
-		func(x float64) (float64, error) { return x, nil },
-		func([]float64) ([]float64, error) { panic("batch exploded") })
+	err := registry.Register(machine.FunctionSpec{
+		Name:    "model.panic_v1",
+		Doc:     machine.Doc{Cost: 1},
+		Go:      func(x float64) (float64, error) { return x, nil },
+		GoBatch: func([]float64) ([]float64, error) { panic("batch exploded") },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,9 +260,12 @@ func TestDetachedBatchStopsWaitingAtItsTimeout(t *testing.T) {
 		const timeout = 5 * time.Millisecond
 		registry := machine.CoreRegistry()
 		release := make(chan struct{})
-		err := machine.Model(registry, "model.stubborn_v1", machine.Doc{Cost: 1, Timeout: timeout, Detached: true},
-			func(x float64) (float64, error) { return x, nil },
-			func(xs []float64) ([]float64, error) { <-release; return xs, nil })
+		err := registry.Register(machine.FunctionSpec{
+			Name:    "model.stubborn_v1",
+			Doc:     machine.Doc{Cost: 1, Timeout: timeout, Detached: true},
+			Go:      func(x float64) (float64, error) { return x, nil },
+			GoBatch: func(xs []float64) ([]float64, error) { <-release; return xs, nil },
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -274,9 +288,12 @@ func TestDetachedBatchStopsWaitingAtItsTimeout(t *testing.T) {
 func BenchmarkBatchVersusSingle(b *testing.B) {
 	const overhead = 20 * time.Microsecond
 	registry := machine.CoreRegistry()
-	err := machine.Model(registry, "model.score_v1", machine.Doc{Cost: 10},
-		func(x float64) (float64, error) { time.Sleep(overhead); return x, nil },
-		func(xs []float64) ([]float64, error) { time.Sleep(overhead); return xs, nil })
+	err := registry.Register(machine.FunctionSpec{
+		Name:    "model.score_v1",
+		Doc:     machine.Doc{Cost: 10},
+		Go:      func(x float64) (float64, error) { time.Sleep(overhead); return x, nil },
+		GoBatch: func(xs []float64) ([]float64, error) { time.Sleep(overhead); return xs, nil },
+	})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -372,9 +389,12 @@ func TestBatchHandsTheEngineOnlyAdmittedArguments(t *testing.T) {
 func TestABatchedCurrencyMismatchIsNotAnExtensionFailure(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
-	err := machine.Model(registry, "model.mixed_v1", machine.Doc{Cost: 1},
-		func(x float64) (float64, error) { return x, nil },
-		func([]float64) ([]float64, error) { return nil, fmt.Errorf("engine: %w", machine.ErrCurrency) })
+	err := registry.Register(machine.FunctionSpec{
+		Name:    "model.mixed_v1",
+		Doc:     machine.Doc{Cost: 1},
+		Go:      func(x float64) (float64, error) { return x, nil },
+		GoBatch: func([]float64) ([]float64, error) { return nil, fmt.Errorf("engine: %w", machine.ErrCurrency) },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

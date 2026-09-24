@@ -156,7 +156,7 @@ func (r *Registry) applyMoney(spec *money.MoneySpec) error {
 		return err
 	}
 	if money.Identity(table) != money.Identity(existing) {
-		return fmt.Errorf("the manifest declares other currencies than this registry")
+		return errors.New("the manifest declares other currencies than this registry")
 	}
 	return nil
 }
@@ -198,8 +198,13 @@ func unavailable(name string) EvalFunc {
 		if calls, ok := ctx.Value(unavailableKey{}).(*unavailableCalls); ok {
 			calls.add(name)
 		}
-		return Value{}, fmt.Errorf("%w: %w: %s", ErrExtension, ErrUnavailable, name)
+		return Value{}, unavailableError(name)
 	}
+}
+
+// unavailableError is a call to a function known only by its signature.
+func unavailableError(name string) error {
+	return money.Classify(ErrExtension, "", fmt.Errorf("%w: %s", ErrUnavailable, name))
 }
 
 type unavailableKey struct{}
@@ -232,7 +237,7 @@ func TrackUnavailable(ctx context.Context) (context.Context, func() []string) {
 
 func (r *Registry) enabledFormsLocked() []Form {
 	out := make([]Form, 0, len(r.forms))
-	for _, form := range knownForms {
+	for _, form := range OptionalForms() {
 		if r.forms[form] {
 			out = append(out, form)
 		}

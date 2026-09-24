@@ -1,6 +1,7 @@
 package std
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -10,19 +11,15 @@ import (
 
 // The pack's aggregates over money, registered only when the registry
 // declares money — so a host declares its currencies before it registers
-// the pack. They are FunctionSpecs rather than Logic because a signature has
+// the pack. They write Params, Result and Eval rather than Go because a signature has
 // to say money: reflection sees money, and the currency is the value's.
 // Every one checks that the amounts it is handed share a currency; the
 // currency-less zero goes with any.
 
-func registerMoney(registry *funroute.Registry) error {
-	_, declared := registry.Money()
-	if !declared {
-		return nil
-	}
+func moneySpecs() []funroute.FunctionSpec {
 	c := funroute.MoneyType
 	amounts := funroute.ArrayOf(c)
-	specs := []funroute.FunctionSpec{
+	return slices.Concat([]funroute.FunctionSpec{
 		moneySpec("sum", []funroute.Type{amounts}, c, "求和", "同币种金额相加；空数组是不带币种的 0。", sumMoney),
 		moneySpec("min", []funroute.Type{amounts}, c, "最小值", "最小的金额；空数组报错。", extremeMoney(true)),
 		moneySpec("max", []funroute.Type{amounts}, c, "最大值", "最大的金额；空数组报错。", extremeMoney(false)),
@@ -35,29 +32,22 @@ func registerMoney(registry *funroute.Registry) error {
 		moneySpec("deltas", []funroute.Type{amounts}, amounts, "差分", "相邻两笔金额之差。", deltasMoney),
 		moneySpec("arg_min", []funroute.Type{amounts}, funroute.IntType, "最小值下标", "最小金额的下标；空数组报错。", argExtremeMoney(true)),
 		moneySpec("arg_max", []funroute.Type{amounts}, funroute.IntType, "最大值下标", "最大金额的下标；空数组报错。", argExtremeMoney(false)),
-	}
-	specs = append(specs, roundedMoneySpecs(amounts, c)...)
-	specs = append(specs, keyedByMoney(amounts)...)
-	for _, spec := range specs {
-		if err := register(registry, spec); err != nil {
-			return err
-		}
-	}
-	return nil
+	}, roundedMoneySpecs(amounts, c), keyedSpecs(true))
 }
 
 func moneySpec(name string, params []funroute.Type, result funroute.Type, label, description string, eval funroute.EvalFunc) funroute.FunctionSpec {
-	return funroute.FunctionSpec{
-		Name: name, Params: params, Result: result, Eval: eval,
-		Doc: funroute.Doc{Constexpr: true, Label: label, Category: "金额", Cost: 4, Description: description},
-	}
+	return funroute.FunctionSpec{Name: name, Params: params, Result: result, Eval: eval, Doc: moneyDoc(label, description)}
+}
+
+func moneyDoc(label, description string) funroute.Doc {
+	return funroute.Doc{Label: label, Category: "金额", Cost: 4, Description: description}
 }
 
 // roundedMoneySpecs are avg and median, whose results fall between minor
 // units: they take the rounding mode as a last argument, since a rule writes
 // every rounding it does.
 func roundedMoneySpecs(amounts, c funroute.Type) []funroute.FunctionSpec {
-	var specs []funroute.FunctionSpec
+	specs := make([]funroute.FunctionSpec, 0, 2)
 	for _, aggregate := range []struct {
 		name, label, description string
 		of                       func([]funroute.Money, funroute.Rounding) (funroute.Money, error)
@@ -74,111 +64,88 @@ func roundedMoneySpecs(amounts, c funroute.Type) []funroute.FunctionSpec {
 					if err != nil {
 						return funroute.Value{}, err
 					}
-					return aggregateMoney(args[0], mode, of)
+					amounts, _, err := amountsOf(args[0])
+					if err != nil {
+						return funroute.Value{}, err
+					}
+					result, err := of(amounts, mode)
+					if err != nil {
+						return funroute.Value{}, err
+					}
+					return funroute.ToValue(result)
 				}))
 	}
 	return specs
 }
 
-// keyedByMoney lets money be the key of the keyed selections: the cheapest
-// channels by fee.
-func keyedByMoney(amounts funroute.Type) []funroute.FunctionSpec {
-	list := funroute.ArrayOf(funroute.TypeVar("T"))
-	var specs []funroute.FunctionSpec
-	for _, name := range []string{"sort_by", "sort_by_desc"} {
-		up := name == "sort_by"
-		specs = append(specs, moneySpec(name, []funroute.Type{list, amounts}, list, "按金额排序", "按金额键排序候选，相等的保持原顺序。",
-			uniformKeys(1, func(args []funroute.Value) (funroute.Value, error) { return sortedBy(args, up) })))
-	}
-	for _, name := range []string{"bottom_k", "top_k"} {
-		ascending := name == "bottom_k"
-		specs = append(specs, moneySpec(name, []funroute.Type{list, amounts, funroute.IntType}, list, "按金额取前 k 个", "按金额键取最小或最大的 k 个候选。",
-			uniformKeys(1, func(args []funroute.Value) (funroute.Value, error) { return pickRanked(args, ascending) })))
-	}
-	return specs
-}
-
 // uniformKeys checks the money keys at index share a currency before eval.
-func uniformKeys(index int, eval func([]funroute.Value) (funroute.Value, error)) funroute.EvalFunc {
-	return func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+func uniformKeys(index int, eval funroute.EvalFunc) funroute.EvalFunc {
+	return func(ctx context.Context, args []funroute.Value) (funroute.Value, error) {
 		if _, _, err := amountsOf(args[index]); err != nil {
 			return funroute.Value{}, err
 		}
-		return eval(args)
+		return eval(ctx, args)
 	}
 }
 
-// amountsOf is an array of money's backing and an amount that has the one
-// currency they are in — the zero value when every one is the currency-less
-// zero. Results are made in that currency with its Like.
+// amountsOf is an array of money's backing and the zero of the one currency
+// they are in — the currency-less zero when every one of them is that zero.
+// A result made from them is in their currency: a total that starts at that
+// zero, or inCurrencyOf.
 func amountsOf(value funroute.Value) ([]funroute.Money, funroute.Money, error) {
 	amounts, err := funroute.FromValue[[]funroute.Money](value)
 	if err != nil {
 		return nil, funroute.Money{}, err
 	}
-	var reference funroute.Money
+	var zero funroute.Money
 	for _, amount := range amounts {
 		switch {
-		case amount.Currency() == "" || amount.Currency() == reference.Currency():
-		case reference.Currency() == "":
-			reference = amount
+		case amount.Currency() == "" || amount.Currency() == zero.Currency():
+		case zero.Currency() == "":
+			if zero, err = amount.MulInt(0); err != nil {
+				return nil, funroute.Money{}, err
+			}
 		default:
-			return nil, funroute.Money{}, fmt.Errorf("%w: %s and %s in one list", funroute.ErrCurrency, reference.Currency(), amount.Currency())
+			return nil, funroute.Money{}, fmt.Errorf("%w: %s and %s in one list", funroute.ErrCurrency, zero.Currency(), amount.Currency())
 		}
 	}
-	return amounts, reference, nil
+	return amounts, zero, nil
 }
 
-// inCurrency is an amount given the list's currency: the currency-less zero
-// becomes the zero of a list that has one.
-func inCurrency(amount, reference funroute.Money) (funroute.Value, error) {
+// inCurrencyOf is an amount made from a list, in the list's currency: the
+// currency-less zero is the list's zero.
+func inCurrencyOf(amount, zero funroute.Money) funroute.Money {
 	if amount.Currency() == "" {
-		// The currency-less zero is only ever zero: the list's zero.
-		filled, err := reference.MulInt(0)
-		if err != nil {
+		return zero
+	}
+	return amount
+}
+
+// sumMoney adds the amounts the way the language adds money.
+func sumMoney(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+	amounts, total, err := amountsOf(args[0])
+	if err != nil {
+		return funroute.Value{}, err
+	}
+	for _, amount := range amounts {
+		if total, err = total.Add(amount); err != nil {
 			return funroute.Value{}, err
 		}
-		amount = filled
 	}
-	return funroute.ToValue(amount)
-}
-
-func sumMoney(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	amounts, reference, err := amountsOf(args[0])
-	if err != nil {
-		return funroute.Value{}, err
-	}
-	total, err := addAll(amounts)
-	if err != nil {
-		return funroute.Value{}, err
-	}
-	return inCurrency(total, reference)
-}
-
-// addAll is the amounts' total, added the way the language adds money.
-func addAll(amounts []funroute.Money) (funroute.Money, error) {
-	var total funroute.Money
-	for _, amount := range amounts {
-		sum, err := total.Add(amount)
-		if err != nil {
-			return funroute.Money{}, err
-		}
-		total = sum
-	}
-	return total, nil
+	return funroute.ToValue(total)
 }
 
 func extremeMoney(smallest bool) funroute.EvalFunc {
 	return func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-		amounts, reference, err := amountsOf(args[0])
+		amounts, zero, err := amountsOf(args[0])
 		if err != nil {
 			return funroute.Value{}, err
 		}
-		index, err := extremeMoneyIndex(amounts, smallest)
+		at, err := extremeMoneyIndex(amounts, smallest)
 		if err != nil {
 			return funroute.Value{}, err
 		}
-		return inCurrency(amounts[index], reference)
+		return funroute.ToValue(inCurrencyOf(amounts[at], zero))
 	}
 }
 
@@ -188,22 +155,25 @@ func argExtremeMoney(smallest bool) funroute.EvalFunc {
 		if err != nil {
 			return funroute.Value{}, err
 		}
-		index, err := extremeMoneyIndex(amounts, smallest)
-		return funroute.Int(int64(index)), err
+		at, err := extremeMoneyIndex(amounts, smallest)
+		return funroute.Int(int64(at)), err
 	}
 }
 
+// extremeMoneyIndex is best for money, which orders by its minor units. It is
+// its own loop because a key function would be a call per item: best cannot
+// take one without making every extreme several times slower.
 func extremeMoneyIndex(amounts []funroute.Money, smallest bool) (int, error) {
 	if len(amounts) == 0 {
-		return 0, fmt.Errorf("an empty array has no extreme")
+		return 0, errNoExtreme
 	}
-	best := 0
+	at := 0
 	for i, amount := range amounts {
-		if (smallest && amount.Minor() < amounts[best].Minor()) || (!smallest && amount.Minor() > amounts[best].Minor()) {
-			best = i
+		if smallest && amount.Minor() < amounts[at].Minor() || !smallest && amount.Minor() > amounts[at].Minor() {
+			at = i
 		}
 	}
-	return best, nil
+	return at, nil
 }
 
 func pairMoney(smallest bool) funroute.EvalFunc {
@@ -234,45 +204,31 @@ func sortMoney(ascending bool) funroute.EvalFunc {
 		sorted := slices.Clone(amounts)
 		slices.SortStableFunc(sorted, func(a, b funroute.Money) int {
 			if ascending {
-				return compareInts(a.Minor(), b.Minor())
+				return cmp.Compare(a.Minor(), b.Minor())
 			}
-			return compareInts(b.Minor(), a.Minor())
+			return cmp.Compare(b.Minor(), a.Minor())
 		})
 		return funroute.ToValue(sorted)
 	}
 }
 
-func compareInts(a, b int64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	default:
-		return 0
-	}
-}
-
 func cumulativeMoney(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	amounts, reference, err := amountsOf(args[0])
+	amounts, total, err := amountsOf(args[0])
 	if err != nil {
 		return funroute.Value{}, err
 	}
 	out := make([]funroute.Money, len(amounts))
-	var total funroute.Money
 	for i, amount := range amounts {
 		if total, err = total.Add(amount); err != nil {
 			return funroute.Value{}, err
 		}
-		if out[i], err = filled(total, reference); err != nil {
-			return funroute.Value{}, err
-		}
+		out[i] = total
 	}
 	return funroute.ToValue(out)
 }
 
 func deltasMoney(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	amounts, reference, err := amountsOf(args[0])
+	amounts, zero, err := amountsOf(args[0])
 	if err != nil {
 		return funroute.Value{}, err
 	}
@@ -282,30 +238,7 @@ func deltasMoney(_ context.Context, args []funroute.Value) (funroute.Value, erro
 		if err != nil {
 			return funroute.Value{}, err
 		}
-		if step, err = filled(step, reference); err != nil {
-			return funroute.Value{}, err
-		}
-		out = append(out, step)
+		out = append(out, inCurrencyOf(step, zero))
 	}
 	return funroute.ToValue(out)
-}
-
-// filled is inCurrency for an amount that stays Go.
-func filled(amount, reference funroute.Money) (funroute.Money, error) {
-	if amount.Currency() != "" {
-		return amount, nil
-	}
-	return reference.MulInt(0)
-}
-
-func aggregateMoney(value funroute.Value, mode funroute.Rounding, of func([]funroute.Money, funroute.Rounding) (funroute.Money, error)) (funroute.Value, error) {
-	amounts, _, err := amountsOf(value)
-	if err != nil {
-		return funroute.Value{}, err
-	}
-	result, err := of(amounts, mode)
-	if err != nil {
-		return funroute.Value{}, err
-	}
-	return funroute.ToValue(result)
 }

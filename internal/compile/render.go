@@ -15,8 +15,8 @@ import (
 // Comments are not syntax: the text parses to the same program with or without
 // them, and re-parsing does not carry them back. The host record stays the
 // single authority; this is a view of it.
-func RenderWithContract(source string, args []ArgSpec, result *machine.Type, resultDoc string) string {
-	lines := contractComments(args, result, resultDoc)
+func RenderWithContract(source string, contract CompileOptions) string {
+	lines := contractComments(contract.Args, contract.Result, contract.ResultDoc)
 	if len(lines) == 0 {
 		return source
 	}
@@ -56,9 +56,9 @@ func comment(label string, width int, typeName, doc string) string {
 
 // ContractFromArtifact recovers the contract an artifact was compiled with, so
 // a host that only stored the artifact can still render or re-check it.
-func ContractFromArtifact(artifact *machine.Artifact) ([]ArgSpec, *machine.Type, string) {
+func ContractFromArtifact(artifact *machine.Artifact) CompileOptions {
 	if artifact == nil {
-		return nil, nil, ""
+		return CompileOptions{}
 	}
 	params := artifact.Args()
 	args := make([]ArgSpec, len(params))
@@ -66,5 +66,5 @@ func ContractFromArtifact(artifact *machine.Artifact) ([]ArgSpec, *machine.Type,
 		args[i] = ArgSpec{Name: param.Name(), Type: param.Type(), Doc: param.Doc()}
 	}
 	result := artifact.Result()
-	return args, &result, artifact.ResultDoc()
+	return CompileOptions{Args: args, Result: &result, ResultDoc: artifact.ResultDoc()}
 }

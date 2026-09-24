@@ -11,11 +11,11 @@ func TestSemanticTokensNameEachPiece(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, standard(t), `{}`)
 	s.open("file:///a.fr", "let(rate = fee, rate + 1) // why")
-	data := s.request("textDocument/semanticTokens/full", docParams("file:///a.fr")).(map[string]any)["data"].([]any)
+	data := as[[]any](t, as[map[string]any](t, s.request("textDocument/semanticTokens/full", docParams("file:///a.fr")))["data"])
 	var got []string
 	for i := 0; i+4 < len(data); i += 5 {
-		name := tokenTypes[int(data[i+3].(float64))]
-		if data[i+4].(float64) == 1 {
+		name := tokenTypes[int(as[float64](t, data[i+3]))]
+		if as[float64](t, data[i+4]) == 1 {
 			name += "+declaration"
 		}
 		got = append(got, name)
@@ -30,11 +30,11 @@ func TestSemanticTokensNameEachPiece(t *testing.T) {
 // with +declaration where it is one.
 func tokenNames(s *session, uri string) []string {
 	s.t.Helper()
-	data := s.request("textDocument/semanticTokens/full", docParams(uri)).(map[string]any)["data"].([]any)
+	data := as[[]any](s.t, as[map[string]any](s.t, s.request("textDocument/semanticTokens/full", docParams(uri)))["data"])
 	var got []string
 	for i := 0; i+4 < len(data); i += 5 {
-		name := tokenTypes[int(data[i+3].(float64))]
-		if data[i+4].(float64) == 1 {
+		name := tokenTypes[int(as[float64](s.t, data[i+3]))]
+		if as[float64](s.t, data[i+4]) == 1 {
 			name += "+declaration"
 		}
 		got = append(got, name)

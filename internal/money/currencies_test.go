@@ -200,7 +200,8 @@ func TestCurrenciesRoundTripAtEveryNumberOfPlaces(t *testing.T) {
 	random := rand.New(rand.NewPCG(11, 12))
 	for digits := range maxCurrencyDigits + 1 {
 		code := placesCode(digits)
-		minors := []int64{0, 1, -1, pow10(digits), -pow10(digits), 123456789, math.MaxInt64, math.MinInt64 + 1}
+		minors := make([]int64, 0, 8+200)
+		minors = append(minors, 0, 1, -1, pow10(digits), -pow10(digits), 123456789, math.MaxInt64, math.MinInt64+1)
 		for range 200 {
 			minors = append(minors, random.Int64()>>random.IntN(63)-math.MaxInt64/2)
 		}

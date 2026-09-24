@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -10,18 +11,16 @@ import (
 	"github.com/nethinwei/funroute/internal/syntax"
 )
 
-// record stamps the inferred type of expr into every candidate state.
-func record(expr syntax.Expr, results []inferResult) []inferResult {
-	for _, result := range results {
-		result.state.nodeTypes[expr.NodeID()] = result.typ
-	}
-	return results
+// record stamps the inferred type of expr.
+func record(expr syntax.Expr, state *inferState, term typeTerm) typeTerm {
+	state.nodeTypes[expr.NodeID()] = term
+	return term
 }
 
-func inferExpr(expr syntax.Expr, state *inferState, context inferContext) ([]inferResult, error) {
+func inferExpr(expr syntax.Expr, state *inferState, context inferContext) (typeTerm, error) {
 	switch node := expr.(type) {
 	case *syntax.LiteralExpr:
-		return record(node, []inferResult{{typ: state.literalTerm(node.Value, context.money), state: state}}), nil
+		return record(node, state, state.literalTerm(node.Value, context.money)), nil
 	case *syntax.VariableExpr:
 		return inferVariable(node, state, context)
 	case *syntax.EnumExpr:
@@ -29,7 +28,7 @@ func inferExpr(expr syntax.Expr, state *inferState, context inferContext) ([]inf
 	case *syntax.ArrayExpr:
 		return inferHomogeneous(node, node.Items, machine.ArrayKind, "array elements must have one type", state, context)
 	case *syntax.DictExpr:
-		return inferDict(node, state, context)
+		return inferHomogeneous(node, dictValues(node), machine.DictKind, "dictionary values must have one type", state, context)
 	case *syntax.SwitchExpr:
 		return inferSwitch(node, state, context)
 	case *syntax.ForExpr:
@@ -51,119 +50,205 @@ func inferExpr(expr syntax.Expr, state *inferState, context inferContext) ([]inf
 	case *syntax.MoneyExpr, *syntax.RatioExpr, *syntax.FxRateExpr, *syntax.CurrencyExpr:
 		return inferMoneyLiteral(node, state, context)
 	default:
-		return nil, fmt.Errorf("internal error: unsupported expression %T", expr)
+		return typeTerm{}, fmt.Errorf("internal error: unsupported expression %T", expr)
 	}
 }
 
 // inferEnum types @member from the contract's enum namespace, not from the
 // surrounding expression, so a reference is typed wherever it appears.
-func inferEnum(node *syntax.EnumExpr, state *inferState, context inferContext) ([]inferResult, error) {
+func inferEnum(node *syntax.EnumExpr, state *inferState, context inferContext) (typeTerm, error) {
 	typ, err := resolveEnumReference(node, context.enums)
 	if err != nil {
-		return nil, err
+		return typeTerm{}, err
 	}
-	return record(node, []inferResult{{typ: state.concrete(typ), state: state}}), nil
+	return record(node, state, state.concrete(typ)), nil
 }
 
-func inferVariable(node *syntax.VariableExpr, state *inferState, context inferContext) ([]inferResult, error) {
+func inferVariable(node *syntax.VariableExpr, state *inferState, context inferContext) (typeTerm, error) {
 	term, ok := context.args[node.Name]
 	if !ok {
-		return nil, fmt.Errorf("internal error: variable %q was not collected", node.Name)
+		return typeTerm{}, fmt.Errorf("internal error: variable %q was not collected", node.Name)
 	}
-	return record(node, []inferResult{{typ: term, state: state}}), nil
+	return record(node, state, term), nil
 }
 
-func inferDict(node *syntax.DictExpr, state *inferState, context inferContext) ([]inferResult, error) {
+// dictValues is a dictionary literal's values, in key order.
+func dictValues(node *syntax.DictExpr) []syntax.Expr {
 	values := make([]syntax.Expr, len(node.Entries))
 	for i, entry := range node.Entries {
 		values[i] = entry.Value
 	}
-	return inferHomogeneous(node, values, machine.DictKind, "dictionary values must have one type", state, context)
+	return values
 }
 
 // inferHomogeneous infers an array or dictionary node, whose elements all share
 // one element type.
-func inferHomogeneous(node syntax.Expr, items []syntax.Expr, kind machine.Kind, message string, state *inferState, context inferContext) ([]inferResult, error) {
+func inferHomogeneous(node syntax.Expr, items []syntax.Expr, kind machine.Kind, message string, state *inferState, context inferContext) (typeTerm, error) {
 	elem := state.fresh()
-	states := []*inferState{state}
 	for _, item := range items {
-		next, err := unifyElement(item, elem, states, context)
-		if err != nil {
-			return nil, err
-		}
-		if len(next) == 0 {
-			return nil, syntax.Around(node, "type error: %s", message)
-		}
-		states = next
-	}
-	out := make([]inferResult, len(states))
-	for i, partial := range states {
-		out[i] = inferResult{typ: containerTerm(kind, elem), state: partial}
-	}
-	return record(node, out), nil
-}
-
-func unifyElement(item syntax.Expr, elem typeTerm, states []*inferState, context inferContext) ([]*inferState, error) {
-	var next []*inferState
-	for _, partial := range states {
-		inferred, err := inferExpr(item, partial, context)
-		if err != nil {
-			return nil, err
-		}
-		for _, result := range inferred {
-			candidate := result.state.clone()
-			if err := candidate.unify(elem, result.typ); err == nil {
-				next = append(next, candidate)
-			}
+		if err := inferAs(item, elem, state, context); err != nil {
+			return typeTerm{}, typeErrorAt(node, err, message)
 		}
 	}
-	return next, nil
+	return record(node, state, containerTerm(kind, elem)), nil
 }
 
-type partialSwitch struct {
-	state   *inferState
-	subject typeTerm
-	result  typeTerm
-}
+// mismatch is a sub-expression that typed but not as what its place asks.
+type mismatch struct{ error }
 
-func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	subjects, err := inferSwitchSubject(node, state, context)
+// inferAs types expr and unifies it with want; a failing unification comes
+// back as a mismatch, anything else as it was.
+func inferAs(expr syntax.Expr, want typeTerm, state *inferState, context inferContext) error {
+	term, err := inferExpr(expr, state, context)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	partials := make([]partialSwitch, 0, len(subjects))
-	for _, subject := range subjects {
-		partials = append(partials, partialSwitch{state: subject.state, subject: subject.typ, result: subject.state.fresh()})
+	if err := state.unify(want, term); err != nil {
+		return mismatch{err}
 	}
+	return nil
+}
+
+// typeErrorAt is err, or the node's own message when err is a mismatch.
+func typeErrorAt(node syntax.Expr, err error, message string) error {
+	if errors.As(err, new(mismatch)) {
+		return syntax.Around(node, "type error: %s", message)
+	}
+	return err
+}
+
+func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContext) (typeTerm, error) {
+	subject := scalarTerm(machine.BoolKind)
+	if node.Value != nil {
+		var err error
+		if subject, err = inferExpr(node.Value, state, context); err != nil {
+			return typeTerm{}, err
+		}
+	}
+	result := state.fresh()
 	for _, item := range node.Cases {
-		next, err := inferSwitchCase(item, partials, context)
-		if err != nil {
-			return nil, err
+		if err := inferSwitchCase(item, subject, result, state, context); err != nil {
+			return typeTerm{}, typeErrorAt(item.Result, err, "switch branches must match the subject and return one type"+memberWrittenAsString(item, context.enums))
 		}
-		if len(next) == 0 {
-			return nil, syntax.Around(item.Result, "type error: switch branches must match the subject and return one type%s",
-				memberWrittenAsString(item, context.enums))
-		}
-		partials = next
 	}
-	if err := validateEnumSwitch(node, partials); err != nil {
-		return nil, err
+	if node.Default != nil {
+		if err := inferAs(node.Default, result, state, context); err != nil {
+			return typeTerm{}, typeErrorAt(node, err, "switch default must match the branch result type")
+		}
+	}
+	state.checks = append(state.checks, func() error { return validateEnumSwitch(node, state, subject) })
+	return record(node, state, result), nil
+}
+
+// inferSwitchCase holds every value of a branch to the subject and its
+// result to the switch's.
+func inferSwitchCase(item syntax.SwitchCaseExpr, subject, result typeTerm, state *inferState, context inferContext) error {
+	for _, match := range item.Match {
+		if err := inferAs(match, subject, state, context); err != nil {
+			return err
+		}
+	}
+	return inferAs(item.Result, result, state, context)
+}
+
+// validateEnumSwitch proves a switch over a declared enum exhaustive, and
+// refuses one without else over anything else.
+func validateEnumSwitch(node *syntax.SwitchExpr, state *inferState, subject typeTerm) error {
+	typ, ok := state.publicType(subject)
+	if ok && typ.Kind() == machine.EnumKind {
+		return validateEnumCases(node, typ)
 	}
 	if node.Default == nil {
-		out := make([]inferResult, len(partials))
-		for i, partial := range partials {
-			out[i] = inferResult{typ: partial.result, state: partial.state}
+		return syntax.Around(node, "type error: switch without else requires a declared enum subject")
+	}
+	return nil
+}
+
+func inferFor(node *syntax.ForExpr, state *inferState, context inferContext) (typeTerm, error) {
+	message := loopSourceHint(node.KeyVariable) + ", the condition must be bool and a dictionary comprehension needs a string key"
+	local, err := loopHead(node.Source, node.Where, node.KeyVariable, node.Variable, state, context)
+	if err == nil {
+		var result typeTerm
+		result, err = inferForYield(node, state, local)
+		if err == nil {
+			return record(node, state, result), nil
 		}
-		return record(node, out), nil
 	}
-	out, err := inferSwitchDefault(node.Default, partials, context)
+	return typeTerm{}, typeErrorAt(node, err, message)
+}
+
+// inferForYield is the comprehension's type: an array or a dictionary of
+// what it yields, or, for the outer clause of a nested one, the inner
+// clause's array spliced in.
+func inferForYield(node *syntax.ForExpr, state *inferState, local inferContext) (typeTerm, error) {
+	if node.YieldKey != nil {
+		if err := inferAs(node.YieldKey, scalarTerm(machine.StringKind), state, local); err != nil {
+			return typeTerm{}, err
+		}
+	}
+	yield, err := inferExpr(node.Yield, state, local)
+	switch {
+	case err != nil:
+		return typeTerm{}, err
+	case node.YieldKey != nil:
+		return containerTerm(machine.DictKind, yield), nil
+	case !node.Flatten:
+		return containerTerm(machine.ArrayKind, yield), nil
+	}
+	spliced := containerTerm(machine.ArrayKind, state.fresh())
+	if err := state.unify(spliced, yield); err != nil {
+		return typeTerm{}, mismatch{err}
+	}
+	return spliced, nil
+}
+
+// loopHead types a loop's source as a container of the loop's kind, binds
+// the loop's variables to its elements, and holds the condition to bool; it
+// is the context the rest of the loop sees.
+func loopHead(source, where syntax.Expr, key, value string, state *inferState, context inferContext) (inferContext, error) {
+	elem := state.fresh()
+	if err := inferAs(source, containerTerm(loopKind(key), elem), state, context); err != nil {
+		return inferContext{}, err
+	}
+	local := withLoopLocals(context, key, value, elem)
+	if where == nil {
+		return local, nil
+	}
+	return local, inferAs(where, scalarTerm(machine.BoolKind), state, local)
+}
+
+func inferReduce(node *syntax.ReduceExpr, state *inferState, context inferContext) (typeTerm, error) {
+	message := loopSourceHint(node.KeyVariable) + ", the condition must be bool and the body must return the accumulator type"
+	local, err := loopHead(node.Source, node.Where, node.KeyVariable, node.Variable, state, context)
 	if err != nil {
-		return nil, err
+		return typeTerm{}, typeErrorAt(node, err, message)
 	}
-	if len(out) == 0 {
-		return nil, syntax.Around(node, "type error: switch default must match the branch result type")
+	// The initial value is typed outside the loop: the accumulator starts
+	// from something the loop variables cannot see.
+	init, err := inferExpr(node.Init, state, context)
+	if err != nil {
+		return typeTerm{}, err
 	}
-	return record(node, out), nil
+	if err := inferAs(node.Body, init, state, withLocal(local, node.Accumulator, init)); err != nil {
+		return typeTerm{}, typeErrorAt(node, err, message)
+	}
+	return record(node, state, init), nil
+}
+
+func inferLet(node *syntax.LetExpr, state *inferState, context inferContext) (typeTerm, error) {
+	local := context
+	for _, binding := range node.Bindings {
+		term, err := inferExpr(binding.Value, state, local)
+		if err != nil {
+			return typeTerm{}, err
+		}
+		local = withLocal(local, binding.Name, term)
+	}
+	body, err := inferExpr(node.Body, state, local)
+	if err != nil {
+		return typeTerm{}, err
+	}
+	return record(node, state, body), nil
 }
 
 // memberWrittenAsString names the likely cause when a branch does not fit: a
@@ -185,22 +270,6 @@ func memberWrittenAsString(item syntax.SwitchCaseExpr, enums map[string]machine.
 		}
 	}
 	return ""
-}
-
-func validateEnumSwitch(node *syntax.SwitchExpr, partials []partialSwitch) error {
-	for _, partial := range partials {
-		typ, ok := partial.state.publicType(partial.subject)
-		if !ok || typ.Kind() != machine.EnumKind {
-			if node.Default == nil {
-				return syntax.Around(node, "type error: switch without else requires a declared enum subject")
-			}
-			continue
-		}
-		if err := validateEnumCases(node, typ); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func validateEnumCases(node *syntax.SwitchExpr, enum machine.Type) error {
@@ -243,140 +312,6 @@ func recordEnumMatch(node *syntax.SwitchExpr, enum machine.Type, match syntax.Ex
 	return nil
 }
 
-// inferSwitchSubject types the subject. The subjectless form has none, and its
-// matches are conditions — which is exactly a bool subject, so both forms share
-// the unification below.
-func inferSwitchSubject(node *syntax.SwitchExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	if node.Value != nil {
-		return inferExpr(node.Value, state, context)
-	}
-	return []inferResult{{typ: scalarTerm(machine.BoolKind), state: state}}, nil
-}
-
-func inferSwitchCase(item syntax.SwitchCaseExpr, partials []partialSwitch, context inferContext) ([]partialSwitch, error) {
-	var next []partialSwitch
-	for _, partial := range partials {
-		matched, err := inferMatches(item.Match, partial, context)
-		if err != nil {
-			return nil, err
-		}
-		for _, state := range matched {
-			results, err := inferExpr(item.Result, state, context)
-			if err != nil {
-				return nil, err
-			}
-			next = append(next, unifyResults(results, partial)...)
-		}
-	}
-	return next, nil
-}
-
-// inferMatches unifies every value of a multi-value branch with the subject.
-func inferMatches(matches []syntax.Expr, partial partialSwitch, context inferContext) ([]*inferState, error) {
-	states := []*inferState{partial.state}
-	for _, match := range matches {
-		candidates, err := unifyMatch(match, partial.subject, states, context)
-		if err != nil {
-			return nil, err
-		}
-		if len(candidates) == 0 {
-			return nil, nil
-		}
-		states = candidates
-	}
-	return states, nil
-}
-
-// unifyMatch is unifyElement for a branch value, which is compared with the
-// subject.
-func unifyMatch(match syntax.Expr, subject typeTerm, states []*inferState, context inferContext) ([]*inferState, error) {
-	var next []*inferState
-	for _, partial := range states {
-		inferred, err := inferExpr(match, partial, context)
-		if err != nil {
-			return nil, err
-		}
-		for _, result := range inferred {
-			candidate := result.state.clone()
-			if err := candidate.unify(subject, result.typ); err == nil {
-				next = append(next, candidate)
-			}
-		}
-	}
-	return next, nil
-}
-
-func unifyResults(results []inferResult, partial partialSwitch) []partialSwitch {
-	var next []partialSwitch
-	for _, result := range results {
-		candidate := result.state.clone()
-		if err := candidate.unify(partial.result, result.typ); err == nil {
-			next = append(next, partialSwitch{state: candidate, subject: partial.subject, result: partial.result})
-		}
-	}
-	return next
-}
-
-func inferSwitchDefault(fallback syntax.Expr, partials []partialSwitch, context inferContext) ([]inferResult, error) {
-	var out []inferResult
-	for _, partial := range partials {
-		fallbacks, err := inferExpr(fallback, partial.state, context)
-		if err != nil {
-			return nil, err
-		}
-		for _, result := range fallbacks {
-			candidate := result.state.clone()
-			if err := candidate.unify(partial.result, result.typ); err == nil {
-				out = append(out, inferResult{typ: partial.result, state: candidate})
-			}
-		}
-	}
-	return out, nil
-}
-
-func inferFor(node *syntax.ForExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	sources, err := inferExpr(node.Source, state, context)
-	if err != nil {
-		return nil, err
-	}
-	var out []inferResult
-	for _, source := range sources {
-		yielded, err := inferForSource(node, source, context)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, yielded...)
-	}
-	if len(out) == 0 {
-		return nil, syntax.Around(node, "type error: %s, the condition must be bool and a dictionary comprehension needs a string key", loopSourceHint(node.KeyVariable))
-	}
-	return record(node, out), nil
-}
-
-func inferForSource(node *syntax.ForExpr, source inferResult, context inferContext) ([]inferResult, error) {
-	candidate := source.state.clone()
-	elem := candidate.fresh()
-	if err := candidate.unify(source.typ, containerTerm(loopKind(node.KeyVariable), elem)); err != nil {
-		return nil, nil
-	}
-	local := withLoopLocals(context, node.KeyVariable, node.Variable, elem)
-	states, err := constrain(node.Where, []*inferState{candidate}, local, machine.BoolKind)
-	if err != nil {
-		return nil, err
-	}
-	if node.YieldKey == nil {
-		if node.Flatten {
-			return spliceYield(node.Yield, states, local)
-		}
-		return inferYield(node.Yield, states, local, machine.ArrayKind)
-	}
-	keyed, err := constrain(node.YieldKey, states, local, machine.StringKind)
-	if err != nil {
-		return nil, err
-	}
-	return inferYield(node.Yield, keyed, local, machine.DictKind)
-}
-
 // loopKind is what the source must be: two loop variables mean a dictionary.
 func loopKind(key string) machine.Kind {
 	if key == "" {
@@ -408,284 +343,10 @@ func withLocal(context inferContext, name string, term typeTerm) inferContext {
 	return local
 }
 
-// constrain types expr in every state and keeps the ones where it came out the
-// wanted kind: a comprehension's condition has to be bool, and the key of a
-// dictionary comprehension has to be a string. A nil expression constrains
-// nothing, which is how the optional clauses opt out.
-func constrain(expr syntax.Expr, states []*inferState, context inferContext, kind machine.Kind) ([]*inferState, error) {
-	if expr == nil {
-		return states, nil
-	}
-	var filtered []*inferState
-	for _, partial := range states {
-		conditions, err := inferExpr(expr, partial, context)
-		if err != nil {
-			return nil, err
-		}
-		for _, condition := range conditions {
-			candidate := condition.state.clone()
-			if err := candidate.unify(condition.typ, scalarTerm(kind)); err == nil {
-				filtered = append(filtered, candidate)
-			}
-		}
-	}
-	return filtered, nil
-}
-
-// spliceYield types the outer loop of a nested comprehension: its yield is the
-// inner loop's array and the elements go straight into the output, so the loop
-// has the type of what it yields rather than an array of it.
-func spliceYield(yield syntax.Expr, states []*inferState, context inferContext) ([]inferResult, error) {
-	var out []inferResult
-	for _, partial := range states {
-		yields, err := inferExpr(yield, partial, context)
-		if err != nil {
-			return nil, err
-		}
-		for _, result := range yields {
-			candidate := result.state.clone()
-			elem := candidate.fresh()
-			if err := candidate.unify(result.typ, containerTerm(machine.ArrayKind, elem)); err != nil {
-				continue
-			}
-			out = append(out, inferResult{typ: containerTerm(machine.ArrayKind, elem), state: candidate})
-		}
-	}
-	return out, nil
-}
-
-func inferYield(yield syntax.Expr, states []*inferState, context inferContext, kind machine.Kind) ([]inferResult, error) {
-	var out []inferResult
-	for _, partial := range states {
-		yields, err := inferExpr(yield, partial, context)
-		if err != nil {
-			return nil, err
-		}
-		for _, result := range yields {
-			out = append(out, inferResult{typ: containerTerm(kind, result.typ), state: result.state})
-		}
-	}
-	return out, nil
-}
-
-// inferRecord types a record literal: every field is typed on its own, and
-// the record's type is those types in the order they were written. A field
-// whose type does not settle — an empty array, say — has to be written with a
-// type the way any other literal does.
-func inferRecord(node *syntax.RecordExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	results := []inferResult{{typ: recordTerm(machine.RecordOf()), state: state}}
-	for _, field := range node.Fields {
-		next, err := inferRecordField(field, results, context)
-		if err != nil {
-			return nil, err
-		}
-		results = next
-	}
-	if len(results) == 0 {
-		return nil, syntax.Around(node, "type error: every record field needs a type of its own")
-	}
-	return record(node, results), nil
-}
-
-// inferRecordField extends each record built so far with one more field.
-func inferRecordField(field syntax.RecordFieldExpr, sofar []inferResult, context inferContext) ([]inferResult, error) {
-	var out []inferResult
-	for _, partial := range sofar {
-		values, err := inferExpr(field.Value, partial.state, context)
-		if err != nil {
-			return nil, err
-		}
-		for _, value := range values {
-			out = append(out, growRecord(partial, field.Name, value)...)
-		}
-	}
-	return out, nil
-}
-
-// growRecord adds one typed field to a record built so far. A literal still
-// open between kinds is settled once per kind: the field's type is part of
-// the record's, and needs to be known now.
-func growRecord(partial inferResult, name string, value inferResult) []inferResult {
-	var out []inferResult
-	for _, state := range value.state.forkLiteral(value.typ) {
-		typ, ok := state.publicType(value.typ)
-		if !ok {
-			continue
-		}
-		grown := machine.RecordOf(append(partial.typ.record.Fields(), machine.FieldOf(name, typ))...)
-		out = append(out, inferResult{typ: recordTerm(grown), state: state})
-	}
-	return out
-}
-
-// inferField reads one field off a record. The record's type has to be known
-// here — from the contract, from a literal or from a let binding — because the
-// field's own type comes from it.
-func inferField(node *syntax.FieldExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	values, err := inferExpr(node.Value, state, context)
-	if err != nil {
-		return nil, err
-	}
-	var out []inferResult
-	for _, value := range values {
-		typ, ok := value.state.publicType(value.typ)
-		if !ok || typ.Kind() != machine.RecordKind {
-			continue
-		}
-		index := typ.FieldIndex(node.Field)
-		if index < 0 {
-			return nil, syntax.Around(node, "type error: %s has no field %q", typ.Summary(), node.Field)
-		}
-		out = append(out, inferResult{typ: value.state.fieldTerm(value.state.deref(value.typ), index), state: value.state})
-	}
-	if len(out) == 0 {
-		return nil, syntax.Around(node, "type error: %q is read off something that is not a record with a known type", node.Field)
-	}
-	return record(node, out), nil
-}
-
-func inferReduce(node *syntax.ReduceExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	sources, err := inferExpr(node.Source, state, context)
-	if err != nil {
-		return nil, err
-	}
-	var out []inferResult
-	for _, source := range sources {
-		folded, err := inferReduceSource(node, source, context)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, folded...)
-	}
-	if len(out) == 0 {
-		return nil, syntax.Around(node, "type error: %s, the condition must be bool and the body must return the accumulator type", loopSourceHint(node.KeyVariable))
-	}
-	return record(node, out), nil
-}
-
-func inferReduceSource(node *syntax.ReduceExpr, source inferResult, context inferContext) ([]inferResult, error) {
-	candidate := source.state.clone()
-	elem := candidate.fresh()
-	if err := candidate.unify(source.typ, containerTerm(loopKind(node.KeyVariable), elem)); err != nil {
-		return nil, nil
-	}
-	local := withLoopLocals(context, node.KeyVariable, node.Variable, elem)
-	states, err := constrain(node.Where, []*inferState{candidate}, local, machine.BoolKind)
-	if err != nil {
-		return nil, err
-	}
-	var out []inferResult
-	for _, state := range states {
-		folded, err := inferReduceInit(node, state, elem, context)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, folded...)
-	}
-	return out, nil
-}
-
-// inferReduceInit types the initial value outside the loop: the accumulator
-// starts from something the loop variables cannot see.
-func inferReduceInit(node *syntax.ReduceExpr, state *inferState, elem typeTerm, context inferContext) ([]inferResult, error) {
-	inits, err := inferExpr(node.Init, state, context)
-	if err != nil {
-		return nil, err
-	}
-	var out []inferResult
-	for _, init := range inits {
-		folded, err := inferReduceBody(node, init, elem, context)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, folded...)
-	}
-	return out, nil
-}
-
-// inferReduceBody binds the item and the accumulator locally; the body must
-// unify with the accumulator so the fold keeps one type.
-func inferReduceBody(node *syntax.ReduceExpr, init inferResult, elem typeTerm, context inferContext) ([]inferResult, error) {
-	local := withLocal(withLoopLocals(context, node.KeyVariable, node.Variable, elem), node.Accumulator, init.typ)
-	bodies, err := inferExpr(node.Body, init.state, local)
-	if err != nil {
-		return nil, err
-	}
-	var out []inferResult
-	for _, body := range bodies {
-		candidate := body.state.clone()
-		if err := candidate.unify(init.typ, body.typ); err == nil {
-			out = append(out, inferResult{typ: init.typ, state: candidate})
-		}
-	}
-	return out, nil
-}
-
 // loopSourceHint explains which source shape the variable count asks for.
 func loopSourceHint(key string) string {
 	if key == "" {
 		return "the source must be an array (use two variables, [e for k, v in d], to walk a dictionary)"
 	}
 	return "two loop variables walk a dictionary, so the source must be a dict (use one variable for an array)"
-}
-
-// letScope is one candidate while walking the bindings: the inference state
-// plus the context the following bindings and the body will see.
-type letScope struct {
-	state   *inferState
-	context inferContext
-}
-
-func inferLet(node *syntax.LetExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	scopes, err := inferLetBindings(node, state, context)
-	if err != nil {
-		return nil, err
-	}
-	var out []inferResult
-	var dropped error
-	for _, scope := range scopes {
-		bodies, err := inferExpr(node.Body, scope.state, scope.context)
-		if err != nil {
-			dropped = err
-			continue
-		}
-		out = append(out, bodies...)
-	}
-	if len(out) == 0 {
-		if dropped != nil {
-			return nil, dropped
-		}
-		return nil, syntax.Around(node, "type error: the let body is not typeable")
-	}
-	return record(node, out), nil
-}
-
-// inferLetBindings types the bindings in order, each one visible to the next.
-func inferLetBindings(node *syntax.LetExpr, state *inferState, context inferContext) ([]letScope, error) {
-	scopes := []letScope{{state: state, context: context}}
-	for _, binding := range node.Bindings {
-		var next []letScope
-		var dropped error
-		for _, scope := range scopes {
-			values, err := inferExpr(binding.Value, scope.state, scope.context)
-			if err != nil {
-				dropped = err
-				continue
-			}
-			for _, value := range values {
-				next = append(next, letScope{
-					state:   value.state,
-					context: withLocal(scope.context, binding.Name, value.typ),
-				})
-			}
-		}
-		if len(next) == 0 {
-			if dropped != nil {
-				return nil, dropped
-			}
-			return nil, syntax.Around(node, "type error: let binding %q is not typeable", binding.Name)
-		}
-		scopes = next
-	}
-	return scopes, nil
 }

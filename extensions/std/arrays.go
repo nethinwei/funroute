@@ -1,37 +1,22 @@
 package std
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/nethinwei/funroute"
 )
 
-// The array functions that are about the shape of a list rather than about
-// what is in it: take one end, cut it short, turn it around, put two together,
-// drop repeats, flatten one level. They are generic, so they are written as
-// FunctionSpecs — reflection cannot express "array of any T".
-func registerArrays(registry *funroute.Registry) error {
-	for _, spec := range arraySpecs() {
-		if err := register(registry, spec); err != nil {
-			return err
-		}
-	}
-	if err := registerSort(registry); err != nil {
-		return err
-	}
-	return registerSequences(registry)
-}
-
-// registerSequences is the sliding-window family. Every one of them keeps the
+// sequenceSpecs are the sliding-window family. Every one of them keeps the
 // "no missing value" rule by shortening the result rather than inventing a
 // hole: deltas of n items has n-1 entries, and a window wider than the array
 // yields nothing at all.
-func registerSequences(registry *funroute.Registry) error {
-	item := funroute.TypeVar("T")
-	list := funroute.ArrayOf(item)
-	for _, spec := range []funroute.FunctionSpec{
+func sequenceSpecs() []funroute.FunctionSpec {
+	list := funroute.ArrayOf(funroute.TypeVar("T"))
+	return append([]funroute.FunctionSpec{
 		{
 			Name: "windows", Params: []funroute.Type{list, funroute.IntType}, Result: funroute.ArrayOf(list), Eval: slidingWindows,
 			Doc: funroute.Doc{
@@ -49,7 +34,7 @@ func registerSequences(registry *funroute.Registry) error {
 			},
 		},
 		{
-			Name: "intersect", Params: []funroute.Type{list, list}, Result: list, Eval: intersectItems,
+			Name: "intersect", Params: []funroute.Type{list, list}, Result: list, Eval: distinctItems,
 			Doc: funroute.Doc{
 				Constexpr: true, Label: "交集", Category: "数组", Cost: 7,
 				Description: "两个数组里都有的元素，按第一个数组的顺序，重复只留一次。",
@@ -64,104 +49,94 @@ func registerSequences(registry *funroute.Registry) error {
 				Params:      []string{"前一个", "后一个"}, Result: "差集",
 			},
 		},
-	} {
-		if err := register(registry, spec); err != nil {
-			return err
-		}
-	}
-	return registerDeltas(registry)
-}
-
-func registerDeltas(registry *funroute.Registry) error {
-	doc := funroute.Doc{
-		Constexpr: true, Label: "相邻差", Category: "数组", Cost: 6,
+	}, eachType("deltas", funroute.Doc{
+		Label: "相邻差", Category: "数组", Cost: 6,
 		Description: "每一项与前一项的差，所以结果比输入少一个；一项或空数组得到空数组。与上一笔比较用它。",
 		Params:      []string{"数组"}, Result: "差值序列",
-	}
-	return eachType(registry, "deltas", doc, deltasOf[int64], deltasOf[float64])
+	}, deltasOf[int64], deltasOf[float64])...)
 }
 
 func slidingWindows(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	items, size, err := sizedGroups(args, "windows")
-	if err != nil {
-		return funroute.Value{}, err
-	}
-	var groups []funroute.Value
-	for start := 0; start+size <= len(items); start++ {
-		window, err := funroute.Array(elementType(args[0]), items[start:start+size])
-		if err != nil {
-			return funroute.Value{}, err
-		}
-		groups = append(groups, window)
-	}
-	return funroute.Array(args[0].Type(), groups)
+	return groupsOf(args, "windows", true)
 }
 
 func chunkItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	items, size, err := sizedGroups(args, "chunk")
-	if err != nil {
-		return funroute.Value{}, err
+	return groupsOf(args, "chunk", false)
+}
+
+// groupsOf cuts an array into runs of size items: every window of them one
+// item apart, or batches one after the other, the last of which may be short.
+func groupsOf(args []funroute.Value, name string, windows bool) (funroute.Value, error) {
+	size, _ := args[1].Int()
+	if size <= 0 {
+		return funroute.Value{}, fmt.Errorf("%s needs a size of at least one, got %d", name, size)
+	}
+	items, width := itemsOf(args[0]), int(size)
+	stride, starts := width, len(items)
+	if windows {
+		stride, starts = 1, len(items)-width+1
 	}
 	var groups []funroute.Value
-	for start := 0; start < len(items); start += size {
-		end := min(start+size, len(items))
-		batch, err := funroute.Array(elementType(args[0]), items[start:end])
+	for start := 0; start < starts; start += stride {
+		group, err := funroute.Array(elementType(args[0]), items[start:min(start+width, len(items))])
 		if err != nil {
 			return funroute.Value{}, err
 		}
-		groups = append(groups, batch)
+		groups = append(groups, group)
 	}
 	return funroute.Array(args[0].Type(), groups)
 }
 
-func sizedGroups(args []funroute.Value, name string) ([]funroute.Value, int, error) {
-	size, _ := args[1].Int()
-	if size <= 0 {
-		return nil, 0, fmt.Errorf("%s needs a size of at least one, got %d", name, size)
-	}
-	return itemsOf(args[0]), int(size), nil
-}
-
-func intersectItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	return setOperation(args, true)
+// distinctItems is unique and intersect: an array's items, in order, each
+// once — of them, those a second array has too, when there is one.
+func distinctItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+	return distinct(args, true)
 }
 
 func exceptItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	return setOperation(args, false)
+	return distinct(args, false)
 }
 
-func setOperation(args []funroute.Value, keepShared bool) (funroute.Value, error) {
-	other := itemsOf(args[1])
+// distinct is the first array's items, in order, each once: all of them, or,
+// held against a second array, those it has or those it has not.
+func distinct(args []funroute.Value, keepShared bool) (funroute.Value, error) {
+	var other []funroute.Value
+	if len(args) > 1 {
+		other = itemsOf(args[1])
+	}
 	var out []funroute.Value
 	for _, item := range itemsOf(args[0]) {
-		if containsValue(other, item) == keepShared && !containsValue(out, item) {
+		if (len(args) == 1 || containsValue(other, item) == keepShared) && !containsValue(out, item) {
 			out = append(out, item)
 		}
 	}
 	return funroute.Array(elementType(args[0]), out)
 }
 
-func deltasOf[T int64 | float64](items []T) ([]T, error) {
+func deltasOf[T int64 | float64](items []T) []T {
 	if len(items) < 2 {
-		return []T{}, nil
+		return []T{}
 	}
 	out := make([]T, len(items)-1)
 	for i := 1; i < len(items); i++ {
 		out[i-1] = items[i] - items[i-1]
 	}
-	return out, nil
+	return out
 }
 
-// arraySpecs is the shape-of-a-list family: take one end, cut it short, turn
-// it around, put two together, drop repeats, flatten one level.
-func arraySpecs() []funroute.FunctionSpec {
+// shapeSpecs are the array functions that are about the shape of a list
+// rather than about what is in it: take one end, cut it short, turn it
+// around, put two together, drop repeats, flatten one level. They are
+// generic, so they are written as FunctionSpecs — reflection cannot express
+// "array of any T".
+func shapeSpecs() []funroute.FunctionSpec {
 	item := funroute.TypeVar("T")
 	list := funroute.ArrayOf(item)
 	shaped := func(name, label, description, result string, params []funroute.Type, labels []string, cost uint64, eval funroute.EvalFunc) funroute.FunctionSpec {
 		return funroute.FunctionSpec{
 			Name: name, Params: params, Result: list, Eval: eval,
 			Doc: funroute.Doc{
-				Constexpr: true, Label: label, Category: "数组", Cost: cost,
+				Label: label, Category: "数组", Cost: cost,
 				Description: description, Params: labels, Result: result,
 			},
 		}
@@ -170,7 +145,7 @@ func arraySpecs() []funroute.FunctionSpec {
 		return funroute.FunctionSpec{
 			Name: name, Params: []funroute.Type{list}, Result: item, Eval: eval,
 			Doc: funroute.Doc{
-				Constexpr: true, Label: label, Category: "数组", Cost: 2,
+				Label: label, Category: "数组", Cost: 2,
 				Description: description, Params: []string{"数组"}, Result: result,
 			},
 		}
@@ -187,50 +162,45 @@ func arraySpecs() []funroute.FunctionSpec {
 		shaped("concat", "拼接数组", "把两个同型数组接成一个。", "拼接结果",
 			[]funroute.Type{list, list}, []string{"前一个", "后一个"}, 5, concatItems),
 		shaped("unique", "去重", "按相等判断去掉重复元素，保留第一次出现的顺序。", "去重后的数组",
-			[]funroute.Type{list}, []string{"数组"}, 6, uniqueItems),
+			[]funroute.Type{list}, []string{"数组"}, 6, distinctItems),
 		shaped("flatten", "拉平一层", "把数组的数组拉平成一层；嵌套推导式配它就是多层遍历。", "拉平后的数组",
 			[]funroute.Type{funroute.ArrayOf(list)}, []string{"嵌套数组"}, 6, flattenItems),
 	}
 }
 
-// registerSort covers both directions of a plain sort. Sorting by a separate
+// sortSpecs cover both directions of a plain sort. Sorting by a separate
 // array of keys is a different question with a different shape — that is
 // sort_by, and it lives with the other two-list functions in select.go.
-func registerSort(registry *funroute.Registry) error {
-	up := funroute.Doc{Constexpr: true,
+func sortSpecs() []funroute.FunctionSpec {
+	return slices.Concat(eachType("sort", funroute.Doc{
 		Label: "排序", Category: "数组", Cost: 8,
 		Description: "按自然顺序升序排列（数值按大小，字符串按 UTF-8 字节序）。要按别的键排，先用推导式算出键。",
 		Params:      []string{"数组"}, Result: "升序数组",
-	}
-	if err := eachType(registry, "sort", up, ascending[int64], ascending[float64], ascending[string]); err != nil {
-		return err
-	}
-	down := funroute.Doc{Constexpr: true,
+	}, sorter[int64](false), sorter[float64](false), sorter[string](false)), eachType("sort_desc", funroute.Doc{
 		Label: "降序排序", Category: "数组", Cost: 8,
 		Description: "按自然顺序降序排列，省得写 reverse(sort(xs))。",
 		Params:      []string{"数组"}, Result: "降序数组",
+	}, sorter[int64](true), sorter[float64](true), sorter[string](true)))
+}
+
+// sorter sorts a copy, stably: a Value's backing is read-only, so sorting in
+// place would edit the caller's array.
+func sorter[T cmp.Ordered](descending bool) func([]T) []T {
+	return func(items []T) []T {
+		out := append([]T(nil), items...)
+		if descending {
+			slices.SortStableFunc(out, func(a, b T) int { return cmp.Compare(b, a) })
+		} else {
+			slices.SortStableFunc(out, cmp.Compare[T])
+		}
+		return out
 	}
-	return eachType(registry, "sort_desc", down, descending[int64], descending[float64], descending[string])
-}
-
-// Both sort a copy: a Value's backing is read-only, so sorting in place would
-// edit the caller's array.
-func ascending[T int64 | float64 | string](items []T) ([]T, error) {
-	out := append([]T(nil), items...)
-	sort.SliceStable(out, func(i, j int) bool { return out[i] < out[j] })
-	return out, nil
-}
-
-func descending[T int64 | float64 | string](items []T) ([]T, error) {
-	out := append([]T(nil), items...)
-	sort.SliceStable(out, func(i, j int) bool { return out[j] < out[i] })
-	return out, nil
 }
 
 func firstItem(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	value, ok := args[0].At(0)
 	if !ok {
-		return funroute.Value{}, fmt.Errorf("first of an empty array")
+		return funroute.Value{}, errors.New("first of an empty array")
 	}
 	return value, nil
 }
@@ -239,31 +209,37 @@ func lastItem(_ context.Context, args []funroute.Value) (funroute.Value, error) 
 	length, _ := args[0].Length()
 	value, ok := args[0].At(length - 1)
 	if !ok {
-		return funroute.Value{}, fmt.Errorf("last of an empty array")
+		return funroute.Value{}, errors.New("last of an empty array")
 	}
 	return value, nil
 }
 
 func sliceItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	items := itemsOf(args[0])
 	start, _ := args[1].Int()
 	end, _ := args[2].Int()
-	if start < 0 || end < start || end > int64(len(items)) {
-		return funroute.Value{}, fmt.Errorf("slice [%d, %d) is outside an array of %d items", start, end, len(items))
+	if part, ok := args[0].Slice(int(start), int(end)); ok {
+		return part, nil
 	}
-	return funroute.Array(elementType(args[0]), items[start:end])
+	length, _ := args[0].Length()
+	return funroute.Value{}, fmt.Errorf("slice [%d, %d) is outside an array of %d items", start, end, length)
 }
 
 func takeItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	count, _ := args[1].Int()
+	return takeFirst(args[0], count, "take needs a count of zero or more, got %d")
+}
+
+// takeFirst is an array's first count items, all of them when it has fewer;
+// a negative count is an error, in the caller's words.
+func takeFirst(array funroute.Value, count int64, negative string) (funroute.Value, error) {
 	if count < 0 {
-		return funroute.Value{}, fmt.Errorf("take needs a count of zero or more, got %d", count)
+		return funroute.Value{}, fmt.Errorf(negative, count)
 	}
-	items := itemsOf(args[0])
-	if count > int64(len(items)) {
-		count = int64(len(items))
+	length, _ := array.Length()
+	if first, ok := array.Slice(0, int(min(count, int64(length)))); ok {
+		return first, nil
 	}
-	return funroute.Array(elementType(args[0]), items[:count])
+	return funroute.Value{}, errors.New("take needs an array")
 }
 
 func reverseItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
@@ -276,31 +252,23 @@ func reverseItems(_ context.Context, args []funroute.Value) (funroute.Value, err
 }
 
 func concatItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	left, right := itemsOf(args[0]), itemsOf(args[1])
-	out := make([]funroute.Value, 0, len(left)+len(right))
-	out = append(out, left...)
-	out = append(out, right...)
-	return funroute.Array(elementType(args[0]), out)
-}
-
-func uniqueItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	var out []funroute.Value
-	for _, item := range itemsOf(args[0]) {
-		if !containsValue(out, item) {
-			out = append(out, item)
-		}
-	}
-	return funroute.Array(elementType(args[0]), out)
+	return funroute.Array(elementType(args[0]), slices.Concat(itemsOf(args[0]), itemsOf(args[1])))
 }
 
 func flattenItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	var out []funroute.Value
-	for _, inner := range itemsOf(args[0]) {
+	inners := itemsOf(args[0])
+	total := 0
+	for _, inner := range inners {
+		length, _ := inner.Length()
+		total += length
+	}
+	out := make([]funroute.Value, 0, total)
+	for _, inner := range inners {
 		out = append(out, itemsOf(inner)...)
 	}
 	inner, ok := elementType(args[0]).Elem()
 	if !ok {
-		return funroute.Value{}, fmt.Errorf("flatten needs an array of arrays")
+		return funroute.Value{}, errors.New("flatten needs an array of arrays")
 	}
 	return funroute.Array(inner, out)
 }

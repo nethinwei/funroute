@@ -228,23 +228,9 @@ func EnumOf(name string, values ...string) Type {
 	return Type{kind: EnumKind, name: name, values: members}
 }
 
-// CloneType deep-copies a type, so a caller that stores one cannot reach into
-// the element type of another.
-func CloneType(t Type) Type {
-	out := t
-	if t.elem != nil {
-		elem := CloneType(*t.elem)
-		out.elem = &elem
-	}
-	out.values = append([]string(nil), t.values...)
-	if t.fields != nil {
-		out.fields = make([]Field, len(t.fields))
-		for i, field := range t.fields {
-			out.fields[i] = Field{name: field.name, typ: CloneType(field.typ)}
-		}
-	}
-	return out
-}
+// cloneTypes is a copy of types that is never nil. A Type is immutable, so
+// only the slice holding them needs copying.
+func cloneTypes(types []Type) []Type { return append([]Type{}, types...) }
 
 func (t Type) String() string {
 	switch t.kind {
@@ -259,7 +245,7 @@ func (t Type) String() string {
 		}
 		return t.name
 	case RecordKind:
-		return "record{" + strings.Join(t.fieldTexts(false), ", ") + "}"
+		return "record{" + strings.Join(t.fieldTexts(Type.String), ", ") + "}"
 	case HandleKind:
 		return fmt.Sprintf("handle<%s>", t.name)
 	case EnumKind:
@@ -272,14 +258,11 @@ func (t Type) String() string {
 	}
 }
 
-func (t Type) fieldTexts(summary bool) []string {
+// fieldTexts is each field as "name: type", the type written by text.
+func (t Type) fieldTexts(text func(Type) string) []string {
 	out := make([]string, len(t.fields))
 	for i, field := range t.fields {
-		if summary {
-			out[i] = field.name + ": " + field.typ.Summary()
-			continue
-		}
-		out[i] = field.name + ": " + field.typ.String()
+		out[i] = field.name + ": " + text(field.typ)
 	}
 	return out
 }
@@ -293,7 +276,7 @@ const enumSummaryLimit = 6
 // to read it back; Summary is only ever shown.
 func (t Type) Summary() string {
 	if t.kind == RecordKind {
-		return "record{" + strings.Join(t.fieldTexts(true), ", ") + "}"
+		return "record{" + strings.Join(t.fieldTexts(Type.Summary), ", ") + "}"
 	}
 	if t.elem != nil {
 		return fmt.Sprintf("%s<%s>", t.kind, t.elem.Summary())
@@ -328,9 +311,14 @@ func WalkTypes(t Type, visit func(Type) error) error {
 
 // TypeContains reports whether kind appears anywhere in t, fields included.
 func TypeContains(t Type, kind Kind) bool {
+	return typeHas(t, func(inner Kind) bool { return inner == kind })
+}
+
+// typeHas reports whether t or any type inside it is of a kind has accepts.
+func typeHas(t Type, has func(Kind) bool) bool {
 	found := false
 	_ = WalkTypes(t, func(inner Type) error {
-		found = found || inner.kind == kind
+		found = found || has(inner.kind)
 		return nil
 	})
 	return found

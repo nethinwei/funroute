@@ -3,6 +3,7 @@ package syntax
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -37,7 +38,7 @@ func ExportExprJSON(expr Expr) ([]byte, error) {
 
 func exportNode(buf *bytes.Buffer, expr Expr) error {
 	if expr == nil {
-		return fmt.Errorf("expression contains a nil node")
+		return errors.New("expression contains a nil node")
 	}
 	if literal, ok := expr.(*LiteralExpr); ok {
 		return exportLiteral(buf, literal)
@@ -46,7 +47,7 @@ func exportNode(buf *bytes.Buffer, expr Expr) error {
 	if plan == nil {
 		return fmt.Errorf("unsupported expression node %T", expr)
 	}
-	fmt.Fprintf(buf, `{"node":%q`, expr.kind())
+	fmt.Fprintf(buf, `{"node":%q`, plan.kind)
 	if err := exportFields(buf, reflect.ValueOf(expr).Elem(), plan); err != nil {
 		return err
 	}
@@ -63,15 +64,15 @@ func exportLiteral(buf *bytes.Buffer, node *LiteralExpr) error {
 	case machine.IntKind, machine.StringKind, machine.BoolKind:
 		encoded, err = json.Marshal(node.Value.Any())
 	case machine.FloatKind:
-		number, _ := node.Value.Float()
-		encoded, err = json.Marshal(strconv.FormatFloat(number, 'g', -1, 64))
+		encoded, err = json.Marshal(node.Decimal.String())
 	default:
 		return fmt.Errorf("literal node has unsupported value type %s", node.Value.Type())
 	}
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(buf, `{"node":%q,%q:%s}`, node.kind(), node.kind(), encoded)
+	kind := node.Value.Kind().String()
+	fmt.Fprintf(buf, `{"node":%q,%q:%s}`, kind, kind, encoded)
 	return nil
 }
 
@@ -107,7 +108,7 @@ func isAbsent(value reflect.Value) bool {
 func exportField(buf *bytes.Buffer, value reflect.Value, field fieldPlan) error {
 	switch field.kind {
 	case fieldExpr:
-		return exportNode(buf, value.Interface().(Expr))
+		return exportNode(buf, heldExpr(value))
 	case fieldName:
 		encoded, _ := json.Marshal(value.String())
 		buf.Write(encoded)
@@ -124,12 +125,12 @@ func exportField(buf *bytes.Buffer, value reflect.Value, field fieldPlan) error 
 // exportList writes a []Expr as nodes, or a list of items as objects.
 func exportList(buf *bytes.Buffer, list reflect.Value, field fieldPlan) error {
 	buf.WriteByte('[')
-	for i := 0; i < list.Len(); i++ {
+	for i := range list.Len() {
 		if i > 0 {
 			buf.WriteByte(',')
 		}
 		if field.kind == fieldExprs {
-			if err := exportNode(buf, list.Index(i).Interface().(Expr)); err != nil {
+			if err := exportNode(buf, heldExpr(list.Index(i))); err != nil {
 				return err
 			}
 			continue
@@ -159,7 +160,7 @@ func ImportExprJSON(data []byte) (Expr, error) {
 		return nil, fmt.Errorf("unsupported expression JSON version %d", document.version)
 	}
 	if !document.hasExpr {
-		return nil, fmt.Errorf("expression JSON is missing expr")
+		return nil, errors.New("expression JSON is missing expr")
 	}
 	importer := &importer{nextID: 1}
 	return importer.node(document.expr)
@@ -188,7 +189,7 @@ func decodeDocument(data []byte) (exprJSONDocument, error) {
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
-			return document, fmt.Errorf("decode expression JSON: trailing JSON value")
+			return document, errors.New("decode expression JSON: trailing JSON value")
 		}
 		return document, fmt.Errorf("decode expression JSON: %w", err)
 	}
@@ -201,7 +202,7 @@ func decodeDocument(data []byte) (exprJSONDocument, error) {
 		number, isNumber := version.(json.Number)
 		parsed, err := strconv.Atoi(string(number))
 		if !isNumber || err != nil {
-			return document, fmt.Errorf("decode expression JSON: version must be an integer")
+			return document, errors.New("decode expression JSON: version must be an integer")
 		}
 		document.version = parsed
 	}
@@ -232,11 +233,11 @@ func (o object) unknown() error {
 
 func decodeObject(value any) (object, error) {
 	if value == nil {
-		return nil, fmt.Errorf("expression JSON contains a null node")
+		return nil, errors.New("expression JSON contains a null node")
 	}
 	fields, ok := value.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("expression JSON node is not an object")
+		return nil, errors.New("expression JSON node is not an object")
 	}
 	return fields, nil
 }
@@ -254,7 +255,7 @@ func (m *importer) node(value any) (Expr, error) {
 	tag, _ := fields.take("node")
 	kind, ok := tag.(string)
 	if !ok {
-		return nil, fmt.Errorf("expression JSON node is missing its node tag")
+		return nil, errors.New("expression JSON node is missing its node tag")
 	}
 	typ, ok := byKind[kind]
 	if !ok {
@@ -266,11 +267,12 @@ func (m *importer) node(value any) (Expr, error) {
 		return importLiteral(kind, id, fields)
 	}
 	node := reflect.New(typ)
-	if err := m.fill(node.Elem(), fields, plans[typ], kind); err != nil {
+	plan := plans[typ]
+	if err := m.fill(node.Elem(), fields, plan, kind); err != nil {
 		return nil, err
 	}
-	node.Elem().FieldByName("ID").SetInt(int64(id))
-	expr, err := finish(node.Interface().(Expr))
+	node.Elem().FieldByIndex(plan.id).SetInt(int64(id))
+	expr, err := finish(heldExpr(node))
 	if err != nil {
 		return nil, fmt.Errorf("%s node: %w", kind, err)
 	}
@@ -285,44 +287,42 @@ func importLiteral(kind string, id int, fields object) (Expr, error) {
 	if err := fields.unknown(); err != nil {
 		return nil, fmt.Errorf("%s node: %w", kind, err)
 	}
-	value, err := literalValue(kind, raw)
+	literal, err := literalValue(kind, raw)
 	if err != nil {
 		return nil, err
 	}
-	return &LiteralExpr{ID: id, Value: value}, nil
+	literal.ID = id
+	return literal, nil
 }
 
-// literalValue reads a literal's value: an int is a JSON number that is an
-// int64 exactly, a float and a string are JSON strings, a bool is a bool.
-func literalValue(kind string, raw any) (machine.Value, error) {
+// literalValue reads a literal: an int is a JSON number that is an int64
+// exactly, a float is the decimal a JSON string writes, a string is a JSON
+// string and a bool a bool.
+func literalValue(kind string, raw any) (*LiteralExpr, error) {
 	malformed := fmt.Errorf("%s node has a malformed %s", kind, kind)
 	switch kind {
 	case "int":
 		number, ok := raw.(json.Number)
 		parsed, err := strconv.ParseInt(string(number), 10, 64)
 		if !ok || err != nil {
-			return machine.Value{}, malformed
+			return nil, malformed
 		}
-		return machine.Int(parsed), nil
+		return &LiteralExpr{Value: machine.Int(parsed)}, nil
 	case "bool":
 		flag, ok := raw.(bool)
 		if !ok {
-			return machine.Value{}, malformed
+			return nil, malformed
 		}
-		return machine.Bool(flag), nil
+		return &LiteralExpr{Value: machine.Bool(flag)}, nil
 	}
 	text, ok := raw.(string)
-	if !ok {
-		return machine.Value{}, malformed
+	switch {
+	case !ok:
+		return nil, malformed
+	case kind == "string":
+		return &LiteralExpr{Value: machine.String(text)}, nil
 	}
-	if kind == "string" {
-		return machine.String(text), nil
-	}
-	parsed, err := exactFloat(text)
-	if err != nil {
-		return machine.Value{}, err
-	}
-	return machine.CheckedFloat(parsed)
+	return decimalLiteral(text)
 }
 
 // fill sets a struct's tagged fields from a decoded object and refuses what is
@@ -349,12 +349,7 @@ func (m *importer) fill(target reflect.Value, fields object, plan *structPlan, c
 func (m *importer) setField(target reflect.Value, raw any, field fieldPlan) error {
 	switch field.kind {
 	case fieldExpr:
-		child, err := m.node(raw)
-		if err != nil {
-			return err
-		}
-		target.Set(reflect.ValueOf(child))
-		return nil
+		return m.setExpr(target, raw)
 	case fieldName:
 		return setName(target, raw, field)
 	case fieldFlag:
@@ -378,7 +373,7 @@ func setFlag(target reflect.Value, raw any, field fieldPlan) error {
 func setName(target reflect.Value, raw any, field fieldPlan) error {
 	name, ok := raw.(string)
 	if !ok {
-		return fmt.Errorf("must be a string")
+		return errors.New("must be a string")
 	}
 	if name == "" && field.optional {
 		return nil
@@ -416,7 +411,7 @@ func validName(name, role string) error {
 func (m *importer) setList(target reflect.Value, raw any, field fieldPlan) error {
 	items, ok := raw.([]any)
 	if !ok {
-		return fmt.Errorf("must be a list")
+		return errors.New("must be a list")
 	}
 	if len(items) < field.min {
 		return fmt.Errorf("needs at least %d item(s)", field.min)
@@ -433,11 +428,9 @@ func (m *importer) setList(target reflect.Value, raw any, field fieldPlan) error
 
 func (m *importer) setItem(slot reflect.Value, raw any, field fieldPlan, index int) error {
 	if field.kind == fieldExprs {
-		child, err := m.node(raw)
-		if err != nil {
+		if err := m.setExpr(slot, raw); err != nil {
 			return fmt.Errorf("item %d: %w", index, err)
 		}
-		slot.Set(reflect.ValueOf(child))
 		return nil
 	}
 	fields, err := decodeObject(raw)
@@ -445,4 +438,14 @@ func (m *importer) setItem(slot reflect.Value, raw any, field fieldPlan, index i
 		return fmt.Errorf("item %d: %w", index, err)
 	}
 	return m.fill(slot, fields, field.item, fmt.Sprintf("%s item %d", field.name, index))
+}
+
+// setExpr imports the node raw into slot, an Expr field or list element.
+func (m *importer) setExpr(slot reflect.Value, raw any) error {
+	child, err := m.node(raw)
+	if err != nil {
+		return err
+	}
+	slot.Set(reflect.ValueOf(child))
+	return nil
 }

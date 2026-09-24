@@ -1,10 +1,7 @@
 package machine
 
 import (
-	"encoding/json"
 	"errors"
-	"math"
-	"strings"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/money"
@@ -99,70 +96,6 @@ func TestSameCurrency(t *testing.T) {
 		if got := sameCurrency(test.a, test.b); got != test.want {
 			t.Fatalf("sameCurrency(%q, %q) = %v, want %v", test.a, test.b, got, test.want)
 		}
-	}
-}
-
-// Every money kind interns into a constant and reads back as itself, through
-// JSON too, and each keeps only the fields it has.
-func TestMoneyConstantsRoundTrip(t *testing.T) {
-	t.Parallel()
-	for name, value := range map[string]Value{
-		"dollars":              MoneyValue(-170, "USD"),
-		"a currency-less zero": MoneyValue(0, ""),
-		"the smallest amount":  MoneyValue(math.MinInt64, "JPY"),
-		"a ratio":              RatioValue(ratio(math.MaxInt64, 10_000_000_000)),
-		"a zero rate":          RatioValue(ratio(0, 1)),
-		"a currency":           CurrencyValue("KWD"),
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			constant := moneyConstant(value)
-			encoded, err := json.Marshal(constant)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var decoded Constant
-			if err := json.Unmarshal(encoded, &decoded); err != nil {
-				t.Fatal(err)
-			}
-			back, err := decoded.moneyValue()
-			if err != nil || back.kind != value.kind || back.i != value.i || back.s != value.s {
-				t.Fatalf("moneyValue(%s) = %+v, %v, want %+v", encoded, back, err, value)
-			}
-			assertConstantShape(t, value.kind, decoded)
-		})
-	}
-}
-
-func assertConstantShape(t *testing.T, kind Kind, constant Constant) {
-	t.Helper()
-	if (constant.Int == nil) != (kind == CurrencyKind || kind == RatioKind) || constant.String == nil || constant.Keys != nil {
-		t.Fatalf("moneyConstant of a %s = %+v, want only the fields that kind has", kind, constant)
-	}
-	if constant.Float != nil || constant.Bool != nil || constant.Elem != nil || constant.Items != nil {
-		t.Fatalf("moneyConstant of a %s = %+v, want no container or scalar fields", kind, constant)
-	}
-}
-
-// A constant missing what its kind needs is refused, not read as a zero.
-func TestMoneyConstantsMissingAFieldAreRefused(t *testing.T) {
-	t.Parallel()
-	amount, code := int64(1), "USD"
-	for name, test := range map[string]struct {
-		constant Constant
-		want     string
-	}{
-		"money with no amount":    {Constant{Type: MoneyKind, String: &code}, "missing its amount"},
-		"money with no currency":  {Constant{Type: MoneyKind, Int: &amount}, "missing its currency"},
-		"a rate with no text":     {Constant{Type: RatioKind}, "missing its text"},
-		"a currency with no code": {Constant{Type: CurrencyKind, Int: &amount}, "missing its currency"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if value, err := test.constant.moneyValue(); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("moneyValue(%+v) = %+v, %v, want an error containing %q", test.constant, value, err, test.want)
-			}
-		})
 	}
 }
 

@@ -27,7 +27,7 @@ func TestServeFramesTheProtocolOnAStream(t *testing.T) {
 	reader, writer := io.Pipe()
 	go func() {
 		_ = Serve(strings.NewReader(input.String()), writer, registry)
-		writer.Close()
+		_ = writer.Close()
 	}()
 	var ids []string
 	frames := bufio.NewReader(reader)

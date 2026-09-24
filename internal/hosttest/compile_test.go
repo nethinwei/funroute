@@ -1,6 +1,7 @@
 package hosttest
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -17,11 +18,15 @@ func hostRegistry(t *testing.T) *funroute.Registry {
 	if err := registry.EnableForm(funroute.SwitchForm); err != nil {
 		t.Fatal(err)
 	}
-	err := funroute.Logic(registry, "route.is_healthy_v1", funroute.Doc{
-		Label:       "渠道是否健康",
-		Description: "UP 表示可用",
-		Category:    "路由",
-	}, func(status string) (bool, error) { return status == "UP", nil })
+	err := registry.Register(funroute.FunctionSpec{
+		Name: "route.is_healthy_v1",
+		Doc: funroute.Doc{
+			Label:       "渠道是否健康",
+			Description: "UP 表示可用",
+			Category:    "路由",
+		},
+		Go: func(status string) (bool, error) { return status == "UP", nil },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,8 +124,7 @@ func TestHostCanRoundTripAProgramThroughJSON(t *testing.T) {
 	}
 	// The artifact carries the contract back, so a host that stored only the
 	// artifact can still render the rule for a human.
-	args, result, resultDoc := funroute.ContractFromArtifact(artifact)
-	text := funroute.RenderWithContract(hostSource, args, result, resultDoc)
+	text := funroute.RenderWithContract(hostSource, funroute.ContractFromArtifact(artifact))
 	if !strings.Contains(text, "health:") || !strings.Contains(text, "渠道健康状态") {
 		t.Fatalf("rendered view = %s, want the argument health with its doc", text)
 	}
@@ -165,5 +169,35 @@ func TestTheDocumentsAHostExchanges(t *testing.T) {
 	manifest, err := json.Marshal(funroute.CoreRegistry().Manifest())
 	if err != nil || !strings.Contains(string(manifest), `"name":"add"`) {
 		t.Fatalf("the manifest is %s, %v, want the kernel's functions by name", manifest, err)
+	}
+}
+
+// An artifact says which shape it is, and its indented JSON is the same
+// artifact as its compact JSON.
+func TestArtifactIndentsTheSameArtifact(t *testing.T) {
+	t.Parallel()
+	artifact, err := funroute.CompileExpr(`route.is_healthy_v1(status)`, hostRegistry(t),
+		funroute.CompileOptions{Args: []funroute.ArgSpec{{Name: "status", Type: funroute.StringType}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Version() != funroute.ArtifactVersion {
+		t.Fatalf("Version() = %d, want %d", artifact.Version(), funroute.ArtifactVersion)
+	}
+	indented, err := artifact.MarshalIndent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var squeezed bytes.Buffer
+	if err := json.Compact(&squeezed, indented); err != nil || !bytes.Equal(squeezed.Bytes(), compact) || !bytes.Contains(indented, []byte("\n  \"")) {
+		t.Fatalf("MarshalIndent() = %s (%v), want %s indented by two spaces", indented, err, compact)
+	}
+	var loaded funroute.Artifact
+	if err := json.Unmarshal(indented, &loaded); err != nil || loaded.Digest() != artifact.Digest() {
+		t.Fatalf("the indented artifact loads with digest %q (%v), want %q", loaded.Digest(), err, artifact.Digest())
 	}
 }

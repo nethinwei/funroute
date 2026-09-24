@@ -85,7 +85,7 @@ func loadMoney(typ reflect.Type, p unsafe.Pointer) Value {
 	case fxRateGoType:
 		return FxRateValue(*(*money.FxRate)(p))
 	default:
-		return CurrencyValue((*(*money.Currency)(p)).Code())
+		return CurrencyValue((*money.Currency)(p).Code())
 	}
 }
 
@@ -105,6 +105,13 @@ func storeMoney(typ reflect.Type, p unsafe.Pointer, v Value) error {
 		*(*money.Currency)(p) = money.CurrencyOf(v.s)
 	}
 	return nil
+}
+
+// newMoneyGo is a new money Go value of typ holding v, whose kind is typ's.
+func newMoneyGo(typ reflect.Type, v Value) reflect.Value {
+	out := reflect.New(typ)
+	_ = storeMoney(typ, out.UnsafePointer(), v)
+	return out.Elem()
 }
 
 // loadScalar also holds a string to the enum it carries: a member name is the
@@ -180,9 +187,10 @@ func loadNative(kind native, p unsafe.Pointer) (Value, error) {
 		return loadBacking[map[string]int64](DictKind, p), nil
 	case nativeFloatMap:
 		return loadBacking[map[string]float64](DictKind, p), checkFloatMap(*(*map[string]float64)(p))
-	default:
+	case nativeStringMap:
 		return loadBacking[map[string]string](DictKind, p), nil
 	}
+	panic(fmt.Sprintf("machine: native backing %d has no Go form", kind))
 }
 
 func loadBacking[T any](kind Kind, p unsafe.Pointer) Value {
@@ -207,7 +215,7 @@ func (c *codec) loadRecord(p unsafe.Pointer) (Value, error) {
 func (c *codec) loadSlice(p unsafe.Pointer) (Value, error) {
 	header := (*sliceHeader)(p)
 	builder := newArrayBuilder(*c.typ.elem, header.len)
-	for i := 0; i < header.len; i++ {
+	for i := range header.len {
 		item, err := c.elem.load(unsafe.Add(header.data, uintptr(i)*c.stride))
 		if err != nil {
 			return Value{}, fmt.Errorf("item %d: %w", i, err)
@@ -237,17 +245,14 @@ func (c *codec) box(p unsafe.Pointer) any {
 	return reflect.NewAt(c.goType, noescape(p)).Elem().Interface()
 }
 
-// contentSink and neverTrue exist for leakContents: the store is never made,
-// but the compiler cannot know that, so what p points to escapes to the heap.
-var (
-	//lint:ignore U1000 written only on the branch that never runs; the write is the point, see leakContents
-	contentSink unsafe.Pointer
-	neverTrue   bool
-)
+// contentSink exists for leakContents and is never set: the store through it
+// is never made, but the compiler cannot know that, so what p points to
+// escapes to the heap.
+var contentSink *unsafe.Pointer
 
 func leakContents(p unsafe.Pointer) {
-	if neverTrue {
-		contentSink = *(*unsafe.Pointer)(p)
+	if contentSink != nil {
+		*contentSink = *(*unsafe.Pointer)(p)
 	}
 }
 
@@ -292,53 +297,42 @@ func storeScalar(kind reflect.Kind, p unsafe.Pointer, v Value) error {
 }
 
 func storeInt(kind reflect.Kind, p unsafe.Pointer, i int64) error {
-	if !intFits(kind, i) {
-		return fmt.Errorf("%d does not fit %s", i, kind)
-	}
+	var fits bool
 	switch kind {
 	case reflect.Int:
-		*(*int)(p) = int(i)
+		fits = put[int](p, i)
 	case reflect.Int8:
-		*(*int8)(p) = int8(i)
+		fits = put[int8](p, i)
 	case reflect.Int16:
-		*(*int16)(p) = int16(i)
+		fits = put[int16](p, i)
 	case reflect.Int32:
-		*(*int32)(p) = int32(i)
+		fits = put[int32](p, i)
 	case reflect.Uint:
-		*(*uint)(p) = uint(i)
+		fits = put[uint](p, i)
 	case reflect.Uint8:
-		*(*uint8)(p) = uint8(i)
+		fits = put[uint8](p, i)
 	case reflect.Uint16:
-		*(*uint16)(p) = uint16(i)
+		fits = put[uint16](p, i)
 	case reflect.Uint32:
-		*(*uint32)(p) = uint32(i)
+		fits = put[uint32](p, i)
 	default:
-		*(*int64)(p) = i
+		fits = put[int64](p, i)
+	}
+	if !fits {
+		return fmt.Errorf("%d does not fit %s", i, kind)
 	}
 	return nil
 }
 
-func intFits(kind reflect.Kind, i int64) bool {
-	switch kind {
-	case reflect.Int:
-		return i >= math.MinInt && i <= math.MaxInt
-	case reflect.Int8:
-		return i >= math.MinInt8 && i <= math.MaxInt8
-	case reflect.Int16:
-		return i >= math.MinInt16 && i <= math.MaxInt16
-	case reflect.Int32:
-		return i >= math.MinInt32 && i <= math.MaxInt32
-	case reflect.Uint:
-		return i >= 0 && uint64(i) <= math.MaxUint
-	case reflect.Uint8:
-		return i >= 0 && i <= math.MaxUint8
-	case reflect.Uint16:
-		return i >= 0 && i <= math.MaxUint16
-	case reflect.Uint32:
-		return i >= 0 && i <= math.MaxUint32
-	default:
-		return true
+// put writes i at p as a T when T holds it exactly, and reports whether it
+// did: the conversion must come back to i with its sign.
+func put[T int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32](p unsafe.Pointer, i int64) bool {
+	v := T(i)
+	if int64(v) != i || (v < 0) != (i < 0) {
+		return false
 	}
+	*(*T)(p) = v
+	return true
 }
 
 func storeNative(kind native, p unsafe.Pointer, v Value) error {
@@ -363,9 +357,10 @@ func storeNative(kind native, p unsafe.Pointer, v Value) error {
 		return storeBacking[map[string]int64](p, v)
 	case nativeFloatMap:
 		return storeBacking[map[string]float64](p, v)
-	default:
+	case nativeStringMap:
 		return storeBacking[map[string]string](p, v)
 	}
+	panic(fmt.Sprintf("machine: native backing %d has no Go form", kind))
 }
 
 func storeBacking[T any](p unsafe.Pointer, v Value) error {

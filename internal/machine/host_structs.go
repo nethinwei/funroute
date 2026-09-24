@@ -43,7 +43,7 @@ func structFields(registry *Registry, typ reflect.Type) ([]Field, []int, error) 
 func taggedFields(registry *Registry, typ reflect.Type) ([]Field, []int, error) {
 	var fields []Field
 	var indexes []int
-	for i := 0; i < typ.NumField(); i++ {
+	for i := range typ.NumField() {
 		structField := typ.Field(i)
 		if !structField.IsExported() {
 			continue
@@ -88,34 +88,40 @@ func fieldNameOf(field reflect.StructField) (string, bool, error) {
 	return name, true, nil
 }
 
-// intoStruct fills a Go struct from a record, matching by name. A struct field
-// the record does not carry keeps its zero value; a record that shares no
-// field with the struct is not that struct at all.
+// structFieldFor is the struct field a record field lands in, found by name
+// among the struct's tagged fields: the one rule both bridges follow, in both
+// directions. The record's every field needs a place in the struct; the
+// struct may carry more, which keeps its zero value on the way in and stays
+// behind on the way out.
+func structFieldFor(typ reflect.Type, declared []Field, indexes []int, record Type, name string) (reflect.StructField, error) {
+	position := slices.IndexFunc(declared, func(field Field) bool { return field.name == name })
+	if position < 0 {
+		return reflect.StructField{}, fmt.Errorf("%s has no field %q for %s", typ, name, record.Summary())
+	}
+	return typ.Field(indexes[position]), nil
+}
+
+// intoStruct fills a Go struct from a record, field by field by name.
 func intoStruct(registry *Registry, value Value, typ reflect.Type) (reflect.Value, error) {
 	record, ok := value.box.(*recordValue)
 	if !ok {
 		return reflect.Value{}, fmt.Errorf("argument is %s, want %s", value.Type().Summary(), typ)
 	}
-	fields, indexes, err := structFields(registry, typ)
+	declared, indexes, err := structFields(registry, typ)
 	if err != nil {
 		return reflect.Value{}, err
 	}
 	out := reflect.New(typ).Elem()
-	filled := 0
-	for position, index := range indexes {
-		source := record.typ.FieldIndex(fields[position].name)
-		if source < 0 {
-			continue
-		}
-		converted, err := intoGo(registry, record.fields[source], typ.Field(index).Type)
+	for i, wanted := range record.typ.fields {
+		field, err := structFieldFor(typ, declared, indexes, record.typ, wanted.name)
 		if err != nil {
-			return reflect.Value{}, fmt.Errorf("field %s: %w", typ.Field(index).Name, err)
+			return reflect.Value{}, err
 		}
-		out.Field(index).Set(converted)
-		filled++
-	}
-	if filled == 0 {
-		return reflect.Value{}, fmt.Errorf("%s shares no field with %s", record.typ.Summary(), typ)
+		converted, err := intoGo(registry, record.fields[i], field.Type)
+		if err != nil {
+			return reflect.Value{}, fmt.Errorf("field %q: %w", wanted.name, err)
+		}
+		out.FieldByIndex(field.Index).Set(converted)
 	}
 	return out, nil
 }
@@ -127,17 +133,13 @@ func outOfStruct(registry *Registry, value reflect.Value, typ Type) (Value, erro
 	if err != nil {
 		return Value{}, err
 	}
-	available := make(map[string]int, len(declared))
-	for position, field := range declared {
-		available[field.name] = indexes[position]
-	}
 	fields := make([]Value, len(typ.fields))
 	for i, wanted := range typ.fields {
-		index, ok := available[wanted.name]
-		if !ok {
-			return Value{}, fmt.Errorf("%s has no field %q for %s", value.Type(), wanted.name, typ.Summary())
+		field, err := structFieldFor(value.Type(), declared, indexes, typ, wanted.name)
+		if err != nil {
+			return Value{}, err
 		}
-		converted, err := outOfGo(registry, value.Field(index), wanted.typ)
+		converted, err := outOfGo(registry, value.FieldByIndex(field.Index), wanted.typ)
 		if err != nil {
 			return Value{}, fmt.Errorf("field %q: %w", wanted.name, err)
 		}

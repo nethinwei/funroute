@@ -3,7 +3,6 @@ package lsp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -20,6 +19,7 @@ type rangedTree struct {
 	Node     string        `json:"node"`
 	Range    Range         `json:"range"`
 	Operator string        `json:"operator,omitempty"`
+	Form     bool          `json:"form,omitempty"`
 	Fields   []rangedField `json:"fields,omitempty"`
 }
 
@@ -39,15 +39,14 @@ func (s *Server) syntaxTree(params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := syntax.SyntaxTree(doc.text)
-	if err != nil {
-		return nil, nil
+	if tree, err := syntax.SyntaxTree(doc.text); err == nil {
+		return s.ranged(doc, *tree), nil
 	}
-	return s.ranged(doc, *tree), nil
+	return null, nil
 }
 
 func (s *Server) ranged(doc *document, tree syntax.Tree) rangedTree {
-	out := rangedTree{Node: tree.Node, Range: doc.rangeOf(tree.Span, s.encoding), Operator: tree.Operator}
+	out := rangedTree{Node: tree.Node, Range: doc.rangeOf(tree.Span, s.encoding), Operator: tree.Operator, Form: tree.Form}
 	out.Fields = s.rangedFields(doc, tree.Fields)
 	return out
 }
@@ -147,12 +146,13 @@ func (s *Server) render(argument json.RawMessage) (any, error) {
 	if s.contractErr != nil {
 		return nil, s.contractErr
 	}
-	return map[string]string{"source": compile.RenderWithContract(doc.text, s.contract.Args, s.contract.Result, s.contract.ResultDoc)}, nil
+	return map[string]string{"source": compile.RenderWithContract(doc.text, s.contract)}, nil
 }
 
 // argumentList answers funroute/arguments: what the document's program takes,
 // in order — the contract's arguments, or the ones inferred from the text
-// when the contract declares none — for a client that asks for their values.
+// when the contract declares none — for a client that asks for their values,
+// with a sample of each value's JSON.
 func (s *Server) argumentList(params json.RawMessage) (any, error) {
 	doc, err := s.documentOf(params)
 	if err != nil {
@@ -160,7 +160,7 @@ func (s *Server) argumentList(params json.RawMessage) (any, error) {
 	}
 	out := []map[string]string{}
 	for _, arg := range s.arguments(doc) {
-		out = append(out, map[string]string{"name": arg.Name(), "type": arg.Type().String(), "doc": arg.Doc()})
+		out = append(out, map[string]string{"name": arg.Name(), "type": arg.Type().String(), "doc": arg.Doc(), "example": sample(arg.Type())})
 	}
 	return out, nil
 }
@@ -248,21 +248,12 @@ func decodeArgs(raw json.RawMessage) (map[string]any, error) {
 	return machine.DecodeArgs(raw)
 }
 
-// errorKinds are the errors a host tells apart, most specific first.
-var errorKinds = []struct {
-	kind string
-	err  error
-}{
-	{"unavailable", machine.ErrUnavailable}, {"nofxrate", machine.ErrNoFxRate}, {"currency", machine.ErrCurrency}, {"arithmetic", machine.ErrArithmetic},
-	{"contract", machine.ErrContract}, {"compile", machine.ErrCompile},
-	{"fuel", machine.ErrFuel}, {"deadline", machine.ErrDeadline}, {"extension", machine.ErrExtension},
-}
-
+// describeError is a run's error by its most specific class, "run" when it
+// has none.
 func describeError(err error) *runError {
-	for _, known := range errorKinds {
-		if errors.Is(err, known.err) {
-			return &runError{Kind: known.kind, Message: err.Error()}
-		}
+	kind := machine.ClassName(err)
+	if kind == "" {
+		kind = "run"
 	}
-	return &runError{Kind: "run", Message: err.Error()}
+	return &runError{Kind: kind, Message: err.Error()}
 }
