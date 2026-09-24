@@ -9,10 +9,10 @@ import (
 func TestFormatBreaksWhatDoesNotFit(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		`switch(case amount > 10_000 && route.is_healthy_v1(primary_channel_status) => "manual_review", case risk > 0.8 => "reject", else "auto")`: `switch(
+		`switch(case amount > 10_000 && route.is_healthy_v1(primary_channel_status) => "manual_review", case risk > 0.8 => "reject", else => "auto")`: `switch(
   case amount > 10000 && route.is_healthy_v1(primary_channel_status) => "manual_review",
   case risk > 0.8 => "reject",
-  else "auto"
+  else => "auto"
 )`,
 		`route.is_healthy_v1(primary_channel_status) && route.is_healthy_v1(secondary_channel_status) && amount > 1000`: `route.is_healthy_v1(primary_channel_status)
   && route.is_healthy_v1(secondary_channel_status)
@@ -29,8 +29,7 @@ func TestFormatBreaksWhatDoesNotFit(t *testing.T) {
   total = bps * 2,
   amount * total / 10000 + base
 )`,
-		`{...order, amount: order.amount - route.fee_v1(order.channel, order.currency), currency: route.settlement_currency_v1(order.channel)}`: `{
-  ...order,
+		`order with {amount: order.amount - route.fee_v1(order.channel, order.currency), currency: route.settlement_currency_v1(order.channel)}`: `order with {
   amount: order.amount - route.fee_v1(order.channel, order.currency),
   currency: route.settlement_currency_v1(order.channel)
 }`,
@@ -142,5 +141,55 @@ func checkReparses(t *testing.T, printer, input, text, want string) {
 	}
 	if got := exportFuzzed(t, text, back); got != want {
 		t.Fatalf("%s of %q = %q parses to %s, want %s", printer, input, text, got, want)
+	}
+}
+
+// An amount and a rate are atoms to the layout: a line breaks around them,
+// never inside them, so a code stays on the line of its figure and a unit on
+// the line of its number, however long the program.
+func TestFormatKeepsMoneyLiteralsWhole(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		`let(fee = amount * 2.9% + USD 0.30, cap = USD 25.00, floor = USD -0.50, switch(case fee > cap => cap, case fee < floor => floor, else => fee))`: `let(
+  fee = amount * 2.9% + USD 0.30,
+  cap = USD 25.00,
+  floor = USD -0.50,
+  switch(case fee > cap => cap, case fee < floor => floor, else => fee)
+)`,
+		`route.quote_v1(amount * 2.9% + USD 0.30, amount * 25bps + EUR 0.25, amount * 0.5bps - JPY 1_000)`: `route.quote_v1(
+  amount * 2.9% + USD 0.30,
+  amount * 25bps + EUR 0.25,
+  amount * 0.5bps - JPY 1000
+)`,
+		`primary_amount_in_settlement * 2.9% + secondary_amount_in_settlement * 25bps - USD 1_000_000.00`: `primary_amount_in_settlement * 2.9% + secondary_amount_in_settlement * 25bps
+  - USD 1000000.00`,
+		`USD 1.70 + 2.9%`: `USD 1.70 + 2.9%`,
+	}
+	for source, want := range cases {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if got := Format(mustParse(t, source)); got != want {
+				t.Errorf("format of %q:\n%s\nwant:\n%s", source, got, want)
+			}
+		})
+	}
+}
+
+// FormatSource keeps a comment after a rate, where the lexer had to look past
+// the space to know the % was a unit.
+func TestFormatSourceKeepsACommentAfterARate(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		"amount*2.9% // card\n":         "amount * 2.9% // card\n",
+		"// fee\nUSD 1_000+x*25bps":     "// fee\nUSD 1000 + x * 25bps",
+		"USD  -1.70 // refund":          "USD -1.70 // refund",
+		"2.9%\n  - fee // after a line": "2.9% - fee // after a line",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if got, err := FormatSource(source); err != nil || got != want {
+				t.Errorf("FormatSource(%q) = %q, %v, want %q, nil", source, got, err, want)
+			}
+		})
 	}
 }

@@ -28,7 +28,7 @@ func hostRegistry(t *testing.T) *lang.Registry {
 	return registry
 }
 
-const hostSource = `switch(case route.is_healthy_v1(health) && doubled > 100 => "adyen", else "stripe")`
+const hostSource = `switch(case route.is_healthy_v1(health) && doubled > 100 => "adyen", else => "stripe")`
 
 // hostContract is what a console reads from its rule record: the arguments in
 // ABI order, their types and the prose it shows operators.
@@ -67,11 +67,11 @@ func TestHostCanCompileAndShipAnArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifact.Args) != 2 || artifact.Args[0].Name != "health" {
-		t.Fatalf("artifact.Args = %#v, want health then doubled", artifact.Args)
+	if len(artifact.Args()) != 2 || artifact.Args()[0].Name() != "health" {
+		t.Fatalf("artifact.Args() = %#v, want health then doubled", artifact.Args())
 	}
-	if !artifact.Result.Equal(lang.StringType) || artifact.Digest == "" {
-		t.Fatalf("result = %s digest = %q, want string and a digest", artifact.Result, artifact.Digest)
+	if !artifact.Result().Equal(lang.StringType) || artifact.Digest() == "" {
+		t.Fatalf("result = %s digest = %q, want string and a digest", artifact.Result(), artifact.Digest())
 	}
 
 	// An artifact is meant to be stored and shipped as JSON.
@@ -114,8 +114,8 @@ func TestHostCanRoundTripAProgramThroughJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Digest != artifact.Digest {
-		t.Fatalf("round trip changed the digest:\n%s\n%s", artifact.Digest, again.Digest)
+	if again.Digest() != artifact.Digest() {
+		t.Fatalf("round trip changed the digest:\n%s\n%s", artifact.Digest(), again.Digest())
 	}
 	// The artifact carries the contract back, so a host that stored only the
 	// artifact can still render the rule for a human.
@@ -124,13 +124,13 @@ func TestHostCanRoundTripAProgramThroughJSON(t *testing.T) {
 	if !strings.Contains(text, "health:") || !strings.Contains(text, "渠道健康状态") {
 		t.Fatalf("rendered view = %s, want the argument health with its doc", text)
 	}
-	checkSameProgram(t, "the rendered view", text, registry, artifact.Digest)
+	checkSameProgram(t, "the rendered view", text, registry, artifact.Digest())
 	// Formatting keeps the contract comments and is still the same program.
 	formatted, err := lang.Format(text)
 	if err != nil || !strings.HasPrefix(formatted, "// health:") {
 		t.Fatalf("formatted view = %s (%v), want it to start with \"// health:\"", formatted, err)
 	}
-	checkSameProgram(t, "the formatted view", formatted, registry, artifact.Digest)
+	checkSameProgram(t, "the formatted view", formatted, registry, artifact.Digest())
 }
 
 // checkSameProgram compiles text against the host contract and requires the
@@ -141,8 +141,8 @@ func checkSameProgram(t *testing.T, what, text string, registry *lang.Registry, 
 	if err != nil {
 		t.Fatalf("compiling %s: %v", what, err)
 	}
-	if artifact.Digest != digest {
-		t.Fatalf("%s compiles to digest %s, want %s", what, artifact.Digest, digest)
+	if artifact.Digest() != digest {
+		t.Fatalf("%s compiles to digest %s, want %s", what, artifact.Digest(), digest)
 	}
 }
 
@@ -162,8 +162,8 @@ func TestTheDocumentsAHostExchanges(t *testing.T) {
 	if handle := lang.NewHandle("onnx.tensor", []float32{1}); handle.Type().String() != "handle<onnx.tensor>" {
 		t.Fatalf("NewHandle(\"onnx.tensor\").Type() = %s, want handle<onnx.tensor>", handle.Type())
 	}
-	functions := lang.CoreRegistry().Manifest().Functions
-	if len(functions) == 0 || functions[0].Name == "" {
-		t.Fatalf("the manifest lists %v, want named functions", functions)
+	manifest, err := json.Marshal(lang.CoreRegistry().Manifest())
+	if err != nil || !strings.Contains(string(manifest), `"name":"add"`) {
+		t.Fatalf("the manifest is %s, %v, want the kernel's functions by name", manifest, err)
 	}
 }

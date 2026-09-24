@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -14,17 +15,17 @@ func TestSampleInfersArgumentsAndRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifact.Args) != 2 {
-		t.Fatalf("args = %#v, want a and b", artifact.Args)
+	if len(artifact.Args()) != 2 {
+		t.Fatalf("args = %#v, want a and b", artifact.Args())
 	}
-	if artifact.Args[0].Name != "a" || !artifact.Args[0].Type.Equal(machine.BoolType) {
-		t.Fatalf("first arg = %#v, want a: bool", artifact.Args[0])
+	if artifact.Args()[0].Name() != "a" || !artifact.Args()[0].Type().Equal(machine.BoolType) {
+		t.Fatalf("first arg = %#v, want a: bool", artifact.Args()[0])
 	}
-	if artifact.Args[1].Name != "b" || !artifact.Args[1].Type.Equal(machine.IntType) {
-		t.Fatalf("second arg = %#v, want b: int", artifact.Args[1])
+	if artifact.Args()[1].Name() != "b" || !artifact.Args()[1].Type().Equal(machine.IntType) {
+		t.Fatalf("second arg = %#v, want b: int", artifact.Args()[1])
 	}
-	if !artifact.Result.Equal(machine.IntType) {
-		t.Fatalf("result = %s, want int", artifact.Result)
+	if !artifact.Result().Equal(machine.IntType) {
+		t.Fatalf("result = %s, want int", artifact.Result())
 	}
 	runtime, err := machine.Instantiate(artifact, registry)
 	if err != nil {
@@ -84,8 +85,8 @@ func TestImplicitNumericDefaultAndExplicitConversions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !artifact.Args[0].Type.Equal(machine.IntType) || !artifact.Args[1].Type.Equal(machine.IntType) || !artifact.Result.Equal(machine.IntType) {
-		t.Fatalf("implicit default = %#v -> %s, want (int, int) -> int", artifact.Args, artifact.Result)
+	if !artifact.Args()[0].Type().Equal(machine.IntType) || !artifact.Args()[1].Type().Equal(machine.IntType) || !artifact.Result().Equal(machine.IntType) {
+		t.Fatalf("implicit default = %#v -> %s, want (int, int) -> int", artifact.Args(), artifact.Result())
 	}
 	artifact, err = CompileExpr(`add(a,b)`, registry, CompileOptions{
 		Args: []ArgSpec{{Name: "a", Type: machine.FloatType}, {Name: "b", Type: machine.FloatType}},
@@ -93,15 +94,15 @@ func TestImplicitNumericDefaultAndExplicitConversions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !artifact.Result.Equal(machine.FloatType) {
-		t.Fatalf("add(a,b) with float arguments returns %s, want float", artifact.Result)
+	if !artifact.Result().Equal(machine.FloatType) {
+		t.Fatalf("add(a,b) with float arguments returns %s, want float", artifact.Result())
 	}
 	artifact, err = CompileExpr(`add(float(amount),0.5)`, registry, CompileOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifact.Args) != 1 || !artifact.Args[0].Type.Equal(machine.IntType) || !artifact.Result.Equal(machine.FloatType) {
-		t.Fatalf("conversion inference = %#v -> %s, want (amount: int) -> float", artifact.Args, artifact.Result)
+	if len(artifact.Args()) != 1 || !artifact.Args()[0].Type().Equal(machine.IntType) || !artifact.Result().Equal(machine.FloatType) {
+		t.Fatalf("conversion inference = %#v -> %s, want (amount: int) -> float", artifact.Args(), artifact.Result())
 	}
 }
 
@@ -123,11 +124,11 @@ func TestFloatLiteralPullsVariablesToFloat(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: %v", test.source, err)
 			}
-			params := make([]string, len(artifact.Args))
-			for i, param := range artifact.Args {
-				params[i] = param.Name + ": " + param.Type.String()
+			params := make([]string, len(artifact.Args()))
+			for i, param := range artifact.Args() {
+				params[i] = param.Name() + ": " + param.Type().String()
 			}
-			got := "(" + strings.Join(params, ", ") + ") -> " + artifact.Result.String()
+			got := "(" + strings.Join(params, ", ") + ") -> " + artifact.Result().String()
 			if got != test.want {
 				t.Fatalf("%s infers %s, want %s", test.source, got, test.want)
 			}
@@ -155,13 +156,30 @@ func TestDeadCandidatesAreDroppedNotFatal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: %v", source, err)
 			}
-			if !artifact.Args[0].Type.Equal(machine.IntType) && !artifact.Args[0].Type.Equal(machine.ArrayOf(machine.IntType)) {
-				t.Fatalf("%s infers %s, want int or array<int>", source, artifact.Args[0].Type)
+			if !artifact.Args()[0].Type().Equal(machine.IntType) && !artifact.Args()[0].Type().Equal(machine.ArrayOf(machine.IntType)) {
+				t.Fatalf("%s infers %s, want int or array<int>", source, artifact.Args()[0].Type())
 			}
 		})
 	}
 	// A genuine conflict still fails.
 	if _, err := CompileExpr(`x > 1 && x == "a"`, registry, CompileOptions{}); err == nil {
 		t.Fatal("conflicting types compiled")
+	}
+}
+
+// A type error never shows inference's own variables: an open literal is
+// named by the kinds it may be, anything else as unknown.
+func TestTypeErrorsDoNotShowInferenceVariables(t *testing.T) {
+	t.Parallel()
+	numbered := regexp.MustCompile(`\?[0-9]`)
+	for source, want := range map[string]string{
+		`0 % "a"`:   "int|rate|money",
+		`0.5 % "a"`: "float|rate",
+		`[] + 1`:    "?",
+	} {
+		_, err := CompileExpr(source, moneyRegistry(t), CompileOptions{})
+		if err == nil || numbered.MatchString(err.Error()) || !strings.Contains(err.Error(), want) {
+			t.Errorf("CompileExpr(%q) error = %v, want one naming %s and no numbered variable", source, err, want)
+		}
 	}
 }

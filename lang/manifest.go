@@ -8,10 +8,7 @@ import "funroute/lang/internal/machine"
 // writes one; Apply adds what it describes to a registry that holds the
 // kernel and the standard library, each missing function as its signature
 // alone, and TrackUnavailable says which of those a run called.
-type (
-	Manifest         = machine.Manifest
-	ManifestFunction = machine.ManifestFunction
-)
+type Manifest = machine.Manifest
 
 const ManifestVersion = machine.ManifestVersion
 

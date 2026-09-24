@@ -88,7 +88,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .status.loading::before { background: var(--violet); animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: .35; transform: scale(.75); } }
 
-.contract-panel, .source-panel, .canvas-panel, .inspector-card { border: 1px solid var(--line); background: var(--surface); box-shadow: 0 14px 40px var(--shadow-card); }
+.contract-panel, .source-panel, .inspector-card { border: 1px solid var(--line); background: var(--surface); box-shadow: 0 14px 40px var(--shadow-card); }
 .contract-panel, .source-panel { margin-bottom: 16px; border-radius: 16px; overflow: hidden; }
 .section-heading { min-height: 68px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line-3); background: linear-gradient(180deg, var(--surface), var(--surface-2)); }
 .section-heading > div { display: flex; align-items: center; gap: 12px; }
@@ -100,9 +100,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .source-panel__editor { padding: 13px 15px 15px; }
 
 .studio-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
-.canvas-panel { min-width: 0; overflow: hidden; border-radius: 16px; }
-.section-heading--canvas { border-bottom: 0; }
-.inspector { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.inspector { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
 .inspector-card { min-width: 0; padding: 15px; border-radius: 16px; }
 /* The expression and its test run sit side by side, two thirds to one third.
    Neither column scrolls: the editor grows with its content and the runner is
@@ -110,7 +108,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .source-workbench { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); align-items: stretch; }
 /* The editor fills its column: it grows with the expression, and when the test
    run beside it is taller, the box stretches instead of leaving the gap blank. */
-.source-workbench > .source-panel__editor { display: flex; min-width: 0; }
+.source-views { display: flex; flex-direction: column; min-width: 0; }
+.source-views > .source-panel__editor { display: flex; flex: 1; min-width: 0; }
+.source-views > .source-panel__structure { flex: 1; min-width: 0; }
+.source-views > [hidden] { display: none; }
+/* The two views of the expression. The tab that cannot be taken yet — the
+   text has an error — is dimmed, and says why when hovered. */
+.view-tabs { display: flex; gap: 4px; padding: 10px 15px 0; border-bottom: 1px solid var(--line-3); }
+.view-tab { margin-bottom: -1px; padding: 7px 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 10px 10px 0 0;
+  color: var(--muted); background: none; font-size: 12px; font-weight: 700; cursor: pointer; }
+.view-tab[aria-selected="true"] { border-color: var(--line-3); color: var(--ink-2); background: var(--surface); }
+.view-tab[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+.view-tab:focus-visible { outline: 3px solid var(--ring); }
 .contract-runner { min-width: 0; border-left: 1px solid var(--line-3); background: var(--surface-2); }
 
 
@@ -121,6 +130,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 @media (max-width: 1180px) {
   .command-deck { grid-template-columns: 1fr; gap: 22px; }
   .source-workbench { grid-template-columns: 1fr; }
+  .inspector { grid-template-columns: 1fr; }
   .contract-runner { border-top: 1px solid var(--line-3); border-left: 0; }
 }
 
@@ -144,3 +154,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .reference dl { margin: 0; display: grid; gap: 4px; }
 .reference dt code { color: var(--blue-ink); font: 11px var(--mono); }
 .reference dd { margin: 0 0 6px; color: var(--ink-3); font-size: 11px; line-height: 1.5; }
+.reference .money-note { margin: 0 0 6px; color: var(--ink-3); font-size: 11px; line-height: 1.5; }
+.reference .currencies { margin: 0; line-height: 1.8; }
+.reference .currencies code { color: var(--blue-ink); font: 11px var(--mono); }

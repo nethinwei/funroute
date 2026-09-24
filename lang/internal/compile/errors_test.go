@@ -30,7 +30,7 @@ func TestCompileAndContractErrorsAreTyped(t *testing.T) {
 // message points at: for 1 + "a" that is all of it, not just the "+".
 func TestTypeErrorsCoverTheirExpression(t *testing.T) {
 	t.Parallel()
-	order := machine.RecordOf(machine.Field{Name: "amount", Type: machine.IntType})
+	order := machine.RecordOf(machine.FieldOf("amount", machine.IntType))
 	options := CompileOptions{Args: []ArgSpec{{Name: "order", Type: order}, {Name: "n", Type: machine.IntType}}}
 	cases := map[string]string{
 		`n + (1 + "a")`:     `(1 + "a")`,
@@ -60,7 +60,7 @@ func TestEveryCompileErrorHasAPosition(t *testing.T) {
 	}{
 		{`1 + @foo`, CompileOptions{}, `@foo`},
 		{`@nope.ok`, CompileOptions{Args: []ArgSpec{{Name: "s", Type: status}}}, `@nope.ok`},
-		{`switch(1, case 1 => 2, else 3)`, CompileOptions{}, `switch(1, case 1 => 2, else 3)`},
+		{`switch(1, case 1 => 2, else => 3)`, CompileOptions{}, `switch(1, case 1 => 2, else => 3)`},
 		{`1 + 2`, CompileOptions{Result: &machine.StringType}, `1 + 2`},
 	}
 	for _, item := range cases {
@@ -80,7 +80,8 @@ func assertErrorCovers(t *testing.T, source string, options CompileOptions, want
 	if !errors.As(err, &positioned) {
 		t.Fatalf("%q: %v has no position", source, err)
 	}
-	if got := source[positioned.Start:positioned.End]; got != want {
+	if start, end := positioned.Span(); source[start:end] != want {
+		got := source[start:end]
 		t.Errorf("%q: the error covers %q, want %q (%v)", source, got, want, err)
 	}
 }

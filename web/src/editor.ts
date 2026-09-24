@@ -119,6 +119,7 @@ const editorTheme = EditorView.theme({
   ".fr-tok-keyword": { color: "var(--tok-form)", fontWeight: "700" },
   ".fr-tok-property": { color: "var(--ink-3)" },
   ".fr-tok-enumMember": { color: "var(--tok-enum)", fontWeight: "600" },
+  ".fr-tok-currency": { color: "var(--tok-number)", fontWeight: "650" },
   ".fr-tok-string": { color: "var(--tok-string)" },
   ".fr-tok-number": { color: "var(--tok-number)" },
   ".fr-tok-operator": { color: "var(--tok-op)" },

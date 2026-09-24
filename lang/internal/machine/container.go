@@ -20,6 +20,8 @@ func (v Value) length() int {
 		return len(box)
 	case []string:
 		return len(box)
+	case []Money:
+		return len(box)
 	case *nestedArray:
 		return len(box.items)
 	case map[string]bool:
@@ -29,6 +31,8 @@ func (v Value) length() int {
 	case map[string]float64:
 		return len(box)
 	case map[string]string:
+		return len(box)
+	case map[string]Money:
 		return len(box)
 	case *nestedDict:
 		return len(box.entries)
@@ -49,6 +53,8 @@ func (v Value) at(i int) Value {
 		return Float(box[i])
 	case []string:
 		return String(box[i])
+	case []Money:
+		return MoneyValue(box[i].minor, box[i].currency)
 	case *nestedArray:
 		return box.items[i]
 	default:
@@ -71,6 +77,9 @@ func (v Value) lookup(key string) (Value, bool) {
 	case map[string]string:
 		value, ok := box[key]
 		return String(value), ok
+	case map[string]Money:
+		value, ok := box[key]
+		return MoneyValue(value.minor, value.currency), ok
 	case *nestedDict:
 		value, ok := box.entries[key]
 		return value, ok
@@ -81,6 +90,34 @@ func (v Value) lookup(key string) (Value, bool) {
 
 // keys lists a dictionary's keys in sorted order: the language promises a
 // program replays identically, and Go's map order does not.
+// eachEntry visits a dictionary's entries in the map's order, which is none:
+// for a walk whose outcome does not depend on the order, such as checking
+// every entry, without sorting or copying the keys as keys does.
+func (v Value) eachEntry(visit func(key string, entry Value) error) error {
+	switch box := v.box.(type) {
+	case map[string]Money:
+		for key, money := range box {
+			if err := visit(key, MoneyValue(money.minor, money.currency)); err != nil {
+				return err
+			}
+		}
+	case *nestedDict:
+		for key, entry := range box.entries {
+			if err := visit(key, entry); err != nil {
+				return err
+			}
+		}
+	default:
+		for _, key := range v.keys() {
+			entry, _ := v.lookup(key)
+			if err := visit(key, entry); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (v Value) keys() []string {
 	switch box := v.box.(type) {
 	case map[string]bool:
@@ -90,6 +127,8 @@ func (v Value) keys() []string {
 	case map[string]float64:
 		return sortedKeys(box)
 	case map[string]string:
+		return sortedKeys(box)
+	case map[string]Money:
 		return sortedKeys(box)
 	case *nestedDict:
 		return sortedKeys(box.entries)
@@ -110,6 +149,8 @@ func (v Value) tail() Value {
 		return Value{kind: ArrayKind, box: box[1:]}
 	case []string:
 		return Value{kind: ArrayKind, box: box[1:]}
+	case []Money:
+		return Value{kind: ArrayKind, box: box[1:]}
 	case *nestedArray:
 		return Value{kind: ArrayKind, box: &nestedArray{elem: box.elem, items: box.items[1:]}}
 	default:
@@ -127,12 +168,13 @@ type arrayBuilder struct {
 	ints    []int64
 	floats  []float64
 	strings []string
+	monies  []Money
 	values  []Value
 }
 
 func newArrayBuilder(elem Type, capacity int) arrayBuilder {
 	builder := arrayBuilder{elem: elem}
-	switch elem.Kind {
+	switch elem.kind {
 	case BoolKind:
 		builder.bools = make([]bool, 0, capacity)
 	case IntKind:
@@ -141,6 +183,8 @@ func newArrayBuilder(elem Type, capacity int) arrayBuilder {
 		builder.floats = make([]float64, 0, capacity)
 	case StringKind:
 		builder.strings = make([]string, 0, capacity)
+	case MoneyKind:
+		builder.monies = make([]Money, 0, capacity)
 	default:
 		builder.values = make([]Value, 0, capacity)
 	}
@@ -149,7 +193,7 @@ func newArrayBuilder(elem Type, capacity int) arrayBuilder {
 
 // add appends a value the caller has already type checked.
 func (b *arrayBuilder) add(value Value) {
-	switch b.elem.Kind {
+	switch b.elem.kind {
 	case BoolKind:
 		b.bools = append(b.bools, value.b)
 	case IntKind:
@@ -158,6 +202,8 @@ func (b *arrayBuilder) add(value Value) {
 		b.floats = append(b.floats, value.f)
 	case StringKind:
 		b.strings = append(b.strings, value.s)
+	case MoneyKind:
+		b.monies = append(b.monies, Money{currency: value.s, minor: value.i})
 	default:
 		b.values = append(b.values, value)
 	}
@@ -173,7 +219,7 @@ func (b *arrayBuilder) addAll(value Value) {
 }
 
 func (b *arrayBuilder) finish() Value {
-	switch b.elem.Kind {
+	switch b.elem.kind {
 	case BoolKind:
 		return Value{kind: ArrayKind, box: b.bools}
 	case IntKind:
@@ -182,6 +228,8 @@ func (b *arrayBuilder) finish() Value {
 		return Value{kind: ArrayKind, box: b.floats}
 	case StringKind:
 		return Value{kind: ArrayKind, box: b.strings}
+	case MoneyKind:
+		return Value{kind: ArrayKind, box: b.monies}
 	default:
 		return Value{kind: ArrayKind, box: &nestedArray{elem: CloneType(b.elem), items: b.values}}
 	}
@@ -190,7 +238,7 @@ func (b *arrayBuilder) finish() Value {
 // packDict is the dictionary counterpart of arrayBuilder, for entries the
 // caller has already type checked.
 func packDict(elem Type, entries map[string]Value) Value {
-	switch elem.Kind {
+	switch elem.kind {
 	case BoolKind:
 		return Value{kind: DictKind, box: mapEntries(entries, func(v Value) bool { return v.b })}
 	case IntKind:
@@ -199,6 +247,8 @@ func packDict(elem Type, entries map[string]Value) Value {
 		return Value{kind: DictKind, box: mapEntries(entries, func(v Value) float64 { return v.f })}
 	case StringKind:
 		return Value{kind: DictKind, box: mapEntries(entries, func(v Value) string { return v.s })}
+	case MoneyKind:
+		return Value{kind: DictKind, box: mapEntries(entries, func(v Value) Money { return Money{currency: v.s, minor: v.i} })}
 	default:
 		copied := make(map[string]Value, len(entries))
 		maps.Copy(copied, entries)

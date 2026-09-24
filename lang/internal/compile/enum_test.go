@@ -21,15 +21,15 @@ func TestEnumContractAndExhaustiveSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !artifact.Result.Equal(channel) || !artifact.Args[0].Type.Equal(channel) {
-		t.Fatalf("artifact contract = %s -> %s, want %s -> %s", artifact.Args[0].Type, artifact.Result, channel, channel)
+	if !artifact.Result().Equal(channel) || !artifact.Args()[0].Type().Equal(channel) {
+		t.Fatalf("artifact contract = %s -> %s, want %s -> %s", artifact.Args()[0].Type(), artifact.Result(), channel, channel)
 	}
-	again, err := CompileJSON(artifact.ExprJSON, registry, options)
+	again, err := CompileJSON(machine.PartsOf(artifact).ExprJSON, registry, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Digest != artifact.Digest {
-		t.Fatalf("enum switch ExprJSON digest = %q, want %q", again.Digest, artifact.Digest)
+	if again.Digest() != artifact.Digest() {
+		t.Fatalf("enum switch ExprJSON digest = %q, want %q", again.Digest(), artifact.Digest())
 	}
 	runtime, err := machine.Instantiate(artifact, registry)
 	if err != nil {
@@ -59,7 +59,7 @@ func assertEnumCompileErrors(t *testing.T, registry *machine.Registry, options C
 		want   string
 	}{
 		{`switch(channel, case @adyen => @adyen)`, "missing stripe"},
-		{`switch(channel, case @adyen => @adyen, case @other => @stripe, else @adyen)`, "not a member"},
+		{`switch(channel, case @adyen => @adyen, case @other => @stripe, else => @adyen)`, "not a member"},
 		{`switch(channel, case "adyen" => @adyen, case "stripe" => @stripe)`, `"adyen" is a member of enum<channel>{adyen,stripe}, written @adyen`},
 		{`switch(channel, case @adyen => "adyen", case @stripe => "stripe")`, "returns string"},
 		{`fallback(channel, candidate)`, "no overload"},
@@ -126,10 +126,10 @@ func TestEnumMembersResolveThroughTheContract(t *testing.T) {
 	if got, _ := value.String(); err != nil || got != "switched" {
 		t.Fatalf("Run(channel=adyen) = %q, %v, want \"switched\"", got, err)
 	}
-	again, err := CompileJSON(artifact.ExprJSON, registry,
+	again, err := CompileJSON(machine.PartsOf(artifact).ExprJSON, registry,
 		CompileOptions{Args: []ArgSpec{{Name: "channel", Type: channel}}, Result: &text})
-	if err != nil || again.Digest != artifact.Digest {
-		t.Fatalf("enum member ExprJSON round trip = %q, %v, want %q", again.Digest, err, artifact.Digest)
+	if err != nil || again.Digest() != artifact.Digest() {
+		t.Fatalf("enum member ExprJSON round trip = %q, %v, want %q", again.Digest(), err, artifact.Digest())
 	}
 	assertEnumReferenceErrors(t, registry, channel, backup)
 }
@@ -152,7 +152,7 @@ func assertEnumReferenceErrors(t *testing.T, registry *machine.Registry, channel
 		})
 	}
 	qualified, err := CompileExpr(`@channel.adyen`, registry, both)
-	if err != nil || !qualified.Result.Equal(channel) {
+	if err != nil || !qualified.Result().Equal(channel) {
 		t.Fatalf("CompileExpr(@channel.adyen) = %v, %v, want a program returning %s", qualified, err, channel)
 	}
 }
@@ -301,19 +301,16 @@ func TestComprehensionsCanReturnEnums(t *testing.T) {
 func TestEnumsAreCollectedFromAnyDepthOfTheContract(t *testing.T) {
 	t.Parallel()
 	channel, registry := enumFixture(t)
-	nested := machine.RecordOf(machine.Field{
-		Name: "inner",
-		Type: machine.RecordOf(machine.Field{Name: "channel", Type: channel}),
-	})
+	nested := machine.RecordOf(machine.FieldOf("inner", machine.RecordOf(machine.FieldOf("channel", channel))))
 	for _, shape := range []struct {
 		name   string
 		typ    machine.Type
 		source string
 	}{
-		{"字段", machine.RecordOf(machine.Field{Name: "channel", Type: channel}), `order.channel == @adyen`},
+		{"字段", machine.RecordOf(machine.FieldOf("channel", channel)), `order.channel == @adyen`},
 		{"字段的字段", nested, `order.inner.channel == @adyen`},
-		{"record 数组的字段", machine.ArrayOf(machine.RecordOf(machine.Field{Name: "channel", Type: channel})), `order[0].channel == @adyen`},
-		{"record 里的枚举数组", machine.RecordOf(machine.Field{Name: "channels", Type: machine.ArrayOf(channel)}), `@adyen in order.channels`},
+		{"record 数组的字段", machine.ArrayOf(machine.RecordOf(machine.FieldOf("channel", channel))), `order[0].channel == @adyen`},
+		{"record 里的枚举数组", machine.RecordOf(machine.FieldOf("channels", machine.ArrayOf(channel))), `@adyen in order.channels`},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
 			t.Parallel()
@@ -327,7 +324,7 @@ func TestEnumsAreCollectedFromAnyDepthOfTheContract(t *testing.T) {
 
 	// The exhaustiveness check reaches it too: a switch on a record's enum
 	// field must still name every member.
-	order := machine.RecordOf(machine.Field{Name: "channel", Type: channel})
+	order := machine.RecordOf(machine.FieldOf("channel", channel))
 	args := []ArgSpec{{Name: "order", Type: order}}
 	if _, err := CompileExpr(`switch(order.channel, case @adyen => 1, case @stripe => 2)`, registry, CompileOptions{Args: args}); err != nil {
 		t.Fatalf("exhaustive switch on a field: %v", err)

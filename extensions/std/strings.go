@@ -27,7 +27,7 @@ func registerStrings(registry *lang.Registry) error {
 			Params: []string{fn.param}, Result: fn.result,
 		}
 		apply := fn.apply
-		if err := lang.Logic(registry, fn.name, doc, func(text string) (string, error) {
+		if err := logic(registry, fn.name, doc, func(text string) (string, error) {
 			return apply(text), nil
 		}); err != nil {
 			return err
@@ -56,7 +56,7 @@ func registerStringTests(registry *lang.Registry) error {
 			Params: []string{"文本", "子串"}, Result: "是否命中",
 		}
 		test := fn.test
-		if err := lang.Logic(registry, fn.name, doc, func(text, part string) (bool, error) {
+		if err := logic(registry, fn.name, doc, func(text, part string) (bool, error) {
 			return test(text, part), nil
 		}); err != nil {
 			return err
@@ -66,7 +66,7 @@ func registerStringTests(registry *lang.Registry) error {
 }
 
 func registerStringParts(registry *lang.Registry) error {
-	if err := lang.Logic(registry, "slice", lang.Doc{Constexpr: true,
+	if err := logic(registry, "slice", lang.Doc{Constexpr: true,
 		Label:       "取子串",
 		Description: "按字符位置取一段，从 start 到 end（不含 end），下标从 0 开始；越界报错，不静默截断。",
 		Category:    "字符串", Cost: 4,
@@ -74,7 +74,7 @@ func registerStringParts(registry *lang.Registry) error {
 	}, sliceString); err != nil {
 		return err
 	}
-	if err := lang.Logic(registry, "split", lang.Doc{Constexpr: true,
+	if err := logic(registry, "split", lang.Doc{Constexpr: true,
 		Label:       "拆分",
 		Description: "按分隔符把文本拆成数组；分隔符为空是错误。",
 		Category:    "字符串", Cost: 5,
@@ -82,7 +82,7 @@ func registerStringParts(registry *lang.Registry) error {
 	}, splitString); err != nil {
 		return err
 	}
-	if err := lang.Logic(registry, "join", lang.Doc{Constexpr: true,
+	if err := logic(registry, "join", lang.Doc{Constexpr: true,
 		Label:       "拼接",
 		Description: "用分隔符把一组文本连起来，拼原因码用它。",
 		Category:    "字符串", Cost: 5,
@@ -92,7 +92,7 @@ func registerStringParts(registry *lang.Registry) error {
 	}); err != nil {
 		return err
 	}
-	return lang.Logic(registry, "replace", lang.Doc{Constexpr: true,
+	return logic(registry, "replace", lang.Doc{Constexpr: true,
 		Label:       "替换",
 		Description: "把文本里出现的每一处 old 换成 new。",
 		Category:    "字符串", Cost: 5,
@@ -106,19 +106,19 @@ func registerStringParts(registry *lang.Registry) error {
 // fixed width: 00001234, a 20-character reconciliation column.
 func registerPadding(registry *lang.Registry) error {
 	for _, side := range []struct {
-		name, label string
-		left        bool
+		name, label, side string
+		left              bool
 	}{
-		{"pad_left", "左侧补齐", true},
-		{"pad_right", "右侧补齐", false},
+		{"pad_left", "左侧补齐", "左侧", true},
+		{"pad_right", "右侧补齐", "右侧", false},
 	} {
 		doc := lang.Doc{
 			Constexpr: true, Label: side.label, Category: "字符串", Cost: 4,
-			Description: "把文本补到指定的字符数，" + side.label[:2] + "补；填充串必须是一个字符。已经够长就原样返回 —— 截断会悄悄丢掉数据。",
+			Description: "把文本补到指定的字符数，在" + side.side + "补；填充串必须是一个字符。已经够长就原样返回 —— 截断会悄悄丢掉数据。",
 			Params:      []string{"文本", "宽度", "填充"}, Result: "补齐后的文本",
 		}
 		left := side.left
-		if err := lang.Logic(registry, side.name, doc, func(text string, width int64, fill string) (string, error) {
+		if err := logic(registry, side.name, doc, func(text string, width int64, fill string) (string, error) {
 			return padTo(text, width, fill, left)
 		}); err != nil {
 			return err

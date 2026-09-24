@@ -2,6 +2,7 @@ package machine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -24,11 +25,38 @@ import (
 // ManifestVersion identifies the manifest's current shape.
 const ManifestVersion = 1
 
-type Manifest struct {
+// Manifest is a registry's signatures as data, for a language service that
+// has the signatures but not the functions. A host gets one from
+// Registry.Manifest, sends it as JSON, and Applies what it reads back; it has
+// no fields to set.
+type Manifest struct{ parts manifestParts }
+
+// Version is the manifest's shape, ManifestVersion when it was written here.
+func (m Manifest) Version() int { return m.parts.Version }
+
+// Money is the money feature the manifest declares, if it declares one.
+func (m Manifest) Money() (MoneySpec, bool) {
+	if m.parts.Money == nil {
+		return MoneySpec{}, false
+	}
+	spec := *m.parts.Money
+	spec.Currencies = slices.Clone(spec.Currencies)
+	return spec, true
+}
+
+func (m Manifest) MarshalJSON() ([]byte, error) { return json.Marshal(m.parts) }
+
+func (m *Manifest) UnmarshalJSON(data []byte) error { return json.Unmarshal(data, &m.parts) }
+
+// manifestParts is what a manifest is made of, and its JSON.
+type manifestParts struct {
 	Version   int                `json:"version"`
 	Forms     []Form             `json:"forms"`
 	Handles   []string           `json:"handles,omitempty"`
 	Functions []ManifestFunction `json:"functions"`
+	// Money is the declared money feature. Apply declares it first, since
+	// the money kernel's functions come with it rather than one by one.
+	Money *MoneySpec `json:"money,omitempty"`
 }
 
 // ManifestFunction is one registered signature. BoundedArgs is written out
@@ -68,7 +96,13 @@ func (r *Registry) Manifest() Manifest {
 		handles = append(handles, name)
 	}
 	slices.Sort(handles)
-	return Manifest{Version: ManifestVersion, Forms: r.enabledFormsLocked(), Handles: handles, Functions: functions}
+	parts := manifestParts{Version: ManifestVersion, Forms: r.enabledFormsLocked(), Handles: handles, Functions: functions}
+	if r.money != nil {
+		spec := r.money.spec
+		spec.Currencies = slices.Clone(spec.Currencies)
+		parts.Money = &spec
+	}
+	return Manifest{parts: parts}
 }
 
 func manifestFunction(function *RegisteredFunction) ManifestFunction {
@@ -83,21 +117,44 @@ func manifestFunction(function *RegisteredFunction) ManifestFunction {
 // alone. A function r does have must cost what the manifest says, or an
 // artifact compiled against one would not bind to the other.
 func (m Manifest) Apply(r *Registry) error {
-	if m.Version != ManifestVersion {
-		return fmt.Errorf("unsupported manifest version %d", m.Version)
+	if m.parts.Version != ManifestVersion {
+		return fmt.Errorf("unsupported manifest version %d", m.parts.Version)
 	}
-	if err := r.EnableForm(m.Forms...); err != nil {
+	if err := r.EnableForm(m.parts.Forms...); err != nil {
 		return err
 	}
-	for _, name := range m.Handles {
+	if err := r.applyMoney(m.parts.Money); err != nil {
+		return err
+	}
+	for _, name := range m.parts.Handles {
 		if err := r.declareHandle(name); err != nil {
 			return err
 		}
 	}
-	for _, function := range m.Functions {
+	for _, function := range m.parts.Functions {
 		if err := r.applyFunction(function); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// applyMoney declares the manifest's money feature, or checks that the one
+// already declared is the same: a literal's minor units depend on it.
+func (r *Registry) applyMoney(spec *MoneySpec) error {
+	if spec == nil {
+		return nil
+	}
+	existing := r.currencies()
+	if existing == nil {
+		return r.DeclareMoney(*spec)
+	}
+	table, err := newCurrencyTable(*spec)
+	if err != nil {
+		return err
+	}
+	if table.identity != existing.identity || table.spec.Rounding != existing.spec.Rounding {
+		return fmt.Errorf("the manifest declares other currencies or rounding than this registry")
 	}
 	return nil
 }

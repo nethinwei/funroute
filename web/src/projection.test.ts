@@ -11,6 +11,7 @@ test("cards are forms and lazy calls, operators are text", () => {
   const lazy = new Set(["if", "fallback"]);
   const call = (name: string, operator?: string) => node("call", [{ name: "name", text: name }], operator);
   assert.equal(isCard(node("let"), lazy), true);
+  assert.equal(isCard(node("using"), lazy), true);
   assert.equal(isCard(call("if"), lazy), true);
   assert.equal(isCard(call("if", "&&"), lazy), false);
   assert.equal(isCard(call("add", "+"), lazy), false);

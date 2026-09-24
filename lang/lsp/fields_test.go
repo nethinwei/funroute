@@ -12,11 +12,11 @@ import (
 func TestCompletionOffersTheFieldsOfARecordBeingUpdated(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"{...order, ":                    "amount fee currency",
-		"{...order, fee: 0, ":            "amount currency",
-		"{...order, cu":                  "amount fee currency",
-		"let(o = order, {...o, ":         "amount fee currency",
-		"{...order, amount: order.fee, ": "fee currency",
+		"order with {":                    "amount fee currency",
+		"order with {fee: 0, ":            "amount currency",
+		"order with {cu":                  "amount fee currency",
+		"let(o = order, o with {":         "amount fee currency",
+		"order with {amount: order.fee, ": "fee currency",
 	}
 	for text, want := range cases {
 		t.Run(text, func(t *testing.T) {
@@ -38,15 +38,15 @@ func TestCompletionOffersTheFieldsOfARecordBeingUpdated(t *testing.T) {
 		"args":   []map[string]string{{"name": "order", "type": "record{amount: int, fee: int}"}},
 		"result": map[string]string{"type": "int"},
 	}})
-	s.open("file:///a.fr", "{...order, ")
-	if got := strings.Join(labels(s.request("textDocument/completion", position("file:///a.fr", 0, 11))), " "); got != "amount fee" {
+	s.open("file:///a.fr", "order with {")
+	if got := strings.Join(labels(s.request("textDocument/completion", position("file:///a.fr", 0, 12))), " "); got != "amount fee" {
 		t.Errorf("with a declared result the completion is %q, want \"amount fee\"", got)
 	}
 	// Anywhere else in an update the usual names are offered.
 	s = newSession(t, standard(t), `{}`)
 	s.notify("funroute/setContract", contract("fee:int"))
-	s.open("file:///a.fr", "{...order, amount: ")
-	if got := labels(s.request("textDocument/completion", position("file:///a.fr", 0, 19))); !slices.Contains(got, "fee") {
+	s.open("file:///a.fr", "order with {amount: ")
+	if got := labels(s.request("textDocument/completion", position("file:///a.fr", 0, 20))); !slices.Contains(got, "fee") {
 		t.Errorf("a field's value is offered %v, want fee among them", got)
 	}
 }

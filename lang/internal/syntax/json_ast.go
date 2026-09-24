@@ -298,9 +298,9 @@ func literalValue(kind string, raw json.RawMessage) (machine.Value, error) {
 	if kind == "string" {
 		return machine.String(text), nil
 	}
-	parsed, err := strconv.ParseFloat(text, 64)
+	parsed, err := exactFloat(text)
 	if err != nil {
-		return machine.Value{}, fmt.Errorf("invalid float %q", text)
+		return machine.Value{}, err
 	}
 	return machine.CheckedFloat(parsed)
 }

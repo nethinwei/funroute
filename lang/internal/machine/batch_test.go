@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -313,5 +314,74 @@ func runInBatch(b *testing.B, ctx context.Context, batch *machine.Batch, args []
 	b.Helper()
 	if _, err := batch.Run(ctx, args); err != nil {
 		b.Error(err)
+	}
+}
+
+// A batch checks each request's arguments before the engine sees any: a
+// request in the wrong currency, in an undeclared one, with a currency-less
+// amount that is not zero or of the wrong kind is answered with the
+// contract's error, and the engine is handed only the dollars the model's
+// signature asks for.
+func TestBatchHandsTheEngineOnlyAdmittedArguments(t *testing.T) {
+	t.Parallel()
+	registry := moneyRegistry(t)
+	var seen []string
+	err := registry.Register(machine.FunctionSpec{
+		Name: "m.score_v1", Params: []machine.Type{machine.MoneyOf("USD")}, Result: machine.IntType,
+		Eval: func(context.Context, []machine.Value) (machine.Value, error) { return machine.Int(1), nil },
+		EvalBatch: func(_ context.Context, calls [][]machine.Value) ([]machine.Value, error) {
+			out := make([]machine.Value, len(calls))
+			for i, call := range calls {
+				m, _ := call[0].Money()
+				seen = append(seen, fmt.Sprint(m.Currency(), " ", m.Minor()))
+				out[i] = machine.Int(1)
+			}
+			return out, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := compileMoney(t, registry, "m.score_v1(a)", "a: money<USD>", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := machine.NewBatch(runtime, machine.BatchOptions{MaxSize: 1})
+	defer batch.Close()
+	for _, arg := range []machine.Value{machine.MoneyValue(5, "EUR"), machine.MoneyValue(5, "XYZ"), machine.MoneyValue(5, ""), machine.Int(3)} {
+		if got, err := batch.Run(t.Context(), []machine.Value{arg}); !errors.Is(err, machine.ErrContract) {
+			t.Errorf("batch.Run(%v) = %v, %v, want ErrContract", arg.Any(), got.Any(), err)
+		}
+	}
+	if got, err := batch.Run(t.Context(), []machine.Value{machine.MoneyValue(5, "USD")}); err != nil || got.Any() != int64(1) {
+		t.Fatalf("batch.Run(USD 0.05) = %v, %v, want 1", got.Any(), err)
+	}
+	if want := []string{"USD 5"}; !slices.Equal(seen, want) {
+		t.Fatalf("the engine saw %q, want only %q", seen, want)
+	}
+}
+
+// A batched engine's currency mismatch is the rule's error at every call it
+// answered: the batch does not wrap it as an extension's failure, which
+// would make it one fallback takes. (A call inside a fallback is not hoisted
+// at all: the batch runs only what the program would run unconditionally.)
+func TestABatchedCurrencyMismatchIsNotAnExtensionFailure(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	err := machine.Model(registry, "model.mixed_v1", machine.Doc{Cost: 1},
+		func(x float64) (float64, error) { return x, nil },
+		func([]float64) ([]float64, error) { return nil, fmt.Errorf("engine: %w", machine.ErrCurrency) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := floatRuntime(t, registry, `model.mixed_v1(x)`)
+	batch := machine.NewBatch(runtime, machine.BatchOptions{MaxSize: 1})
+	defer batch.Close()
+	if got, err := batch.Run(t.Context(), []machine.Value{machine.Float(1)}); !errors.Is(err, machine.ErrCurrency) || errors.Is(err, machine.ErrExtension) {
+		t.Fatalf("batch.Run = %v, %v, want ErrCurrency and not ErrExtension", got.Any(), err)
 	}
 }

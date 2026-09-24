@@ -2,6 +2,7 @@ package syntax
 
 import (
 	"fmt"
+	"strings"
 
 	"funroute/lang/internal/machine"
 )
@@ -118,10 +119,12 @@ func (e *EnumExpr) Source() string {
 }
 
 func (e *EnumExpr) check() error {
-	if !machine.IsValidVariableName(e.Member) || machine.IsReservedName(e.Member) {
+	// A member follows @, so it may be shaped like a code: @CARD is no
+	// currency.
+	if !machine.IsValidFieldName(e.Member) {
 		return fmt.Errorf("invalid enum member %q", e.Member)
 	}
-	if e.Enum != "" && !machine.IsValidVariableName(e.Enum) {
+	if e.Enum != "" && !machine.IsValidFieldName(e.Enum) {
 		return fmt.Errorf("invalid enum name %q", e.Enum)
 	}
 	return nil
@@ -210,11 +213,11 @@ func checkRecordFields(fields []RecordFieldExpr) error {
 	return nil
 }
 
-// RecordUpdateExpr is {...order, amount: 1}: the record Base with some of its
+// RecordUpdateExpr is order with {amount: 1}: the record Base with some of its
 // fields replaced. It cannot be sugar for a record literal, because which
 // fields Base has is known only once its type is. The result has Base's type:
 // every field named must be one of Base's, with a value of that field's type.
-// A nested field is replaced by nesting: {...b, customer: {...b.customer, amount: 1}}.
+// A nested field is replaced by nesting: b with {customer: b.customer with {amount: 1}}.
 type RecordUpdateExpr struct {
 	ID  int `json:"-"`
 	Pos int `json:"-"`
@@ -395,10 +398,177 @@ func distinctNames(names ...string) error {
 	return nil
 }
 
+// MoneyExpr is an amount written in its currency: USD 1.70, EUR -0.05. The
+// amount stays the decimal it was written as — how many minor units it is
+// depends on the currency's places, which are the registry's, and ExprJSON
+// must not depend on a registry.
+type MoneyExpr struct {
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
+	Currency string `json:"currency" role:"text"`
+	Amount   string `json:"amount" role:"text"`
+}
+
+func (*MoneyExpr) exprNode()       {}
+func (e *MoneyExpr) NodeID() int   { return e.ID }
+func (e *MoneyExpr) Position() int { return e.Pos }
+func (*MoneyExpr) kind() string    { return "money" }
+
+func (e *MoneyExpr) check() error {
+	if !machine.IsCurrencyCode(e.Currency) {
+		return fmt.Errorf("invalid currency code %q", e.Currency)
+	}
+	digits, negative := strings.CutPrefix(e.Amount, "-")
+	if !plainDecimal(digits) {
+		return fmt.Errorf("invalid amount %q: write a plain decimal such as 1.70", e.Amount)
+	}
+	if negative && strings.Trim(digits, "0.") == "" {
+		return fmt.Errorf("invalid amount %q: an amount has no negative zero", e.Amount)
+	}
+	return nil
+}
+
+// RateExpr is a rate written with its unit: 2.9% or 25bps. Like money it
+// keeps the decimal it was written as.
+type RateExpr struct {
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
+	Value string `json:"value" role:"text"`
+	Unit  string `json:"unit" role:"text"`
+}
+
+func (*RateExpr) exprNode()       {}
+func (e *RateExpr) NodeID() int   { return e.ID }
+func (e *RateExpr) Position() int { return e.Pos }
+func (*RateExpr) kind() string    { return "rate" }
+
+func (e *RateExpr) check() error {
+	if e.Unit != "%" && e.Unit != "bps" {
+		return fmt.Errorf("invalid rate unit %q: write %% or bps", e.Unit)
+	}
+	if !plainDecimal(e.Value) {
+		return fmt.Errorf("invalid rate %q: write a plain decimal such as 2.9", e.Value)
+	}
+	return nil
+}
+
+// Scale is the power of ten the rate's value is divided by: 2 for a percent,
+// 4 for a basis point.
+func (e *RateExpr) Scale() int {
+	if e.Unit == "bps" {
+		return 4
+	}
+	return 2
+}
+
+// plainDecimal is digits with at most one point between them.
+func plainDecimal(text string) bool {
+	whole, fraction, hasPoint := strings.Cut(text, ".")
+	return digitsOnly(whole) && (!hasPoint || digitsOnly(fraction))
+}
+
+func digitsOnly(text string) bool {
+	if text == "" {
+		return false
+	}
+	for i := 0; i < len(text); i++ {
+		if text[i] < '0' || text[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// CurrencyExpr is a currency, written as its code: USD. Currencies are the
+// language's own, not an enum a contract brings, so a name shaped like a code
+// is always one, and no variable may take such a name.
+type CurrencyExpr struct {
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
+	Code string `json:"code" role:"text"`
+}
+
+func (*CurrencyExpr) exprNode()       {}
+func (e *CurrencyExpr) NodeID() int   { return e.ID }
+func (e *CurrencyExpr) Position() int { return e.Pos }
+func (*CurrencyExpr) kind() string    { return "currency" }
+
+func (e *CurrencyExpr) check() error {
+	if !machine.IsCurrencyCode(e.Code) {
+		return fmt.Errorf("invalid currency code %q", e.Code)
+	}
+	return nil
+}
+
+// FxRateExpr is an exchange rate written the way a market writes one, 150
+// JPY / USD: one USD buys 150 JPY. It is a rate, not two amounts, so its
+// figure takes as many places as the quote has.
+type FxRateExpr struct {
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
+	Rate  string `json:"rate" role:"text"`
+	Quote string `json:"quote" role:"text"`
+	Base  string `json:"base" role:"text"`
+}
+
+func (*FxRateExpr) exprNode()       {}
+func (e *FxRateExpr) NodeID() int   { return e.ID }
+func (e *FxRateExpr) Position() int { return e.Pos }
+func (*FxRateExpr) kind() string    { return "fxrate" }
+
+func (e *FxRateExpr) check() error {
+	if !machine.IsCurrencyCode(e.Quote) || !machine.IsCurrencyCode(e.Base) {
+		return fmt.Errorf("invalid currency codes %q / %q", e.Quote, e.Base)
+	}
+	// plainDecimal, as for money and rates: digits on both sides of a point,
+	// which is what the printer writes back and the parser reads.
+	if !plainDecimal(e.Rate) {
+		return fmt.Errorf("an exchange rate's figure is a plain positive decimal, not %q", e.Rate)
+	}
+	return nil
+}
+
+// UsingExpr is using(…, settled / paid, body): body runs with the quoted
+// exchange rates and no others, so -> in it converts at them and nothing
+// else — the rates a rule converts at are the ones it writes. @name first is
+// one of the contract's named rate tables, with the quotes laid over it. A
+// rate from outside is carried in by reading it: using(fx(USD, JPY), …).
+type UsingExpr struct {
+	ID  int `json:"-"`
+	Pos int `json:"-"`
+	Span
+	// Table is @name, a rate table the contract declares, written first: the
+	// quotes are laid over it, later ones over earlier.
+	Table Expr `json:"table,omitempty"`
+	// Quotes are the exchange rates, in the order written.
+	Quotes []Expr `json:"quotes,omitempty"`
+	Body   Expr   `json:"body"`
+}
+
+func (*UsingExpr) exprNode()       {}
+func (e *UsingExpr) NodeID() int   { return e.ID }
+func (e *UsingExpr) Position() int { return e.Pos }
+func (*UsingExpr) kind() string    { return "using" }
+
+func (e *UsingExpr) check() error {
+	_, named := e.Table.(*EnumExpr)
+	switch {
+	case e.Table != nil && !named:
+		return fmt.Errorf("a using's rate table is written @name")
+	case e.Table == nil && len(e.Quotes) == 0:
+		return fmt.Errorf("using needs at least one exchange rate")
+	}
+	return nil
+}
+
 // nodeTypes lists every node the walker knows, by its ExprJSON tag. A literal
 // has four tags, one per value kind; the others have one each.
 var nodeTypes = []Expr{
 	&LiteralExpr{}, &VariableExpr{}, &EnumExpr{}, &ArrayExpr{}, &DictExpr{}, &CallExpr{},
 	&RecordExpr{}, &FieldExpr{}, &SwitchExpr{}, &ForExpr{}, &ReduceExpr{}, &LetExpr{},
-	&RecordUpdateExpr{},
+	&RecordUpdateExpr{}, &MoneyExpr{}, &RateExpr{}, &UsingExpr{}, &FxRateExpr{}, &CurrencyExpr{},
 }

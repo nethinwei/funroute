@@ -1,7 +1,9 @@
 package machine_test
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"funroute/lang/internal/compile"
@@ -12,7 +14,7 @@ import (
 // malformed, and the table is where that check now lives.
 func TestInstructionValidationUsesTheTable(t *testing.T) {
 	t.Parallel()
-	artifact := &machine.Artifact{Instructions: make([]machine.Instruction, 3)}
+	artifact := machine.ArtifactWith(machine.ArtifactParts{Instructions: make([]machine.Instruction, 3)})
 	for _, test := range []struct {
 		name        string
 		instruction machine.Instruction
@@ -144,8 +146,8 @@ func TestBenchSanity(t *testing.T) {
 		t.Fatalf("sum = %v, want 15", value.Any())
 	}
 	// The accumulator is local to reduce, so it never reaches the signature.
-	if len(artifact.Args) != 1 || artifact.Args[0].Name != "items" {
-		t.Fatalf("args = %#v, want only items", artifact.Args)
+	if len(artifact.Args()) != 1 || artifact.Args()[0].Name() != "items" {
+		t.Fatalf("args = %#v, want only items", artifact.Args())
 	}
 }
 
@@ -264,4 +266,130 @@ func benchVector(b *testing.B, size int) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// A frame makes its locals before running, so an artifact that claims more
+// than its instructions could write is refused on load, digest or not.
+func TestAnArtifactClaimingTooManyLocalsIsRefused(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	artifact, err := compile.CompileExpr(`let(a = x + 1, a * a)`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "x", Type: machine.IntType}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := machine.PartsOf(artifact)
+	for _, locals := range []int{-1, 1 << 40} {
+		parts.Locals = locals
+		tampered, err := machine.SealArtifact(parts, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := machine.Instantiate(tampered, registry); err == nil {
+			t.Errorf("Instantiate(an artifact claiming %d locals) = nil error, want a refusal", locals)
+		}
+	}
+}
+
+// forgedLoad compiles source, lets forge rewrite the artifact's parts, seals
+// them again — a correct digest proves nothing about who sealed them — and
+// loads the result.
+func forgedLoad(t *testing.T, source, contract string, forge func(*machine.ArtifactParts)) error {
+	t.Helper()
+	registry := moneyRegistry(t)
+	artifact, err := compileMoney(t, registry, source, contract, "")
+	if err != nil {
+		t.Fatalf("CompileExpr(%q) error = %v", source, err)
+	}
+	parts := machine.PartsOf(artifact)
+	forge(&parts)
+	forged, err := machine.SealArtifact(parts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = machine.Instantiate(forged, registry)
+	return err
+}
+
+// Instantiate holds an artifact's constants to the registry's currencies as
+// the boundary holds arguments: an amount with no currency that is not zero,
+// an undeclared currency — alone, in an exchange rate, in an array — are
+// refused at load, not left for the program to meet.
+func TestInstantiateRefusesForgedMoneyConstants(t *testing.T) {
+	t.Parallel()
+	text := func(s string) *string { return &s }
+	for _, test := range []struct {
+		name, source, contract string
+		forge                  func(*machine.ArtifactParts)
+	}{
+		{"an amount with no currency", "a + USD 0.05", "a: money<USD>", func(p *machine.ArtifactParts) { p.Constants[0].String = text("") }},
+		{"an undeclared currency", "a + USD 0.05", "a: money<USD>", func(p *machine.ArtifactParts) { p.Constants[0].String = text("XYZ") }},
+		{"a rate in an undeclared currency", "using(150 JPY / USD, a -> JPY)", "a: money<USD>", func(p *machine.ArtifactParts) { p.Constants[0].String = text("XYZ") }},
+		{"an item of an array", "[USD 0.05, USD 0.10]", "", func(p *machine.ArtifactParts) { p.Constants[0].Items[1].String = text("XYZ") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := forgedLoad(t, test.source, test.contract, test.forge); err == nil {
+				t.Fatalf("Instantiate of %s with %s = nil, want a refusal", test.source, test.name)
+			}
+		})
+	}
+	if err := forgedLoad(t, "a + USD 0.05", "a: money<USD>", func(*machine.ArtifactParts) {}); err != nil {
+		t.Fatalf("Instantiate of an honest artifact = %v", err)
+	}
+}
+
+// A run takes a rate table of the registry's currencies whatever its default
+// rounding: the rates convert amounts, and the amounts are the same. A table
+// of other currencies or other places is ErrCurrency.
+func TestARunTakesARateTableOfTheSameCurrencies(t *testing.T) {
+	t.Parallel()
+	registry := moneyRegistry(t)
+	spec, _ := registry.Money()
+	artifact, err := compileMoney(t, registry, "a -> JPY", "a: money<USD>", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		rounding machine.Rounding
+		edit     func([]machine.CurrencySpec) []machine.CurrencySpec
+		works    bool
+	}{
+		"the registry's own": {spec.Rounding, nil, true},
+		"another rounding":   {machine.RoundDown, nil, true},
+		"another currency": {spec.Rounding, func(c []machine.CurrencySpec) []machine.CurrencySpec {
+			return append(c, machine.CurrencySpec{Code: "GBP", Digits: 2})
+		}, false},
+		"another place for yen": {spec.Rounding, func(c []machine.CurrencySpec) []machine.CurrencySpec { return withDigits(c, "JPY", 2) }, false},
+	} {
+		currencies := slices.Clone(spec.Currencies)
+		if test.edit != nil {
+			currencies = test.edit(currencies)
+		}
+		table, err := machine.NewCurrencies(machine.MoneySpec{Rounding: test.rounding, Currencies: currencies})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rates := table.NewRates()
+		if err := rates.Add("USD", "JPY", "150"); err != nil {
+			t.Fatal(err)
+		}
+		_, err = runtime.RunValues(t.Context(), []machine.Value{machine.MoneyValue(100, "USD")}, machine.RunOptions{Rates: rates})
+		if works := err == nil; works != test.works || (!works && !errors.Is(err, machine.ErrCurrency)) {
+			t.Errorf("%s: error = %v, want it to run %v", name, err, test.works)
+		}
+	}
+}
+
+// withDigits is currencies with code's places changed.
+func withDigits(currencies []machine.CurrencySpec, code string, digits int) []machine.CurrencySpec {
+	for i := range currencies {
+		if currencies[i].Code == code {
+			currencies[i].Digits = digits
+		}
+	}
+	return currencies
 }

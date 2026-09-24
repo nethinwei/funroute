@@ -38,15 +38,12 @@ var (
 const ExprJSONVersion = syntax.ExprJSONVersion
 
 // Compilation produces an artifact: immutable bytecode with a digest over
-// everything that is contract. Its fields are public because an artifact is
-// meant to be stored and shipped as JSON.
+// everything that is contract. A host stores and ships it as JSON and reads
+// its contract through Args, Result and Digest; its bytecode is the
+// machine's, and Instantiate checks every part of it again.
 type (
 	Artifact       = machine.Artifact
 	Parameter      = machine.Parameter
-	Constant       = machine.Constant
-	Instruction    = machine.Instruction
-	CallReference  = machine.CallReference
-	OpCode         = machine.OpCode
 	CompileOptions = compile.CompileOptions
 )
 

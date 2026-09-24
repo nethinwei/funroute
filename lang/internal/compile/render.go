@@ -60,10 +60,11 @@ func ContractFromArtifact(artifact *machine.Artifact) ([]ArgSpec, *machine.Type,
 	if artifact == nil {
 		return nil, nil, ""
 	}
-	args := make([]ArgSpec, len(artifact.Args))
-	for i, param := range artifact.Args {
-		args[i] = ArgSpec{Name: param.Name, Type: param.Type, Doc: param.Doc}
+	params := artifact.Args()
+	args := make([]ArgSpec, len(params))
+	for i, param := range params {
+		args[i] = ArgSpec{Name: param.Name(), Type: param.Type(), Doc: param.Doc()}
 	}
-	result := artifact.Result
-	return args, &result, artifact.ResultDoc
+	result := artifact.Result()
+	return args, &result, artifact.ResultDoc()
 }

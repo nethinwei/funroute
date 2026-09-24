@@ -3,6 +3,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"funroute/lang/internal/machine"
@@ -21,16 +22,16 @@ func TestArrayDictionaryAndGenericFunctions(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []machine.Parameter{
-		{Name: "weights", Type: machine.DictOf(machine.FloatType)},
-		{Name: "key", Type: machine.StringType},
-		{Name: "fallback", Type: machine.IntType},
+		machine.NewParameter("weights", machine.DictOf(machine.FloatType), ""),
+		machine.NewParameter("key", machine.StringType, ""),
+		machine.NewParameter("fallback", machine.IntType, ""),
 	}
-	if len(artifact.Args) != len(want) {
-		t.Fatalf("args = %#v, want %#v", artifact.Args, want)
+	if len(artifact.Args()) != len(want) {
+		t.Fatalf("args = %#v, want %#v", artifact.Args(), want)
 	}
 	for i := range want {
-		if artifact.Args[i].Name != want[i].Name || !artifact.Args[i].Type.Equal(want[i].Type) {
-			t.Fatalf("arg %d = %#v, want %#v", i, artifact.Args[i], want[i])
+		if artifact.Args()[i].Name() != want[i].Name() || !artifact.Args()[i].Type().Equal(want[i].Type()) {
+			t.Fatalf("arg %d = %#v, want %#v", i, artifact.Args()[i], want[i])
 		}
 	}
 	runtime, err := machine.Instantiate(artifact, registry)
@@ -73,10 +74,10 @@ func TestExtensionSignatureDrivesInference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := artifact.Args[0].Type; !got.Equal(machine.StringType) {
+	if got := artifact.Args()[0].Type(); !got.Equal(machine.StringType) {
 		t.Fatalf("country type = %s, want string", got)
 	}
-	if got := artifact.Args[1].Type; !got.Equal(machine.IntType) {
+	if got := artifact.Args()[1].Type(); !got.Equal(machine.IntType) {
 		t.Fatalf("amount type = %s, want int", got)
 	}
 	runtime, err := machine.Instantiate(artifact, registry)
@@ -131,6 +132,148 @@ func registerCollectionTestExtensions(t *testing.T, registry *machine.Registry) 
 	} {
 		if err := registry.Register(spec); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// Money meeting a plain number the wrong way says where to go instead.
+func TestMoneyMistakesAreExplained(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		"amount + 5":     "money(n, 币种)",
+		"amount / 3":     "allocate",
+		"amount * risk":  "2.9% 这样的字面量",
+		"amount + euros": "amount -> USD",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			contract := moneyContract(t, "amount: money<USD>; risk: float; euros: money<EUR>")
+			_, err := CompileExpr(source, moneyRegistry(t), CompileOptions{Args: contract})
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("CompileExpr(%q) error = %v, want a hint containing %q", source, err, want)
+			}
+		})
+	}
+}
+
+// hintContract is where money meets everything a hint knows about.
+const hintContract = "amount: money<USD>; euros: money<EUR>; a: money<c>; b: money<d>; u: money<?>; risk: float; k: int; f: bool; fee: rate"
+
+// hintOf compiles source under hintContract and returns what follows the
+// no-overload message's "；", or "" when there is no hint.
+func hintOf(t *testing.T, source string) string {
+	t.Helper()
+	_, err := CompileExpr(source, moneyRegistry(t), CompileOptions{Args: moneyContract(t, hintContract)})
+	if err == nil {
+		t.Fatalf("CompileExpr(%q) compiled, want a type error", source)
+	}
+	_, hint, _ := strings.Cut(err.Error(), "；")
+	return hint
+}
+
+// Every way money meets a plain number or other money wrongly has its hint.
+func TestMoneyHintsCoverEveryBranch(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		"amount - euros":  "币种不同",
+		"amount < euros":  "币种不同",
+		"amount == euros": "币种不同",
+		"amount * euros":  "两笔金额不能相乘",
+		"1 - fee":         "100% - fee",
+		"fee * 2":         "100% - fee",
+		"k * fee":         "n * fee 先把 n 用在金额上",
+		"fee / k":         "100% - fee",
+		"risk + fee":      "100% - fee",
+		"fee < 1":         "100% - fee",
+		"amount <= euros": "币种不同",
+		"amount > euros":  "币种不同",
+		"amount >= euros": "币种不同",
+		"amount + a":      "币种不同",
+		"risk * amount":   "2.9% 这样的字面量",
+		"amount + risk":   "2.9% 这样的字面量",
+		"amount < risk":   "2.9% 这样的字面量",
+		"risk / u":        "2.9% 这样的字面量",
+		"amount / k":      "allocate(m, n)",
+		"u / 3":           "allocate(m, n)",
+		"5 + amount":      "like(同币种金额, n)",
+		"amount - 5":      "money(n, 币种)",
+		"5 - amount":      "money(n, 币种)",
+		"u + k":           "money(n, 币种)",
+		// Two arguments, one money and one float, whatever the function.
+		"like(amount, risk)":     "2.9% 这样的字面量",
+		"fallback(amount, risk)": "2.9% 这样的字面量",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if got := hintOf(t, source); !strings.Contains(got, want) {
+				t.Fatalf("CompileExpr(%q) hint = %q, want one containing %q", source, got, want)
+			}
+		})
+	}
+}
+
+// Where no hint would be true, none is given.
+func TestMoneyHintsStaySilentElsewhere(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{
+		"3 / amount", "minor(k)", `"x" + amount`, "if(f, amount, risk)", "fallback(amount, 5)",
+		"if(f, {a: 1}, {b: 2})", "if(f, {fee: amount}, {cost: euros})", "{fee: amount} + {fee: amount}", "{fee: amount} + 1", "[amount] + [euros]",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if got := hintOf(t, source); got != "" {
+				t.Fatalf("CompileExpr(%q) hint = %q, want none", source, got)
+			}
+		})
+	}
+}
+
+// The container hints still speak for containers of money.
+func TestContainerHintsHoldForMoney(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		"[amount] + [amount]":           "concat(a, b)",
+		`{"x": amount} + {"y": amount}`: "merge(a, b)",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if got := hintOf(t, source); !strings.Contains(got, want) {
+				t.Fatalf("CompileExpr(%q) hint = %q, want one containing %q", source, got, want)
+			}
+		})
+	}
+}
+
+// The README promises money × money a pointer too; it has none.
+func TestMoneyTimesMoneyIsExplained(t *testing.T) {
+	t.Parallel()
+	got := hintOf(t, "amount * amount")
+	if got == "" {
+		t.Fatal("amount * amount has no hint")
+	}
+}
+
+// The hint that two amounts are in different currencies is given where they
+// are: at an operator that needs one currency, with both known and not the
+// same — never for like, whose name begins as a comparison's does, nor for
+// amounts that may well be in one currency.
+func TestTheCurrencyHintNamesOnlyCurrenciesThatDiffer(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name          string
+		left, right   string
+		wantsCurrency bool
+	}{
+		{"add", "money<USD>", "money<EUR>", true},
+		{"lt", "money<c>", "money<USD>", true},
+		{"ge", "money<USD>", "money<EUR>", true},
+		{"like", "money<USD>", "money<USD>", false},
+		{"lt", "money<USD>", "money<USD>", false},
+		{"add", "money<?>", "money<USD>", false},
+	} {
+		got := moneyHint(test.name, []string{test.left, test.right})
+		if says := strings.Contains(got, "币种不同"); says != test.wantsCurrency {
+			t.Errorf("moneyHint(%s, %s, %s) = %q, want a currency hint %v", test.name, test.left, test.right, got, test.wantsCurrency)
 		}
 	}
 }

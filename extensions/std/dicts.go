@@ -19,7 +19,7 @@ import (
 func registerDicts(registry *lang.Registry) error {
 	item := lang.TypeVar("T")
 	dict := lang.DictOf(item)
-	if err := registry.Register(lang.FunctionSpec{
+	if err := register(registry, lang.FunctionSpec{
 		Name: "get", Params: []lang.Type{dict, lang.StringType, item}, Result: item, Eval: evalGet,
 		Doc: lang.Doc{
 			Constexpr: true, Label: "取值或默认", Category: "容器", Cost: 3,
@@ -29,7 +29,7 @@ func registerDicts(registry *lang.Registry) error {
 	}); err != nil {
 		return err
 	}
-	return registry.Register(lang.FunctionSpec{
+	return register(registry, lang.FunctionSpec{
 		Name: "merge", Params: []lang.Type{dict, dict}, Result: dict, Eval: evalMerge,
 		Doc: lang.Doc{
 			Constexpr: true, Label: "合并字典", Category: "容器", Cost: 8,

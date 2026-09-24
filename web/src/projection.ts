@@ -6,7 +6,7 @@ import type { Position, Range, Tree, TreeField } from "./protocol.ts";
 // A card is a node with branches, local names or laziness: the forms with a
 // node of their own, and a call to a lazy function such as if. An operator
 // is text, even when it expands into if.
-const FORM_NODES = new Set(["switch", "for", "reduce", "let"]);
+const FORM_NODES = new Set(["switch", "for", "reduce", "let", "using"]);
 
 export function callName(tree: Tree): string {
   return tree.fields?.find((field) => field.name === "name")?.text ?? "";
@@ -79,10 +79,11 @@ export function indent(source: string, indent: string): string {
 export const BLOCKS: Record<string, string> = {
   if: "if($, then_value, else_value)",
   fallback: "fallback($, backup)",
-  switch: "switch($, case value => result, else otherwise)",
+  switch: "switch($, case value => result, else => otherwise)",
   for: "[item for item in $]",
   reduce: "reduce(item in $, acc = 0, acc + item)",
   let: "let(name = value, $)",
+  using: "using(150 JPY / USD, $)",
 };
 
 export function wrap(block: string, inner: string): string {

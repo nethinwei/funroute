@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unsafe"
@@ -73,4 +74,42 @@ func TestBoundaryKeepsTheInvariants(t *testing.T) {
 func nan() float64 {
 	zero := 0.0
 	return zero / zero
+}
+
+// floatInt stops below 2^63 itself: math.MaxInt64 converts to 2^63, so a
+// comparison against it let that float through to an undefined conversion.
+func TestFloatIntStopsBelowTwoToTheSixtyThree(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		value float64
+		want  int64
+		ok    bool
+	}{
+		{0x1p63, 0, false},
+		{-0x1p63, -1 << 63, true},
+		{0x1p63 - 1024, 1<<63 - 1024, true},
+		{1.5, 0, false},
+		{-7, -7, true},
+	} {
+		if got, ok := floatInt(test.value); got != test.want || ok != test.ok {
+			t.Errorf("floatInt(%v) = %d, %v, want %d, %v", test.value, got, ok, test.want, test.ok)
+		}
+	}
+}
+
+// A float64 past 2^53 is an int JSON decoding has already rounded, so the
+// boundary refuses it rather than take the wrong number; json.Number and Go
+// ints carry it exactly.
+func TestCoerceIntRefusesFloatsPastExactIntegers(t *testing.T) {
+	t.Parallel()
+	for _, input := range []any{float64(1<<53 + 2), float64(-(1<<53 + 2)), 0x1p63, 1.5} {
+		if got, err := coerceInt(input); err == nil {
+			t.Errorf("coerceInt(%v) = %v, want an error", input, got.i)
+		}
+	}
+	for input, want := range map[any]int64{float64(1 << 53): 1 << 53, json.Number("9007199254740993"): 9007199254740993, int64(9007199254740993): 9007199254740993} {
+		if got, err := coerceInt(input); err != nil || got.i != want {
+			t.Errorf("coerceInt(%v) = %d, %v, want %d", input, got.i, err, want)
+		}
+	}
 }

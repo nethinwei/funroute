@@ -21,7 +21,7 @@ func record(expr syntax.Expr, results []inferResult) []inferResult {
 func inferExpr(expr syntax.Expr, state *inferState, context inferContext) ([]inferResult, error) {
 	switch node := expr.(type) {
 	case *syntax.LiteralExpr:
-		return record(node, []inferResult{{typ: concreteTerm(node.Value.Type()), state: state}}), nil
+		return record(node, []inferResult{{typ: state.literalTerm(node.Value, context.money), state: state}}), nil
 	case *syntax.VariableExpr:
 		return inferVariable(node, state, context)
 	case *syntax.EnumExpr:
@@ -44,8 +44,12 @@ func inferExpr(expr syntax.Expr, state *inferState, context inferContext) ([]inf
 		return inferRecordUpdate(node, state, context)
 	case *syntax.LetExpr:
 		return inferLet(node, state, context)
+	case *syntax.UsingExpr:
+		return inferUsing(node, state, context)
 	case *syntax.CallExpr:
 		return inferCall(node, state, context)
+	case *syntax.MoneyExpr, *syntax.RateExpr, *syntax.FxRateExpr, *syntax.CurrencyExpr:
+		return inferMoneyLiteral(node, state, context)
 	default:
 		return nil, fmt.Errorf("internal error: unsupported expression %T", expr)
 	}
@@ -58,13 +62,19 @@ func inferEnum(node *syntax.EnumExpr, state *inferState, context inferContext) (
 	if err != nil {
 		return nil, err
 	}
-	return record(node, []inferResult{{typ: concreteTerm(typ), state: state}}), nil
+	return record(node, []inferResult{{typ: state.concrete(typ), state: state}}), nil
 }
 
 func inferVariable(node *syntax.VariableExpr, state *inferState, context inferContext) ([]inferResult, error) {
 	term, ok := context.args[node.Name]
 	if !ok {
 		return nil, fmt.Errorf("internal error: variable %q was not collected", node.Name)
+	}
+	// A contract argument that carries currency is read with fresh unit
+	// classes, so what one use merges does not blur what another proves.
+	// A local of the same name is not in hints: withLocal takes it out.
+	if hint, declared := context.hints[node.Name]; declared && carriesUnits(hint) {
+		term = state.concrete(hint)
 	}
 	return record(node, []inferResult{{typ: term, state: state}}), nil
 }
@@ -175,7 +185,7 @@ func memberWrittenAsString(item syntax.SwitchCaseExpr, enums map[string]machine.
 			continue
 		}
 		for _, enum := range enums {
-			if slices.Contains(enum.Values, value) {
+			if slices.Contains(enum.Values(), value) {
 				return fmt.Sprintf("; %q is a member of %s, written @%s", value, enum.Summary(), value)
 			}
 		}
@@ -186,7 +196,7 @@ func memberWrittenAsString(item syntax.SwitchCaseExpr, enums map[string]machine.
 func validateEnumSwitch(node *syntax.SwitchExpr, partials []partialSwitch) error {
 	for _, partial := range partials {
 		typ, ok := partial.state.publicType(partial.subject)
-		if !ok || typ.Kind != machine.EnumKind {
+		if !ok || typ.Kind() != machine.EnumKind {
 			if node.Default == nil {
 				return syntax.Around(node, "type error: switch without else requires a declared enum subject")
 			}
@@ -208,11 +218,11 @@ func validateEnumCases(node *syntax.SwitchExpr, enum machine.Type) error {
 			}
 		}
 	}
-	if node.Default != nil || len(seen) == len(enum.Values) {
+	if node.Default != nil || len(seen) == len(enum.Values()) {
 		return nil
 	}
-	missing := make([]string, 0, len(enum.Values)-len(seen))
-	for _, value := range enum.Values {
+	missing := make([]string, 0, len(enum.Values())-len(seen))
+	for _, value := range enum.Values() {
 		if !seen[value] {
 			missing = append(missing, value)
 		}
@@ -224,12 +234,12 @@ func recordEnumMatch(node *syntax.SwitchExpr, enum machine.Type, match syntax.Ex
 	member, ok := match.(*syntax.EnumExpr)
 	if !ok {
 		if node.Default == nil {
-			return syntax.Around(match, "type error: an exhaustive enum switch matches enum members, such as @%s", enum.Values[0])
+			return syntax.Around(match, "type error: an exhaustive enum switch matches enum members, such as @%s", enum.Values()[0])
 		}
 		return nil
 	}
 	value := member.Member
-	if !slices.Contains(enum.Values, value) {
+	if !slices.Contains(enum.Values(), value) {
 		return syntax.Around(match, "type error: %q is not a member of %s", value, enum.Summary())
 	}
 	if seen[value] {
@@ -271,7 +281,7 @@ func inferSwitchCase(item syntax.SwitchCaseExpr, partials []partialSwitch, conte
 func inferMatches(matches []syntax.Expr, partial partialSwitch, context inferContext) ([]*inferState, error) {
 	states := []*inferState{partial.state}
 	for _, match := range matches {
-		candidates, err := unifyElement(match, partial.subject, states, context)
+		candidates, err := unifyMatch(match, partial.subject, states, context)
 		if err != nil {
 			return nil, err
 		}
@@ -281,6 +291,33 @@ func inferMatches(matches []syntax.Expr, partial partialSwitch, context inferCon
 		states = candidates
 	}
 	return states, nil
+}
+
+// unifyMatch is unifyElement for a branch value, which is compared with the
+// subject: proven currencies that differ are an error there, as in eq.
+func unifyMatch(match syntax.Expr, subject typeTerm, states []*inferState, context inferContext) ([]*inferState, error) {
+	var next []*inferState
+	var conflict error
+	for _, partial := range states {
+		inferred, err := inferExpr(match, partial, context)
+		if err != nil {
+			return nil, err
+		}
+		for _, result := range inferred {
+			if err := result.state.termsConflict(subject, result.typ); err != nil {
+				conflict = err
+				continue
+			}
+			candidate := result.state.clone()
+			if err := candidate.unify(subject, result.typ); err == nil {
+				next = append(next, candidate)
+			}
+		}
+	}
+	if len(next) == 0 && conflict != nil {
+		return nil, syntax.Around(match, "type error: %v", conflict)
+	}
+	return next, nil
 }
 
 func unifyResults(results []inferResult, partial partialSwitch) []partialSwitch {
@@ -378,6 +415,10 @@ func withLocal(context inferContext, name string, term typeTerm) inferContext {
 	local.args = make(map[string]typeTerm, len(context.args)+1)
 	maps.Copy(local.args, context.args)
 	local.args[name] = term
+	if _, shadowed := context.hints[name]; shadowed {
+		local.hints = maps.Clone(context.hints)
+		delete(local.hints, name)
+	}
 	return local
 }
 
@@ -446,7 +487,7 @@ func inferYield(yield syntax.Expr, states []*inferState, context inferContext, k
 // whose type does not settle — an empty array, say — has to be written with a
 // type the way any other literal does.
 func inferRecord(node *syntax.RecordExpr, state *inferState, context inferContext) ([]inferResult, error) {
-	results := []inferResult{{typ: recordTerm(machine.RecordOf()), state: state}}
+	results := []inferResult{{typ: state.recordTerm(machine.RecordOf()), state: state}}
 	for _, field := range node.Fields {
 		next, err := inferRecordField(field, results, context)
 		if err != nil {
@@ -469,16 +510,27 @@ func inferRecordField(field syntax.RecordFieldExpr, sofar []inferResult, context
 			return nil, err
 		}
 		for _, value := range values {
-			typ, ok := value.state.publicType(value.typ)
-			if !ok {
-				continue
-			}
-			grown := machine.CloneType(*partial.typ.record)
-			grown.Fields = append(grown.Fields, machine.Field{Name: field.Name, Type: typ})
-			out = append(out, inferResult{typ: recordTerm(grown), state: value.state})
+			out = append(out, growRecord(partial, field.Name, value)...)
 		}
 	}
 	return out, nil
+}
+
+// growRecord adds one typed field to a record built so far. A literal still
+// open between kinds is settled once per kind: the field's type is part of
+// the record's, and needs to be known now.
+func growRecord(partial inferResult, name string, value inferResult) []inferResult {
+	var out []inferResult
+	for _, state := range value.state.forkLiteral(value.typ) {
+		typ, ok := state.publicType(value.typ)
+		if !ok {
+			continue
+		}
+		grown := machine.RecordOf(append(partial.typ.record.Fields(), machine.FieldOf(name, typ))...)
+		units := slices.Concat(partial.typ.units, state.unitTermsOf(value.typ))
+		out = append(out, inferResult{typ: state.recordOver(grown, units), state: state})
+	}
+	return out
 }
 
 // inferField reads one field off a record. The record's type has to be known
@@ -492,14 +544,14 @@ func inferField(node *syntax.FieldExpr, state *inferState, context inferContext)
 	var out []inferResult
 	for _, value := range values {
 		typ, ok := value.state.publicType(value.typ)
-		if !ok || typ.Kind != machine.RecordKind {
+		if !ok || typ.Kind() != machine.RecordKind {
 			continue
 		}
 		index := typ.FieldIndex(node.Field)
 		if index < 0 {
 			return nil, syntax.Around(node, "type error: %s has no field %q", typ.Summary(), node.Field)
 		}
-		out = append(out, inferResult{typ: concreteTerm(typ.Fields[index].Type), state: value.state})
+		out = append(out, inferResult{typ: value.state.fieldTerm(value.state.deref(value.typ), index), state: value.state})
 	}
 	if len(out) == 0 {
 		return nil, syntax.Around(node, "type error: %q is read off something that is not a record with a known type", node.Field)

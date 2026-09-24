@@ -15,7 +15,7 @@ import (
 func registerGroups(registry *lang.Registry) error {
 	item := lang.TypeVar("T")
 	list := lang.ArrayOf(item)
-	if err := registry.Register(lang.FunctionSpec{
+	if err := register(registry, lang.FunctionSpec{
 		Name:   "group_by",
 		Params: []lang.Type{list, lang.ArrayOf(lang.StringType)},
 		Result: lang.DictOf(list),

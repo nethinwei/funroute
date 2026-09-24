@@ -22,6 +22,12 @@ type typeTerm struct {
 	// literal whose field values have types — so unification compares the
 	// type rather than unifying field by field.
 	record *machine.Type
+	// quote is an exchange rate's second unit; elem holds its first, and
+	// money's and a currency's only one.
+	quote *typeTerm
+	// units are a record's unit classes, one per currency position in it
+	// (infer_record.go).
+	units []typeTerm
 }
 
 type inferState struct {
@@ -30,6 +36,15 @@ type inferState struct {
 	nodeTypes  map[int]typeTerm
 	selections map[int]string
 	mixed      int
+	// units is what is known about each unit class, at its root; allowed is
+	// the kinds each open literal may still become, and written the kind each
+	// literal was written as (infer_literal.go). All stay nil in a program
+	// without money.
+	units             map[int]unitInfo
+	allowed           map[int]kindSet
+	written           map[int]machine.Kind
+	fx                int
+	convertedLiterals int
 }
 
 func newInferState() *inferState {
@@ -43,11 +58,16 @@ func newInferState() *inferState {
 
 func (s *inferState) clone() *inferState {
 	out := &inferState{
-		nextVar:    s.nextVar,
-		mixed:      s.mixed,
-		subst:      make(map[int]typeTerm, len(s.subst)),
-		nodeTypes:  make(map[int]typeTerm, len(s.nodeTypes)),
-		selections: make(map[int]string, len(s.selections)),
+		nextVar:           s.nextVar,
+		mixed:             s.mixed,
+		fx:                s.fx,
+		convertedLiterals: s.convertedLiterals,
+		subst:             make(map[int]typeTerm, len(s.subst)),
+		nodeTypes:         make(map[int]typeTerm, len(s.nodeTypes)),
+		selections:        make(map[int]string, len(s.selections)),
+		units:             maps.Clone(s.units),
+		allowed:           maps.Clone(s.allowed),
+		written:           maps.Clone(s.written),
 	}
 	maps.Copy(out.subst, s.subst)
 	maps.Copy(out.nodeTypes, s.nodeTypes)
@@ -65,11 +85,6 @@ func scalarTerm(kind machine.Kind) typeTerm { return typeTerm{kind: kind} }
 
 func containerTerm(kind machine.Kind, elem typeTerm) typeTerm {
 	return typeTerm{kind: kind, elem: &elem}
-}
-
-func recordTerm(t machine.Type) typeTerm {
-	cloned := machine.CloneType(t)
-	return typeTerm{kind: machine.RecordKind, record: &cloned}
 }
 
 func (s *inferState) deref(term typeTerm) typeTerm {
@@ -91,9 +106,16 @@ func (s *inferState) deref(term typeTerm) typeTerm {
 func (s *inferState) unify(left, right typeTerm) error {
 	left = s.deref(left)
 	right = s.deref(right)
+	if s.isUnit(left) && s.isUnit(right) {
+		s.unifyUnit(left, right)
+		return nil
+	}
 	if left.kind == machine.VarKind {
 		if right.kind == machine.VarKind && left.id == right.id {
 			return nil
+		}
+		if err := s.constrain(left, right); err != nil {
+			return err
 		}
 		if s.occurs(left.id, right) {
 			return fmt.Errorf("recursive type")
@@ -116,10 +138,26 @@ func (s *inferState) unify(left, right typeTerm) error {
 		}
 		return s.unify(*left.elem, *right.elem)
 	}
-	if left.kind == machine.RecordKind {
-		if left.record == nil || right.record == nil || !left.record.Equal(*right.record) {
-			return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
+	if left.kind == machine.RecordKind && !s.unifyRecords(left, right) {
+		return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
+	}
+	return s.unifyUnits(left, right)
+}
+
+// unifyUnits merges the unit classes of two unit-carrying terms of one kind.
+func (s *inferState) unifyUnits(left, right typeTerm) error {
+	if !machine.IsUnitKind(left.kind) {
+		return nil
+	}
+	if left.elem == nil || right.elem == nil {
+		return fmt.Errorf("malformed %s type", left.kind)
+	}
+	s.unifyUnit(*left.elem, *right.elem)
+	if left.kind == machine.FxRateKind {
+		if left.quote == nil || right.quote == nil {
+			return fmt.Errorf("malformed exchange rate type")
 		}
+		s.unifyUnit(*left.quote, *right.quote)
 	}
 	return nil
 }
@@ -139,6 +177,9 @@ func (s *inferState) occurs(id int, term typeTerm) bool {
 	if term.kind == machine.VarKind {
 		return term.id == id
 	}
+	if term.quote != nil && s.occurs(id, *term.quote) {
+		return true
+	}
 	if term.elem != nil {
 		return s.occurs(id, *term.elem)
 	}
@@ -146,34 +187,35 @@ func (s *inferState) occurs(id int, term typeTerm) bool {
 }
 
 func (s *inferState) instantiate(t machine.Type, vars map[string]typeTerm) typeTerm {
-	switch t.Kind {
+	return s.instantiateAs(t, vars, false)
+}
+
+// instantiateResult is instantiate for a result, where a unit left empty
+// means the currency is decided at run time rather than "any".
+func (s *inferState) instantiateResult(t machine.Type, vars map[string]typeTerm) typeTerm {
+	return s.instantiateAs(t, vars, true)
+}
+
+func (s *inferState) instantiateAs(t machine.Type, vars map[string]typeTerm, result bool) typeTerm {
+	switch t.Kind() {
 	case machine.VarKind:
-		if existing, ok := vars[t.Name]; ok {
+		if existing, ok := vars[t.Name()]; ok {
 			return existing
 		}
 		fresh := s.fresh()
-		vars[t.Name] = fresh
+		vars[t.Name()] = fresh
 		return fresh
 	case machine.ArrayKind, machine.DictKind:
-		if t.Elem == nil {
+		if !hasElem(t) {
 			return typeTerm{kind: machine.InvalidKind}
 		}
-		elem := s.instantiate(*t.Elem, vars)
-		return containerTerm(t.Kind, elem)
+		elem := s.instantiateAs(elemOf(t), vars, result)
+		return containerTerm(t.Kind(), elem)
+	case machine.MoneyKind, machine.CurrencyKind, machine.FxRateKind:
+		return s.unitTerm(t.Kind(), t.Units(), func(name string) typeTerm { return s.signatureUnit(name, vars, result) })
 	default:
-		return concreteTerm(t)
+		return s.concrete(t)
 	}
-}
-
-func concreteTerm(t machine.Type) typeTerm {
-	if t.Kind == machine.ArrayKind || t.Kind == machine.DictKind {
-		elem := concreteTerm(*t.Elem)
-		return containerTerm(t.Kind, elem)
-	}
-	if t.Kind == machine.RecordKind {
-		return recordTerm(t)
-	}
-	return typeTerm{kind: t.Kind, name: t.Name, values: append([]string(nil), t.Values...)}
 }
 
 func (s *inferState) publicType(term typeTerm) (machine.Type, bool) {
@@ -185,7 +227,7 @@ func (s *inferState) publicType(term typeTerm) (machine.Type, bool) {
 		if term.record == nil {
 			return machine.Type{}, false
 		}
-		return machine.CloneType(*term.record), true
+		return s.publicRecord(term), true
 	case machine.ArrayKind, machine.DictKind:
 		if term.elem == nil {
 			return machine.Type{}, false
@@ -198,8 +240,10 @@ func (s *inferState) publicType(term typeTerm) (machine.Type, bool) {
 			return machine.ArrayOf(elem), true
 		}
 		return machine.DictOf(elem), true
+	case machine.MoneyKind, machine.CurrencyKind, machine.FxRateKind:
+		return s.publicUnits(term)
 	default:
-		return machine.Type{Kind: term.kind, Name: term.name, Values: append([]string(nil), term.values...)}, true
+		return machine.ScalarType(term.kind, term.name, term.values), true
 	}
 }
 
@@ -209,12 +253,29 @@ func (s *inferState) describe(term typeTerm) string {
 		return typ.String()
 	}
 	if term.kind == machine.VarKind {
-		return fmt.Sprintf("?%d", term.id)
+		return s.describeOpen(term)
 	}
 	if term.elem != nil {
 		return fmt.Sprintf("%s<%s>", term.kind, s.describe(*term.elem))
 	}
 	return term.kind.String()
+}
+
+// describeOpen names a type inference has not settled the way a reader can
+// use: a literal by the kinds it may still be, anything else as unknown. The
+// variable's number is inference's bookkeeping, not the program's.
+func (s *inferState) describeOpen(term typeTerm) string {
+	set, literal := s.allowed[term.id]
+	if !literal {
+		return "?"
+	}
+	var kinds []string
+	for _, kind := range []machine.Kind{machine.IntKind, machine.FloatKind, machine.RateKind, machine.MoneyKind} {
+		if set.has(kind) {
+			kinds = append(kinds, kind.String())
+		}
+	}
+	return strings.Join(kinds, "|")
 }
 
 type inferResult struct {
@@ -233,6 +294,12 @@ type inference struct {
 type inferContext struct {
 	args     map[string]typeTerm
 	registry *machine.Registry
+	// hints is the contract's argument types. A read of an argument whose
+	// type carries currency units gets fresh unit classes from it.
+	hints map[string]machine.Type
+	// money is whether the registry declares money, which is what lets a
+	// literal become a rate or money.
+	money bool
 	// enums is the contract's enum namespace: every enum type the host
 	// declared for this program, by name. A bare @member is resolved in it.
 	enums map[string]machine.Type
@@ -254,16 +321,19 @@ type programCandidate struct {
 // ret, when non-nil, is unified with the result rather than compared to it
 // afterwards, so a declared float result settles `1 + 2` as float arithmetic instead of
 // rejecting it.
-func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string]machine.Type, order []string, ret *machine.Type) (*inference, error) {
+func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string]machine.Type, order []string, ret *machine.Type, tables []string) (*inference, error) {
 	names := syntax.FreeVariables(expr)
 	if order != nil {
 		names = order
 	}
 	initial := newInferState()
 	context := newInferContext(initial, names, registry)
+	context.hints = hints
 	if err := collectEnums(context.enums, hints, ret); err != nil {
 		return nil, err
 	}
+	addRegistryEnums(context.enums, registry)
+	addTableEnum(context.enums, tables)
 	if err := applyHints(initial, context.args, hints); err != nil {
 		return nil, err
 	}
@@ -275,16 +345,44 @@ func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string
 	if err != nil {
 		return nil, err
 	}
+	results, err = settleCandidates(expr, results)
+	if err != nil {
+		return nil, err
+	}
 	candidates, unresolved := programCandidates(results, names, context.args)
 	chosen, err := chooseCandidate(candidates, unresolved)
 	if err != nil {
 		return nil, err
 	}
 	inferred := buildInference(chosen)
+	if ret != nil {
+		// The declared result is the ABI, whatever the expression's own
+		// units: where it proves less, the compiler checks at the end.
+		inferred.Result = machine.CloneType(*ret)
+	}
 	if err := validateEnumResult(expr, inferred, registry); err != nil {
 		return nil, err
 	}
 	return inferred, nil
+}
+
+// settleCandidates settles the literals of every reading, dropping the ones
+// whose literals cannot settle; none settling is the program's type error.
+func settleCandidates(expr syntax.Expr, results []inferResult) ([]inferResult, error) {
+	var kept []inferResult
+	var failure error
+	for _, result := range results {
+		result.state = result.state.clone()
+		if err := result.state.settleLiterals(); err != nil {
+			failure = err
+			continue
+		}
+		kept = append(kept, result)
+	}
+	if len(kept) == 0 && failure != nil {
+		return nil, syntax.Around(expr, "type error: %v", failure)
+	}
+	return kept, nil
 }
 
 // applyResultType keeps the candidates whose result unifies with the declared
@@ -296,14 +394,22 @@ func applyResultType(expr syntax.Expr, results []inferResult, ret *machine.Type)
 	}
 	kept := make([]inferResult, 0, len(results))
 	var rejected string
+	var unitErr error
 	for _, result := range results {
+		if err := checkResultUnits(expr, result.state, result.typ, *ret); err != nil {
+			unitErr = err
+			continue
+		}
 		state := result.state.clone()
-		target := concreteTerm(*ret)
+		target := state.concrete(*ret)
 		if err := state.unify(result.typ, target); err != nil {
 			rejected = result.state.describe(result.typ)
 			continue
 		}
 		kept = append(kept, inferResult{typ: target, state: state})
+	}
+	if len(kept) == 0 && unitErr != nil && rejected == "" {
+		return nil, unitErr
 	}
 	if len(kept) == 0 {
 		if rejected == "" {
@@ -321,12 +427,13 @@ func newInferContext(state *inferState, names []string, registry *machine.Regist
 	for _, name := range names {
 		args[name] = state.fresh()
 	}
-	return inferContext{args: args, registry: registry, enums: map[string]machine.Type{}}
+	_, money := registry.Money()
+	return inferContext{args: args, registry: registry, enums: map[string]machine.Type{}, money: money}
 }
 
 func applyHints(state *inferState, args map[string]typeTerm, hints map[string]machine.Type) error {
 	for name, hint := range hints {
-		if err := state.unify(args[name], concreteTerm(hint)); err != nil {
+		if err := state.unify(args[name], state.concrete(hint)); err != nil {
 			return fmt.Errorf("type hint for %q: %w", name, err)
 		}
 	}
@@ -348,7 +455,9 @@ func programCandidates(results []inferResult, names []string, args map[string]ty
 			continue
 		}
 		key := candidateKey(params, resultType)
-		if _, exists := byKey[key]; !exists {
+		// One program read two ways keeps the reading that got there with
+		// the fewest promotions.
+		if existing, exists := byKey[key]; !exists || candidatePenalty(result.state) < candidatePenalty(existing.result.state) {
 			byKey[key] = programCandidate{key: key, result: result, params: params, resultTyp: resultType}
 		}
 	}
@@ -364,7 +473,7 @@ func candidateParams(result inferResult, names []string, args map[string]typeTer
 		if !ok {
 			return nil, name
 		}
-		params[i] = machine.Parameter{Name: name, Type: typ}
+		params[i] = machine.NewParameter(name, typ, "")
 	}
 	return params, ""
 }
@@ -372,7 +481,7 @@ func candidateParams(result inferResult, names []string, args map[string]typeTer
 func candidateKey(params []machine.Parameter, result machine.Type) string {
 	parts := make([]string, len(params))
 	for i, param := range params {
-		parts[i] = param.Name + ":" + param.Type.String()
+		parts[i] = param.Name() + ":" + param.Type().String()
 	}
 	return strings.Join(parts, ",") + "->" + result.String()
 }
@@ -402,7 +511,7 @@ func cheapestCandidates(byKey map[string]programCandidate) []programCandidate {
 	bestScore := int(^uint(0) >> 1)
 	var best []programCandidate
 	for _, item := range byKey {
-		score := implicitCandidateScore(item.params, item.resultTyp) + item.result.state.mixed*mixedPenalty
+		score := implicitCandidateScore(item.params, item.resultTyp) + candidatePenalty(item.result.state)
 		if score < bestScore {
 			bestScore = score
 			best = []programCandidate{item}
@@ -438,13 +547,13 @@ const mixedPenalty = 100
 func implicitCandidateScore(params []machine.Parameter, result machine.Type) int {
 	score := implicitTypeScore(result)
 	for _, param := range params {
-		score += implicitTypeScore(param.Type)
+		score += implicitTypeScore(param.Type())
 	}
 	return score
 }
 
 func implicitTypeScore(typ machine.Type) int {
-	switch typ.Kind {
+	switch typ.Kind() {
 	case machine.IntKind:
 		return 0
 	case machine.BoolKind:
@@ -458,14 +567,24 @@ func implicitTypeScore(typ machine.Type) int {
 	case machine.HandleKind:
 		return 30
 	case machine.ArrayKind, machine.DictKind:
-		if typ.Elem == nil {
+		if !hasElem(typ) {
 			return 100
 		}
-		return 2 + implicitTypeScore(*typ.Elem)
+		return 2 + implicitTypeScore(elemOf(typ))
 	case machine.RecordKind:
 		// A record matches only itself, so it never competes with a numeric
 		// promotion; the score just has to be worse than the scalars'.
 		return 30
+	case machine.RateKind:
+		// A rate is a float that happens to be exact: allowed wherever it
+		// types, never the reading of an unconstrained number.
+		return 12
+	case machine.CurrencyKind:
+		return 20
+	case machine.MoneyKind:
+		return 40
+	case machine.FxRateKind:
+		return 50
 	default:
 		return 100
 	}

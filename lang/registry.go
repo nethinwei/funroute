@@ -8,6 +8,7 @@ type (
 	FunctionSpec = machine.FunctionSpec
 	EvalFunc     = machine.EvalFunc
 	Doc          = machine.Doc
+	Example      = machine.Example
 	Form         = machine.Form
 )
 

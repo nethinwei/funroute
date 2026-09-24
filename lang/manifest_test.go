@@ -47,8 +47,8 @@ func TestManifestStandsInForTheHostsFunctions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompileExpr(%q) against the manifest: %v", source, err)
 	}
-	if inBrowser.Digest != atHost.Digest {
-		t.Fatalf("against the manifest %q compiles to digest %s, want the host's %s", source, inBrowser.Digest, atHost.Digest)
+	if inBrowser.Digest() != atHost.Digest() {
+		t.Fatalf("against the manifest %q compiles to digest %s, want the host's %s", source, inBrowser.Digest(), atHost.Digest())
 	}
 	checkUnavailableCall(t, inBrowser, browser, host)
 }
@@ -86,18 +86,36 @@ func checkUnavailableCall(t *testing.T, artifact *lang.Artifact, browser, host *
 // what one compiles the other would refuse to bind.
 func TestManifestRefusesADisagreement(t *testing.T) {
 	t.Parallel()
-	manifest := withStandard(t).Manifest()
-	for i, function := range manifest.Functions {
-		if function.Name == "add" {
-			manifest.Functions[i].Doc.Cost += 1
-			break
+	edited := func(edit func(map[string]any)) lang.Manifest {
+		encoded, err := json.Marshal(withStandard(t).Manifest())
+		if err != nil {
+			t.Fatal(err)
 		}
+		var document map[string]any
+		if err := json.Unmarshal(encoded, &document); err != nil {
+			t.Fatal(err)
+		}
+		edit(document)
+		encoded, _ = json.Marshal(document)
+		var manifest lang.Manifest
+		if err := json.Unmarshal(encoded, &manifest); err != nil {
+			t.Fatal(err)
+		}
+		return manifest
 	}
-	if err := manifest.Apply(withStandard(t)); err == nil {
+	costlier := edited(func(document map[string]any) {
+		for _, function := range document["functions"].([]any) {
+			if entry := function.(map[string]any); entry["name"] == "add" {
+				entry["doc"].(map[string]any)["cost"] = 99.0
+				return
+			}
+		}
+	})
+	if err := costlier.Apply(withStandard(t)); err == nil {
 		t.Fatal("a manifest that disagrees on a cost was applied")
 	}
-	manifest.Version = lang.ManifestVersion + 1
-	if err := manifest.Apply(withStandard(t)); err == nil {
+	newer := edited(func(document map[string]any) { document["version"] = float64(lang.ManifestVersion + 1) })
+	if err := newer.Apply(withStandard(t)); err == nil {
 		t.Fatal("a manifest of another version was applied")
 	}
 }

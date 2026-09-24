@@ -19,7 +19,7 @@ import (
 
 var (
 	errNoAbsolute   = fmt.Errorf("the smallest int has no absolute value")
-	errDivideByZero = fmt.Errorf("division by zero")
+	errDivideByZero = fmt.Errorf("%w: division by zero", lang.ErrArithmetic)
 )
 
 // maxRangeLength caps one range call. The compiler already requires constant
@@ -35,6 +35,7 @@ func Register(registry *lang.Registry) error {
 	for _, register := range []func(*lang.Registry) error{
 		registerSum, registerExtremes, registerQuantifiers, registerRange,
 		registerStrings, registerArrays, registerNumbers, registerStatistics, registerSelect, registerGroups, registerDicts,
+		registerMoney,
 	} {
 		if err := register(registry); err != nil {
 			return err
@@ -99,10 +100,10 @@ func registerQuantifiers(registry *lang.Registry) error {
 		Params:      []string{"布尔数组"},
 		Result:      "是否全部满足",
 	}
-	if err := lang.Logic(registry, "any", any, anyTrue); err != nil {
+	if err := logic(registry, "any", any, anyTrue); err != nil {
 		return err
 	}
-	return lang.Logic(registry, "all", all, allTrue)
+	return logic(registry, "all", all, allTrue)
 }
 
 // registerRange is the only source of a sequence that does not come from the
@@ -126,7 +127,7 @@ func registerRange(registry *lang.Registry) error {
 		for i := range params {
 			params[i] = lang.IntType
 		}
-		if err := registry.Register(rangeSpec(params, form.labels, form.bounds)); err != nil {
+		if err := register(registry, rangeSpec(params, form.labels, form.bounds)); err != nil {
 			return err
 		}
 	}
@@ -177,7 +178,7 @@ func sumInts(items []int64) (int64, error) {
 	total := int64(0)
 	for _, item := range items {
 		if item > 0 && total > math.MaxInt64-item || item < 0 && total < math.MinInt64-item {
-			return 0, fmt.Errorf("integer overflow in sum")
+			return 0, fmt.Errorf("%w: integer overflow in sum", lang.ErrArithmetic)
 		}
 		total += item
 	}
@@ -190,7 +191,7 @@ func sumFloats(items []float64) (float64, error) {
 		total += item
 	}
 	if math.IsNaN(total) || math.IsInf(total, 0) {
-		return 0, fmt.Errorf("non-finite float result in sum")
+		return 0, fmt.Errorf("%w: non-finite float result in sum", lang.ErrArithmetic)
 	}
 	return total, nil
 }
@@ -235,6 +236,19 @@ func allTrue(items []bool) (bool, error) {
 	return true, nil
 }
 
+// logic and register are how the pack registers: lang.Logic and
+// Registry.Register with the name's examples (examples.go) in the doc, so
+// every overload of a name shows the same uses.
+func logic(registry *lang.Registry, name string, doc lang.Doc, fn any) error {
+	doc.Examples = examples[name]
+	return lang.Logic(registry, name, doc, fn)
+}
+
+func register(registry *lang.Registry, spec lang.FunctionSpec) error {
+	spec.Doc.Examples = examples[spec.Name]
+	return registry.Register(spec)
+}
+
 // eachType registers one name for every element type it serves. The language
 // has no type classes, so a function that works on int, float and string is
 // three registrations — that is the signature, not repetition. What this takes
@@ -242,7 +256,7 @@ func allTrue(items []bool) (bool, error) {
 // buys back is a single place to read how many types a name covers.
 func eachType(registry *lang.Registry, name string, doc lang.Doc, implementations ...any) error {
 	for _, implementation := range implementations {
-		if err := lang.Logic(registry, name, doc, implementation); err != nil {
+		if err := logic(registry, name, doc, implementation); err != nil {
 			return err
 		}
 	}

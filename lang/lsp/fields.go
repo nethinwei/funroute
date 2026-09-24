@@ -10,7 +10,7 @@ import (
 )
 
 // updateFields is what can be named at a field of a record update being
-// written, {...order, |}: the fields of the base's record type not written
+// written, order with {|}: the fields of the base's record type not written
 // there yet, in the record's order. It reports false anywhere else, and when
 // the base's type cannot be told, so completion goes on as it would have.
 //
@@ -57,7 +57,7 @@ func (s *Server) baseType(candidate string, base, update syntax.Span) (machine.T
 	// base itself rather than a part of it.
 	end := update.Start + len(stand)
 	for _, node := range analysis.Nodes {
-		if node.Span.Start >= update.Start && node.Span.End <= end && node.Type != nil && node.Type.Kind == machine.RecordKind {
+		if node.Span.Start >= update.Start && node.Span.End <= end && node.Type != nil && node.Type.Kind() == machine.RecordKind {
 			return *node.Type, true
 		}
 	}
@@ -66,12 +66,12 @@ func (s *Server) baseType(candidate string, base, update syntax.Span) (machine.T
 
 func fieldItems(typ machine.Type, written []string) []completionItem {
 	items := []completionItem{}
-	for i, field := range typ.Fields {
-		if slices.Contains(written, field.Name) {
+	for i, field := range typ.Fields() {
+		if slices.Contains(written, field.Name()) {
 			continue
 		}
 		items = append(items, completionItem{
-			Label: field.Name, Kind: kindField, SortText: fmt.Sprintf("0%04d", i), Detail: field.Type.String(),
+			Label: field.Name(), Kind: kindField, SortText: fmt.Sprintf("0%04d", i), Detail: field.Type().String(),
 		})
 	}
 	return items

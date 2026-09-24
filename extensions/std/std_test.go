@@ -88,8 +88,8 @@ func TestPackIsConstexpr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifact.Instructions) != 1 {
-		t.Fatalf("compiled to %d instructions, want one load", len(artifact.Instructions))
+	if artifact.InstructionCount() != 1 {
+		t.Fatalf("compiled to %d instructions, want one load", artifact.InstructionCount())
 	}
 }
 
@@ -172,8 +172,8 @@ func TestPackIsSymmetric(t *testing.T) {
 func TestNamesCoverEveryElementTypeTheyClaim(t *testing.T) {
 	t.Parallel()
 	overloads := map[string]int{}
-	for _, function := range registry(t).Catalog().Functions {
-		overloads[function.Name]++
+	for _, function := range registry(t).Catalog().Functions() {
+		overloads[function.Name()]++
 	}
 	for _, expected := range []struct {
 		name  string
@@ -239,4 +239,41 @@ func run(t *testing.T, source string, args map[string]any, specs ...lang.ArgSpec
 		return nil, err
 	}
 	return value.Any(), nil
+}
+
+// Declaring money adds exactly one money overload to each name that has one
+// (min and max two: the array form and the pair), and nothing to the rest.
+func TestMoneyDeclarationAddsOneOverloadPerName(t *testing.T) {
+	t.Parallel()
+	count := func(registry *lang.Registry) map[string]int {
+		overloads := map[string]int{}
+		for _, function := range registry.Catalog().Functions() {
+			overloads[function.Name()]++
+		}
+		return overloads
+	}
+	without, with := count(registry(t)), count(moneyPack(t))
+	for name, added := range map[string]int{
+		"sum": 1, "abs": 1, "sort": 1, "sort_desc": 1, "cumsum": 1, "deltas": 1,
+		"arg_min": 1, "arg_max": 1, "sort_by": 1, "sort_by_desc": 1, "top_k": 1, "bottom_k": 1,
+		"min": 2, "max": 2, "avg": 2, "median": 2,
+		"stddev": 0, "percentile": 0, "rank": 0, "pow": 0, "unique": 0, "take": 0,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := with[name] - without[name]; got != added {
+				t.Errorf("declaring money adds %d overloads of %s (%d → %d), want %d", got, name, without[name], with[name], added)
+			}
+		})
+	}
+}
+
+// A registry that never declared money has no money overload anywhere.
+func TestPackWithoutMoneyHasNoMoneySignature(t *testing.T) {
+	t.Parallel()
+	for _, function := range registry(t).Catalog().Functions() {
+		if strings.Contains(function.Signature(), "money") || function.Doc().Category == "金额" {
+			t.Errorf("%s is in a registry without money", function.Signature())
+		}
+	}
 }

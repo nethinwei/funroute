@@ -11,7 +11,7 @@ var lexemeCorpus = []string{
 	`if(a, b, add(1, 1))`,
 	`amount * bps / 10_000 + fixed // a comment`,
 	`switch(country, case "SG", "MY" => 1, else => 2)`,
-	`switch(case amount > 10_000 => "manual_review", else "auto")`,
+	`switch(case amount > 10_000 => "manual_review", else => "auto")`,
 	`[{channel: c, currency: k} for c in channels if healthy(c) for k in currencies]`,
 	`{k: v * 2 for k, v in rates if v > 0}`,
 	`reduce(name, weight in weights, total = 0.0, total + weight)`,
@@ -25,6 +25,10 @@ var lexemeCorpus = []string{
 	`(b)`, `f((x))`, `-(b)`, `a..b`, `f(a..b)`, `a.b..c`, "\"d.\x18\"",
 	// A lone byte that is not UTF-8 is not whitespace, whatever it would be as a rune.
 	"a \x85 b",
+	// Money and rates, written well and badly: the lexemes still cover the
+	// source and still report what Parse reports.
+	`amount * 2.9% + USD 0.30 // fee`, `USD -1.70`, `-USD 1.70`, `JPY -1_000`, `f(USD -1e3)`, `USD-1`, `USD - 1`, `USD 1.70%`, `25bpsx`,
+	`7%-2`, `2.9%-fee`, `2.9% != r`, `1e3%`, `[x*0.5bps for x in xs if x>1%]`, `USD + 1`, `usd 1`,
 }
 
 // Every piece of source is accounted for exactly once: the lexemes are in
@@ -95,7 +99,7 @@ func TestLexemesSayWhatEachPieceIs(t *testing.T) {
 		{`x in xs`, map[string]Role{"in": RoleOperator}},
 		{`let(rate = 2, rate)`, map[string]Role{"let": RoleForm, "=": RoleNone, "2": RoleLiteral}},
 		{`reduce(p in ps, acc = 0, acc + p)`, map[string]Role{"reduce": RoleForm, "in": RoleKeyword, "+": RoleOperator}},
-		{`switch(x, case 1 => true, else false)`, map[string]Role{"switch": RoleForm, "case": RoleKeyword, "else": RoleKeyword, "true": RoleLiteral}},
+		{`switch(x, case 1 => true, else => false)`, map[string]Role{"switch": RoleForm, "case": RoleKeyword, "else": RoleKeyword, "true": RoleLiteral}},
 		{`route.score_v1(order)`, map[string]Role{"route.score_v1": RoleFunction, "order": RoleArgument}},
 		{`order.items`, map[string]Role{"order": RoleArgument, "items": RoleField}},
 		{`f(x).fee`, map[string]Role{"fee": RoleField}},
@@ -153,4 +157,51 @@ func rolesOf(t *testing.T, source string) map[string]Role {
 		out[text] = lexeme.Role
 	}
 	return out
+}
+
+// An amount is a currency code, read as the enum member it is, and a figure
+// read as a literal; a rate is one literal. The minus of a negative amount is
+// the operator it is written as.
+func TestMoneyLexemesSayWhatEachPieceIs(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		source string
+		want   map[string]Role
+	}{
+		{`USD 1.70`, map[string]Role{"USD": RoleCurrency, "1.70": RoleLiteral}},
+		{`JPY -1_000`, map[string]Role{"-": RoleOperator, "JPY": RoleCurrency, "1_000": RoleLiteral}},
+		{`amount * 2.9% + 25bps`, map[string]Role{"amount": RoleArgument, "2.9%": RoleLiteral, "25bps": RoleLiteral, "+": RoleOperator}},
+		{`x * 0.5bps`, map[string]Role{"0.5bps": RoleLiteral}},
+		{`USD + 1`, map[string]Role{"USD": RoleCurrency}},
+		{`150.25 JPY / USD`, map[string]Role{"150.25": RoleLiteral, "JPY": RoleCurrency, "/": RoleOperator, "USD": RoleCurrency}},
+		{`10 % 3`, map[string]Role{"%": RoleOperator, "10": RoleLiteral}},
+		{`x%3`, map[string]Role{"%": RoleOperator, "3": RoleLiteral}},
+		{`10%-3`, map[string]Role{"10%": RoleLiteral, "-": RoleOperator, "3": RoleLiteral}},
+		{`money(170, USD)`, map[string]Role{"money": RoleFunction, "USD": RoleCurrency}},
+	}
+	for _, c := range cases {
+		t.Run(c.source, func(t *testing.T) {
+			t.Parallel()
+			checkRoles(t, c.source, c.want)
+		})
+	}
+	source := `USD 1.70 + 2.9%`
+	lexemes, _ := Lexemes(source)
+	if len(lexemes) != 4 || lexemes[0].Class != ClassIdentifier || lexemes[1].Class != ClassNumber {
+		t.Errorf("Lexemes(%q) = %+v, want the code as %q and the figure as %q", source, lexemes, ClassIdentifier, ClassNumber)
+	}
+	if got := source[lexemes[3].Start:lexemes[3].End]; got != "2.9%" {
+		t.Errorf("Lexemes(%q) end with %q, want the rate %q as one lexeme", source, got, "2.9%")
+	}
+}
+
+// A rate is a number with its unit; the lexer read a number.
+func TestARateLexemeIsANumber(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{`2.9%`, `25bps`} {
+		lexemes, _ := Lexemes(source)
+		if len(lexemes) != 1 || lexemes[0].Class != ClassNumber {
+			t.Errorf("Lexemes(%q) = %+v, want one lexeme of class %q", source, lexemes, ClassNumber)
+		}
+	}
 }

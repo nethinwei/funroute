@@ -2,8 +2,10 @@ package lang_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -24,20 +26,30 @@ var (
 	_ lang.Kind
 	_ lang.Type
 	_ lang.Form
-	_ lang.Constant
-	_ lang.Instruction
-	_ lang.OpCode
 	_ *lang.Runtime
 	_ *lang.Batch
 	_ lang.LanguageCatalog
 	_ lang.FunctionDescriptor
 	_ lang.FormDescriptor
+	_ lang.Example
 	_ []lang.Parameter
-	_ []lang.CallReference
-	_ []lang.ManifestFunction
+	_ lang.Manifest
+	_ *lang.Artifact
+	_ lang.Field
 	_ *lang.Binding[RouteIn, RouteOut]
 	_ *lang.Program[RouteIn, RouteOut]
 	_ *lang.ProgramBatch[RouteIn, RouteOut]
+	_ lang.Money
+	_ lang.Rate
+	_ *lang.Rates
+	_ lang.Currency
+	_ lang.MoneySpec
+	_ lang.CurrencySpec
+	_ lang.Rounding
+	_ lang.AllocationStrategy
+	_ lang.Quote
+	_ lang.QuoteSpec
+	_ *lang.Currencies
 )
 
 func TestHostNamesTheValueTypes(t *testing.T) {
@@ -58,8 +70,8 @@ func TestHostNamesTheValueTypes(t *testing.T) {
 	// A record is named fields with their own types, in an order that is part
 	// of the type; the host writes both down.
 	orderType := lang.RecordOf(
-		lang.Field{Name: "amount", Type: lang.IntType},
-		lang.Field{Name: "currency", Type: lang.StringType},
+		lang.FieldOf("amount", lang.IntType),
+		lang.FieldOf("currency", lang.StringType),
 	)
 	order, err := lang.Record(orderType, []lang.Value{lang.Int(1200), lang.String("SGD")})
 	if err != nil {
@@ -239,9 +251,9 @@ func decisionRegistry(t *testing.T) *lang.Registry {
 
 func orderContract() lang.CompileOptions {
 	return lang.CompileOptions{Args: []lang.ArgSpec{{Name: "order", Type: lang.RecordOf(
-		lang.Field{Name: "amount", Type: lang.IntType},
-		lang.Field{Name: "currency_code", Type: lang.StringType},
-		lang.Field{Name: "tags", Type: lang.ArrayOf(lang.StringType)},
+		lang.FieldOf("amount", lang.IntType),
+		lang.FieldOf("currency_code", lang.StringType),
+		lang.FieldOf("tags", lang.ArrayOf(lang.StringType)),
 	)}}}
 }
 
@@ -255,8 +267,8 @@ func TestHostPassesItsStructsThrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := lang.RecordOf(
-		lang.Field{Name: "channel", Type: lang.StringType},
-		lang.Field{Name: "net", Type: lang.IntType},
+		lang.FieldOf("channel", lang.StringType),
+		lang.FieldOf("net", lang.IntType),
 	)
 	runtime, err := lang.Instantiate(artifact, registry)
 	if err != nil {
@@ -462,7 +474,7 @@ func TestDeclaredTypesAreSpellingOnly(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CompileExpr with order: %s: %v", text, err)
 			}
-			digests[label] = artifact.Digest
+			digests[label] = artifact.Digest()
 		})
 	}
 	if digests["named"] != digests["written"] {
@@ -499,5 +511,223 @@ func TestTwoFieldsCannotShareATag(t *testing.T) {
 	}
 	if _, err := lang.Bind[in, int64](lang.CoreRegistry()); err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("Bind[in, int64] error = %v, want %q", err, want)
+	}
+}
+
+// A rate prints and crosses JSON as a decimal string, and reads back from a
+// string or a number.
+func TestRatesCrossJSONAsDecimals(t *testing.T) {
+	t.Parallel()
+	for rate, want := range map[lang.Rate]string{rateUnits(290_000_000): "0.029", rateUnits(150 * rateScale): "150", rateUnits(-1): "-0.0000000001", rateUnits(0): "0"} {
+		if got := rate.String(); got != want {
+			t.Errorf("Rate(%d).String() = %q, want %q", rate, got, want)
+		}
+		encoded, err := json.Marshal(rate)
+		if err != nil || string(encoded) != `"`+want+`"` {
+			t.Errorf("json.Marshal(Rate(%d)) = %s, %v, want %q", rate, encoded, err, want)
+		}
+	}
+	for data, want := range map[string]lang.Rate{`"0.029"`: rateUnits(290_000_000), `0.029`: rateUnits(290_000_000), `2`: rateUnits(2 * rateScale), `"-1.5"`: rateUnits(-15_000_000_000)} {
+		var got lang.Rate
+		if err := json.Unmarshal([]byte(data), &got); err != nil || got != want {
+			t.Errorf("json.Unmarshal(%s) = %d, %v, want %d", data, got, err, want)
+		}
+	}
+	for _, data := range []string{`"abc"`, `1e3`, `"0.00000000001"`, `true`, `"1_0"`} {
+		var got lang.Rate
+		if err := json.Unmarshal([]byte(data), &got); err == nil {
+			t.Errorf("json.Unmarshal(%s) = %v, nil, want an error", data, got)
+		}
+	}
+}
+
+// A host's []Money reaches an extension as the very slice: money arrays
+// keep the zero-copy boundary.
+func TestMoneyArraysReachExtensionsWithoutCopying(t *testing.T) {
+	t.Parallel()
+	registry := moneyConsole(t)
+	var received []lang.Money
+	err := lang.Logic(registry, "ledger.count_v1", lang.Doc{Cost: 1}, func(lines []lang.Money) (int64, error) {
+		received = lines
+		return int64(len(lines)), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := lang.CompileExpr(`ledger.count_v1(lines)`, registry, lang.CompileOptions{
+		Args: []lang.ArgSpec{{Name: "lines", Type: lang.ArrayOf(lang.MoneyOf(""))}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := lang.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := []lang.Money{amount("USD", 1), amount("EUR", 2)}
+	value, err := lang.ToValue(lines)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := runtime.RunValues(t.Context(), []lang.Value{value}, lang.RunOptions{}); err != nil || result.Any() != int64(2) {
+		t.Fatalf("RunValues(ledger.count_v1) = %v, %v, want 2", result.Any(), err)
+	}
+	if &received[0] != &lines[0] {
+		t.Error("the extension received a copy of the host's money")
+	}
+	back, err := lang.FromValue[[]lang.Money](value)
+	if err != nil || &back[0] != &lines[0] {
+		t.Errorf("FromValue[[]Money] = %v, %v, want the host's own slice", back, err)
+	}
+}
+
+// RunValues checks money the way Run does: an undeclared currency is a
+// currency failure and a contract one.
+func TestRunValuesChecksTheCurrencies(t *testing.T) {
+	t.Parallel()
+	_, runtime := everyKind(t)
+	valid := func() []lang.Value {
+		return []lang.Value{
+			valueOf(amount("USD", 1000)), valueOf(rateUnits(290_000_000)), valueOf(currency("EUR")),
+		}
+	}
+	value, err := runtime.RunValues(t.Context(), valid(), lang.RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded, err := json.Marshal(value); err != nil || string(encoded) != `{"fee":{"currency":"USD","minor":29},"made":{"currency":"EUR","minor":100}}` {
+		t.Errorf("RunValues = %s, %v, want the fee and EUR 1.00", encoded, err)
+	}
+	for name, edit := range map[string]func([]lang.Value){
+		"undeclared amount": func(args []lang.Value) { args[0] = valueOf(looseMoney("XXX", 1)) },
+		"undeclared payout": func(args []lang.Value) { args[2] = valueOf(currency("XXX")) },
+	} {
+		args := valid()
+		edit(args)
+		if _, err := runtime.RunValues(t.Context(), args, lang.RunOptions{}); !errors.Is(err, lang.ErrCurrency) || !errors.Is(err, lang.ErrContract) {
+			t.Errorf("RunValues with %s error = %v, want ErrCurrency and ErrContract", name, err)
+		}
+	}
+	args := valid()
+	args[1] = lang.Int(1)
+	if _, err := runtime.RunValues(t.Context(), args, lang.RunOptions{}); !errors.Is(err, lang.ErrContract) || errors.Is(err, lang.ErrCurrency) {
+		t.Errorf("RunValues with an int for a rate error = %v, want ErrContract alone", err)
+	}
+}
+
+// A declared currency the contract does not allow is the same failure on
+// both doors: Run says it is a currency mismatch, and so should RunValues.
+func TestBothDoorsCallAWrongCurrencyACurrencyError(t *testing.T) {
+	t.Parallel()
+	registry := moneyConsole(t)
+	artifact, err := lang.CompileExpr(`amount`, registry, lang.CompileOptions{Args: []lang.ArgSpec{{Name: "amount", Type: lang.MoneyOf("USD")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := lang.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, byName := runtime.Run(t.Context(), map[string]any{"amount": "EUR 1.00"}, lang.RunOptions{})
+	_, byValue := runtime.RunValues(t.Context(), []lang.Value{valueOf(amount("EUR", 100))}, lang.RunOptions{})
+	if !errors.Is(byName, lang.ErrCurrency) || !errors.Is(byValue, lang.ErrCurrency) {
+		t.Errorf("EUR for money<USD>: Run error = %v, RunValues error = %v, want ErrCurrency from both", byName, byValue)
+	}
+}
+
+// EncodeJSON writes money the way a person reads it, in the registry's
+// places, inside records (in field order), arrays and dictionaries; the
+// currency-less zero is 0. json.Marshal, which knows no places, writes minor
+// units.
+func TestEncodeJSONWritesAmountsAsText(t *testing.T) {
+	t.Parallel()
+	registry := moneyConsole(t)
+	artifact, err := lang.CompileExpr(`{z: USD -1.70, a: [JPY 5, JPY 0], d: {"k": EUR 0.05}, r: 25bps, c: EUR, n: 1, fx: JPY 150 / USD 1}`, registry, lang.CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := lang.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := runtime.Run(t.Context(), nil, lang.RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"z":"USD -1.70","a":["JPY 5","JPY 0"],"d":{"k":"EUR 0.05"},"r":"0.0025","c":"EUR","n":1,"fx":{"base":"USD","quote":"JPY","rate":"150"}}`
+	if encoded, err := registry.EncodeJSON(value); err != nil || string(encoded) != want {
+		t.Errorf("EncodeJSON = %s, %v\nwant %s", encoded, err, want)
+	}
+	raw := `{"z":{"currency":"USD","minor":-170},"a":[{"currency":"JPY","minor":5},{"currency":"JPY","minor":0}],"d":{"k":{"currency":"EUR","minor":5}},"r":"0.0025","c":"EUR","n":1,"fx":{"base":"USD","quote":"JPY","rate":"150"}}`
+	if encoded, err := json.Marshal(value); err != nil || string(encoded) != raw {
+		t.Errorf("json.Marshal = %s, %v\nwant %s", encoded, err, raw)
+	}
+	if encoded, err := registry.EncodeJSON(valueOf(lang.Money{})); err != nil || string(encoded) != "0" {
+		t.Errorf("EncodeJSON(currency-less zero) = %s, %v, want 0", encoded, err)
+	}
+	if encoded, err := lang.CoreRegistry().EncodeJSON(valueOf(amount("USD", 170))); err != nil || string(encoded) != `{"currency":"USD","minor":170}` {
+		t.Errorf("EncodeJSON without money declared = %s, %v, want the minor units", encoded, err)
+	}
+}
+
+// Declaring money changes nothing a program without money compiles to, and
+// an artifact that uses money loads only where the same money is declared.
+func TestMoneyIsStampedOnlyWhereItIsUsed(t *testing.T) {
+	t.Parallel()
+	plain, withMoney := lang.CoreRegistry(), moneyConsole(t)
+	options := lang.CompileOptions{Args: []lang.ArgSpec{{Name: "x", Type: lang.IntType}}}
+	before, err := lang.CompileExpr(`x * 250 / 10000`, plain, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := lang.CompileExpr(`x * 250 / 10000`, withMoney, options)
+	if err != nil || after.Digest() != before.Digest() {
+		t.Fatalf("a program without money: digest %s after declaring money, %s before (%v), want the same", after.Digest(), before.Digest(), err)
+	}
+	fee, err := lang.CompileExpr(`USD 1.70`, withMoney, lang.CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lang.Instantiate(fee, plain); err == nil {
+		t.Error("Instantiate(money artifact) on a registry without money error = nil, want a refusal")
+	}
+	evenly := lang.CoreRegistry()
+	spec, _ := withMoney.Money()
+	spec.Rounding = lang.RoundHalfEven
+	if err := evenly.DeclareMoney(spec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lang.Instantiate(fee, evenly); err == nil {
+		t.Error("Instantiate(money artifact) on a registry rounding otherwise error = nil, want a refusal")
+	}
+	if _, err := lang.CompileExpr(`USD 1.70`, plain, lang.CompileOptions{}); !errors.Is(err, lang.ErrCompile) {
+		t.Errorf("CompileExpr(USD 1.70) without money error = %v, want ErrCompile", err)
+	}
+}
+
+// No data type the package hands a host has a field the host can write:
+// every one is made by a constructor, a table or a registry, and read
+// through methods, so what a host holds already keeps the rules. The option
+// structs a host fills in — CompileOptions, FunctionSpec, Doc, MoneySpec,
+// CurrencySpec, BatchOptions, RunOptions, TextContract — are input, checked
+// where they are used, and are not in this list.
+func TestDataTypesHaveNoWritableFields(t *testing.T) {
+	t.Parallel()
+	for _, typ := range []reflect.Type{
+		reflect.TypeFor[lang.Value](), reflect.TypeFor[lang.Type](), reflect.TypeFor[lang.Field](),
+		reflect.TypeFor[lang.Money](), reflect.TypeFor[lang.Rate](), reflect.TypeFor[lang.FxRate](),
+		reflect.TypeFor[lang.Currency](), reflect.TypeFor[lang.Rates](), reflect.TypeFor[lang.Quote](), reflect.TypeFor[lang.Artifact](),
+		reflect.TypeFor[lang.Parameter](), reflect.TypeFor[lang.Manifest](), reflect.TypeFor[lang.LanguageCatalog](),
+		reflect.TypeFor[lang.FunctionDescriptor](), reflect.TypeFor[lang.FormDescriptor](), reflect.TypeFor[lang.PositionError](),
+	} {
+		if typ.Kind() != reflect.Struct {
+			t.Errorf("%s is a %s, want a struct a host cannot convert into", typ, typ.Kind())
+			continue
+		}
+		for field := range typ.Fields() {
+			if field.IsExported() {
+				t.Errorf("%s has the exported field %s, want only methods", typ, field.Name)
+			}
+		}
 	}
 }

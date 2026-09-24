@@ -36,14 +36,14 @@ func registerNumbers(registry *lang.Registry) error {
 			Constexpr: true, Label: fn.label, Category: "数值", Cost: 3,
 			Description: fn.description, Params: []string{"数值"}, Result: "整数",
 		}
-		if err := lang.Logic(registry, fn.name, doc, roundingTo(fn.name, fn.apply)); err != nil {
+		if err := logic(registry, fn.name, doc, roundingTo(fn.name, fn.apply)); err != nil {
 			return err
 		}
 	}
 	if err := registerPower(registry); err != nil {
 		return err
 	}
-	return lang.Logic(registry, "mod", lang.Doc{
+	return logic(registry, "mod", lang.Doc{
 		Constexpr: true, Label: "取余", Category: "数值", Cost: 3,
 		Description: "浮点取余，符号跟随被除数；除数不能为零。写作 a % b。",
 		Params:      []string{"被除数", "除数"}, Result: "余数",
@@ -143,25 +143,25 @@ func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) 
 // kind of friction a rule writer notices every day.
 func registerPairwise(registry *lang.Registry) error {
 	for _, extreme := range []struct {
-		name, label string
-		smallest    bool
+		name, label, which string
+		smallest           bool
 	}{
-		{"min", "两者取小", true},
-		{"max", "两者取大", false},
+		{"min", "两者取小", "较小", true},
+		{"max", "两者取大", "较大", false},
 	} {
 		doc := lang.Doc{
 			Constexpr: true, Label: extreme.label, Category: "数值", Cost: 2,
-			Description: "两个同型数值或字符串里" + extreme.label[2:] + "的那个。封顶写 min(fee, cap)。",
+			Description: "两个同型数值或字符串里" + extreme.which + "的那个。封顶写 min(fee, cap)。",
 			Params:      []string{"左值", "右值"}, Result: "结果",
 		}
 		smallest := extreme.smallest
-		if err := lang.Logic(registry, extreme.name, doc, pairwise[int64](smallest)); err != nil {
+		if err := logic(registry, extreme.name, doc, pairwise[int64](smallest)); err != nil {
 			return err
 		}
-		if err := lang.Logic(registry, extreme.name, doc, pairwise[float64](smallest)); err != nil {
+		if err := logic(registry, extreme.name, doc, pairwise[float64](smallest)); err != nil {
 			return err
 		}
-		if err := lang.Logic(registry, extreme.name, doc, pairwise[string](smallest)); err != nil {
+		if err := logic(registry, extreme.name, doc, pairwise[string](smallest)); err != nil {
 			return err
 		}
 	}
@@ -240,7 +240,7 @@ func multiplyInts(left, right int64) (int64, error) {
 	}
 	product := left * right
 	if product/right != left {
-		return 0, fmt.Errorf("integer overflow in pow")
+		return 0, fmt.Errorf("%w: integer overflow in pow", lang.ErrArithmetic)
 	}
 	return product, nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -34,6 +33,7 @@ func (f specialForm) String() string {
 // registry's own through its slice.
 func cloneDoc(doc Doc) Doc {
 	doc.Params = append([]string(nil), doc.Params...)
+	doc.Examples = append([]Example(nil), doc.Examples...)
 	return doc
 }
 
@@ -60,6 +60,14 @@ type FunctionSpec struct {
 
 	special specialForm
 	builtin bool
+	// readsRun marks a kernel function whose answer depends on the run, not
+	// only on its arguments — convert reads the run's rate table — so folding
+	// must not call it.
+	readsRun bool
+	// roundingScope marks round(expr, mode): the compiler compiles expr with
+	// its rounding steps taking mode and emits no call. Not a special form —
+	// nothing about it is lazy, and a front end draws it as a call.
+	roundingScope bool
 }
 
 func (s FunctionSpec) Signature() string {
@@ -87,8 +95,9 @@ func (f *RegisteredFunction) Key() string { return f.key }
 func (f *RegisteredFunction) NeedsBoundedArgs() bool { return f.Doc.BoundedArgs }
 
 // IsConstexpr reports whether folding may call this function. Everything the
-// kernel registers is; a host function says so for itself.
-func (f *RegisteredFunction) IsConstexpr() bool { return f.builtin || f.Doc.Constexpr }
+// kernel registers is, except what reads the run; a host function says so for
+// itself.
+func (f *RegisteredFunction) IsConstexpr() bool { return (f.builtin && !f.readsRun) || f.Doc.Constexpr }
 
 // IsLazyIf reports whether this is the kernel's `if`, which the compiler emits
 // as jumps instead of a call so the untaken branch is never evaluated.
@@ -98,6 +107,19 @@ func (f *RegisteredFunction) IsLazyIf() bool { return f.special == specialIf }
 // candidate participates in type inference, but bytecode advances only when
 // the previous expression returns ErrExtension or ErrDeadline.
 func (f *RegisteredFunction) IsLazyFallback() bool { return f.special == specialFallback }
+
+// IsRoundingScope reports round(expr, mode), which the compiler turns into
+// the rounding steps inside expr taking mode.
+func (f *RegisteredFunction) IsRoundingScope() bool { return f.roundingScope }
+
+// RoundingVariant is the signature of the same operation with the rounding
+// mode spelled out as a last argument, if the registry has one: what a step
+// inside round(…) calls instead.
+func RoundingVariant(r *Registry, function *RegisteredFunction) (*RegisteredFunction, bool) {
+	variant := function.FunctionSpec
+	variant.Params = append(append([]Type(nil), function.Params...), RoundingEnumType())
+	return r.Resolve(variant.Signature())
+}
 
 // Cost is what one call charges the fuel budget. It lives in Doc because a
 // host states it once, beside what the function is for.
@@ -117,6 +139,8 @@ type Registry struct {
 	forms    map[Form]bool
 	handles  map[reflect.Type]string
 	byHandle map[string]reflect.Type
+	// money is the declared money feature, nil until DeclareMoney.
+	money *currencyTable
 }
 
 func NewRegistry() *Registry {
@@ -170,7 +194,7 @@ func (r *Registry) Handles() []Type {
 	for name := range r.byHandle {
 		out = append(out, HandleOf(name))
 	}
-	slices.SortFunc(out, func(a, b Type) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(out, func(a, b Type) int { return strings.Compare(a.name, b.name) })
 	return out
 }
 
@@ -219,29 +243,46 @@ func (r *Registry) EnabledForms() []Form {
 // one authority, used both here (a function may not claim a reserved name) and
 // by the parser and the JSON importer (a name in a document must be one a
 // function could have). Two copies would drift.
-var (
-	// A function name may be dotted, to carry a namespace and a version:
-	// route.score_v1. A variable name may not: "." is kept for field access.
-	functionNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*$`)
-	variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-)
+//
+// A function name may be dotted, to carry a namespace and a version:
+// route.score_v1. A variable name may not: "." is kept for field access. The
+// shapes are checked byte by byte rather than by a regular expression: the
+// run's boundary asks of every currency unit whether it is a variable, and a
+// regexp's matcher comes from a pool.
+func nameShape(name string, dotted bool) bool {
+	if name == "" || !wordStart(name[0]) {
+		return false
+	}
+	for i := 1; i < len(name); i++ {
+		if c := name[i]; !wordStart(c) && (c < '0' || c > '9') && (!dotted || c != '.') {
+			return false
+		}
+	}
+	return true
+}
+
+func wordStart(c byte) bool { return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
 
 // reservedNames are parsed as literals or special forms, so no function may
 // claim them.
 var reservedNames = map[string]bool{
 	"true": true, "false": true,
 	"switch": true, "for": true, "reduce": true,
-	"in": true, "else": true, "case": true, "let": true,
+	"in": true, "else": true, "case": true, "let": true, "using": true, "with": true,
 }
 
 // IsValidFunctionName reports whether name has the shape of a function name.
 func IsValidFunctionName(name string) bool {
-	return functionNamePattern.MatchString(name)
+	return nameShape(name, true)
 }
 
 // IsValidVariableName reports whether name has the shape of a variable name.
+// A name shaped like a currency code is that currency, so no variable has it.
+// Nor is one called if: if is a function's name, and in a comprehension or a
+// reduce it starts the filter clause, which a variable called if would make
+// a matter of context.
 func IsValidVariableName(name string) bool {
-	return variableNamePattern.MatchString(name)
+	return nameShape(name, false) && !IsCurrencyCode(name) && name != "if"
 }
 
 // IsReservedName reports whether the language keeps name for itself.
@@ -253,7 +294,7 @@ func IsReservedName(name string) bool {
 // type parser, the source parser and the ExprJSON importer alike: a plain
 // name, and not one the syntax has taken.
 func IsValidFieldName(name string) bool {
-	return IsValidVariableName(name) && !IsReservedName(name)
+	return nameShape(name, false) && !IsReservedName(name)
 }
 
 func (r *Registry) Register(spec FunctionSpec) error {
@@ -279,6 +320,9 @@ func (r *Registry) Register(spec FunctionSpec) error {
 	if err := validateSignature(spec); err != nil {
 		return err
 	}
+	if err := r.admitsMoney(spec); err != nil {
+		return err
+	}
 	if err := normalizeDoc(&spec); err != nil {
 		return err
 	}
@@ -291,6 +335,36 @@ func (r *Registry) Register(spec FunctionSpec) error {
 	registered := &RegisteredFunction{FunctionSpec: spec, key: key}
 	r.byKey[key] = registered
 	r.byName[spec.Name] = append(r.byName[spec.Name], registered)
+	return nil
+}
+
+// admitsMoney refuses a signature that uses a money type before money is
+// declared, and one that names a currency the registry did not declare.
+func (r *Registry) admitsMoney(spec FunctionSpec) error {
+	for _, typ := range append(slices.Clone(spec.Params), spec.Result) {
+		if err := WalkTypes(typ, func(inner Type) error { return r.admitsMoneyType(spec.Name, inner) }); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Registry) admitsMoneyType(name string, typ Type) error {
+	if !IsMoneyKind(typ.kind) {
+		return nil
+	}
+	table := r.currencies()
+	if table == nil {
+		return fmt.Errorf("function %s uses %s, but this registry declares no money (Registry.DeclareMoney)", name, typ)
+	}
+	for _, unit := range typ.Units() {
+		if !IsCurrencyCode(unit) {
+			continue
+		}
+		if _, err := table.places(unit); err != nil {
+			return fmt.Errorf("function %s: %w", name, err)
+		}
+	}
 	return nil
 }
 
@@ -310,11 +384,21 @@ func validateSignature(spec FunctionSpec) error {
 			return fmt.Errorf("function %s result type variable %s is not present in its parameters", spec.Name, name)
 		}
 	}
+	units := 0
+	for name := range paramsVars {
+		if strings.HasPrefix(name, "unit:") {
+			units++
+		}
+	}
+	// The checks before one call keep a slot per currency variable.
+	if units > maxCheckGroups {
+		return fmt.Errorf("function %s has %d currency variables, at most %d", spec.Name, units, maxCheckGroups)
+	}
 	return nil
 }
 
 func validateTypePattern(t Type, vars map[string]bool) error {
-	switch t.Kind {
+	switch t.kind {
 	case BoolKind, IntKind, FloatKind, StringKind:
 		return nil
 	case EnumKind:
@@ -323,21 +407,35 @@ func validateTypePattern(t Type, vars map[string]bool) error {
 		}
 		return nil
 	case HandleKind:
-		if !IsValidFunctionName(t.Name) {
-			return fmt.Errorf("invalid handle name %q", t.Name)
+		if !IsValidFunctionName(t.name) {
+			return fmt.Errorf("invalid handle name %q", t.name)
 		}
 		return nil
 	case VarKind:
-		if t.Name == "" {
+		if t.name == "" {
 			return fmt.Errorf("unnamed type variable")
 		}
-		vars[t.Name] = true
+		vars[t.name] = true
+		return nil
+	case RateKind:
+		return nil
+	case MoneyKind, CurrencyKind, FxRateKind:
+		if !t.unitsAreWellFormed() {
+			return fmt.Errorf("invalid type %s", t)
+		}
+		// A unit variable is a variable like T: the result may only use the
+		// ones the parameters bind. It is kept apart from T by its prefix.
+		for _, unit := range t.Units() {
+			if IsUnitVariable(unit) {
+				vars["unit:"+unit] = true
+			}
+		}
 		return nil
 	case ArrayKind, DictKind:
-		if t.Elem == nil {
-			return fmt.Errorf("%s is missing its element type", t.Kind)
+		if t.elem == nil {
+			return fmt.Errorf("%s is missing its element type", t.kind)
 		}
-		return validateTypePattern(*t.Elem, vars)
+		return validateTypePattern(*t.elem, vars)
 	case RecordKind:
 		// A record in a signature is fixed: its fields are its identity, so
 		// there is nothing to leave open the way an element type can be.

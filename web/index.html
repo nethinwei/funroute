@@ -55,7 +55,7 @@
 
     <section class="source-panel" aria-labelledby="source-title">
       <div class="section-heading">
-        <div><span class="step">02</span><div><h2 id="source-title">表达式</h2><p>悬停看类型，输入时有补全和签名提示</p></div></div>
+        <div><span class="step">02</span><div><h2 id="source-title">表达式</h2><p>代码与结构是同一段文本的两个视图；表达式有错误时不能切换</p></div></div>
         <span id="status" class="status loading" role="status" aria-live="polite">正在载入…</span>
         <div class="source-toolbar">
           <span class="shortcut">⌘ / Ctrl + Enter 运行</span>
@@ -64,16 +64,19 @@
         </div>
       </div>
       <div class="source-workbench">
-        <div id="editor" class="source-panel__editor"></div>
+        <div class="source-views">
+          <div class="view-tabs" role="tablist" aria-label="视图">
+            <button id="tab-code" class="view-tab" type="button" role="tab" aria-selected="true" aria-controls="editor">代码</button>
+            <button id="tab-structure" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="structure" tabindex="-1">结构</button>
+          </div>
+          <div id="editor" class="source-panel__editor" role="tabpanel" aria-labelledby="tab-code"></div>
+          <div id="structure" class="source-panel__structure" role="tabpanel" aria-labelledby="tab-structure" hidden><fr-structure></fr-structure></div>
+        </div>
         <fr-runner class="contract-runner"></fr-runner>
       </div>
     </section>
 
     <div class="studio-layout">
-      <section class="canvas-panel" aria-labelledby="canvas-title">
-        <div class="section-heading section-heading--canvas"><div><span class="step">03</span><div><h2 id="canvas-title">结构视图</h2><p>同一段文本的结构；这里的每处修改都直接改写上面的表达式</p></div></div></div>
-        <fr-structure></fr-structure>
-      </section>
       <aside class="inspector">
         <details class="inspector-card json-card"><summary>语法树</summary><pre id="tree" class="code"></pre></details>
         <details class="inspector-card syntax-card"><summary>函数说明</summary><div id="reference" class="reference"></div></details>

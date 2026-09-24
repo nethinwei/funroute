@@ -111,6 +111,7 @@ const (
 	kindVariable   = 6
 	kindKeyword    = 14
 	kindEnumMember = 20
+	kindConstant   = 21
 )
 
 type completionItem struct {

@@ -14,8 +14,8 @@ import (
 func TestRecordFieldsAreReadAndBuilt(t *testing.T) {
 	t.Parallel()
 	order := machine.RecordOf(
-		machine.Field{Name: "amount", Type: machine.IntType},
-		machine.Field{Name: "currency", Type: machine.StringType},
+		machine.FieldOf("amount", machine.IntType),
+		machine.FieldOf("currency", machine.StringType),
 	)
 	registry := consoleRegistry(t)
 	artifact, err := CompileExpr(`{net: order.amount - fee, currency: order.currency}`, registry, CompileOptions{
@@ -35,8 +35,8 @@ func TestRecordFieldsAreReadAndBuilt(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := machine.RecordOf(
-		machine.Field{Name: "net", Type: machine.IntType},
-		machine.Field{Name: "currency", Type: machine.StringType},
+		machine.FieldOf("net", machine.IntType),
+		machine.FieldOf("currency", machine.StringType),
 	)
 	if !runtime.ResultType().Equal(want) {
 		t.Fatalf("result type = %s, want %s", runtime.ResultType(), want)
@@ -49,7 +49,7 @@ func TestRecordFieldsAreReadAndBuilt(t *testing.T) {
 
 func TestRecordRejectsWhatIsNotThatRecord(t *testing.T) {
 	t.Parallel()
-	order := machine.RecordOf(machine.Field{Name: "amount", Type: machine.IntType})
+	order := machine.RecordOf(machine.FieldOf("amount", machine.IntType))
 	contract := CompileOptions{Args: []ArgSpec{{Name: "order", Type: order}}}
 	if _, err := CompileExpr(`order.total`, consoleRegistry(t), contract); err == nil ||
 		!strings.Contains(err.Error(), "no field") {
@@ -57,9 +57,9 @@ func TestRecordRejectsWhatIsNotThatRecord(t *testing.T) {
 	}
 	// The field order is the type: the same names in another order is another type.
 	swapped := machine.RecordOf(
-		machine.Field{Name: "b", Type: machine.IntType}, machine.Field{Name: "a", Type: machine.IntType})
+		machine.FieldOf("b", machine.IntType), machine.FieldOf("a", machine.IntType))
 	if swapped.Equal(machine.RecordOf(
-		machine.Field{Name: "a", Type: machine.IntType}, machine.Field{Name: "b", Type: machine.IntType})) {
+		machine.FieldOf("a", machine.IntType), machine.FieldOf("b", machine.IntType))) {
 		t.Fatal("field order is part of a record's identity")
 	}
 	// A missing field at the boundary is refused: there is no null to fill it.
@@ -81,7 +81,7 @@ func TestRecordRejectsWhatIsNotThatRecord(t *testing.T) {
 // after a subscript, be compared, and survive the ExprJSON round trip.
 func TestRecordComposesWithTheRestOfTheLanguage(t *testing.T) {
 	t.Parallel()
-	orders := machine.ArrayOf(machine.RecordOf(machine.Field{Name: "amount", Type: machine.IntType}))
+	orders := machine.ArrayOf(machine.RecordOf(machine.FieldOf("amount", machine.IntType)))
 	contract := []ArgSpec{{Name: "orders", Type: orders}}
 	for _, test := range []struct {
 		source string
@@ -178,5 +178,114 @@ func assertRunsTo(t *testing.T, registry *machine.Registry, source string, contr
 	}
 	if got := fmt.Sprint(value.Any()); got != want {
 		t.Fatalf("%s = %s, want %s", source, got, want)
+	}
+}
+
+// formContract gives money to every form: arrays in a code and in a contract
+// currency, a record field, a dictionary and rates.
+const formContract = "amount: money<USD>; ms: array<money<USD>>; cs: array<money<c>>; r: record{fee: money<c>}; " +
+	"fees: dict<money<EUR>>; rates: array<rate>; k: int; m: money<c>"
+
+func formArgs() map[string]any {
+	return map[string]any{
+		"amount": "USD 10.00", "ms": []any{"USD 1.00", "USD -2.00"}, "cs": []any{"EUR 1.00"},
+		"r": map[string]any{"fee": "EUR 0.50"}, "fees": map[string]any{"a": "EUR 1.00"},
+		"rates": []any{"0.1"}, "k": 2, "m": "EUR 10.00",
+	}
+}
+
+// Money keeps its currency through for, reduce, let, switch, record
+// literals, field reads and dictionary comprehensions.
+func TestMoneyFlowsThroughForms(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ source, typ, want string }{
+		{"[x * 2 for x in ms]", "array<money<USD>>", "[{USD 200} {USD -400}]"},
+		{"[x for x in ms if x > 0]", "array<money<USD>>", "[{USD 100}]"},
+		{"[x -> JPY for x in ms]", "array<money<JPY>>", "[{JPY 151} {JPY -301}]"},
+		{"[x * q for x in ms for q in rates]", "array<money<USD>>", "[{USD 10} {USD -20}]"},
+		{"reduce(x in ms, total = 0, total + x)", "money<USD>", "{USD -100}"},
+		{"reduce(x in ms, total = USD 0, total + x)", "money<USD>", "{USD -100}"},
+		{"reduce(x in cs, total = 0, total + x)", "money<c>", "{EUR 100}"},
+		{"reduce(x in ms if x > 0, n = 0, n + 1)", "int", "1"},
+		{"let(fee = amount * 2.9%, cap = USD 0.25, if(fee > cap, cap, fee))", "money<USD>", "{USD 25}"},
+		{"switch(currency(m), case USD => m * 2%, case EUR => m * 3%, else => m)", "money<c>", "{EUR 30}"},
+		{"{fee: amount * 2.9%, net: amount - amount * 2.9%}.net", "money<USD>", "{USD 971}"},
+		{"r.fee + r.fee", "money<c>", "{EUR 100}"},
+		{"r.fee + m", "money<c>", "{EUR 1050}"},
+		{"{string(currency(x)): minor(x) for x in cs}", "dict<int>", "map[EUR:100]"},
+		{"{key: v * 2 for key, v in fees}", "dict<money<EUR>>", "map[a:{EUR 200}]"},
+		{"allocate(amount, [1, 2])", "array<money<USD>>", "[{USD 333} {USD 667}]"},
+		{"len(allocate(amount, len(ms)))", "int", "2"},
+		{"allocate(m, 3)[0]", "money<c>", "{EUR 334}"},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			artifact, err := compileMoney(t, test.source, formContract, "")
+			if err != nil {
+				t.Fatalf("CompileExpr(%q) error = %v", test.source, err)
+			}
+			got, err := runArtifact(t, artifact, formArgs())
+			if artifact.Result().String() != test.typ || err != nil || got != test.want {
+				t.Fatalf("%s = %s (%s), %v, want %s (%s)", test.source, got, artifact.Result(), err, test.want, test.typ)
+			}
+		})
+	}
+}
+
+// A form hands its units on, so a proven mismatch inside one is still a
+// compile error.
+func TestFormsKeepProvenMismatches(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{
+		"[x + m for x in ms]",
+		"reduce(x in ms, total = m, total + x)",
+		"let(fee = r.fee, fee + amount)",
+		"{key: v + amount for key, v in fees}",
+		"switch(k, case 1 => amount, else => amount) + m",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if _, err := compileMoney(t, source, formContract, ""); err == nil || !strings.Contains(err.Error(), "no overload") {
+				t.Fatalf("CompileExpr(%q) error = %v, want no overload", source, err)
+			}
+		})
+	}
+}
+
+// Splitting into a count the input does not bound is refused, as range is.
+func TestAllocateNeedsABoundedCount(t *testing.T) {
+	t.Parallel()
+	if _, err := compileMoney(t, "allocate(amount, k)", formContract, ""); err == nil {
+		t.Fatal("allocate(amount, k) compiled, want the count to need a bound")
+	}
+}
+
+// A record literal's field needs its type on the spot, so a literal there is
+// settled once per kind it may be: the plain kind wins unless something
+// later — the declared result, a use of the field — asks for the other.
+func TestRecordFieldLiteralsAreForked(t *testing.T) {
+	t.Parallel()
+	const contract = "usd: money<USD>"
+	for _, test := range []struct{ source, result, want string }{
+		{"{fee: 0}", "", "record{fee: int}"},
+		{"{r: 0.5}", "", "record{r: float}"},
+		{"{fee: 0, r: 0.5}", "", "record{fee: int, r: float}"},
+		{"{r: 0.5}", "record{r: rate}", "record{r: rate}"},
+		{"{fee: 0}", "record{fee: money<?>}", "record{fee: money<?>}"},
+		{"{r: 0.5}.r * usd", "", "money<USD>"},
+		// The field is read over the record's own unit class: the zero
+		// meets dollars and the sum is proven dollars.
+		{"{fee: 0}.fee + usd", "", "money<USD>"},
+	} {
+		t.Run(test.source+" as "+test.result, func(t *testing.T) {
+			t.Parallel()
+			artifact, err := compileMoney(t, test.source, contract, test.result)
+			if err != nil {
+				t.Fatalf("CompileExpr(%q) error = %v", test.source, err)
+			}
+			if got := artifact.Result().String(); got != test.want {
+				t.Fatalf("CompileExpr(%q) result = %s, want %s", test.source, got, test.want)
+			}
+		})
 	}
 }

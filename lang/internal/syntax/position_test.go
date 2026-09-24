@@ -25,9 +25,25 @@ func TestSyntaxErrorsCoverTheirToken(t *testing.T) {
 			if !errors.As(err, &positioned) {
 				t.Fatalf("Parse(%q) error = %v, want a *PosError", source, err)
 			}
-			if got := source[positioned.Start:positioned.End]; got != want {
+			if got := source[positioned.start:positioned.end]; got != want {
 				t.Errorf("%q: the error covers %q, want %q (%v)", source, got, want, err)
 			}
 		})
+	}
+}
+
+// An error placed on a node keeps what it was, for errors.Is, and says
+// where it happened.
+func TestAroundErrorKeepsTheCause(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("division by zero")
+	expr, err := Parse("a + 1 / 0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	placed := AroundError(expr, cause)
+	positioned, ok := errors.AsType[*PosError](placed)
+	if !errors.Is(placed, cause) || !ok || positioned.start != 0 || positioned.end != 9 || placed.Error() != cause.Error() {
+		t.Fatalf("AroundError = %v (%+v), want the cause over the whole program", placed, positioned)
 	}
 }

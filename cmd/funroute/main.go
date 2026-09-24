@@ -68,24 +68,60 @@ Commands:
 The contract is the host's: -types 'a=bool,b=int' declares the arguments and
 their order. Without it both are inferred. -alias names a type so a record
 does not have to be written out for every argument that has its shape:
-  -alias 'Order=record{amount: int, currency: string}' -types 'a=Order,b=Order'`)
+  -alias 'Order=record{amount: int, currency: string}' -types 'a=Order,b=Order'
+-tables 'settlement' declares the named rate tables using(@settlement, …) takes.
+
+Money: -currencies iso (the default, ISO 4217) or none; -rounding half_up (the
+default) or another mode. run -rates gives the rates -> converts at, one quote
+an entry, and @name starts a named table:
+  run -expr 'amount -> JPY' -types 'amount=money<USD>' -args '{"amount":"USD 1.00"}' -rates 'USD/JPY 150'`)
 }
 
 type commonFlags struct {
-	set     *flag.FlagSet
-	expr    *string
-	types   *string
-	aliases *string
+	set        *flag.FlagSet
+	expr       *string
+	types      *string
+	aliases    *string
+	tables     *string
+	currencies *string
+	rounding   *string
 }
 
 func flags(name string) commonFlags {
 	set := flag.NewFlagSet(name, flag.ContinueOnError)
 	return commonFlags{
-		set:     set,
-		expr:    set.String("expr", "", "expression source"),
-		types:   set.String("types", "", "comma-separated argument type hints"),
-		aliases: set.String("alias", "", "comma-separated type declarations, Name=type"),
+		set:        set,
+		expr:       set.String("expr", "", "expression source"),
+		types:      set.String("types", "", "comma-separated argument type hints"),
+		aliases:    set.String("alias", "", "comma-separated type declarations, Name=type"),
+		tables:     set.String("tables", "", "comma-separated named rate tables the contract declares"),
+		currencies: set.String("currencies", "iso", "the money declared: iso (ISO 4217) or none"),
+		rounding:   set.String("rounding", "half_up", "the default rounding of money"),
 	}
+}
+
+// moneySpec is the money -currencies and -rounding declare, nil for none.
+func moneySpec(currencies, rounding string) (*lang.MoneySpec, error) {
+	switch currencies {
+	case "none":
+		return nil, nil
+	case "iso":
+		mode, err := lang.ParseRounding(rounding)
+		if err != nil {
+			return nil, err
+		}
+		return &lang.MoneySpec{Rounding: mode, Currencies: std.ISO4217()}, nil
+	default:
+		return nil, fmt.Errorf("-currencies is iso or none, not %q", currencies)
+	}
+}
+
+func (common commonFlags) registry() (*lang.Registry, error) {
+	money, err := moneySpec(*common.currencies, *common.rounding)
+	if err != nil {
+		return nil, err
+	}
+	return newRegistry(money)
 }
 
 func inspect(args []string) error {
@@ -97,13 +133,13 @@ func inspect(args []string) error {
 	if err != nil {
 		return err
 	}
-	params := make([]string, len(artifact.Args))
-	for i, param := range artifact.Args {
-		params[i] = param.Name + ": " + param.Type.String()
+	params := make([]string, 0, len(artifact.Args()))
+	for _, param := range artifact.Args() {
+		params = append(params, param.String())
 	}
-	fmt.Printf("(%s) -> %s\n", strings.Join(params, ", "), artifact.Result)
-	fmt.Println("digest:", artifact.Digest)
-	fmt.Println("instructions:", len(artifact.Instructions))
+	fmt.Printf("(%s) -> %s\n", strings.Join(params, ", "), artifact.Result())
+	fmt.Println("digest:", artifact.Digest())
+	fmt.Println("instructions:", artifact.InstructionCount())
 	return nil
 }
 
@@ -136,28 +172,44 @@ func serveLanguage(args []string) error {
 	if err := set.Parse(args); err != nil {
 		return err
 	}
-	registry, err := newRegistry()
+	manifest, err := readManifest(*manifestPath)
 	if err != nil {
 		return err
 	}
-	if *manifestPath != "" {
-		if err := applyManifest(registry, *manifestPath); err != nil {
+	// The manifest's money is declared before the standard pack registers,
+	// so the pack's aggregates over money are the real ones.
+	money, _ := moneySpec("iso", "half_up")
+	if manifest != nil {
+		money = nil
+		if spec, declared := manifest.Money(); declared {
+			money = &spec
+		}
+	}
+	registry, err := newRegistry(money)
+	if err != nil {
+		return err
+	}
+	if manifest != nil {
+		if err := manifest.Apply(registry); err != nil {
 			return err
 		}
 	}
 	return lsp.Serve(os.Stdin, os.Stdout, registry)
 }
 
-func applyManifest(registry *lang.Registry, path string) error {
+func readManifest(path string) (*lang.Manifest, error) {
+	if path == "" {
+		return nil, nil
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var manifest lang.Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return fmt.Errorf("manifest %s: %w", path, err)
+		return nil, fmt.Errorf("manifest %s: %w", path, err)
 	}
-	return manifest.Apply(registry)
+	return &manifest, nil
 }
 
 // formatSource prints a program laid out the way the language prints it.
@@ -203,6 +255,7 @@ func run(args []string) error {
 	common := flags("run")
 	argsSource := common.set.String("args", "{}", "JSON object containing argument values")
 	fuel := common.set.Uint64("fuel", lang.DefaultFuel, "execution fuel")
+	rates := common.set.String("rates", "", "quotes to convert at, ';'-separated: 'USD/JPY 150; @settlement; USD/JPY 149.5'")
 	if err := common.set.Parse(args); err != nil {
 		return err
 	}
@@ -210,7 +263,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	registry, err := newRegistry()
+	registry, err := common.registry()
 	if err != nil {
 		return err
 	}
@@ -222,20 +275,72 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := runtime.Run(context.Background(), rawArgs, lang.RunOptions{Fuel: *fuel})
+	options, err := runOptions(registry, *fuel, *rates)
+	if err != nil {
+		return err
+	}
+	result, err := runtime.Run(context.Background(), rawArgs, options)
+	if err != nil {
+		return err
+	}
+	value, err := registry.EncodeJSON(result)
 	if err != nil {
 		return err
 	}
 	encoded, err := json.MarshalIndent(map[string]any{
-		"digest": artifact.Digest,
+		"digest": artifact.Digest(),
 		"type":   result.Type().String(),
-		"value":  result,
+		"value":  json.RawMessage(value),
 	}, "", "  ")
 	if err != nil {
 		return err
 	}
 	fmt.Println(string(encoded))
 	return nil
+}
+
+// runOptions is a run's fuel and rate tables. -rates is read the way the
+// workbench's rate panel is, one quote an entry: "BASE/QUOTE rate", and
+// "@name" starting a named table.
+func runOptions(registry *lang.Registry, fuel uint64, text string) (lang.RunOptions, error) {
+	options := lang.RunOptions{Fuel: fuel}
+	if strings.TrimSpace(text) == "" {
+		return options, nil
+	}
+	currencies, declared := registry.Currencies()
+	if !declared {
+		return options, fmt.Errorf("-rates needs money declared")
+	}
+	options.Rates = currencies.NewRates()
+	into := options.Rates
+	for entry := range strings.SplitSeq(text, ";") {
+		entry = strings.TrimSpace(entry)
+		if name, named := strings.CutPrefix(entry, "@"); named {
+			if options.RateTables == nil {
+				options.RateTables = map[string]*lang.Rates{}
+			}
+			into = currencies.NewRates()
+			options.RateTables[name] = into
+			continue
+		}
+		if err := addQuote(into, entry); err != nil {
+			return options, err
+		}
+	}
+	return options, nil
+}
+
+// addQuote adds "BASE/QUOTE rate" to rates; an empty entry adds nothing.
+func addQuote(rates *lang.Rates, entry string) error {
+	if entry == "" {
+		return nil
+	}
+	pair, rate, ok := strings.Cut(entry, " ")
+	base, quote, slashed := strings.Cut(pair, "/")
+	if !ok || !slashed {
+		return fmt.Errorf("-rates: %q is not BASE/QUOTE rate", entry)
+	}
+	return rates.Add(strings.TrimSpace(base), strings.TrimSpace(quote), strings.TrimSpace(rate))
 }
 
 func compileSource(common commonFlags) (*lang.Artifact, error) {
@@ -246,11 +351,16 @@ func compileSource(common commonFlags) (*lang.Artifact, error) {
 	if err != nil {
 		return nil, err
 	}
+	for name := range strings.SplitSeq(*common.tables, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			contract.Tables = append(contract.Tables, name)
+		}
+	}
 	options, err := contract.Options()
 	if err != nil {
 		return nil, err
 	}
-	registry, err := newRegistry()
+	registry, err := common.registry()
 	if err != nil {
 		return nil, err
 	}
@@ -261,14 +371,19 @@ func compileSource(common commonFlags) (*lang.Artifact, error) {
 	return artifact, nil
 }
 
-// newRegistry is the kernel with every lazy form enabled and the standard
-// pack. Domain functions are the host's business, so the CLI registers none of
-// those — but a tool for trying expressions out is useless without sum, len
-// and the rest.
-func newRegistry() (*lang.Registry, error) {
+// newRegistry is the kernel with every lazy form enabled, the money given
+// (none when nil) and the standard pack. Domain functions are the host's
+// business, so the CLI registers none of those — but a tool for trying
+// expressions out is useless without sum, len and the rest.
+func newRegistry(money *lang.MoneySpec) (*lang.Registry, error) {
 	registry := lang.CoreRegistry()
 	if err := registry.EnableForm(lang.SwitchForm, lang.ForForm, lang.ReduceForm); err != nil {
 		return nil, err
+	}
+	if money != nil {
+		if err := registry.DeclareMoney(*money); err != nil {
+			return nil, err
+		}
 	}
 	if err := std.Register(registry); err != nil {
 		return nil, err

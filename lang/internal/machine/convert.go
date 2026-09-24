@@ -42,6 +42,18 @@ func fromGo(input any) (Value, error) {
 		return Value{kind: DictKind, box: x}, nil
 	case map[string]float64:
 		return Value{kind: DictKind, box: x}, checkFloatMap(x)
+	case Money:
+		return MoneyValue(x.minor, x.currency), nil
+	case Rate:
+		return RateValue(x), nil
+	case FxRate:
+		return FxRateValue(x), x.checked()
+	case Currency:
+		return CurrencyValue(x.code), nil
+	case []Money:
+		return Value{kind: ArrayKind, box: x}, nil
+	case map[string]Money:
+		return Value{kind: DictKind, box: x}, nil
 	default:
 		return structFromGo(input)
 	}
@@ -114,6 +126,12 @@ func ToValue[T any](input T) (Value, error) {
 		return CheckedFloat(*scalar)
 	case *string:
 		return String(*scalar), nil
+	case *Money:
+		return MoneyValue(scalar.minor, scalar.currency), nil
+	case *Rate:
+		return RateValue(*scalar), nil
+	case *Currency:
+		return CurrencyValue(scalar.code), nil
 	}
 	value, err := fromGo(input)
 	if errors.Is(err, errUnsupportedGoType) {
@@ -138,6 +156,16 @@ func FromValue[T any](value Value) (T, error) {
 		return out, assign(target, Value.String, value)
 	case *[][]float64:
 		return out, assignRows(target, value)
+	case *Money:
+		return out, assign(target, Value.Money, value)
+	case *Rate:
+		return out, assign(target, Value.Rate, value)
+	case *FxRate:
+		return out, assign(target, Value.FxRate, value)
+	case *Currency:
+		code, ok := value.Currency()
+		*target = code
+		return out, kindError(ok, value, out)
 	}
 	if boxed, ok := value.box.(T); ok {
 		return boxed, nil
@@ -193,6 +221,12 @@ func assignRows(target *[][]float64, value Value) error {
 // type is wrapped as it is; the lenient cases below exist for what a JSON
 // decoder produces — float64 for every number, []any for every array.
 func coerce(input any, expected Type) (Value, error) {
+	return coerceWith(input, expected, nil)
+}
+
+// coerceWith is coerce with the registry's currency table, which reading
+// money written as "USD 1.70" needs: the places belong to the currency.
+func coerceWith(input any, expected Type, table *currencyTable) (Value, error) {
 	if value, err := fromGo(input); err == nil {
 		if value.hasType(expected) {
 			return value, nil
@@ -200,11 +234,11 @@ func coerce(input any, expected Type) (Value, error) {
 		// A typed Value of the wrong type is a host bug. A float64 where an
 		// int is expected is a JSON decoder at work, and the lenient path below
 		// takes it — but a []float64 never becomes an array<int>.
-		if _, isValue := input.(Value); isValue || (!leniently(expected.Kind) && !containerKind(expected.Kind)) {
+		if _, isValue := input.(Value); isValue || (!leniently(expected.kind) && !containerKind(expected.kind)) {
 			return Value{}, fmt.Errorf("got %s, want %s", value.Type().Summary(), expected.Summary())
 		}
 	}
-	switch expected.Kind {
+	switch expected.kind {
 	case BoolKind:
 		return Value{}, fmt.Errorf("got %T, want bool", input)
 	case IntKind:
@@ -214,11 +248,13 @@ func coerce(input any, expected Type) (Value, error) {
 	case StringKind:
 		return Value{}, fmt.Errorf("got %T, want string", input)
 	case ArrayKind:
-		return coerceArray(input, expected)
+		return coerceArray(input, expected, table)
 	case DictKind:
-		return coerceDict(input, expected)
+		return coerceDict(input, expected, table)
 	case RecordKind:
-		return coerceRecord(input, expected)
+		return coerceRecord(input, expected, table)
+	case MoneyKind, RateKind, FxRateKind, CurrencyKind:
+		return coerceMoneyKind(input, expected, table)
 	default:
 		return Value{}, fmt.Errorf("unsupported expected type %s", expected)
 	}
@@ -229,20 +265,20 @@ func coerce(input any, expected Type) (Value, error) {
 // field is not that record, and there is no null to stand in for one. Fields
 // the contract does not declare are ignored: one payload serves many rules,
 // and a misspelled name still shows up as the missing one.
-func coerceRecord(input any, expected Type) (Value, error) {
+func coerceRecord(input any, expected Type, table *currencyTable) (Value, error) {
 	entries, ok := input.(map[string]any)
 	if !ok {
 		return Value{}, fmt.Errorf("got %T, want %s", input, expected.Summary())
 	}
-	fields := make([]Value, len(expected.Fields))
-	for i, field := range expected.Fields {
-		raw, present := entries[field.Name]
+	fields := make([]Value, len(expected.fields))
+	for i, field := range expected.fields {
+		raw, present := entries[field.name]
 		if !present {
-			return Value{}, fmt.Errorf("field %q is missing", field.Name)
+			return Value{}, fmt.Errorf("field %q is missing", field.name)
 		}
-		value, err := coerce(raw, field.Type)
+		value, err := coerceWith(raw, field.typ, table)
 		if err != nil {
-			return Value{}, fmt.Errorf("field %q: %w", field.Name, err)
+			return Value{}, fmt.Errorf("field %q: %w", field.name, err)
 		}
 		fields[i] = value
 	}
@@ -252,7 +288,7 @@ func coerceRecord(input any, expected Type) (Value, error) {
 // leniently reports whether a mismatched native value may still convert: a
 // float64 holding 3 is a fine int, a []float64 is not an array<int>.
 func leniently(kind Kind) bool {
-	return kind == IntKind || kind == FloatKind
+	return kind == IntKind || kind == FloatKind || IsMoneyKind(kind)
 }
 
 func containerKind(kind Kind) bool {
@@ -292,13 +328,28 @@ func coerceInt(input any) (Value, error) {
 		}
 		return Int(parsed), nil
 	case float64:
-		if value < math.MinInt64 || value > math.MaxInt64 || math.Trunc(value) != value {
-			return Value{}, fmt.Errorf("%v is not an int", value)
+		// A float64 past 2^53 has already been rounded — JSON decoded into
+		// any turns 9007199254740993 into 9007199254740992 — so the int it
+		// holds is not the one that was written.
+		whole, ok := floatInt(value)
+		if !ok || whole > maxExactFloatInt || whole < -maxExactFloatInt {
+			return Value{}, fmt.Errorf("%v is not an int a float64 holds exactly: decode JSON with UseNumber, or pass an int", value)
 		}
-		return Int(int64(value)), nil
+		return Int(whole), nil
 	default:
 		return Value{}, fmt.Errorf("got %T, want int", input)
 	}
+}
+
+// floatInt is the int a float holds, and false for one with a fraction or
+// outside int64. The upper bound is 2^63 itself, exclusive: math.MaxInt64
+// converts to that float, so comparing against it lets 2^63 through, and
+// int64(2^63) is not defined.
+func floatInt(value float64) (int64, bool) {
+	if value < -0x1p63 || value >= 0x1p63 || math.Trunc(value) != value {
+		return 0, false
+	}
+	return int64(value), true
 }
 
 func unsignedInt(value uint64) (Value, error) {
@@ -335,17 +386,17 @@ func coerceFloat(input any) (Value, error) {
 	}
 }
 
-func coerceArray(input any, expected Type) (Value, error) {
-	if expected.Elem == nil {
+func coerceArray(input any, expected Type, table *currencyTable) (Value, error) {
+	if expected.elem == nil {
 		return Value{}, fmt.Errorf("array type is missing its element type")
 	}
 	raw, err := anySlice(input, expected)
 	if err != nil {
 		return Value{}, err
 	}
-	builder := newArrayBuilder(*expected.Elem, len(raw))
+	builder := newArrayBuilder(*expected.elem, len(raw))
 	for i := range raw {
-		value, err := coerce(raw[i], *expected.Elem)
+		value, err := coerceWith(raw[i], *expected.elem, table)
 		if err != nil {
 			return Value{}, fmt.Errorf("array item %d: %w", i, err)
 		}
@@ -375,8 +426,8 @@ func anySlice(input any, expected Type) ([]any, error) {
 	}
 }
 
-func coerceDict(input any, expected Type) (Value, error) {
-	if expected.Elem == nil {
+func coerceDict(input any, expected Type, table *currencyTable) (Value, error) {
+	if expected.elem == nil {
 		return Value{}, fmt.Errorf("dictionary type is missing its value type")
 	}
 	raw, err := anyMap(input, expected)
@@ -385,13 +436,13 @@ func coerceDict(input any, expected Type) (Value, error) {
 	}
 	entries := make(map[string]Value, len(raw))
 	for key, item := range raw {
-		value, err := coerce(item, *expected.Elem)
+		value, err := coerceWith(item, *expected.elem, table)
 		if err != nil {
 			return Value{}, fmt.Errorf("dictionary entry %q: %w", key, err)
 		}
 		entries[key] = value
 	}
-	return packDict(*expected.Elem, entries), nil
+	return packDict(*expected.elem, entries), nil
 }
 
 func anyMap(input any, expected Type) (map[string]any, error) {

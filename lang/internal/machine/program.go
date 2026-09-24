@@ -35,7 +35,7 @@ func NewCodec[In, Out any](registry *Registry) (*Codec[In, Out], error) {
 		return nil, fmt.Errorf("arguments: %w", err)
 	}
 	for _, field := range declared {
-		c.params = append(c.params, Parameter{Name: field.Name, Type: field.Type})
+		c.params = append(c.params, Parameter{name: field.name, typ: field.typ})
 	}
 	if c.result, err = reflectType(registry, c.out); err != nil {
 		return nil, fmt.Errorf("result: %w", err)
@@ -47,7 +47,7 @@ func NewCodec[In, Out any](registry *Registry) (*Codec[In, Out], error) {
 func (c *Codec[In, Out]) Parameters() []Parameter {
 	params := make([]Parameter, len(c.params))
 	for i, param := range c.params {
-		params[i] = Parameter{Name: param.Name, Type: CloneType(param.Type)}
+		params[i] = Parameter{name: param.name, typ: CloneType(param.typ)}
 	}
 	return params
 }
@@ -66,11 +66,11 @@ func (c *Codec[In, Out]) Instantiate(artifact *Artifact) (*Program[In, Out], err
 	// Planned against the runtime's own snapshot, so the types the codecs
 	// share belong to it and no caller can change them.
 	declared := runtime.artifact
-	args, err := newArgsCodec(c.registry, c.in, declared.Args)
+	args, err := newArgsCodec(c.registry, c.in, declared.parts.Args)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrContract, err)
 	}
-	result, err := newCodecFor(c.registry, c.out, declared.Result)
+	result, err := newCodecFor(c.registry, c.out, declared.parts.Result)
 	if err != nil {
 		return nil, fmt.Errorf("%w: result: %v", ErrContract, err)
 	}
@@ -84,8 +84,8 @@ func (c *Codec[In, Out]) Instantiate(artifact *Artifact) (*Program[In, Out], err
 // program never reads is never converted either, so one host struct can serve
 // many rules and each pays only for the fields it uses.
 func argumentReads(artifact *Artifact) []int {
-	read := make([]bool, len(artifact.Args))
-	for _, instruction := range artifact.Instructions {
+	read := make([]bool, len(artifact.parts.Args))
+	for _, instruction := range artifact.parts.Instructions {
 		if instruction.Op == OpLoadArg {
 			read[instruction.A] = true
 		}

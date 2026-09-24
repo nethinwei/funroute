@@ -71,7 +71,7 @@ func (s *Server) hover(params json.RawMessage) (any, error) {
 func (s *Server) explain(fact compile.NodeFact, name string) []string {
 	var out []string
 	if function, ok := s.registry.Resolve(fact.Signature); ok {
-		out = append(out, "`"+fact.Signature+"`", describe(function.Doc))
+		out = append(out, "`"+fact.Signature+"`", describe(function.Doc)+examples(function.Doc.Examples))
 	}
 	if fact.Reference == "argument" {
 		for _, arg := range s.contract.Args {
@@ -83,7 +83,32 @@ func (s *Server) explain(fact compile.NodeFact, name string) []string {
 	if fact.Reference == "local" {
 		out = append(out, "局部名")
 	}
+	if fact.Type != nil && fact.Type.Kind() == machine.MoneyKind {
+		if note := s.minorUnits(name); note != "" {
+			out = append(out, note)
+		}
+	}
 	return out
+}
+
+// minorUnits says what a money literal is in its currency's minor unit:
+// USD 1.70 is 170, because the registry gives dollars two places. The text
+// is the literal as written, so any space may part the code from the figure
+// and the figure may carry a sign and _ separators (JPY -1_000).
+func (s *Server) minorUnits(text string) string {
+	words := strings.Fields(text)
+	if len(words) != 2 {
+		return ""
+	}
+	code, amount := words[0], strings.ReplaceAll(words[1], "_", "")
+	value, err := machine.ParseMoneyAmount(s.registry, code, amount)
+	spec, _ := s.registry.Money()
+	index := slices.IndexFunc(spec.Currencies, func(currency machine.CurrencySpec) bool { return currency.Code == code })
+	if err != nil || index < 0 {
+		return ""
+	}
+	money, _ := value.Money()
+	return fmt.Sprintf("最小单位 %d（%s 保留 %d 位小数）", money.Minor(), code, spec.Currencies[index].Digits)
 }
 
 func describe(doc machine.Doc) string {
@@ -93,10 +118,38 @@ func describe(doc machine.Doc) string {
 	return doc.Label + "：" + doc.Description
 }
 
+// examples is a doc's examples as a block of the language, each call with
+// the value it gives, for a hover or a completion's documentation.
+func examples(list []machine.Example) string {
+	if len(list) == 0 {
+		return ""
+	}
+	lines := make([]string, len(list))
+	for i, example := range list {
+		lines[i] = example.Source + "  // " + example.Result
+	}
+	return "\n\n```funroute\n" + strings.Join(lines, "\n") + "\n```"
+}
+
+// namedExamples is every example the overloads of a name carry, once each:
+// a name the kernel and a pack share has examples from both.
+func (s *Server) namedExamples(name string) []machine.Example {
+	var out []machine.Example
+	for _, function := range s.registry.Overloads(name) {
+		for _, example := range function.Doc.Examples {
+			if !slices.Contains(out, example) {
+				out = append(out, example)
+			}
+		}
+	}
+	return out
+}
+
 // completion offers what the position can name: the contract's arguments,
-// the locals in scope there, the registry's functions and forms — or, after
-// @, the members of the contract's enums. sortText orders them by kind,
-// nearest first — locals, arguments, functions, forms — then by name.
+// the locals in scope there, the registry's functions and forms and its
+// currencies — or, after @, the members of the contract's enums. sortText
+// orders them by kind, nearest first — locals, arguments, functions, forms,
+// currencies — then by name.
 func (s *Server) completion(params json.RawMessage) (any, error) {
 	doc, offset, err := s.at(params)
 	if err != nil {
@@ -112,12 +165,25 @@ func (s *Server) completion(params json.RawMessage) (any, error) {
 	}
 	items := []completionItem{}
 	for _, arg := range s.arguments(doc) {
-		items = append(items, completionItem{Label: arg.Name, Kind: kindVariable, SortText: "1" + arg.Name, Detail: arg.Type.String(), Documentation: markdown(arg.Doc)})
+		items = append(items, completionItem{Label: arg.Name(), Kind: kindVariable, SortText: "1" + arg.Name(), Detail: arg.Type().String(), Documentation: markdown(arg.Doc())})
 	}
 	for _, name := range localsAt(doc.text, offset) {
 		items = append(items, completionItem{Label: name, Kind: kindVariable, SortText: "0" + name, Detail: "局部名"})
 	}
-	return append(items, s.callables()...), nil
+	return append(append(items, s.callables()...), s.currencies()...), nil
+}
+
+// currencies are the registry's declared currencies, written as their codes.
+func (s *Server) currencies() []completionItem {
+	spec, declared := s.registry.Money()
+	if !declared {
+		return nil
+	}
+	items := make([]completionItem, len(spec.Currencies))
+	for i, currency := range spec.Currencies {
+		items[i] = completionItem{Label: currency.Code, Kind: kindConstant, SortText: "4" + currency.Code, Detail: fmt.Sprintf("currency，%d 位小数", currency.Digits)}
+	}
+	return items
 }
 
 // arguments is what the program takes: the contract's, or, when it declares
@@ -126,7 +192,7 @@ func (s *Server) arguments(doc *document) []machine.Parameter {
 	if len(s.contract.Args) > 0 {
 		out := make([]machine.Parameter, len(s.contract.Args))
 		for i, arg := range s.contract.Args {
-			out[i] = machine.Parameter{Name: arg.Name, Type: arg.Type, Doc: arg.Doc}
+			out[i] = machine.NewParameter(arg.Name, arg.Type, arg.Doc)
 		}
 		return out
 	}
@@ -202,40 +268,47 @@ func (s *Server) callables() []completionItem {
 func (s *Server) buildCallables() []completionItem {
 	var items []completionItem
 	seen := map[string]bool{}
-	for _, function := range s.registry.Catalog().Functions {
-		if seen[function.Name] {
+	for _, function := range s.registry.Catalog().Functions() {
+		if seen[function.Name()] {
 			continue
 		}
-		seen[function.Name] = true
-		overloads := len(s.registry.Overloads(function.Name))
-		detail := function.Signature
+		seen[function.Name()] = true
+		overloads := len(s.registry.Overloads(function.Name()))
+		detail := function.Signature()
 		if overloads > 1 {
 			detail = fmt.Sprintf("%s（共 %d 个签名）", detail, overloads)
 		}
-		items = append(items, completionItem{Label: function.Name, Kind: kindFunction, SortText: "2" + function.Name, Detail: detail, Documentation: markdown(describe(function.Doc))})
+		documentation := describe(function.Doc()) + examples(s.namedExamples(function.Name()))
+		items = append(items, completionItem{Label: function.Name(), Kind: kindFunction, SortText: "2" + function.Name(), Detail: detail, Documentation: markdown(documentation)})
+	}
+	forms := map[string]machine.Doc{}
+	for _, form := range s.registry.Catalog().SpecialForms() {
+		forms[form.Name()] = form.Doc()
 	}
 	for _, form := range append(s.registry.EnabledForms(), "let") {
 		if form != machine.ForForm {
-			items = append(items, completionItem{Label: string(form), Kind: kindKeyword, SortText: "3" + string(form)})
+			doc := forms[string(form)]
+			items = append(items, completionItem{Label: string(form), Kind: kindKeyword, SortText: "3" + string(form), Documentation: markdown(describe(doc) + examples(doc.Examples))})
 		}
 	}
 	return items
 }
 
-// enumMembers lists every member of every enum the contract declares. A
+// enumMembers lists every member of every enum the contract declares, and
+// the registry's currencies and rounding modes when it declares money. A
 // member two enums share is offered qualified, as it has to be written.
 func (s *Server) enumMembers() []completionItem {
 	owners := map[string][]string{}
 	var order []string
-	enums := s.contract.Enums()
+	enums := compile.EnumNamespace(s.contract, s.registry)
 	for _, name := range slices.Sorted(maps.Keys(enums)) {
 		enum := enums[name]
-		for _, member := range enum.Values {
+		for _, member := range enum.Values() {
 			if len(owners[member]) == 0 {
 				order = append(order, member)
 			}
-			if !slices.Contains(owners[member], enum.Name) {
-				owners[member] = append(owners[member], enum.Name)
+			if !slices.Contains(owners[member], enum.Name()) {
+				owners[member] = append(owners[member], enum.Name())
 			}
 		}
 	}

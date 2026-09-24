@@ -97,6 +97,8 @@ type example struct {
 	MinControlDepth int                   `json:"min_control_depth"`
 	Covers          []string              `json:"covers"`
 	Operators       []string              `json:"operators"`
+	Rates           []quote               `json:"rates"`
+	Tables          map[string][]quote    `json:"tables"`
 }
 
 func readExamples(t *testing.T) []example {
@@ -156,11 +158,11 @@ func TestExamplesRunAndCoverTheLanguage(t *testing.T) {
 func everything(registry *machine.Registry) map[string]map[string]bool {
 	missing := map[string]map[string]bool{"functions and forms": {}, "operators": {}, "nodes": {}}
 	catalog := registry.Catalog()
-	for _, function := range catalog.Functions {
-		missing["functions and forms"][function.Name] = true
+	for _, function := range catalog.Functions() {
+		missing["functions and forms"][function.Name()] = true
 	}
-	for _, form := range catalog.SpecialForms {
-		missing["functions and forms"][form.Name] = true
+	for _, form := range catalog.SpecialForms() {
+		missing["functions and forms"][form.Name()] = true
 	}
 	for _, operator := range syntax.Operators() {
 		missing["operators"][operator] = true
@@ -187,7 +189,7 @@ func runExample(t *testing.T, s *session, item example) {
 		t.Fatalf("example %q has diagnostics: %v", item.Label, got)
 	}
 	result := s.request("workspace/executeCommand", map[string]any{"command": runCommand, "arguments": []map[string]any{
-		{"uri": "file:///example.fr", "args": item.Args},
+		{"uri": "file:///example.fr", "args": item.Args, "rates": item.Rates, "tables": item.Tables},
 	}}).(map[string]any)
 	if !reflect.DeepEqual(result["value"], item.Expected) {
 		t.Fatalf("example %q = %#v (%v), want %#v", item.Label, result["value"], result["error"], item.Expected)
@@ -233,7 +235,7 @@ func blockDepth(tree syntax.Tree, missing map[string]bool) int {
 // counts the branches a program takes, however they are spelled.
 func isBlock(tree syntax.Tree) bool {
 	switch tree.Node {
-	case "switch", "let", "for", "reduce":
+	case "switch", "let", "for", "reduce", "using":
 		return true
 	case "call":
 		return tree.Fields[0].Text == "if" || tree.Fields[0].Text == "fallback"
@@ -242,3 +244,188 @@ func isBlock(tree syntax.Tree) bool {
 }
 
 func keys(set map[string]bool) string { return fmt.Sprint(reflect.ValueOf(set).MapKeys()) }
+
+// run executes the document's program with args and returns the result.
+func (s *session) run(uri string, args any) map[string]any {
+	s.t.Helper()
+	return s.request("workspace/executeCommand", map[string]any{"command": runCommand, "arguments": []map[string]any{
+		{"uri": uri, "args": args},
+	}}).(map[string]any)
+}
+
+// A run writes money as the registry's text, "USD 1.70", a rate as its
+// decimal and an exchange rate as its object; the result's type says which.
+// The registry rounds half to even, so USD 1.00 at 150.5 is JPY 150.
+func TestRunWritesMoneyAsText(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		source, args string
+		contract     []string
+		value, typ   string
+	}{
+		{"USD 1.70", `{}`, nil, `"USD 1.70"`, `{"kind":"money","name":"USD"}`},
+		{"USD -1.70", `{}`, nil, `"USD -1.70"`, `{"kind":"money","name":"USD"}`},
+		{"KWD 1.234 + KWD 0.001", `{}`, nil, `"KWD 1.235"`, `{"kind":"money","name":"KWD"}`},
+		{"2.9%", `{}`, nil, `"0.029"`, `{"kind":"rate"}`},
+		{"25bps", `{}`, nil, `"0.0025"`, `{"kind":"rate"}`},
+		{"KWD", `{}`, nil, `"KWD"`, `{"kind":"currency","name":"KWD"}`},
+		{"[USD 1, USD -0.5]", `{}`, nil, `["USD 1.00","USD -0.50"]`, `{"elem":{"kind":"money","name":"USD"},"kind":"array"}`},
+		{"amount * 2.9% + like(amount, 30)", `{"amount":"USD 10.00"}`, []string{"amount:money<c>"}, `"USD 0.59"`, `{"kind":"money","name":"c"}`},
+		{"amount * 2.9%", `{"amount":{"currency":"JPY","minor":1000}}`, []string{"amount:money<?>"}, `"JPY 29"`, `{"kind":"money"}`},
+		{"amount", `{"amount":0}`, []string{"amount:money<?>"}, `0`, `{"kind":"money"}`},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			s := newSession(t, withKWD(t), `{}`)
+			s.notify("funroute/setContract", contract(test.contract...))
+			s.open("file:///a.fr", test.source)
+			result := s.run("file:///a.fr", test.args)
+			value, _ := json.Marshal(result["value"])
+			typ, _ := json.Marshal(result["type"])
+			if result["error"] != nil || string(value) != test.value || string(typ) != test.typ {
+				t.Errorf("run %q with %s = %v, want value %s of type %s", test.source, test.args, result, test.value, test.typ)
+			}
+		})
+	}
+}
+
+// A run that meets two currencies fails as a currency error, whether the
+// rule meets them or the arguments bind one currency variable two ways.
+func TestRunReportsCurrencyErrors(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		source, args, message string
+		contract              []string
+	}{
+		{"amount + USD 1", `{"amount":"JPY 5"}`, "JPY and USD", []string{"amount:money<?>"}},
+		{"a + b", `{"a":"USD 1","b":"JPY 1"}`, "USD and JPY", []string{"a:money<?>", "b:money<?>"}},
+		{"a + b", `{"a":"USD 1","b":"JPY 1"}`, "c is JPY here but USD elsewhere", []string{"a:money<c>", "b:money<c>"}},
+		{"amount", `{"amount":{"currency":"EUR","minor":1}}`, `"EUR" is not declared`, []string{"amount:money<?>"}},
+		{"cur", `{"cur":"EUR"}`, `"EUR" is not declared`, []string{"cur:currency<?>"}},
+		{"amount", `{"amount":"KWD 1.000"}`, "KWD where JPY is declared", []string{"amount:money<JPY>"}},
+	} {
+		t.Run(test.message, func(t *testing.T) {
+			t.Parallel()
+			s := newSession(t, withKWD(t), `{}`)
+			s.notify("funroute/setContract", contract(test.contract...))
+			s.open("file:///a.fr", test.source)
+			failure, _ := s.run("file:///a.fr", test.args)["error"].(map[string]any)
+			if failure["kind"] != "currency" || !strings.Contains(fmt.Sprint(failure["message"]), test.message) {
+				t.Errorf("run %q with %s failed with %v, want kind currency and a message containing %q", test.source, test.args, failure, test.message)
+			}
+		})
+	}
+}
+
+// A money program that does not compile fails the run as a compile error,
+// the way any other program does.
+func TestRunReportsMoneyCompileErrors(t *testing.T) {
+	t.Parallel()
+	s := newSession(t, withKWD(t), `{}`)
+	for _, source := range []string{"USD 1 + JPY 1", "USD 1.234", "EUR 1"} {
+		s.open("file:///a.fr", source)
+		failure, _ := s.run("file:///a.fr", `{}`)["error"].(map[string]any)
+		if failure["kind"] != "compile" {
+			t.Errorf("run %q failed with %v, want kind compile", source, failure)
+		}
+	}
+}
+
+// The catalog carries the declared money — the currencies sorted by code,
+// each with its places, and the rounding by name — and nothing when money is
+// not declared.
+func TestCatalogCarriesTheMoneyFeature(t *testing.T) {
+	t.Parallel()
+	s := newSession(t, withKWD(t), `{}`)
+	catalog := s.request("funroute/catalog", map[string]any{}).(map[string]any)
+	money, _ := json.Marshal(catalog["money"])
+	want := `{"currencies":[{"code":"JPY","digits":0},{"code":"KWD","digits":3},{"code":"USD","digits":2}],"rounding":"half_even"}`
+	if string(money) != want {
+		t.Errorf("the catalog's money = %s, want %s", money, want)
+	}
+	names := map[string]bool{}
+	for _, function := range catalog["functions"].([]any) {
+		names[function.(map[string]any)["name"].(string)] = true
+	}
+	for _, name := range []string{"money", "minor", "currency", "like", "round", "rate"} {
+		if !names[name] {
+			t.Errorf("the catalog of a registry with money lacks %s", name)
+		}
+	}
+	plain := newSession(t, standard(t), `{}`).request("funroute/catalog", map[string]any{}).(map[string]any)
+	if _, has := plain["money"]; has {
+		t.Errorf("the catalog without money declared has money %v, want none", plain["money"])
+	}
+}
+
+// Arithmetic with no answer is its own kind: a division by zero, an overflow,
+// an exchange rate that is not positive, whether the rule or the arguments
+// bring it.
+func TestRunReportsArithmeticErrors(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		source, args, message string
+		contract              []string
+	}{
+		{"n / d", `{"n":1,"d":0}`, "division by zero", []string{"n:int", "d:int"}},
+		{"n + 1", `{"n":9223372036854775807}`, "overflow", []string{"n:int"}},
+		{"fee / zero", `{"fee":"0.029","zero":"0"}`, "division by zero", []string{"fee:rate", "zero:rate"}},
+	} {
+		t.Run(test.message+" "+test.source, func(t *testing.T) {
+			t.Parallel()
+			s := newSession(t, withKWD(t), `{}`)
+			s.notify("funroute/setContract", contract(test.contract...))
+			s.open("file:///a.fr", test.source)
+			failure, _ := s.run("file:///a.fr", test.args)["error"].(map[string]any)
+			if failure["kind"] != "arithmetic" || !strings.Contains(fmt.Sprint(failure["message"]), test.message) {
+				t.Errorf("run %q with %s failed with %v, want kind arithmetic and a message containing %q", test.source, test.args, failure, test.message)
+			}
+		})
+	}
+}
+
+// A run's quotes make its rate table: amount -> JPY converts through them,
+// no path is the kind norate, and a quote the table refuses fails the run.
+func TestRunConvertsThroughItsRates(t *testing.T) {
+	t.Parallel()
+	usdJPY := []quote{{Base: "USD", Quote: "JPY", Rate: "150.5"}}
+	for _, test := range []struct {
+		name, source string
+		rates        []quote
+		value, kind  string
+	}{
+		{"direct", "amount -> JPY", usdJPY, `"JPY 150"`, ""},
+		{"inverse", "JPY 301 -> USD", usdJPY, `"USD 2.00"`, ""},
+		{"no path", "amount -> KWD", usdJPY, "", "norate"},
+		{"no table", "amount -> JPY", nil, "", "norate"},
+		{"caught", "fallback(amount -> KWD, KWD 0)", usdJPY, `"KWD 0.000"`, ""},
+		{"a bad quote", "amount -> JPY", []quote{{Base: "USD", Quote: "JPY", Rate: "-1"}}, "", "arithmetic"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSession(t, withKWD(t), `{}`)
+			s.notify("funroute/setContract", contract("amount:money<USD>"))
+			s.open("file:///a.fr", test.source)
+			result := s.request("workspace/executeCommand", map[string]any{"command": runCommand, "arguments": []map[string]any{
+				{"uri": "file:///a.fr", "args": `{"amount":"USD 1.00"}`, "rates": test.rates},
+			}}).(map[string]any)
+			checkRun(t, test.source, result, test.value, test.kind)
+		})
+	}
+}
+
+// checkRun requires a run to give value, or to fail as kind.
+func checkRun(t *testing.T, source string, result map[string]any, value, kind string) {
+	t.Helper()
+	failure, _ := result["error"].(map[string]any)
+	if kind != "" {
+		if failure["kind"] != kind {
+			t.Errorf("run %q failed with %v, want kind %s", source, failure, kind)
+		}
+		return
+	}
+	got, _ := json.Marshal(result["value"])
+	if failure != nil || string(got) != value {
+		t.Errorf("run %q = %s (%v), want %s", source, got, failure, value)
+	}
+}

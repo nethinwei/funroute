@@ -33,13 +33,13 @@ const NoArgument = -1
 
 // PrefetchSites lists the hoistable calls of an artifact in program order.
 func PrefetchSites(artifact *Artifact) []PrefetchSite {
-	guarded := guardedInstructions(artifact.Instructions)
+	guarded := guardedInstructions(artifact.parts.Instructions)
 	var sites []PrefetchSite
-	for pc, instruction := range artifact.Instructions {
+	for pc, instruction := range artifact.parts.Instructions {
 		if instruction.Op != OpCall || guarded[pc] {
 			continue
 		}
-		operands, ok := callOperands(artifact.Instructions, pc, instruction.B)
+		operands, ok := callOperands(artifact.parts.Instructions, pc, instruction.B)
 		if !ok {
 			continue
 		}
@@ -72,6 +72,8 @@ func markRange(guarded []bool, from, to int) {
 // machine are exactly its arguments, and accepts them only when each is an
 // argument load or a constant.
 func callOperands(code []Instruction, pc, count int) ([]Operand, bool) {
+	// A call the compiler put currency checks before is not hoisted: a Batch
+	// would hand the engine operands in currencies the checks would refuse.
 	if count > pc {
 		return nil, false
 	}

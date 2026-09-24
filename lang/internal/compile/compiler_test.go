@@ -45,11 +45,11 @@ func TestExprJSONCanonicalRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(before.Args) != 2 || before.Args[0].Name != "a" || before.Args[1].Name != "z" {
-		t.Fatalf("canonical args = %#v, want a then z", before.Args)
+	if len(before.Args()) != 2 || before.Args()[0].Name() != "a" || before.Args()[1].Name() != "z" {
+		t.Fatalf("canonical args = %#v, want a then z", before.Args())
 	}
-	if before.Digest != after.Digest {
-		t.Fatalf("compile digest changed across AST round trip: %s != %s", before.Digest, after.Digest)
+	if before.Digest() != after.Digest() {
+		t.Fatalf("compile digest changed across AST round trip: %s != %s", before.Digest(), after.Digest())
 	}
 }
 
@@ -88,13 +88,13 @@ func TestFunctionalForBindsLocalFiltersAndMaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantArgs := []machine.Parameter{{Name: "channels", Type: machine.ArrayOf(machine.StringType)}}
-	if len(artifact.Args) != len(wantArgs) {
-		t.Fatalf("args = %#v, want %#v", artifact.Args, wantArgs)
+	wantArgs := []machine.Parameter{machine.NewParameter("channels", machine.ArrayOf(machine.StringType), "")}
+	if len(artifact.Args()) != len(wantArgs) {
+		t.Fatalf("args = %#v, want %#v", artifact.Args(), wantArgs)
 	}
 	for i := range wantArgs {
-		if artifact.Args[i].Name != wantArgs[i].Name || !artifact.Args[i].Type.Equal(wantArgs[i].Type) {
-			t.Fatalf("arg %d = %#v, want %#v", i, artifact.Args[i], wantArgs[i])
+		if artifact.Args()[i].Name() != wantArgs[i].Name() || !artifact.Args()[i].Type().Equal(wantArgs[i].Type()) {
+			t.Fatalf("arg %d = %#v, want %#v", i, artifact.Args()[i], wantArgs[i])
 		}
 	}
 	runtime, err := machine.Instantiate(artifact, registry)
@@ -116,15 +116,15 @@ func TestFunctionalForBindsLocalFiltersAndMaps(t *testing.T) {
 			t.Fatalf("result item %d = %#v, want UP", i, item.Any())
 		}
 	}
-	if artifact.Locals != 1 {
-		t.Fatalf("locals = %d, want 1", artifact.Locals)
+	if machine.PartsOf(artifact).Locals != 1 {
+		t.Fatalf("locals = %d, want 1", machine.PartsOf(artifact).Locals)
 	}
 }
 
 func TestFunctionalSwitchIsLazyAndTyped(t *testing.T) {
 	t.Parallel()
 	registry := consoleRegistry(t)
-	artifact, err := CompileExpr(`switch(country, case "SG" => 1, case "MY" => 2, else div(1,zero))`, registry, CompileOptions{})
+	artifact, err := CompileExpr(`switch(country, case "SG" => 1, case "MY" => 2, else => div(1,zero))`, registry, CompileOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestArtifactJSONRoundTripAndTamperDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact.Instructions[0].A = 999
+	machine.PartsOf(artifact).Instructions[0].A = 999
 	result, err := runtime.Run(t.Context(), map[string]any{"n": 1}, machine.RunOptions{})
 	if err != nil {
 		t.Fatalf("runtime retained mutable artifact: %v", err)
@@ -173,7 +173,7 @@ func TestArtifactJSONRoundTripAndTamperDetection(t *testing.T) {
 	if value, ok := result.Int(); !ok || value != 3 {
 		t.Fatalf("snapshotted runtime Run(n=1) = %#v, want 3", result.Any())
 	}
-	artifact.Calls[0].Cost++
+	machine.PartsOf(artifact).Calls[0].Cost++
 	if _, err := machine.Instantiate(artifact, registry); err == nil {
 		t.Fatal("mutated artifact was accepted")
 	}
@@ -185,7 +185,7 @@ func TestReduceFoldsArrayWithLocalAccumulator(t *testing.T) {
 		`reduce(price in prices, total = 0, add(total,price))`,
 		consoleRegistry(t), map[string]any{"prices": []any{10, 20, 30}}, machine.RunOptions{})
 	params := runtime.Args()
-	if len(params) != 1 || params[0].Name != "prices" || !params[0].Type.Equal(machine.ArrayOf(machine.IntType)) {
+	if len(params) != 1 || params[0].Name() != "prices" || !params[0].Type().Equal(machine.ArrayOf(machine.IntType)) {
 		t.Fatalf("args = %#v, want prices: array<int>", params)
 	}
 	if !runtime.ResultType().Equal(machine.IntType) {
@@ -301,7 +301,7 @@ func TestSwitchEvaluatesItsSubjectOnce(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	artifact, err := CompileExpr(`switch(probe_v1(n), case 1 => "one", case 2 => "two", else "other")`, registry, CompileOptions{})
+	artifact, err := CompileExpr(`switch(probe_v1(n), case 1 => "one", case 2 => "two", else => "other")`, registry, CompileOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,8 +328,8 @@ func TestSwitchEvaluatesItsSubjectOnce(t *testing.T) {
 func TestArgumentChecksDoNotAllocate(t *testing.T) {
 	registry := machine.CoreRegistry()
 	order := machine.RecordOf(
-		machine.Field{Name: "amount", Type: machine.IntType},
-		machine.Field{Name: "currency", Type: machine.StringType},
+		machine.FieldOf("amount", machine.IntType),
+		machine.FieldOf("currency", machine.StringType),
 	)
 	record, err := machine.Record(order, []machine.Value{machine.Int(1200), machine.String("SGD")})
 	if err != nil {
@@ -419,7 +419,7 @@ func compileAndRun(t *testing.T, source string, registry *machine.Registry, args
 
 func BenchmarkCompile(b *testing.B) {
 	registry := benchRegistry(b)
-	source := `switch(country, case "SG" => reduce(p in prices, t = 0, add(t,p)), case "MY" => reduce(p in prices, t = 1, mul(t,p)), else 0)`
+	source := `switch(country, case "SG" => reduce(p in prices, t = 0, add(t,p)), case "MY" => reduce(p in prices, t = 1, mul(t,p)), else => 0)`
 	b.ReportAllocs()
 	for b.Loop() {
 		if _, err := CompileExpr(source, registry, CompileOptions{
@@ -555,37 +555,37 @@ var switchCases = []struct {
 }{
 	{
 		name:   "多值 case",
-		source: `switch(country, case "MY", "TH" => "adyen_asia", case "SG" => "adyen_sg", else "global")`,
+		source: `switch(country, case "MY", "TH" => "adyen_asia", case "SG" => "adyen_sg", else => "global")`,
 		args:   map[string]any{"country": "TH"},
 		want:   "adyen_asia",
 	},
 	{
 		name:   "多值 case 未命中走默认",
-		source: `switch(country, case "MY", "TH" => "adyen_asia", else "global")`,
+		source: `switch(country, case "MY", "TH" => "adyen_asia", else => "global")`,
 		args:   map[string]any{"country": "JP"},
 		want:   "global",
 	},
 	{
 		name:   "条件链取第一个成立的分支",
-		source: `switch(case amount > 10000 => "manual", case risk > 0.8 => "reject", else "auto")`,
+		source: `switch(case amount > 10000 => "manual", case risk > 0.8 => "reject", else => "auto")`,
 		args:   map[string]any{"amount": 20000, "risk": 0.1},
 		want:   "manual",
 	},
 	{
 		name:   "条件链按顺序短路",
-		source: `switch(case amount > 10000 => "manual", case risk > 0.8 => "reject", else "auto")`,
+		source: `switch(case amount > 10000 => "manual", case risk > 0.8 => "reject", else => "auto")`,
 		args:   map[string]any{"amount": 5, "risk": 0.9},
 		want:   "reject",
 	},
 	{
 		name:   "条件链多条件任一成立",
-		source: `switch(case amount > 10000, risk > 0.8 => "review", else "auto")`,
+		source: `switch(case amount > 10000, risk > 0.8 => "review", else => "auto")`,
 		args:   map[string]any{"amount": 5, "risk": 0.9},
 		want:   "review",
 	},
 	{
 		name:   "条件链默认分支",
-		source: `switch(case amount > 10000 => "manual", else "auto")`,
+		source: `switch(case amount > 10000 => "manual", else => "auto")`,
 		args:   map[string]any{"amount": 5},
 		want:   "auto",
 	},
@@ -610,8 +610,8 @@ func TestSwitchIsStillLazyAndTypeChecked(t *testing.T) {
 	registry := consoleRegistry(t)
 	// The untaken branch must not be evaluated, in both shapes.
 	for _, source := range []string{
-		`switch(country, case "SG" => 1, else div(1,zero))`,
-		`switch(case country == "SG" => 1, else div(1,zero))`,
+		`switch(country, case "SG" => 1, else => div(1,zero))`,
+		`switch(case country == "SG" => 1, else => div(1,zero))`,
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
@@ -622,17 +622,17 @@ func TestSwitchIsStillLazyAndTypeChecked(t *testing.T) {
 		})
 	}
 	// A bare variable as a condition is fine — it just types as bool.
-	artifact, err := CompileExpr(`switch(case healthy => "yes", else "no")`, registry, CompileOptions{})
+	artifact, err := CompileExpr(`switch(case healthy => "yes", else => "no")`, registry, CompileOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifact.Args) != 1 || !artifact.Args[0].Type.Equal(machine.BoolType) {
-		t.Fatalf("args = %#v, want healthy: bool", artifact.Args)
+	if len(artifact.Args()) != 1 || !artifact.Args()[0].Type().Equal(machine.BoolType) {
+		t.Fatalf("args = %#v, want healthy: bool", artifact.Args())
 	}
 	// A non-bool condition, and results of different types, must be rejected.
 	for _, source := range []string{
-		`switch(case 1 => "yes", else "no")`,
-		`switch(country, case "SG" => 1, else "two")`,
+		`switch(case 1 => "yes", else => "no")`,
+		`switch(country, case "SG" => 1, else => "two")`,
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
@@ -642,7 +642,7 @@ func TestSwitchIsStillLazyAndTypeChecked(t *testing.T) {
 		})
 	}
 	// A condition branch with a subject still compares values.
-	if _, err := CompileExpr(`switch(country, case amount => "yes", else "no")`, registry, CompileOptions{}); err == nil {
+	if _, err := CompileExpr(`switch(country, case amount => "yes", else => "no")`, registry, CompileOptions{}); err == nil {
 		t.Fatal("subject and match of different types compiled")
 	}
 }
@@ -656,8 +656,8 @@ func TestLetBindsMultipleLocalsInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifact.Args) != 1 || artifact.Args[0].Name != "amount" {
-		t.Fatalf("args = %#v, want only amount", artifact.Args)
+	if len(artifact.Args()) != 1 || artifact.Args()[0].Name() != "amount" {
+		t.Fatalf("args = %#v, want only amount", artifact.Args())
 	}
 	runtime, err := machine.Instantiate(artifact, registry)
 	if err != nil {
@@ -751,7 +751,7 @@ func TestSplicingSurvivesExprJSONAndLeavesOneClauseAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded := nested.ExprJSON
+	encoded := machine.PartsOf(nested).ExprJSON
 	if !strings.Contains(string(encoded), `"flatten":true`) {
 		t.Fatalf("the outer clause did not record the splice: %s", encoded)
 	}
@@ -759,15 +759,15 @@ func TestSplicingSurvivesExprJSONAndLeavesOneClauseAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.Digest != nested.Digest {
-		t.Fatalf("round trip changed the digest: %s vs %s", reloaded.Digest, nested.Digest)
+	if reloaded.Digest() != nested.Digest() {
+		t.Fatalf("round trip changed the digest: %s vs %s", reloaded.Digest(), nested.Digest())
 	}
 
 	plain, err := CompileExpr(`[a + 1 for a in xs]`, registry, CompileOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(plain.ExprJSON), "flatten") {
-		t.Fatalf("a one-clause comprehension gained a field: %s", plain.ExprJSON)
+	if strings.Contains(string(machine.PartsOf(plain).ExprJSON), "flatten") {
+		t.Fatalf("a one-clause comprehension gained a field: %s", machine.PartsOf(plain).ExprJSON)
 	}
 }

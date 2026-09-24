@@ -2,14 +2,13 @@ package syntax
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"funroute/lang/internal/machine"
 )
 
 type parser struct {
+	source string
 	tokens []token
 	index  int
 	nextID int
@@ -36,7 +35,7 @@ type reading struct {
 func read(source string, roles bool) reading {
 	lex := &lexer{source: source}
 	tokens, err := lex.tokens()
-	p := &parser{tokens: tokens, nextID: 1}
+	p := &parser{source: source, tokens: tokens, nextID: 1}
 	if roles {
 		p.roles = map[int]roleMark{}
 	}
@@ -94,26 +93,68 @@ func (p *parser) node(at token, expr Expr) (Expr, error) {
 	return finished, nil
 }
 
-// parseBinary is precedence climbing; every operator here is left associative.
+// parseBinary is precedence climbing. An operator is left associative
+// unless the table says otherwise: see follows.
 func (p *parser) parseBinary(min int) (Expr, error) {
 	left, err := p.parseUnary()
 	if err != nil {
 		return nil, err
 	}
+	return p.climb(left, min)
+}
+
+// climb reads the infix operators after left, whose precedence is at least
+// min.
+func (p *parser) climb(left Expr, min int) (Expr, error) {
+	var last *operatorSpec
 	for {
 		operator := p.peek()
 		spec, ok := p.infixOperator(operator)
 		if !ok || spec.precedence < min {
 			return left, nil
 		}
+		if err := p.follows(last, spec, operator); err != nil {
+			return nil, err
+		}
 		p.index++
 		p.mark(operator, RoleOperator)
-		right, err := p.parseBinary(spec.precedence + 1)
+		right, err := p.rightOperand(spec)
 		if err != nil {
 			return nil, err
 		}
 		left = p.stamp(left.Extent().Start, p.expandOperator(operator, spec, left, right))
+		last = &spec
 	}
+}
+
+// follows refuses an operator the grammar does not let come after last at
+// one level: a comparison after one of its own precedence, which would be a
+// chain the language gives no meaning to, and anything tighter than -> after
+// its right operand, which is a currency and nothing more.
+func (p *parser) follows(last *operatorSpec, spec operatorSpec, operator token) error {
+	switch {
+	case last == nil:
+		return nil
+	case last.nonAssociative && spec.precedence == last.precedence:
+		return p.errorf(operator, "comparisons do not chain: a %s b %s c needs parentheses, or && between two comparisons", last.token, spec.token)
+	case last.postfixRight && spec.precedence > last.precedence:
+		return p.errorf(operator, "%s takes one currency on its right: write (amount %s JPY) %s …", last.token, last.token, spec.token)
+	}
+	return nil
+}
+
+// rightOperand reads an infix operator's right operand: the next tighter
+// level, or for -> one postfix expression — a code, a name, a field, a call,
+// a parenthesised expression.
+func (p *parser) rightOperand(spec operatorSpec) (Expr, error) {
+	if !spec.postfixRight {
+		return p.parseBinary(spec.precedence + 1)
+	}
+	primary, err := p.parsePrimary()
+	if err != nil {
+		return nil, err
+	}
+	return p.parsePostfix(primary)
 }
 
 // infixOperator finds the operator a token starts, whether it is punctuation
@@ -168,7 +209,8 @@ func (p *parser) parseUnary() (Expr, error) {
 	return p.stamp(operator.pos, p.expandOperator(operator, spec, operand)), nil
 }
 
-// parsePostfix reads what can follow a primary: subscripts and field reads.
+// parsePostfix reads what can follow a primary: subscripts, field reads and
+// with {…}, the record with some fields replaced.
 // xs[i] is at(xs, i) and d["k"] is at(d, "k"), so indexing adds no node — only
 // a spelling; .field is the same FieldExpr a dotted name produces, which is
 // why orders[0].amount and order.amount mean the same thing.
@@ -188,6 +230,15 @@ func (p *parser) parsePostfix(base Expr) (Expr, error) {
 				return nil, err
 			}
 			base = p.stamp(start, field)
+		case tokenIdentifier:
+			if !p.keyword("with") {
+				return base, nil
+			}
+			updated, err := p.parseWith(base)
+			if err != nil {
+				return nil, err
+			}
+			base = p.stamp(start, updated)
 		default:
 			return base, nil
 		}
@@ -230,44 +281,6 @@ func (p *parser) parseFieldRead(base Expr) (Expr, error) {
 		at, expr = at+1+len(field), node
 	}
 	return expr, nil
-}
-
-// negate keeps -42 a literal and turns -e into sub(0, e).
-func (p *parser) negate(operator token) (Expr, error) {
-	if next := p.peek(); next.kind == tokenInt || next.kind == tokenFloat {
-		p.index++
-		return p.numberLiteral(next, true)
-	}
-	operand, err := p.parseUnary()
-	if err != nil {
-		return nil, err
-	}
-	zero := &LiteralExpr{ID: p.id(), Pos: operator.pos, Span: tokenSpan(operator), Value: machine.Int(0)}
-	return p.call(operator, "sub", zero, operand), nil
-}
-
-func (p *parser) numberLiteral(tok token, negative bool) (Expr, error) {
-	p.mark(tok, RoleLiteral)
-	text := tok.text
-	if negative {
-		text = "-" + text
-	}
-	if tok.kind == tokenInt {
-		value, err := strconv.ParseInt(text, 10, 64)
-		if err != nil {
-			return nil, p.errorf(tok, "integer is outside int64 range")
-		}
-		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.Int(value)}, nil
-	}
-	value, err := strconv.ParseFloat(text, 64)
-	if err != nil {
-		return nil, p.errorf(tok, "invalid float")
-	}
-	checked, err := machine.CheckedFloat(value)
-	if err != nil {
-		return nil, p.errorf(tok, "%v", err)
-	}
-	return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: checked}, nil
 }
 
 // call and boolean build the nodes an operator expands into. What has no
@@ -345,6 +358,9 @@ func (p *parser) primary() (Expr, error) {
 	switch tok.kind {
 	case tokenInt, tokenFloat:
 		p.index++
+		if p.startsFxRate(tok) {
+			return p.fxRateLiteral(tok)
+		}
 		return p.numberLiteral(tok, false)
 	case tokenString:
 		p.index++
@@ -358,20 +374,12 @@ func (p *parser) primary() (Expr, error) {
 		p.index++
 		p.mark(tok, RoleEnumMember)
 		return p.node(tok, enumReference(p.id(), tok))
+	case tokenRate:
+		p.index++
+		return p.rateLiteral(tok)
 	case tokenIdentifier:
 		p.index++
-		if tok.text == "true" || tok.text == "false" {
-			p.mark(tok, RoleLiteral)
-			return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.Bool(tok.text == "true")}, nil
-		}
-		if p.peek().kind == tokenLeftParen {
-			return p.parseCall(tok)
-		}
-		// A dotted name that is not being called is a variable and the fields
-		// read off it: order.amount is at(order).amount, never one name. A
-		// call keeps its dots, because that is how a function is versioned:
-		// route.score_v1(…).
-		return p.variableWithFields(tok)
+		return p.name(tok)
 	case tokenLeftParen:
 		return p.parseGroup()
 	case tokenLeftBracket:
@@ -381,6 +389,30 @@ func (p *parser) primary() (Expr, error) {
 	default:
 		return nil, p.errorf(tok, "expected an expression")
 	}
+}
+
+// name reads what a name starts: an amount (USD 1.70), true or false, a
+// call, a currency (USD), or a variable and the fields read off it.
+func (p *parser) name(tok token) (Expr, error) {
+	if p.startsMoney(tok) {
+		return p.moneyLiteral(tok)
+	}
+	if tok.text == "true" || tok.text == "false" {
+		p.mark(tok, RoleLiteral)
+		return &LiteralExpr{ID: p.id(), Pos: tok.pos, Value: machine.Bool(tok.text == "true")}, nil
+	}
+	if p.peek().kind == tokenLeftParen {
+		return p.parseCall(tok)
+	}
+	if machine.IsCurrencyCode(tok.text) {
+		p.mark(tok, RoleCurrency)
+		return p.node(tok, &CurrencyExpr{ID: p.id(), Pos: tok.pos, Code: tok.text})
+	}
+	// A dotted name that is not being called is a variable and the fields
+	// read off it: order.amount is at(order).amount, never one name. A call
+	// keeps its dots, because that is how a function is versioned:
+	// route.score_v1(…).
+	return p.variableWithFields(tok)
 }
 
 // parseGroup reads (e), which is only there to override infix precedence.
@@ -400,6 +432,9 @@ func (p *parser) parseGroup() (Expr, error) {
 // accesses on it, checking each part is a usable name.
 func (p *parser) variableWithFields(tok token) (Expr, error) {
 	parts := strings.Split(tok.text, ".")
+	if machine.IsCurrencyCode(parts[0]) {
+		return nil, p.errorf(tok, "%s is a currency, and a currency has no fields", parts[0])
+	}
 	for i, offset := 0, tok.pos; i < len(parts); i++ {
 		role := RoleField
 		if i == 0 {
@@ -433,7 +468,7 @@ func (p *parser) variableWithFields(tok token) (Expr, error) {
 func (p *parser) parseCall(name token) (Expr, error) {
 	p.index++ // (
 	p.mark(name, RoleFunction)
-	if name.text == "reduce" || name.text == "switch" || name.text == "let" {
+	if name.text == "reduce" || name.text == "switch" || name.text == "let" || name.text == "using" {
 		p.mark(name, RoleForm)
 	}
 	if name.text == "reduce" {
@@ -444,6 +479,9 @@ func (p *parser) parseCall(name token) (Expr, error) {
 	}
 	if name.text == "let" {
 		return p.parseLetCall(name)
+	}
+	if name.text == "using" {
+		return p.parseUsingCall(name)
 	}
 	args, err := p.parseList(tokenRightParen)
 	if err != nil {
@@ -566,8 +604,8 @@ func (p *parser) parseAccumulator() (string, Expr, error) {
 // branches start, which is what removes the ambiguity between a subject and a
 // multi-value condition branch:
 //
-//	switch(subject, case "SG" => "a", case "MY", "TH" => "b", else "c")
-//	switch(case amount > 100 => "a", case risk > 0.8 => "b", else "c")
+//	switch(subject, case "SG" => "a", case "MY", "TH" => "b", else => "c")
+//	switch(case amount > 100 => "a", case risk > 0.8 => "b", else => "c")
 func (p *parser) parseSwitchCall(name token) (Expr, error) {
 	if p.keyword("case") {
 		return p.switchBranches(name, nil)
@@ -582,11 +620,11 @@ func (p *parser) parseSwitchCall(name token) (Expr, error) {
 	if p.keyword("case") {
 		return p.switchBranches(name, subject)
 	}
-	return nil, p.errorf(name, "switch branches start with \"case\": switch(subject, case m => r, else d)")
+	return nil, p.errorf(name, "switch branches start with \"case\": switch(subject, case m => r, else => d)")
 }
 
 // switchBranches reads "case m1, m2 => r" groups and an optional final
-// "else d". The compiler accepts the missing else only when a declared enum
+// "else => d". The compiler accepts the missing else only when a declared enum
 // subject is covered exhaustively.
 func (p *parser) switchBranches(name token, subject Expr) (Expr, error) {
 	var cases []SwitchCaseExpr
@@ -613,10 +651,13 @@ func (p *parser) switchBranches(name token, subject Expr) (Expr, error) {
 	}
 	if p.keyword("else") {
 		p.takeKeyword()
-		// A branch reads "case m => r", so "else => r" is what a hand writes
-		// next; both spellings mean the same thing and the printer picks one.
-		if p.peek().kind == tokenFatArrow {
+		// Every branch leads to its result with =>: "else => r" as a case
+		// reads "case m => r". There is no second spelling.
+		if arrow := p.peek(); arrow.kind == tokenFatArrow {
 			p.index++
+			p.mark(arrow, RoleOperator)
+		} else {
+			return nil, p.errorf(arrow, "expected '=>' after else: a switch reads switch(subject, case m => r, else => d)")
 		}
 		fallback, err := p.parseExpr()
 		if err != nil {
@@ -735,24 +776,6 @@ func (p *parser) peekN(offset int) token {
 		return token{kind: tokenEOF}
 	}
 	return p.tokens[index]
-}
-
-// unquote reads a string token's text. Text is UTF-8: a byte that is not,
-// escaped as \200, would be replaced on the way through ExprJSON, and the
-// program would not read back as itself; written raw, strconv.Unquote would
-// quietly replace it already. Both are refused.
-func (p *parser) unquote(tok token, invalid string) (string, error) {
-	if !utf8.ValidString(tok.text) {
-		return "", p.errorf(tok, "string is not valid UTF-8")
-	}
-	value, err := strconv.Unquote(tok.text)
-	if err != nil {
-		return "", p.errorf(tok, "%s: %v", invalid, err)
-	}
-	if !utf8.ValidString(value) {
-		return "", p.errorf(tok, "string is not valid UTF-8")
-	}
-	return value, nil
 }
 
 func (p *parser) errorf(tok token, format string, args ...any) error {

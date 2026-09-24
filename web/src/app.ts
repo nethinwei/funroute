@@ -1,15 +1,17 @@
 // The workbench: an editor and a structure view on one text, a contract, a
 // test run. Every fact about the language comes from the language server;
 // this file only moves them between the pieces.
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
 import type { EditorView } from "@codemirror/view";
 import { startClient } from "./lsp.ts";
 import { createEditor, formatDocument, offsetAt, replaceAll } from "./editor.ts";
 import { Text, argsText } from "./projection.ts";
-import type { ArgSpec, Catalog, Diagnostic, RunResult, TextContract, Tree } from "./protocol.ts";
+import type { ArgSpec, Catalog, Diagnostic, MoneySpec, RunResult, TextContract, Tree } from "./protocol.ts";
 import type { ContractPanel } from "./contract.ts";
 import type { RunPanel } from "./runner.ts";
 import type { Block, Edit, StructureView } from "./canvas.ts";
+import { switchRefusal, type Checked, type View } from "./views.ts";
+import { quotesText, type Quote, type QuoteTables } from "./quotes.ts";
 import "./contract.ts";
 import "./runner.ts";
 import "./canvas.ts";
@@ -42,7 +44,8 @@ const failed = (what: string) => (error: unknown) => setStatus(`${what}：${erro
 // dropped.
 async function showDiagnostics(diagnostics: Diagnostic[]) {
   const first = diagnostics.find((item) => item.severity === 1) ?? diagnostics[0];
-  if (first) setStatus(`${first.range.start.line + 1}:${first.range.start.character + 1} ${first.message}`, first.severity === 1 ? "error" : "warning");
+  const said = first ? `${first.range.start.line + 1}:${first.range.start.character + 1} ${first.message}` : "";
+  if (first) setStatus(said, first.severity === 1 ? "error" : "warning");
   else setStatus("编译通过", "ok");
   client.sync();
   const text = editor.state.doc.toString();
@@ -55,6 +58,54 @@ async function showDiagnostics(diagnostics: Diagnostic[]) {
   structure.tree = tree;
   runner.args = args;
   $<HTMLElement>("#tree").textContent = JSON.stringify(tree, null, 2);
+  checked = { source: text, error: first?.severity === 1 ? said : undefined };
+  markTabs();
+}
+
+// The two views of the expression. checked is what the server last said of
+// the text; the other tab is offered only while that text is sound.
+let view: View = "code";
+let checked: Checked | null = null;
+const tabs: Record<View, HTMLElement> = { code: $("#tab-code"), structure: $("#tab-structure") };
+const panels: Record<View, HTMLElement> = { code: $("#editor"), structure: $("#structure") };
+
+function markTabs() {
+  const other: View = view === "code" ? "structure" : "code";
+  const refusal = switchRefusal(checked, editor.state.doc.toString());
+  tabs[other].setAttribute("aria-disabled", String(refusal !== ""));
+  tabs[other].title = refusal;
+}
+
+function showView(next: View) {
+  if (next === view) return;
+  const refusal = switchRefusal(checked, editor.state.doc.toString());
+  if (refusal) {
+    setStatus(refusal, "error");
+    return;
+  }
+  view = next;
+  for (const name of ["code", "structure"] as View[]) {
+    const on = name === view;
+    tabs[name].setAttribute("aria-selected", String(on));
+    tabs[name].tabIndex = on ? 0 : -1;
+    panels[name].hidden = !on;
+  }
+  markTabs();
+  // A hidden editor measured nothing; now it is shown it lays out again.
+  if (view === "code") {
+    editor.requestMeasure();
+    editor.focus();
+  }
+}
+
+for (const name of ["code", "structure"] as View[]) {
+  tabs[name].addEventListener("click", () => showView(name));
+  tabs[name].addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const next: View = name === "code" ? "structure" : "code";
+    showView(next);
+    tabs[view].focus();
+  });
 }
 
 structure.addEventListener("edit", (event) => {
@@ -80,8 +131,13 @@ async function run() {
   client.sync();
   try {
     const args = argsText(runner.entries());
+    const table = runner.table();
+    if ("error" in table) {
+      throw new Error(table.error);
+    }
+    const { quotes: rates, tables } = table;
     const started = performance.now();
-    const result = await client.request<object, RunResult>("workspace/executeCommand", { command: "funroute.run", arguments: [{ uri: URI, args }] });
+    const result = await client.request<object, RunResult>("workspace/executeCommand", { command: "funroute.run", arguments: [{ uri: URI, args, rates, tables }] });
     runner.done(result, performance.now() - started);
   } catch (error) {
     failed("运行没有完成")(error);
@@ -99,12 +155,16 @@ $("#copy").addEventListener("click", () => {
     .then(() => setStatus("已复制，契约写在注释里", "ok"), failed("没有复制"));
 });
 
-type Example = { label: string; category: string; description: string; source: string; contract: TextContract; args: Record<string, unknown> };
+type Example = {
+  label: string; category: string; description: string; source: string; contract: TextContract;
+  args: Record<string, unknown>; rates?: Quote[]; tables?: QuoteTables;
+};
 
 function pick(example: Example) {
   contract.contract = example.contract;
   runner.declared = example.contract.result;
   runner.values = Object.fromEntries(Object.entries(example.args ?? {}).map(([name, value]) => [name, JSON.stringify(value)]));
+  runner.rates = quotesText(example.rates ?? [], example.tables);
   runner.result = null;
   sendContract();
   replaceAll(editor, example.source);
@@ -127,9 +187,18 @@ function showCatalog(catalog: Catalog) {
   }
   structure.blocks = blocks;
   const categories = [...new Set(catalog.functions.map((item) => item.doc.category))].sort();
-  render(categories.map((category) => html`<h4>${category}</h4><dl>${catalog.functions.filter((item) => item.doc.category === category).map((item) => html`
-    <dt><code>${item.signature}</code></dt><dd>${item.doc.label}${item.doc.description ? `：${item.doc.description}` : ""}</dd>`)}</dl>`),
+  render(html`${moneySection(catalog.money)}${categories.map((category) => html`<h4>${category}</h4><dl>${catalog.functions.filter((item) => item.doc.category === category).map((item) => html`
+    <dt><code>${item.signature}</code></dt><dd>${item.doc.label}${item.doc.description ? `：${item.doc.description}` : ""}</dd>`)}</dl>`)}`,
   $("#reference"));
+}
+
+// moneySection lists the currencies the registry declared, each with its
+// decimal places, and the rounding a product falls back on.
+function moneySection(money?: MoneySpec) {
+  if (!money) return nothing;
+  return html`<h4>币种</h4>
+    <p class="money-note">默认舍入 <code>${money.rounding}</code>，括号里是小数位。金额写作 <code>USD 1.70</code>，币种直接写代码 <code>USD</code>，汇率写作 <code>150 JPY / USD</code>。</p>
+    <p class="currencies">${money.currencies.map((currency) => html`<code>${currency.code}(${currency.digits})</code> `)}</p>`;
 }
 
 // The theme follows the system until someone picks one. The page's own

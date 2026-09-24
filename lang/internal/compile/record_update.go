@@ -7,7 +7,7 @@ import (
 	"funroute/lang/internal/syntax"
 )
 
-// A record update, {...order, amount: 1}, has its base's type: it replaces
+// A record update, order with {amount: 1}, has its base's type: it replaces
 // fields and never adds, removes or retypes one. That keeps the result the
 // type it came from — an Order in, an Order out — so it can go back into the
 // contract that declared it.
@@ -22,7 +22,7 @@ func inferRecordUpdate(node *syntax.RecordUpdateExpr, state *inferState, context
 	var out []inferResult
 	for _, base := range bases {
 		typ, ok := base.state.publicType(base.typ)
-		if !ok || typ.Kind != machine.RecordKind {
+		if !ok || typ.Kind() != machine.RecordKind {
 			continue
 		}
 		states, err := inferUpdatedFields(node, typ, base.state, context)
@@ -30,11 +30,11 @@ func inferRecordUpdate(node *syntax.RecordUpdateExpr, state *inferState, context
 			return nil, err
 		}
 		for _, updated := range states {
-			out = append(out, inferResult{typ: recordTerm(typ), state: updated})
+			out = append(out, inferResult{typ: updated.recordTerm(typ), state: updated})
 		}
 	}
 	if len(out) == 0 {
-		return nil, syntax.Around(node.Base, "type error: {...} updates something that is not a record with a known type")
+		return nil, syntax.Around(node.Base, "type error: with {…} updates something that is not a record with a known type")
 	}
 	return record(node, out), nil
 }
@@ -47,7 +47,7 @@ func inferUpdatedFields(node *syntax.RecordUpdateExpr, typ machine.Type, state *
 		if index < 0 {
 			return nil, syntax.Around(field.Value, "type error: %s has no field %q to update", typ.Summary(), field.Name)
 		}
-		next, err := inferUpdatedField(field, typ.Fields[index].Type, states, context)
+		next, err := inferUpdatedField(field, typ.Fields()[index].Type(), states, context)
 		if err != nil {
 			return nil, err
 		}
@@ -58,17 +58,27 @@ func inferUpdatedFields(node *syntax.RecordUpdateExpr, typ machine.Type, state *
 
 func inferUpdatedField(field syntax.RecordFieldExpr, want machine.Type, states []*inferState, context inferContext) ([]*inferState, error) {
 	var out []*inferState
+	var unitErr error
 	for _, state := range states {
 		values, err := inferExpr(field.Value, state, context)
 		if err != nil {
 			return nil, err
 		}
 		for _, value := range values {
+			// Unit classes merge without failing, so a proven currency that
+			// is not the field's is refused here, before it is merged away.
+			if err := checkResultUnits(field.Value, value.state, value.typ, want); err != nil {
+				unitErr = err
+				continue
+			}
 			candidate := value.state.clone()
-			if candidate.unify(value.typ, concreteTerm(want)) == nil {
+			if candidate.unify(value.typ, candidate.concrete(want)) == nil {
 				out = append(out, candidate)
 			}
 		}
+	}
+	if len(out) == 0 && unitErr != nil {
+		return nil, unitErr
 	}
 	if len(out) == 0 {
 		return nil, syntax.Around(field.Value, "type error: field %q is %s, and an update keeps its type", field.Name, want.Summary())
@@ -80,7 +90,7 @@ func inferUpdatedField(field syntax.RecordFieldExpr, want machine.Type, states [
 // were written, and replaces them in one instruction.
 func (c *bytecodeCompiler) compileRecordUpdate(node *syntax.RecordUpdateExpr) error {
 	resultType, ok := c.inferred.NodeTypes[node.ID]
-	if !ok || resultType.Kind != machine.RecordKind {
+	if !ok || resultType.Kind() != machine.RecordKind {
 		return fmt.Errorf("internal error: record update with unresolved type")
 	}
 	if err := c.compile(node.Base); err != nil {
@@ -92,6 +102,10 @@ func (c *bytecodeCompiler) compileRecordUpdate(node *syntax.RecordUpdateExpr) er
 		if err := c.compile(field.Value); err != nil {
 			return err
 		}
+		// The record keeps its type, so a new value whose currency inference
+		// could not prove is checked against the field's before it goes in.
+		declared := resultType.Fields()[resultType.FieldIndex(field.Name)].Type()
+		c.checkValue(field.Value, declared)
 	}
 	c.emit(machine.Instruction{Op: machine.OpRecordWith, Type: &resultType, Keys: names})
 	return nil

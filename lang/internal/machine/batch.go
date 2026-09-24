@@ -2,7 +2,6 @@ package machine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -97,8 +96,8 @@ func (b *Batch) Sites() int { return len(b.sites) }
 // call from many goroutines; that is the point. The hoisted engine calls run
 // under the earliest deadline in the batch, and each program under its own.
 func (b *Batch) Run(ctx context.Context, args []Value) (Value, error) {
-	if len(args) != len(b.runtime.artifact.Args) {
-		return Value{}, fmt.Errorf("%w: expected %d arguments, got %d", ErrContract, len(b.runtime.artifact.Args), len(args))
+	if len(args) != len(b.runtime.artifact.parts.Args) {
+		return Value{}, fmt.Errorf("%w: expected %d arguments, got %d", ErrContract, len(b.runtime.artifact.parts.Args), len(args))
 	}
 	return b.submit(ctx, args, false)
 }
@@ -194,16 +193,33 @@ func (b *Batch) executeShared(ctx context.Context, requests []*batchRequest, opt
 }
 
 // executeUnder is one batch: every hoisted call once under ctx, then every
-// program under its request's own.
+// program under its request's own. A request whose arguments the program
+// would refuse is answered first and left out: the engine sees only what a
+// run of its own would have handed it.
 func (b *Batch) executeUnder(ctx context.Context, active []*batchRequest, options RunOptions) {
+	active = b.admitted(active)
 	prefetched := make([]map[int]Prefetched, len(active))
 	for _, site := range b.sites {
 		b.prefetch(ctx, site, active, prefetched)
 	}
 	for i, request := range active {
-		options.Prefetched = prefetched[i]
+		options.prefetched = prefetched[i]
 		request.finish(b.run(request, options))
 	}
+}
+
+// admitted answers the requests whose arguments do not fit the contract and
+// keeps the rest, in order.
+func (b *Batch) admitted(active []*batchRequest) []*batchRequest {
+	kept := active[:0]
+	for _, request := range active {
+		if err := b.runtime.admit(request.args, request.typed); err != nil {
+			request.finish(batchResult{err: err})
+			continue
+		}
+		kept = append(kept, request)
+	}
+	return kept
 }
 
 func (b *Batch) run(request *batchRequest, options RunOptions) batchResult {
@@ -265,9 +281,9 @@ func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchR
 		calls[i] = b.operands(site, request.args)
 	}
 	results, err := invokeBatch(ctx, site.function, calls)
-	if err != nil && !errors.Is(err, ErrDeadline) && ctx.Err() != nil {
+	if err != nil && !keepsIdentity(err) && ctx.Err() != nil {
 		err = fmt.Errorf("%w: %v", ErrDeadline, err)
-	} else if err != nil && !errors.Is(err, ErrDeadline) && !errors.Is(err, ErrExtension) {
+	} else if err != nil && !keepsIdentity(err) {
 		err = fmt.Errorf("%w: %v", ErrExtension, err)
 	}
 	if err == nil && len(results) != len(requests) {
@@ -298,7 +314,7 @@ func invokeBatch(ctx context.Context, function *RegisteredFunction, calls [][]Va
 	} else {
 		results, err = callBatchSafely(ctx, function, calls)
 	}
-	if err != nil && ctx.Err() != nil {
+	if err != nil && ctx.Err() != nil && !keepsIdentity(err) {
 		return nil, fmt.Errorf("%w: %v", ErrDeadline, err)
 	}
 	return results, err

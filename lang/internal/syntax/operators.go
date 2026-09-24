@@ -15,43 +15,53 @@ const (
 	expandOr
 	expandNot
 	expandNegate
+	expandConvert
 )
 
-// operatorSpec is one operator. Every infix operator is left associative —
-// the parser climbs precedence that way and the printer parenthesises a right
-// operand of equal precedence — so there is no column for it.
+// operatorSpec is one operator. An infix operator is left associative
+// unless nonAssociative says it may not follow one of its own precedence:
+// the comparisons, so a < b < c and a == b == c are errors rather than
+// (a < b) < c. postfixRight says its right operand is a postfix expression,
+// not the next tighter level: amount -> JPY + fee is an error rather than
+// amount -> (JPY + fee), and the operators tighter than it cannot follow it.
 type operatorSpec struct {
-	kind       tokenKind
-	token      string
-	fixity     string
-	precedence int
-	function   string
-	arity      int
-	expansion  operatorExpansion
+	kind           tokenKind
+	token          string
+	fixity         string
+	precedence     int
+	function       string
+	arity          int
+	expansion      operatorExpansion
+	nonAssociative bool
+	postfixRight   bool
 }
 
 // sourceOperators is the one operator definition: the lexer, the parser and
 // the printer all read it, so a new operator is one row here.
 var sourceOperators = []operatorSpec{
-	{tokenOrOr, "||", "infix", 1, "", 2, expandOr},
-	{tokenAndAnd, "&&", "infix", 2, "", 2, expandAnd},
-	{tokenEqEq, "==", "infix", 3, "eq", 2, expandCall},
-	{tokenBangEq, "!=", "infix", 3, "", 2, expandNotEqual},
-	{tokenLess, "<", "infix", 4, "lt", 2, expandCall},
-	{tokenLessEq, "<=", "infix", 4, "le", 2, expandCall},
-	{tokenGreater, ">", "infix", 4, "gt", 2, expandCall},
-	{tokenGreaterEq, ">=", "infix", 4, "ge", 2, expandCall},
-	{tokenPlus, "+", "infix", 5, "add", 2, expandCall},
-	{tokenMinus, "-", "infix", 5, "sub", 2, expandCall},
-	{tokenStar, "*", "infix", 6, "mul", 2, expandCall},
-	{tokenSlash, "/", "infix", 6, "div", 2, expandCall},
-	{tokenPercent, "%", "infix", 6, "mod", 2, expandCall},
+	{tokenOrOr, "||", "infix", 1, "", 2, expandOr, false, false},
+	{tokenAndAnd, "&&", "infix", 2, "", 2, expandAnd, false, false},
+	{tokenEqEq, "==", "infix", 3, "eq", 2, expandCall, true, false},
+	{tokenBangEq, "!=", "infix", 3, "", 2, expandNotEqual, true, false},
+	{tokenLess, "<", "infix", 4, "lt", 2, expandCall, true, false},
+	{tokenLessEq, "<=", "infix", 4, "le", 2, expandCall, true, false},
+	{tokenGreater, ">", "infix", 4, "gt", 2, expandCall, true, false},
+	{tokenGreaterEq, ">=", "infix", 4, "ge", 2, expandCall, true, false},
+	// amount -> JPY converts through the run's rate table. It binds looser
+	// than arithmetic, so fee + amount -> JPY converts the sum, and tighter
+	// than comparison; a bare currency code after it is that currency.
+	{tokenArrow, "->", "infix", 5, "convert", 2, expandConvert, false, true},
+	{tokenPlus, "+", "infix", 6, "add", 2, expandCall, false, false},
+	{tokenMinus, "-", "infix", 6, "sub", 2, expandCall, false, false},
+	{tokenStar, "*", "infix", 7, "mul", 2, expandCall, false, false},
+	{tokenSlash, "/", "infix", 7, "div", 2, expandCall, false, false},
+	{tokenPercent, "%", "infix", 7, "mod", 2, expandCall, false, false},
 	// "in" is spelled as a word, so it is matched by text rather than by token
 	// kind; "[]" is postfix and is matched by the parser where a primary ends.
-	{tokenIdentifier, "in", "infix", 4, "member", 2, expandCall},
-	{tokenLeftBracket, "[]", "index", 8, "at", 2, expandCall},
-	{tokenBang, "!", "prefix", 7, "", 1, expandNot},
-	{tokenMinus, "-", "prefix", 7, "sub", 1, expandNegate},
+	{tokenIdentifier, "in", "infix", 4, "member", 2, expandCall, true, false},
+	{tokenLeftBracket, "[]", "index", 9, "at", 2, expandCall, false, false},
+	{tokenBang, "!", "prefix", 8, "", 1, expandNot, false, false},
+	{tokenMinus, "-", "prefix", 8, "sub", 1, expandNegate, false, false},
 }
 
 var binaryOperators = operatorMap("infix")
@@ -79,6 +89,25 @@ var keywordOperators = func() map[string]operatorSpec {
 	}
 	return out
 }()
+
+// leftLevel is the precedence an infix operator's left operand must reach
+// to go without parentheses: its own, or one more when it does not chain.
+func (s operatorSpec) leftLevel() int {
+	if s.nonAssociative {
+		return s.precedence + 1
+	}
+	return s.precedence
+}
+
+// rightLevel is the same for the right operand: one more than its own, so a
+// right operand of equal precedence keeps its parentheses, or a postfix
+// expression's.
+func (s operatorSpec) rightLevel() int {
+	if s.postfixRight {
+		return postfixPrecedence
+	}
+	return s.precedence + 1
+}
 
 // spelledAsWord reports an operator whose token is a word, not punctuation.
 func (s operatorSpec) spelledAsWord() bool { return s.kind == tokenIdentifier }
@@ -119,7 +148,7 @@ func (s operatorSpec) read(expr Expr) ([]Expr, bool) {
 	}
 	args := call.Args
 	switch s.expansion {
-	case expandCall:
+	case expandCall, expandConvert:
 		return args, call.Name == s.function && len(args) == s.arity
 	case expandNegate:
 		// The arity is checked before the slice: f() has no args[1:].

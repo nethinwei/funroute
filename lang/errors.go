@@ -22,6 +22,16 @@ var (
 	ErrFuel      = machine.ErrFuel
 	ErrDeadline  = machine.ErrDeadline
 	ErrExtension = machine.ErrExtension
+	// ErrCurrency is money meeting money of another currency where one is
+	// required, or a currency the registry did not declare.
+	ErrCurrency = machine.ErrCurrency
+	// ErrNoRate is a conversion with no rate table, or a table with no rate
+	// between the two currencies either way. It is data not at hand, so fallback takes it.
+	ErrNoRate = machine.ErrNoRate
+	// ErrArithmetic is arithmetic with no answer: an overflow, a division by
+	// zero, a float that is not finite, an exchange rate that is not
+	// positive. fallback does not take it.
+	ErrArithmetic = machine.ErrArithmetic
 	// ErrUnavailable is an ErrExtension from a function this registry knows
 	// only by its signature, from a Manifest.
 	ErrUnavailable = machine.ErrUnavailable

@@ -2,6 +2,7 @@ package compile
 
 import (
 	"fmt"
+	"slices"
 
 	"funroute/lang/internal/machine"
 	"funroute/lang/internal/syntax"
@@ -46,6 +47,12 @@ type CompileOptions struct {
 
 	// ResultDoc is prose for the console, excluded from the digest like Doc.
 	ResultDoc string
+
+	// RateTables names the rate tables besides RunOptions.Rates a rule may
+	// convert through: using(@settlement, …) takes one by name, and the host
+	// hands them in with RunOptions.RateTables. The names are part of the
+	// contract, and the artifact records them.
+	RateTables []string
 
 	MaxInstructions int
 }
@@ -102,6 +109,23 @@ func ValidateContract(options CompileOptions) error {
 	}
 	if options.Result != nil && !options.Result.IsConcrete() {
 		return contractErrorf("the declared result type is not concrete: %s", *options.Result)
+	}
+	if options.MaxInstructions < 0 {
+		return contractErrorf("the instruction limit is %d; 0 means the default", options.MaxInstructions)
+	}
+	return validateRateTables(options.RateTables)
+}
+
+// validateRateTables checks the names of the contract's rate tables: each a
+// name a field could have, written once.
+func validateRateTables(tables []string) error {
+	for i, name := range tables {
+		if !machine.IsValidFieldName(name) {
+			return contractErrorf("invalid rate table name %q", name)
+		}
+		if slices.Contains(tables[:i], name) {
+			return contractErrorf("rate table %q is declared twice", name)
+		}
 	}
 	return nil
 }

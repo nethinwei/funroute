@@ -30,7 +30,16 @@ func collectEnums(dst map[string]machine.Type, hints map[string]machine.Type, re
 func (o CompileOptions) Enums() map[string]machine.Type {
 	enums := map[string]machine.Type{}
 	_ = collectEnums(enums, o.argTypes(), o.Result)
+	addTableEnum(enums, o.RateTables)
 	return enums
+}
+
+// addTableEnum puts the contract's rate tables into the namespace @member
+// resolves in, as the members of rate_table.
+func addTableEnum(enums map[string]machine.Type, tables []string) {
+	if len(tables) > 0 {
+		enums[machine.RateTableEnum] = machine.EnumOf(machine.RateTableEnum, tables...)
+	}
 }
 
 // collectEnum registers every enum the type holds, at any depth — an element,
@@ -38,13 +47,13 @@ func (o CompileOptions) Enums() map[string]machine.Type {
 // declares its channel enum there, not as a separate argument.
 func collectEnum(dst map[string]machine.Type, typ machine.Type) error {
 	return machine.WalkTypes(typ, func(inner machine.Type) error {
-		if inner.Kind != machine.EnumKind {
+		if inner.Kind() != machine.EnumKind {
 			return nil
 		}
-		if existing, ok := dst[inner.Name]; ok && !existing.Equal(inner) {
+		if existing, ok := dst[inner.Name()]; ok && !existing.Equal(inner) {
 			return fmt.Errorf("the contract declares %s and %s under the same name", existing.Summary(), inner.Summary())
 		}
-		dst[inner.Name] = machine.CloneType(inner)
+		dst[inner.Name()] = machine.CloneType(inner)
 		return nil
 	})
 }
@@ -58,11 +67,17 @@ func resolveEnumReference(node *syntax.EnumExpr, enums map[string]machine.Type) 
 	}
 	var found []string
 	for name, typ := range enums {
-		if slices.Contains(typ.Values, node.Member) {
+		if slices.Contains(typ.Values(), node.Member) {
 			found = append(found, name)
 		}
 	}
 	slices.Sort(found)
+	// The contract's own enums come first: declaring money must not make a
+	// rule that already wrote @last for a contract member ambiguous. The
+	// registry's strategy is then @allocation.last.
+	if contract := slices.DeleteFunc(slices.Clone(found), isRegistryEnum); len(contract) > 0 {
+		found = contract
+	}
 	switch len(found) {
 	case 1:
 		return enums[found[0]], nil
@@ -75,13 +90,20 @@ func resolveEnumReference(node *syntax.EnumExpr, enums map[string]machine.Type) 
 	}
 }
 
+// isRegistryEnum reports an enum the language brings rather than a type of
+// the contract: the rounding modes and the allocation strategies money
+// brings, and the rate tables. A contract's own enum member comes first.
+func isRegistryEnum(name string) bool {
+	return name == machine.RoundingEnum || name == machine.AllocationEnum || name == machine.RateTableEnum
+}
+
 func resolveQualifiedEnum(node *syntax.EnumExpr, enums map[string]machine.Type) (machine.Type, error) {
 	typ, ok := enums[node.Enum]
 	if !ok {
 		return machine.Type{}, syntax.Around(node, "type error: the contract declares no enum named %q%s",
 			node.Enum, declaredEnums(enums))
 	}
-	if !slices.Contains(typ.Values, node.Member) {
+	if !slices.Contains(typ.Values(), node.Member) {
 		return machine.Type{}, syntax.Around(node, "type error: %q is not a member of %s", node.Member, typ.Summary())
 	}
 	return typ, nil
@@ -124,6 +146,8 @@ func validateConstrainedReturn(expr syntax.Expr, expected machine.Type, inferred
 	case *syntax.SwitchExpr:
 		return validateConstrainedSwitch(node, expected, inferred, registry)
 	case *syntax.LetExpr:
+		return validateAndSet(node, node.Body, expected, inferred, registry)
+	case *syntax.UsingExpr:
 		return validateAndSet(node, node.Body, expected, inferred, registry)
 	case *syntax.ReduceExpr:
 		if err := validateConstrainedReturn(node.Init, expected, inferred, registry); err != nil {
@@ -186,11 +210,11 @@ func validateConstrainedSwitch(node *syntax.SwitchExpr, expected machine.Type, i
 }
 
 func validateConstrainedArray(node *syntax.ArrayExpr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
-	if expected.Kind != machine.ArrayKind || expected.Elem == nil {
+	if expected.Kind() != machine.ArrayKind || !hasElem(expected) {
 		return enumReturnError(node, expected)
 	}
 	for _, item := range node.Items {
-		if err := validateConstrainedReturn(item, *expected.Elem, inferred, registry); err != nil {
+		if err := validateConstrainedReturn(item, elemOf(expected), inferred, registry); err != nil {
 			return err
 		}
 	}
@@ -199,11 +223,11 @@ func validateConstrainedArray(node *syntax.ArrayExpr, expected machine.Type, inf
 }
 
 func validateConstrainedDict(node *syntax.DictExpr, expected machine.Type, inferred *inference, registry *machine.Registry) error {
-	if expected.Kind != machine.DictKind || expected.Elem == nil {
+	if expected.Kind() != machine.DictKind || !hasElem(expected) {
 		return enumReturnError(node, expected)
 	}
 	for _, entry := range node.Entries {
-		if err := validateConstrainedReturn(entry.Value, *expected.Elem, inferred, registry); err != nil {
+		if err := validateConstrainedReturn(entry.Value, elemOf(expected), inferred, registry); err != nil {
 			return err
 		}
 	}
@@ -221,10 +245,10 @@ func validateConstrainedFor(node *syntax.ForExpr, expected machine.Type, inferre
 	if node.YieldKey != nil {
 		want = machine.DictKind
 	}
-	if expected.Kind != want || expected.Elem == nil {
+	if expected.Kind() != want || !hasElem(expected) {
 		return enumReturnError(node, expected)
 	}
-	yield := *expected.Elem
+	yield := elemOf(expected)
 	if node.Flatten {
 		yield = expected
 	}

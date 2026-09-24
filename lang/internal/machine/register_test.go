@@ -23,8 +23,8 @@ func TestHandlesPassBetweenModelsUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !artifact.Result.Equal(machine.FloatType) {
-		t.Fatalf("result = %s, want float", artifact.Result)
+	if !artifact.Result().Equal(machine.FloatType) {
+		t.Fatalf("result = %s, want float", artifact.Result())
 	}
 	runtime, err := machine.Instantiate(artifact, registry)
 	if err != nil {
@@ -156,5 +156,53 @@ func BenchmarkLogicCall(b *testing.B) {
 		if _, err := runtime.RunValues(ctx, args, machine.RunOptions{}); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// quoteArgs is what fees.quote_v1 was last handed, for the test to look at.
+type quoteArgs struct {
+	items []machine.Money
+}
+
+// Logic reads the money types' Go forms as money, their units unknown, and
+// hands an array of money over without a copy.
+func TestLogicTakesAndGivesMoney(t *testing.T) {
+	t.Parallel()
+	registry := moneyRegistry(t)
+	var seen quoteArgs
+	quote := func(m machine.Money, r machine.Rate, c machine.Currency, xs []machine.Money) (machine.Money, error) {
+		seen.items = xs
+		converted, err := machine.MulDivRound(m.Minor(), machine.RateScaled(r), machine.RateScale, machine.RoundDown)
+		return machine.NewMoney(c.Code(), converted+int64(len(xs))), err
+	}
+	if err := machine.Logic(registry, "fees.quote_v1", machine.Doc{Cost: 5}, quote); err != nil {
+		t.Fatal(err)
+	}
+	function := registry.Overloads("fees.quote_v1")[0]
+	if got, want := function.Signature(), "fees.quote_v1(money<?>,rate,currency<?>,array<money<?>>)->money<?>"; got != want {
+		t.Fatalf("signature = %s, want %s", got, want)
+	}
+	items := []machine.Money{machine.NewMoney("EUR", 1), machine.NewMoney("EUR", 2)}
+	args := []machine.Value{
+		machine.MoneyValue(1000, "EUR"), rateValue(t, "0.5"),
+		machine.CurrencyValue("USD"), moneyValues(t, items),
+	}
+	artifact, err := compileMoney(t, registry, "fees.quote_v1(a, r, c, xs)", "a: money<?>; r: rate; c: currency<?>; xs: array<money<?>>", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := runtime.RunValues(t.Context(), args, machine.RunOptions{})
+	if got, _ := value.Money(); err != nil || got != (machine.NewMoney("USD", 502)) {
+		t.Fatalf("fees.quote_v1 = %v, %v, want USD 5.02", got, err)
+	}
+	if len(seen.items) != 2 || &seen.items[0] != &items[0] {
+		t.Fatal("the array of money was copied on its way to the function")
+	}
+	if err := machine.Logic(machine.CoreRegistry(), "fees.quote_v1", machine.Doc{}, quote); err == nil || !strings.Contains(err.Error(), "declares no money") {
+		t.Fatalf("Logic with money before DeclareMoney: error = %v, want declares no money", err)
 	}
 }

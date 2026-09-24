@@ -183,7 +183,7 @@
       "label": "值分支",
       "category": "基础语法",
       "description": "switch 带主体时逐个匹配值，分支惰性求值，通常要写 else",
-      "source": "switch(country,\n  case \"SG\" => \"adyen_sg\",\n  case \"MY\" => \"stripe_my\",\n  else \"stripe_global\"\n)",
+      "source": "switch(country,\n  case \"SG\" => \"adyen_sg\",\n  case \"MY\" => \"stripe_my\",\n  else => \"stripe_global\"\n)",
       "contract": {
         "args": [
           {
@@ -235,7 +235,7 @@
       "label": "条件链",
       "category": "基础语法",
       "description": "switch 不写主体就是条件链，替代嵌套 if，按书写顺序命中",
-      "source": "switch(\n  case amount >= 100000 => \"large\",\n  case amount >= 1000   => \"medium\",\n  else \"small\"\n)",
+      "source": "switch(\n  case amount >= 100000 => \"large\",\n  case amount >= 1000   => \"medium\",\n  else => \"small\"\n)",
       "contract": {
         "args": [
           {
@@ -601,8 +601,8 @@
     {
       "label": "改几个字段",
       "category": "基础语法",
-      "description": "{...order, 字段: 新值} 复制一份记录、替换其中几个字段，类型不变：Order 进，Order 出",
-      "source": "{...order, amount: order.amount - order.fee, fee: 0}",
+      "description": "order with {字段: 新值} 复制一份记录、替换其中几个字段，类型不变：Order 进，Order 出",
+      "source": "order with {amount: order.amount - order.fee, fee: 0}",
       "contract": {
         "types": {
           "Order": "record{amount: int, fee: int, currency: string}"
@@ -640,7 +640,7 @@
       "label": "成员判断",
       "category": "基础语法",
       "description": "x in xs 问数组里有没有这个元素，\"k\" in d 问字典里有没有这个键",
-      "source": "switch(\n  case currency in settled => \"settle:\" + currency,\n  case currency in accepted => \"hold:\" + currency,\n  else \"reject\"\n)",
+      "source": "switch(\n  case currency in settled => \"settle:\" + currency,\n  case currency in accepted => \"hold:\" + currency,\n  else => \"reject\"\n)",
       "contract": {
         "args": [
           {
@@ -687,7 +687,7 @@
       "label": "整数序列与全体判断",
       "category": "基础语法",
       "description": "range 生成固定长度的整数序列，参数必须编译期已知；all 判断一个布尔数组是否全部成立",
-      "source": "let(\n  delays = [base_delay * step for step in range(1, 4)],\n  ready = all([delay <= ceiling for delay in delays]),\n  switch(case ready => delays, else [base_delay])\n)",
+      "source": "let(\n  delays = [base_delay * step for step in range(1, 4)],\n  ready = all([delay <= ceiling for delay in delays]),\n  switch(case ready => delays, else => [base_delay])\n)",
       "contract": {
         "args": [
           {
@@ -728,7 +728,7 @@
       "label": "卡 BIN 与品牌",
       "category": "基础语法",
       "description": "字符串操作用在最常见的地方：清洗、取前缀、判前缀、规范化大小写",
-      "source": "let(\n  bin = slice(trim(card), 0, 6),\n  brand = switch(\n    case starts_with(bin, \"4\") => \"visa\",\n    case starts_with(bin, \"5\") => \"mastercard\",\n    else \"other\"\n  ),\n  {bin: bin, brand: upper(brand), supported: contains(accepted, brand)}\n)",
+      "source": "let(\n  bin = slice(trim(card), 0, 6),\n  brand = switch(\n    case starts_with(bin, \"4\") => \"visa\",\n    case starts_with(bin, \"5\") => \"mastercard\",\n    else => \"other\"\n  ),\n  {bin: bin, brand: upper(brand), supported: contains(accepted, brand)}\n)",
       "contract": {
         "types": {
           "Card": "record{bin: string, brand: string, supported: bool}"
@@ -1433,7 +1433,7 @@
       "label": "报价级联分档",
       "category": "支付路由",
       "description": "let 接住一次 fallback 级联的报价，再用条件 switch 判断落在哪一档",
-      "source": "let(\n  quote = fallback(\n    route.fee_quote_v1(primary_status, primary_fee),\n    route.fee_quote_v1(backup_status, backup_fee),\n    ceiling_fee\n  ),\n  switch(\n    case quote >= ceiling_fee => \"ceiling\",\n    case quote > primary_fee  => \"backup\",\n    else \"primary\"\n  )\n)",
+      "source": "let(\n  quote = fallback(\n    route.fee_quote_v1(primary_status, primary_fee),\n    route.fee_quote_v1(backup_status, backup_fee),\n    ceiling_fee\n  ),\n  switch(\n    case quote >= ceiling_fee => \"ceiling\",\n    case quote > primary_fee  => \"backup\",\n    else => \"primary\"\n  )\n)",
       "contract": {
         "args": [
           {
@@ -1487,7 +1487,7 @@
       "label": "枚举渠道切换",
       "category": "支付路由",
       "description": "枚举 switch 穷尽后不需要 else，每个分支内部再按健康状态二次收敛",
-      "source": "switch(channel,\n  case @adyen  => switch(case route.is_healthy_v1(health) => @adyen,  else @stripe),\n  case @stripe => switch(case route.is_healthy_v1(health) => @stripe, else @adyen)\n)",
+      "source": "switch(channel,\n  case @adyen  => switch(case route.is_healthy_v1(health) => @adyen,  else => @stripe),\n  case @stripe => switch(case route.is_healthy_v1(health) => @stripe, else => @adyen)\n)",
       "contract": {
         "args": [
           {
@@ -1520,7 +1520,7 @@
       "label": "地区与额度分流",
       "category": "支付路由",
       "description": "值 switch 归拢国家、条件 switch 归拢额度，两个局部绑定再拼成路由键",
-      "source": "let(\n  region = switch(country,\n    case \"SG\", \"MY\", \"TH\" => \"asia\",\n    case \"US\", \"CA\"       => \"na\",\n    else \"global\"\n  ),\n  tier = switch(\n    case amount >= 1000000 => \"enterprise\",\n    case amount >= 10000   => \"standard\",\n    else \"micro\"\n  ),\n  region + \":\" + tier\n)",
+      "source": "let(\n  region = switch(country,\n    case \"SG\", \"MY\", \"TH\" => \"asia\",\n    case \"US\", \"CA\"       => \"na\",\n    else => \"global\"\n  ),\n  tier = switch(\n    case amount >= 1000000 => \"enterprise\",\n    case amount >= 10000   => \"standard\",\n    else => \"micro\"\n  ),\n  region + \":\" + tier\n)",
       "contract": {
         "args": [
           {
@@ -1594,7 +1594,7 @@
       "label": "健康候选筛选",
       "category": "支付路由",
       "description": "推导式按 key 遍历字典筛出可用渠道，reduce 数出结果长度（语言没有 length 原语），全灭时退到应急渠道",
-      "source": "let(\n  healthy = [name for name, status in channel_statuses if route.is_healthy_v1(status)],\n  live = len(healthy),\n  switch(case live == 0 => [emergency_channel], else healthy)\n)",
+      "source": "let(\n  healthy = [name for name, status in channel_statuses if route.is_healthy_v1(status)],\n  live = len(healthy),\n  switch(case live == 0 => [emergency_channel], else => healthy)\n)",
       "contract": {
         "args": [
           {
@@ -1680,7 +1680,7 @@
       "label": "报价级联择优",
       "category": "复杂策略",
       "description": "主路是一次宽 fallback 级联，备份池用推导式逐个报价、失败的自动落到挂牌价，reduce 取最低后再与主路比价",
-      "source": "let(\n  primary = fallback(\n    route.fee_quote_v1(status_01, 0.018),\n    route.fee_quote_v1(status_02, 0.020),\n    route.fee_quote_v1(status_03, 0.022),\n    route.fee_quote_v1(status_04, 0.024),\n    route.fee_quote_v1(status_05, 0.026),\n    listed_fee\n  ),\n  pool = [fallback(route.fee_quote_v1(pool_status, fee), listed_fee) for fee in pool_fees],\n  cheapest = min(pool),\n  {\n    \"primary\": primary,\n    \"pool_best\": cheapest,\n    \"chosen\": switch(case cheapest < primary => cheapest, else primary)\n  }\n)",
+      "source": "let(\n  primary = fallback(\n    route.fee_quote_v1(status_01, 0.018),\n    route.fee_quote_v1(status_02, 0.020),\n    route.fee_quote_v1(status_03, 0.022),\n    route.fee_quote_v1(status_04, 0.024),\n    route.fee_quote_v1(status_05, 0.026),\n    listed_fee\n  ),\n  pool = [fallback(route.fee_quote_v1(pool_status, fee), listed_fee) for fee in pool_fees],\n  cheapest = min(pool),\n  {\n    \"primary\": primary,\n    \"pool_best\": cheapest,\n    \"chosen\": switch(case cheapest < primary => cheapest, else => primary)\n  }\n)",
       "contract": {
         "args": [
           {
@@ -1758,7 +1758,7 @@
       "label": "全球支付决策",
       "category": "复杂策略",
       "description": "合规、风险、渠道、币种、额度各由最合适的结构算成一个局部量，最后一条扁平条件链收口，而不是十层 switch 套娃",
-      "source": "let(\n  flagged = len([name for name, hit in watchlists if hit]),\n  risk = fallback(model.fraud_v1(model.embed_v1(features)), risk_fallback),\n  candidates = [name for name, status in channel_statuses if route.is_healthy_v1(status)],\n  live = len(candidates),\n  settlement = switch(case currency == settlement_currency => \"local\", else \"fx\"),\n  tier = switch(\n    case amount >= high_value_limit => \"high\",\n    case amount <= minimum_amount   => \"micro\",\n    else \"standard\"\n  ),\n  needs_3ds = method == \"card\" && !three_ds_completed && amount > three_ds_limit,\n  switch(\n    case !enabled            => \"disabled\",\n    case flagged > 0         => \"reject:compliance\",\n    case risk >= risk_reject => \"reject:risk\",\n    case risk >= risk_review => \"review:risk\",\n    case tier == \"micro\"     => \"reject:minimum\",\n    case tier == \"high\"      => \"review:high_value\",\n    case live == 0           => \"hold:no_channel\",\n    case needs_3ds           => \"challenge:3ds\",\n    else \"route:\" + settlement + \":\" + capture_mode\n  )\n)",
+      "source": "let(\n  flagged = len([name for name, hit in watchlists if hit]),\n  risk = fallback(model.fraud_v1(model.embed_v1(features)), risk_fallback),\n  candidates = [name for name, status in channel_statuses if route.is_healthy_v1(status)],\n  live = len(candidates),\n  settlement = switch(case currency == settlement_currency => \"local\", else => \"fx\"),\n  tier = switch(\n    case amount >= high_value_limit => \"high\",\n    case amount <= minimum_amount   => \"micro\",\n    else => \"standard\"\n  ),\n  needs_3ds = method == \"card\" && !three_ds_completed && amount > three_ds_limit,\n  switch(\n    case !enabled            => \"disabled\",\n    case flagged > 0         => \"reject:compliance\",\n    case risk >= risk_reject => \"reject:risk\",\n    case risk >= risk_review => \"review:risk\",\n    case tier == \"micro\"     => \"reject:minimum\",\n    case tier == \"high\"      => \"review:high_value\",\n    case live == 0           => \"hold:no_channel\",\n    case needs_3ds           => \"challenge:3ds\",\n    else => \"route:\" + settlement + \":\" + capture_mode\n  )\n)",
       "contract": {
         "args": [
           {
@@ -1884,7 +1884,7 @@
       "label": "结构化支付编排",
       "category": "复杂策略",
       "description": "模型评分与信号计数先定处置，每个下游阶段只管自己那一件事，最后由一个 if 决定发出放行包还是拦截包",
-      "source": "let(\n  risk = fallback(model.fraud_v1(model.embed_v1(features)), risk_fallback),\n  hits = len([name for name, fired in signals if fired]),\n  action = switch(\n    case blocked => \"reject\",\n    case risk >= 0.90 => \"review\",\n    case hits >= 2 => \"review\",\n    case amount > review_limit => \"review\",\n    else \"approve\"\n  ),\n  route = switch(\n    case country == \"BR\" && method == \"bank\" => \"pix\",\n    case method == \"wallet\" => \"wallet\",\n    case route.is_healthy_v1(primary_health) => \"adyen\",\n    else \"stripe\"\n  ),\n  auth_mode = switch(\n    case method != \"card\" => \"native\",\n    case amount > three_ds_limit => \"three_ds\",\n    else \"frictionless\"\n  ),\n  capture = switch(case risk >= 0.70 => \"manual\", else \"auto\"),\n  if(action == \"approve\",\n    {\"action\": action, \"route\": route, \"auth\": auth_mode, \"capture\": capture, \"reason\": \"approved\"},\n    {\"action\": action, \"route\": \"none\", \"auth\": \"none\", \"capture\": \"none\",\n     \"reason\": switch(action, case \"reject\" => \"risk_or_blocklist\", else \"manual_review\")}\n  )\n)",
+      "source": "let(\n  risk = fallback(model.fraud_v1(model.embed_v1(features)), risk_fallback),\n  hits = len([name for name, fired in signals if fired]),\n  action = switch(\n    case blocked => \"reject\",\n    case risk >= 0.90 => \"review\",\n    case hits >= 2 => \"review\",\n    case amount > review_limit => \"review\",\n    else => \"approve\"\n  ),\n  route = switch(\n    case country == \"BR\" && method == \"bank\" => \"pix\",\n    case method == \"wallet\" => \"wallet\",\n    case route.is_healthy_v1(primary_health) => \"adyen\",\n    else => \"stripe\"\n  ),\n  auth_mode = switch(\n    case method != \"card\" => \"native\",\n    case amount > three_ds_limit => \"three_ds\",\n    else => \"frictionless\"\n  ),\n  capture = switch(case risk >= 0.70 => \"manual\", else => \"auto\"),\n  if(action == \"approve\",\n    {\"action\": action, \"route\": route, \"auth\": auth_mode, \"capture\": capture, \"reason\": \"approved\"},\n    {\"action\": action, \"route\": \"none\", \"auth\": \"none\", \"capture\": \"none\",\n     \"reason\": switch(action, case \"reject\" => \"risk_or_blocklist\", else => \"manual_review\")}\n  )\n)",
       "contract": {
         "args": [
           {
@@ -1979,7 +1979,7 @@
       "label": "跨境结算流水线",
       "category": "复杂策略",
       "description": "reduce 汇总明细，顺序 let 表达十段计算流水线，条件费用由 switch 决定，最后打包成数组字典",
-      "source": "let(\n  gross = sum(line_items),\n  interchange = gross * interchange_bps / 10000,\n  scheme_fee = gross * scheme_bps / 10000,\n  fx_fee = switch(case cross_border => gross * fx_bps / 10000, else 0),\n  gateway_fee = gross * gateway_bps / 10000 + fixed_fee,\n  total_fee = interchange + scheme_fee + fx_fee + gateway_fee,\n  reserve = gross * reserve_bps / 10000,\n  net_before_tax = gross - total_fee - reserve,\n  withholding = switch(case taxable => net_before_tax * tax_bps / 10000, else 0),\n  payable = net_before_tax - withholding,\n  {\"fees\": [interchange, scheme_fee, fx_fee, gateway_fee, total_fee], \"settlement\": [gross, reserve, withholding, payable]}\n)",
+      "source": "let(\n  gross = sum(line_items),\n  interchange = gross * interchange_bps / 10000,\n  scheme_fee = gross * scheme_bps / 10000,\n  fx_fee = switch(case cross_border => gross * fx_bps / 10000, else => 0),\n  gateway_fee = gross * gateway_bps / 10000 + fixed_fee,\n  total_fee = interchange + scheme_fee + fx_fee + gateway_fee,\n  reserve = gross * reserve_bps / 10000,\n  net_before_tax = gross - total_fee - reserve,\n  withholding = switch(case taxable => net_before_tax * tax_bps / 10000, else => 0),\n  payable = net_before_tax - withholding,\n  {\"fees\": [interchange, scheme_fee, fx_fee, gateway_fee, total_fee], \"settlement\": [gross, reserve, withholding, payable]}\n)",
       "contract": {
         "args": [
           {
@@ -2153,7 +2153,7 @@
       "label": "模型反欺诈",
       "category": "风险控制",
       "description": "推导式逐行把特征向量化并评分，reduce 取出最坏一行，再由条件 switch 定处置",
-      "source": "let(\n  scores = [model.fraud_v1(model.embed_v1(row)) for row in feature_rows],\n  worst = max(scores),\n  switch(\n    case worst > 0.8 => \"review\",\n    case worst > 0.5 => \"challenge\",\n    else \"accept\"\n  )\n)",
+      "source": "let(\n  scores = [model.fraud_v1(model.embed_v1(row)) for row in feature_rows],\n  worst = max(scores),\n  switch(\n    case worst > 0.8 => \"review\",\n    case worst > 0.5 => \"challenge\",\n    else => \"accept\"\n  )\n)",
       "contract": {
         "args": [
           {
@@ -2193,7 +2193,7 @@
       "label": "金额分层",
       "category": "风险控制",
       "description": "上游字符串逐条转成整数，推导式里再用无主体 switch 覆盖小额、标准额和大额边界",
-      "source": "let(\n  amounts = [int(text) for text in amount_texts],\n  [switch(\n     case amount < 1000       => \"micro\",\n     case amount <= 100000    => \"standard\",\n     case amount >= 1000000   => \"manual_review\",\n     else \"enhanced_review\"\n   ) for amount in amounts]\n)",
+      "source": "let(\n  amounts = [int(text) for text in amount_texts],\n  [switch(\n     case amount < 1000       => \"micro\",\n     case amount <= 100000    => \"standard\",\n     case amount >= 1000000   => \"manual_review\",\n     else => \"enhanced_review\"\n   ) for amount in amounts]\n)",
       "contract": {
         "args": [
           {
@@ -2236,7 +2236,7 @@
       "label": "费率结算",
       "category": "金融计算",
       "description": "reduce 汇总批次金额，switch 给变动费封顶，局部绑定接着算固定费、准备金和净结算额",
-      "source": "let(\n  gross = sum(amounts),\n  variable_fee = gross * bps / 10000,\n  capped_fee = switch(case variable_fee > fee_cap => fee_cap, else variable_fee),\n  net = gross - capped_fee - fixed_fee,\n  net + reserve\n)",
+      "source": "let(\n  gross = sum(amounts),\n  variable_fee = gross * bps / 10000,\n  capped_fee = switch(case variable_fee > fee_cap => fee_cap, else => variable_fee),\n  net = gross - capped_fee - fixed_fee,\n  net + reserve\n)",
       "contract": {
         "args": [
           {
@@ -2298,7 +2298,7 @@
       "label": "结算偏差",
       "category": "金融计算",
       "description": "筛选条件同时检查负向和正向容差（一元负号），产出项再按方向标注是少结还是多结",
-      "source": "[account + switch(case delta < 0 => \":short\", else \":over\")\n for account, delta in deltas\n if delta <= -tolerance || delta >= tolerance]",
+      "source": "[account + switch(case delta < 0 => \":short\", else => \":over\")\n for account, delta in deltas\n if delta <= -tolerance || delta >= tolerance]",
       "contract": {
         "args": [
           {
@@ -2458,7 +2458,7 @@
       "label": "结构化订单决策",
       "category": "数据结构",
       "description": "宿主把订单整个传进来，规则读字段、算费用并返回一条结构化决策，而不是拍平成几十个入参",
-      "source": "let(\n  needs_review = order.amount > limit || order.currency != settlement,\n  fee = order.amount * bps / 10000,\n  {\n    channel: switch(case needs_review => \"manual\", else \"auto\"),\n    net: order.amount - fee,\n    reason: switch(\n      case order.amount > limit          => \"high_value\",\n      case order.currency != settlement  => \"cross_border\",\n      else                                  \"standard\"\n    )\n  }\n)",
+      "source": "let(\n  needs_review = order.amount > limit || order.currency != settlement,\n  fee = order.amount * bps / 10000,\n  {\n    channel: switch(case needs_review => \"manual\", else => \"auto\"),\n    net: order.amount - fee,\n    reason: switch(\n      case order.amount > limit          => \"high_value\",\n      case order.currency != settlement  => \"cross_border\",\n      else =>                                  \"standard\"\n    )\n  }\n)",
       "contract": {
         "types": {
           "Order": "record{amount: int, currency: string}",
@@ -2567,7 +2567,7 @@
       "label": "稳定调用契约",
       "category": "契约治理",
       "description": "调用方仍传旧字段时，表达式可以不读取它，保持 ABI 稳定",
-      "source": "switch(case amount >= threshold => amount * 2, else amount)",
+      "source": "switch(case amount >= threshold => amount * 2, else => amount)",
       "contract": {
         "args": [
           {
@@ -2764,6 +2764,1341 @@
         "merge"
       ],
       "operators": []
+    },
+    {
+      "label": "按币种计费并封顶",
+      "category": "金额计算",
+      "description": "契约写 money<c>：同一个 c 的金额同币种，编译期就能相加比较；2.9% 是精确的比例，like 在同一币种里造出固定费，结果回到参数带来的那个币种",
+      "source": "let(\n  fee = amount * 2.9% + like(amount, 30),\n  if(fee > cap, cap, fee)\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<c>",
+            "doc": "交易金额"
+          },
+          {
+            "name": "cap",
+            "type": "money<c>",
+            "doc": "手续费封顶，与交易同币种"
+          }
+        ],
+        "result": {
+          "type": "money<c>",
+          "doc": "手续费"
+        }
+      },
+      "args": {
+        "amount": "EUR 100.00",
+        "cap": "EUR 2.50"
+      },
+      "expected": "EUR 2.50",
+      "covers": [
+        "like"
+      ],
+      "operators": [
+        "infix:*",
+        "infix:+",
+        "infix:>"
+      ]
+    },
+    {
+      "label": "拆开的金额与币种",
+      "category": "金额计算",
+      "description": "输入里金额与币种常常分开：money 用最小单位整数和币种造出金额，currency_of 校验币种代码；minor、currency、sign 再把它拆开",
+      "source": "let(\n  m = money(order.minor, currency_of(order.code)),\n  {amount: m, currency: currency(m), cents: minor(m), sign: sign(m)}\n)",
+      "contract": {
+        "types": {
+          "Order": "record{minor: int, code: string}",
+          "Parts": "record{amount: money<?>, currency: currency<?>, cents: int, sign: int}"
+        },
+        "args": [
+          {
+            "name": "order",
+            "type": "Order",
+            "doc": "上游传来的订单：最小单位金额与币种代码"
+          }
+        ],
+        "result": {
+          "type": "Parts",
+          "doc": "金额与它的各个部分"
+        }
+      },
+      "args": {
+        "order": {
+          "minor": 1500,
+          "code": "JPY"
+        }
+      },
+      "expected": {
+        "amount": "JPY 1500",
+        "currency": "JPY",
+        "cents": 1500,
+        "sign": 1
+      },
+      "covers": [
+        "money",
+        "currency_of",
+        "currency",
+        "minor",
+        "sign"
+      ],
+      "operators": []
+    },
+    {
+      "label": "分摊不丢分",
+      "category": "结算分账",
+      "description": "按权重分一笔钱，各份加起来一定等于原额：各份向零取整，剩下的最小单位按最大余数法发出，被舍掉最多的份先得",
+      "source": "allocate(total, [2, 1, 1])",
+      "contract": {
+        "args": [
+          {
+            "name": "total",
+            "type": "money<c>",
+            "doc": "要分摊的总额"
+          }
+        ],
+        "result": {
+          "type": "array<money<c>>",
+          "doc": "各方分得的金额"
+        }
+      },
+      "args": {
+        "total": "USD 10.01"
+      },
+      "expected": [
+        "USD 5.01",
+        "USD 2.50",
+        "USD 2.50"
+      ],
+      "covers": [
+        "allocate"
+      ],
+      "operators": []
+    },
+    {
+      "label": "分摊策略",
+      "category": "结算分账",
+      "description": "余数怎么发由末尾的策略说：@all_last 把舍入差全部交给最后一份，比如收单行那一份；另有 @largest_remainder（缺省）、@largest_weight、@in_order、@reverse_order、@all_first",
+      "source": "allocate(total, [1, 1, 1], @all_last)",
+      "contract": {
+        "args": [
+          {
+            "name": "total",
+            "type": "money<c>",
+            "doc": "要分摊的总额"
+          }
+        ],
+        "result": {
+          "type": "array<money<c>>",
+          "doc": "各方分得的金额"
+        }
+      },
+      "args": {
+        "total": "USD 10.00"
+      },
+      "expected": [
+        "USD 3.33",
+        "USD 3.33",
+        "USD 3.34"
+      ],
+      "covers": [
+        "allocate"
+      ],
+      "operators": []
+    },
+    {
+      "label": "文本费率加通道费",
+      "category": "金额计算",
+      "description": "费率从配置里读出来是文本：rate 把十进制文本精确读成比例，再加上 25bps 的通道费与 USD 0.30 的固定费；浮点数不能当费率",
+      "source": "amount * (rate(fee_text) + 25bps) + USD 0.30",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<USD>",
+            "doc": "交易金额"
+          },
+          {
+            "name": "fee_text",
+            "type": "string",
+            "doc": "配置里的费率文本"
+          }
+        ],
+        "result": {
+          "type": "money<USD>",
+          "doc": "按配置费率计的费用"
+        }
+      },
+      "args": {
+        "amount": "USD 100.00",
+        "fee_text": "0.0275"
+      },
+      "expected": "USD 3.30",
+      "covers": [
+        "rate"
+      ],
+      "operators": [
+        "infix:*",
+        "infix:+"
+      ]
+    },
+    {
+      "label": "跨境结算换汇",
+      "category": "跨境汇率",
+      "description": "-> 按运行时汇率表换汇，结果币种由目标币种决定；round 选定这一步的舍入方式，这里向下取整不多付",
+      "source": "round(amount -> JPY, @down)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<USD>",
+            "doc": "结算金额"
+          }
+        ],
+        "result": {
+          "type": "money<JPY>",
+          "doc": "到账日元"
+        }
+      },
+      "args": {
+        "amount": "USD 100.00"
+      },
+      "expected": "JPY 15025",
+      "covers": [
+        "convert",
+        "round"
+      ],
+      "operators": [
+        "infix:->"
+      ],
+      "rates": [
+        {
+          "base": "USD",
+          "quote": "JPY",
+          "rate": "150.255"
+        }
+      ]
+    },
+    {
+      "label": "多币种历史折成美元",
+      "category": "跨境汇率",
+      "description": "每笔订单币种不同：各自换成美元才能加在一起；汇率表里没有某个币种的汇率是 ErrNoRate",
+      "source": "sum([money(o.amount, o.currency) -> USD for o in history])",
+      "contract": {
+        "types": {
+          "Order": "record{amount: int, currency: currency<?>}"
+        },
+        "args": [
+          {
+            "name": "history",
+            "type": "array<Order>",
+            "doc": "过去的订单，最小单位金额与币种"
+          }
+        ],
+        "result": {
+          "type": "money<USD>",
+          "doc": "折成美元的总额"
+        }
+      },
+      "args": {
+        "history": [
+          {
+            "amount": 1000,
+            "currency": "EUR"
+          },
+          {
+            "amount": 2000,
+            "currency": "JPY"
+          }
+        ]
+      },
+      "expected": "USD 24.40",
+      "covers": [],
+      "operators": [
+        "infix:->"
+      ],
+      "rates": [
+        {
+          "base": "EUR",
+          "quote": "USD",
+          "rate": "1.1"
+        },
+        {
+          "base": "JPY",
+          "quote": "USD",
+          "rate": "0.0067"
+        }
+      ]
+    },
+    {
+      "label": "费率加固定费，保底封顶",
+      "category": "费率计费",
+      "description": "最常见的商户扣率：百分比加每笔固定费，再落在保底与封顶之间；min、max 对同币种金额直接可用",
+      "source": "min(max(amount * 2.9% + like(amount, 30), floor_fee), cap)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<c>",
+            "doc": "交易金额"
+          },
+          {
+            "name": "floor_fee",
+            "type": "money<c>",
+            "doc": "每笔最低收费"
+          },
+          {
+            "name": "cap",
+            "type": "money<c>",
+            "doc": "每笔封顶"
+          }
+        ],
+        "result": {
+          "type": "money<c>",
+          "doc": "手续费"
+        }
+      },
+      "args": {
+        "amount": "EUR 5.00",
+        "floor_fee": "EUR 0.50",
+        "cap": "EUR 5.00"
+      },
+      "expected": "EUR 0.50",
+      "covers": [
+        "min",
+        "max"
+      ],
+      "operators": [
+        "infix:*",
+        "infix:+"
+      ]
+    },
+    {
+      "label": "阶梯费率",
+      "category": "费率计费",
+      "description": "按商户本月交易量分档定费率：量越大费率越低，金额阈值直接写成带币种的字面量",
+      "source": "let(\n  tier = switch(\n    case volume >= USD 100000.00 => 1.8%,\n    case volume >= USD 10000.00  => 2.2%,\n    else => 2.9%),\n  amount * tier + USD 0.20\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<USD>",
+            "doc": "本笔金额"
+          },
+          {
+            "name": "volume",
+            "type": "money<USD>",
+            "doc": "商户本月累计交易量"
+          }
+        ],
+        "result": {
+          "type": "money<USD>",
+          "doc": "本笔手续费"
+        }
+      },
+      "args": {
+        "amount": "USD 250.00",
+        "volume": "USD 42000.00"
+      },
+      "expected": "USD 5.70",
+      "covers": [],
+      "operators": [
+        "infix:>=",
+        "infix:*",
+        "infix:+"
+      ]
+    },
+    {
+      "label": "Interchange++ 透传",
+      "category": "费率计费",
+      "description": "交换费、卡组织费按实际透传，再加收单机构的加价；三段比例先相加，整体只舍入一次",
+      "source": "round(amount * (interchange + scheme_fee + markup), @half_even) + USD 0.05",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<USD>",
+            "doc": "交易金额"
+          },
+          {
+            "name": "interchange",
+            "type": "rate",
+            "doc": "发卡行交换费率"
+          },
+          {
+            "name": "scheme_fee",
+            "type": "rate",
+            "doc": "卡组织费率"
+          },
+          {
+            "name": "markup",
+            "type": "rate",
+            "doc": "收单加价"
+          }
+        ],
+        "result": {
+          "type": "money<USD>",
+          "doc": "商户手续费"
+        }
+      },
+      "args": {
+        "amount": "USD 123.45",
+        "interchange": "0.018",
+        "scheme_fee": "0.0013",
+        "markup": "0.0025"
+      },
+      "expected": "USD 2.74",
+      "covers": [
+        "round"
+      ],
+      "operators": [
+        "infix:*",
+        "infix:+"
+      ]
+    },
+    {
+      "label": "按卡组织取费率",
+      "category": "费率计费",
+      "description": "各卡组织的费率放在字典里，没配的卡组织按 3% 兜底",
+      "source": "amount * get(rates, brand, 3%)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<c>",
+            "doc": "交易金额"
+          },
+          {
+            "name": "brand",
+            "type": "string",
+            "doc": "卡组织"
+          },
+          {
+            "name": "rates",
+            "type": "dict<rate>",
+            "doc": "各卡组织的费率"
+          }
+        ],
+        "result": {
+          "type": "money<c>",
+          "doc": "手续费"
+        }
+      },
+      "args": {
+        "amount": "GBP 80.00",
+        "brand": "amex",
+        "rates": {
+          "visa": "0.019",
+          "mastercard": "0.021"
+        }
+      },
+      "expected": "GBP 2.40",
+      "covers": [
+        "get"
+      ],
+      "operators": [
+        "infix:*"
+      ]
+    },
+    {
+      "label": "反推含费金额",
+      "category": "费率计费",
+      "description": "商户想到账 100 美元，该向顾客收多少：净额加固定费再除以 100% 减费率，向上取整保证不少收",
+      "source": "round((net + USD 0.30) / (100% - 2.9%), @up)",
+      "contract": {
+        "args": [
+          {
+            "name": "net",
+            "type": "money<USD>",
+            "doc": "商户想到账的金额"
+          }
+        ],
+        "result": {
+          "type": "money<USD>",
+          "doc": "应向顾客收取的金额"
+        }
+      },
+      "args": {
+        "net": "USD 100.00"
+      },
+      "expected": "USD 103.30",
+      "covers": [],
+      "operators": [
+        "infix:+",
+        "infix:/",
+        "infix:-"
+      ]
+    },
+    {
+      "label": "退款退还手续费",
+      "category": "费率计费",
+      "description": "部分退款时按退款占比退还手续费：prorate(fee, refund, amount) 是 fee × refund / amount，中间精确、只舍入一次，不会先把比例舍到十位小数",
+      "source": "{refund: refund, fee_back: round(prorate(fee, refund, amount), @half_even)}",
+      "contract": {
+        "types": {
+          "Refund": "record{refund: money<c>, fee_back: money<c>}"
+        },
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<c>",
+            "doc": "原交易金额"
+          },
+          {
+            "name": "refund",
+            "type": "money<c>",
+            "doc": "退款金额"
+          },
+          {
+            "name": "fee",
+            "type": "money<c>",
+            "doc": "原交易手续费"
+          }
+        ],
+        "result": {
+          "type": "Refund",
+          "doc": "退款与退还的手续费"
+        }
+      },
+      "args": {
+        "amount": "EUR 200.00",
+        "refund": "EUR 50.00",
+        "fee": "EUR 6.10"
+      },
+      "expected": {
+        "refund": "EUR 50.00",
+        "fee_back": "EUR 1.52"
+      },
+      "covers": [
+        "prorate",
+        "round"
+      ],
+      "operators": []
+    },
+    {
+      "label": "现金舍入",
+      "category": "费率计费",
+      "description": "瑞士法郎现金以 0.05 为最小面额：round_to 把金额取到粒度的整数倍，粒度是同币种的金额，舍入方式同样由 round(…) 选",
+      "source": "round_to(amount, CHF 0.05)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<CHF>",
+            "doc": "应收金额"
+          }
+        ],
+        "result": {
+          "type": "money<CHF>",
+          "doc": "现金应收"
+        }
+      },
+      "args": {
+        "amount": "CHF 1.03"
+      },
+      "expected": "CHF 1.05",
+      "covers": [
+        "round_to"
+      ],
+      "operators": []
+    },
+    {
+      "label": "最低成本路由",
+      "category": "支付路由",
+      "description": "每个渠道的报价是费率加固定费；算出这笔金额在各渠道的成本，选最便宜的",
+      "source": "let(\n  costs = [amount * q.rate + q.fixed for q in quotes],\n  {channel: quotes[arg_min(costs)].name, cost: min(costs)}\n)",
+      "contract": {
+        "types": {
+          "Quote": "record{name: string, rate: rate, fixed: money<c>}",
+          "Choice": "record{channel: string, cost: money<c>}"
+        },
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<c>",
+            "doc": "交易金额"
+          },
+          {
+            "name": "quotes",
+            "type": "array<Quote>",
+            "doc": "各渠道报价"
+          }
+        ],
+        "result": {
+          "type": "Choice",
+          "doc": "选中的渠道与成本"
+        }
+      },
+      "args": {
+        "amount": "USD 80.00",
+        "quotes": [
+          {
+            "name": "adyen",
+            "rate": "0.026",
+            "fixed": "USD 0.25"
+          },
+          {
+            "name": "stripe",
+            "rate": "0.029",
+            "fixed": "USD 0.30"
+          },
+          {
+            "name": "checkout",
+            "rate": "0.024",
+            "fixed": "USD 0.40"
+          }
+        ]
+      },
+      "expected": {
+        "channel": "checkout",
+        "cost": "USD 2.32"
+      },
+      "covers": [
+        "arg_min"
+      ],
+      "operators": [
+        "infix:*",
+        "infix:+",
+        "index:[]"
+      ]
+    },
+    {
+      "label": "成本与成功率权衡",
+      "category": "支付路由",
+      "description": "便宜的渠道不一定划算：用成本除以成功率，得到每笔成功交易的期望成本，再选最小的",
+      "source": "let(\n  per_success = [(amount * q.rate + q.fixed) / q.approval for q in quotes],\n  quotes[arg_min(per_success)].name\n)",
+      "contract": {
+        "types": {
+          "Offer": "record{name: string, rate: rate, fixed: money<c>, approval: rate}"
+        },
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<c>",
+            "doc": "交易金额"
+          },
+          {
+            "name": "quotes",
+            "type": "array<Offer>",
+            "doc": "各渠道报价与成功率"
+          }
+        ],
+        "result": {
+          "type": "string",
+          "doc": "期望成本最低的渠道"
+        }
+      },
+      "args": {
+        "amount": "USD 80.00",
+        "quotes": [
+          {
+            "name": "adyen",
+            "rate": "0.026",
+            "fixed": "USD 0.25",
+            "approval": "0.93"
+          },
+          {
+            "name": "stripe",
+            "rate": "0.029",
+            "fixed": "USD 0.30",
+            "approval": "0.97"
+          },
+          {
+            "name": "checkout",
+            "rate": "0.024",
+            "fixed": "USD 0.40",
+            "approval": "0.85"
+          }
+        ]
+      },
+      "expected": "adyen",
+      "covers": [],
+      "operators": [
+        "infix:*",
+        "infix:+",
+        "infix:/"
+      ]
+    },
+    {
+      "label": "按币种阈值走 3DS",
+      "category": "支付路由",
+      "description": "强认证阈值按币种配置在字典里（最小单位）；like 在交易的币种里造出阈值金额再比较",
+      "source": "if(amount > like(amount, get(thresholds, string(currency(amount)), 50000)), \"challenge\", \"frictionless\")",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<c>",
+            "doc": "交易金额"
+          },
+          {
+            "name": "thresholds",
+            "type": "dict<int>",
+            "doc": "各币种的 3DS 阈值，最小单位"
+          }
+        ],
+        "result": {
+          "type": "string",
+          "doc": "认证方式"
+        }
+      },
+      "args": {
+        "amount": "JPY 80000",
+        "thresholds": {
+          "JPY": 50000,
+          "USD": 25000
+        }
+      },
+      "expected": "challenge",
+      "covers": [],
+      "operators": [
+        "infix:>"
+      ]
+    },
+    {
+      "label": "渠道报价比价（宿主函数）",
+      "category": "支付路由",
+      "description": "报价来自宿主的 Go 函数：它用 lang.Money 的方法计算，与规则里的舍入完全一致；两份报价同币种，直接比较",
+      "source": "let(\n  quotes = {adyen: route.money_quote_v1(\"adyen\", amount), stripe: route.money_quote_v1(\"stripe\", amount)},\n  if(quotes.adyen <= quotes.stripe, \"adyen\", \"stripe\")\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<c>",
+            "doc": "交易金额"
+          }
+        ],
+        "result": {
+          "type": "string",
+          "doc": "报价更低的渠道"
+        }
+      },
+      "args": {
+        "amount": "SGD 50.00"
+      },
+      "expected": "adyen",
+      "covers": [
+        "route.money_quote_v1"
+      ],
+      "operators": [
+        "infix:<="
+      ]
+    },
+    {
+      "label": "平台分账",
+      "category": "结算分账",
+      "description": "平台抽佣 8%，支付通道收 2.9% 加固定费，剩下的给卖家；三方都是同一币种的金额",
+      "source": "let(\n  processing = amount * 2.9% + like(amount, 30),\n  commission = amount * 8%,\n  {seller: amount - commission - processing, platform: commission, processor: processing}\n)",
+      "contract": {
+        "types": {
+          "Split": "record{seller: money<c>, platform: money<c>, processor: money<c>}"
+        },
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<c>",
+            "doc": "订单金额"
+          }
+        ],
+        "result": {
+          "type": "Split",
+          "doc": "各方所得"
+        }
+      },
+      "args": {
+        "amount": "EUR 120.00"
+      },
+      "expected": {
+        "seller": "EUR 106.62",
+        "platform": "EUR 9.60",
+        "processor": "EUR 3.78"
+      },
+      "covers": [],
+      "operators": [
+        "infix:*",
+        "infix:+",
+        "infix:-"
+      ]
+    },
+    {
+      "label": "分期付款",
+      "category": "结算分账",
+      "description": "加上分期手续费后平均分成 6 期，一分不丢：除不尽的分摊在前几期",
+      "source": "allocate(price + price * fee_rate, 6)",
+      "contract": {
+        "args": [
+          {
+            "name": "price",
+            "type": "money<c>",
+            "doc": "商品价格"
+          },
+          {
+            "name": "fee_rate",
+            "type": "rate",
+            "doc": "分期手续费率"
+          }
+        ],
+        "result": {
+          "type": "array<money<c>>",
+          "doc": "每期应还"
+        }
+      },
+      "args": {
+        "price": "CNY 999.00",
+        "fee_rate": "0.045"
+      },
+      "expected": [
+        "CNY 174.00",
+        "CNY 174.00",
+        "CNY 173.99",
+        "CNY 173.99",
+        "CNY 173.99",
+        "CNY 173.99"
+      ],
+      "covers": [],
+      "operators": [
+        "infix:+",
+        "infix:*"
+      ]
+    },
+    {
+      "label": "净额结算换成美元",
+      "category": "结算分账",
+      "description": "当日交易总额扣掉按比例和按笔的手续费，再按汇率表换成美元",
+      "source": "let(\n  fees = gross * 2.9% + like(gross, 30) * count,\n  (gross - fees) -> USD\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "gross",
+            "type": "money<c>",
+            "doc": "当日交易总额"
+          },
+          {
+            "name": "count",
+            "type": "int",
+            "doc": "交易笔数"
+          }
+        ],
+        "result": {
+          "type": "money<USD>",
+          "doc": "到账美元"
+        }
+      },
+      "args": {
+        "gross": "EUR 10000.00",
+        "count": 120
+      },
+      "expected": "USD 10496.29",
+      "covers": [],
+      "operators": [
+        "infix:*",
+        "infix:+",
+        "infix:-",
+        "infix:->"
+      ],
+      "rates": [
+        {
+          "base": "EUR",
+          "quote": "USD",
+          "rate": "1.085"
+        }
+      ]
+    },
+    {
+      "label": "动态货币转换加点",
+      "category": "跨境汇率",
+      "description": "DCC：在运行时汇率上加 3.5% 的点差再换成顾客本币。fx(EUR, USD) 读出汇率表里的汇率，汇率乘比例是同一货币对的加点汇率，用它换汇只舍入一次",
+      "source": "using(fx(EUR, USD) * (100% + 3.5%), amount -> USD)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<EUR>",
+            "doc": "商户标价"
+          }
+        ],
+        "result": {
+          "type": "money<USD>",
+          "doc": "向顾客收取的美元"
+        }
+      },
+      "args": {
+        "amount": "EUR 200.00"
+      },
+      "expected": "USD 223.56",
+      "covers": [
+        "fx",
+        "using"
+      ],
+      "operators": [
+        "infix:*",
+        "infix:+",
+        "infix:->"
+      ],
+      "rates": [
+        {
+          "base": "EUR",
+          "quote": "USD",
+          "rate": "1.08"
+        }
+      ]
+    },
+    {
+      "label": "经美元交叉换汇",
+      "category": "跨境汇率",
+      "description": "汇率表里只有美元报价：日元换欧元就在规则里写明经美元的两跳。第一跳取 USD/JPY 的倒数，第二跳用 USD/EUR；语言从不自己找中转货币，所以用哪条汇率一眼就能看出来",
+      "source": "amount -> USD -> EUR",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<JPY>",
+            "doc": "日元金额"
+          }
+        ],
+        "result": {
+          "type": "money<EUR>",
+          "doc": "欧元金额"
+        }
+      },
+      "args": {
+        "amount": "JPY 15000"
+      },
+      "expected": "EUR 92.00",
+      "covers": [],
+      "operators": [
+        "infix:->"
+      ],
+      "rates": [
+        {
+          "base": "USD",
+          "quote": "EUR",
+          "rate": "0.92"
+        },
+        {
+          "base": "USD",
+          "quote": "JPY",
+          "rate": "150"
+        }
+      ]
+    },
+    {
+      "label": "成交汇率偏离报警",
+      "category": "跨境汇率",
+      "description": "按报价汇率算出应到账的欧元，与实际到账相除得偏离比例，超过 ±0.5% 就报警",
+      "source": "let(\n  expected = paid -> EUR,\n  deviation = settled / expected - 100%,\n  deviation > 0.5% || deviation < -0.5%\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "paid",
+            "type": "money<USD>",
+            "doc": "支付金额"
+          },
+          {
+            "name": "settled",
+            "type": "money<EUR>",
+            "doc": "到账金额"
+          }
+        ],
+        "result": {
+          "type": "bool",
+          "doc": "是否偏离过大"
+        }
+      },
+      "args": {
+        "paid": "USD 1000.00",
+        "settled": "EUR 912.00"
+      },
+      "expected": true,
+      "covers": [],
+      "operators": [
+        "infix:/",
+        "infix:-",
+        "infix:>",
+        "infix:<",
+        "infix:||",
+        "prefix:-",
+        "infix:->"
+      ],
+      "rates": [
+        {
+          "base": "USD",
+          "quote": "EUR",
+          "rate": "0.92"
+        }
+      ]
+    },
+    {
+      "label": "汇率缺失兜底",
+      "category": "跨境汇率",
+      "description": "汇率表里没有这条路径（或根本没给汇率表）是 ErrNoRate，fallback 接住它。兜底值要让下游认得出来：兜底成 0 的金额在成本比较里会被当成最便宜的通道，所以这里连同一个 priced 标记一起返回",
+      "source": "fallback({jpy: amount -> JPY, priced: true}, {jpy: JPY 0, priced: false})",
+      "contract": {
+        "types": {
+          "Priced": "record{jpy: money<JPY>, priced: bool}"
+        },
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<USD>",
+            "doc": "结算金额"
+          }
+        ],
+        "result": {
+          "type": "Priced",
+          "doc": "到账日元，以及是否真的按汇率换了"
+        }
+      },
+      "args": {
+        "amount": "USD 10.00"
+      },
+      "rates": [
+        {
+          "base": "EUR",
+          "quote": "JPY",
+          "rate": "160"
+        }
+      ],
+      "expected": {
+        "jpy": "JPY 0",
+        "priced": false
+      },
+      "covers": [
+        "fallback"
+      ],
+      "operators": [
+        "infix:->"
+      ]
+    },
+    {
+      "label": "按成交价换汇",
+      "category": "跨境汇率",
+      "description": "using 只用写在里面的汇率：这笔按实际成交价（到账额 ÷ 支付额）换，运行时汇率表里的 0.92 不参与",
+      "source": "using(settled / paid, amount -> EUR)",
+      "contract": {
+        "args": [
+          {
+            "name": "settled",
+            "type": "money<EUR>",
+            "doc": "这笔交易实际到账"
+          },
+          {
+            "name": "paid",
+            "type": "money<USD>",
+            "doc": "这笔交易支付额"
+          },
+          {
+            "name": "amount",
+            "type": "money<USD>",
+            "doc": "要换的金额"
+          }
+        ],
+        "result": {
+          "type": "money<EUR>",
+          "doc": "按成交价换出的欧元"
+        }
+      },
+      "args": {
+        "settled": "EUR 91.00",
+        "paid": "USD 100.00",
+        "amount": "USD 50.00"
+      },
+      "rates": [
+        {
+          "base": "USD",
+          "quote": "EUR",
+          "rate": "0.92"
+        }
+      ],
+      "expected": "EUR 45.50",
+      "covers": [
+        "using"
+      ],
+      "operators": [
+        "infix:->",
+        "infix:/"
+      ]
+    },
+    {
+      "label": "沿用汇率表的报价",
+      "category": "跨境汇率",
+      "description": "using 只用写在里面的汇率，要沿用运行时汇率表里的报价就用 fx(USD, JPY) 读出来写进去：汇率表只有 USD/JPY，再写上 1.08 USD / EUR，欧元就能先换美元、再换日元。换汇是单跳的，经过哪种货币由规则写明",
+      "source": "using(1.08 USD / EUR, fx(USD, JPY), amount -> USD -> JPY)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<EUR>",
+            "doc": "欧元金额"
+          }
+        ],
+        "result": {
+          "type": "money<JPY>",
+          "doc": "日元金额"
+        }
+      },
+      "args": {
+        "amount": "EUR 100.00"
+      },
+      "rates": [
+        {
+          "base": "USD",
+          "quote": "JPY",
+          "rate": "150"
+        }
+      ],
+      "expected": "JPY 16200",
+      "covers": [
+        "using"
+      ],
+      "operators": [
+        "infix:->",
+        "infix:/"
+      ]
+    },
+    {
+      "label": "链式换汇",
+      "category": "跨境汇率",
+      "description": "每个 -> 只用汇率表里这一对货币的报价（或反方向报价的倒数），从不自己找中转货币；要经过人民币就写两跳。每一跳落到中间币种的最小单位时各舍入一次，中间的 CNY 是一笔真实的金额",
+      "source": "amount -> CNY -> USD",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<JPY>",
+            "doc": "日元金额"
+          }
+        ],
+        "result": {
+          "type": "money<USD>",
+          "doc": "经人民币换得的美元"
+        }
+      },
+      "args": {
+        "amount": "JPY 15000"
+      },
+      "rates": [
+        {
+          "base": "CNY",
+          "quote": "JPY",
+          "rate": "20"
+        },
+        {
+          "base": "USD",
+          "quote": "CNY",
+          "rate": "7.2"
+        }
+      ],
+      "expected": "USD 104.17",
+      "covers": [],
+      "operators": [
+        "infix:->"
+      ]
+    },
+    {
+      "label": "只用协议价",
+      "category": "跨境汇率",
+      "description": "using 只用这里的报价，运行时汇率表里的 USD/JPY 160 不参与。150.25 JPY / USD 是报价的写法：数字在前、分母是单写的币种，小数位不受币种限制",
+      "source": "using(150.25 JPY / USD, amount -> JPY)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<USD>",
+            "doc": "美元金额"
+          }
+        ],
+        "result": {
+          "type": "money<JPY>",
+          "doc": "按协议价换出的日元"
+        }
+      },
+      "args": {
+        "amount": "USD 100.00"
+      },
+      "rates": [
+        {
+          "base": "USD",
+          "quote": "JPY",
+          "rate": "160"
+        }
+      ],
+      "expected": "JPY 15025",
+      "covers": [
+        "using"
+      ],
+      "operators": [
+        "infix:->",
+        "infix:/"
+      ]
+    },
+    {
+      "label": "运行时汇率优先、协议价兜底",
+      "category": "跨境汇率",
+      "description": "fallback 加 using 是整段备选：先按运行时汇率表换，找不到汇率（ErrNoRate）再整段改用协议价。与补充报价不同，两边的汇率不会拼成一条路径",
+      "source": "fallback(amount -> JPY, using(150 JPY / USD, amount -> JPY))",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<USD>",
+            "doc": "美元金额"
+          }
+        ],
+        "result": {
+          "type": "money<JPY>",
+          "doc": "日元金额"
+        }
+      },
+      "args": {
+        "amount": "USD 100.00"
+      },
+      "rates": [
+        {
+          "base": "EUR",
+          "quote": "JPY",
+          "rate": "160"
+        }
+      ],
+      "expected": "JPY 15000",
+      "covers": [
+        "using",
+        "fallback"
+      ],
+      "operators": [
+        "infix:->",
+        "infix:/"
+      ],
+      "min_control_depth": 2
+    },
+    {
+      "label": "具名汇率表",
+      "category": "跨境汇率",
+      "description": "契约声明几张具名汇率表（比如市场价与清算价），using(@settlement, …) 在其中一张上换汇，后面写的报价盖在它上面；宿主运行时按名字把表传进来，没传的表是空表，换汇就是 ErrNoRate",
+      "source": "{quoted: amount -> JPY, settled: using(@settlement, amount -> JPY)}",
+      "contract": {
+        "types": {
+          "Both": "record{quoted: money<JPY>, settled: money<JPY>}"
+        },
+        "tables": [
+          "settlement"
+        ],
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<USD>",
+            "doc": "美元金额"
+          }
+        ],
+        "result": {
+          "type": "Both",
+          "doc": "按市场价与按清算价换得的日元"
+        }
+      },
+      "args": {
+        "amount": "USD 100.00"
+      },
+      "rates": [
+        {
+          "base": "USD",
+          "quote": "JPY",
+          "rate": "150"
+        }
+      ],
+      "tables": {
+        "settlement": [
+          {
+            "base": "USD",
+            "quote": "JPY",
+            "rate": "149.5"
+          }
+        ]
+      },
+      "expected": {
+        "quoted": "JPY 15000",
+        "settled": "JPY 14950"
+      },
+      "covers": [
+        "using"
+      ],
+      "operators": [
+        "infix:->"
+      ]
+    },
+    {
+      "label": "单日累计限额",
+      "category": "风险控制",
+      "description": "今天已成交的金额加上这一笔，超过单日限额就拦截；数组里的金额与限额必须同币种",
+      "source": "sum(today) + amount > limit",
+      "contract": {
+        "args": [
+          {
+            "name": "today",
+            "type": "array<money<c>>",
+            "doc": "今天已成交的各笔金额"
+          },
+          {
+            "name": "amount",
+            "type": "money<c>",
+            "doc": "本笔金额"
+          },
+          {
+            "name": "limit",
+            "type": "money<c>",
+            "doc": "单日限额"
+          }
+        ],
+        "result": {
+          "type": "bool",
+          "doc": "是否超限"
+        }
+      },
+      "args": {
+        "today": [
+          "HKD 3000.00",
+          "HKD 4500.00"
+        ],
+        "amount": "HKD 2800.00",
+        "limit": "HKD 10000.00"
+      },
+      "expected": true,
+      "covers": [
+        "sum"
+      ],
+      "operators": [
+        "infix:+",
+        "infix:>"
+      ]
+    },
+    {
+      "label": "稳定币通道：比例加固定费封顶",
+      "category": "费率计费",
+      "description": "USDT 按业务精度 6 位小数声明；千分之一加每笔 1 USDT，封顶 20 USDT。链上精确金额在宿主记账系统换算，规则只按业务精度计费",
+      "source": "let(fee = amount * 0.1% + USDT 1, if(fee > USDT 20, USDT 20, fee))",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money<USDT>",
+            "doc": "到账的 USDT 金额"
+          }
+        ],
+        "result": {
+          "type": "money<USDT>",
+          "doc": "通道费"
+        }
+      },
+      "args": {
+        "amount": "USDT 5000.000000"
+      },
+      "expected": "USDT 6.000000",
+      "covers": [],
+      "operators": [
+        "infix:*",
+        "infix:+",
+        "infix:>"
+      ]
     }
   ]
 }

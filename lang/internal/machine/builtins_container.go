@@ -167,7 +167,7 @@ func evalStringLength(_ context.Context, args []Value) (Value, error) {
 func evalIntMod(_ context.Context, args []Value) (Value, error) {
 	dividend, divisor := args[0].i, args[1].i
 	if divisor == 0 {
-		return Value{}, fmt.Errorf("division by zero")
+		return Value{}, errDivisionByZero
 	}
 	if divisor == -1 {
 		return Int(0), nil // avoids the MinInt64 % -1 overflow trap

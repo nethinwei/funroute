@@ -72,6 +72,7 @@ var (
 	StringType = machine.StringType
 	TypeVar    = machine.TypeVar
 	RecordOf   = machine.RecordOf
+	FieldOf    = machine.FieldOf
 	ArrayOf    = machine.ArrayOf
 	DictOf     = machine.DictOf
 	HandleOf   = machine.HandleOf

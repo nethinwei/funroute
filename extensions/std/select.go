@@ -37,7 +37,7 @@ func registerSelect(registry *lang.Registry) error {
 		},
 	}
 	for _, spec := range specs {
-		if err := registry.Register(spec); err != nil {
+		if err := register(registry, spec); err != nil {
 			return err
 		}
 	}
@@ -66,7 +66,7 @@ func registerSortBy(registry *lang.Registry, list lang.Type) error {
 		up := direction.ascending
 		eval := func(_ context.Context, args []lang.Value) (lang.Value, error) { return sortedBy(args, up) }
 		for _, key := range []lang.Type{lang.IntType, lang.FloatType, lang.StringType} {
-			if err := registry.Register(lang.FunctionSpec{
+			if err := register(registry, lang.FunctionSpec{
 				Name: direction.name, Params: []lang.Type{list, lang.ArrayOf(key)}, Result: list, Eval: eval,
 				Doc: lang.Doc{
 					Constexpr: true, Label: direction.label, Category: "选择", Cost: 9,
@@ -95,7 +95,7 @@ func registerRanked(registry *lang.Registry, list lang.Type) error {
 	} {
 		ascending := ranked.ascending
 		for _, key := range []lang.Type{lang.IntType, lang.FloatType, lang.StringType} {
-			if err := registry.Register(lang.FunctionSpec{
+			if err := register(registry, lang.FunctionSpec{
 				Name:   ranked.name,
 				Params: []lang.Type{list, lang.ArrayOf(key), lang.IntType},
 				Result: list,
@@ -125,7 +125,7 @@ func registerWhile(registry *lang.Registry, list lang.Type) error {
 		{"drop_while", "跳过开头满足的", "从头跳过 true，遇到第一个 false 就把剩下的全部返回。判断数组必须与候选等长。", false},
 	} {
 		prefix, name := side.prefix, side.name
-		if err := registry.Register(lang.FunctionSpec{
+		if err := register(registry, lang.FunctionSpec{
 			Name: name, Params: []lang.Type{list, lang.ArrayOf(lang.BoolType)}, Result: list,
 			Eval: func(ctx context.Context, args []lang.Value) (lang.Value, error) {
 				return cutWhile(name, args, prefix)
@@ -194,13 +194,13 @@ func registerExtremeIndex(registry *lang.Registry) error {
 			Constexpr: true, Label: extreme.label, Category: "选择", Cost: 5,
 			Description: extreme.description, Params: []string{"键"}, Result: "下标",
 		}
-		if err := lang.Logic(registry, extreme.name, doc, extreme.ints); err != nil {
+		if err := logic(registry, extreme.name, doc, extreme.ints); err != nil {
 			return err
 		}
-		if err := lang.Logic(registry, extreme.name, doc, extreme.floats); err != nil {
+		if err := logic(registry, extreme.name, doc, extreme.floats); err != nil {
 			return err
 		}
-		if err := lang.Logic(registry, extreme.name, doc, extreme.texts); err != nil {
+		if err := logic(registry, extreme.name, doc, extreme.texts); err != nil {
 			return err
 		}
 	}
@@ -256,6 +256,10 @@ func valueLess(left, right lang.Value) bool {
 	if a, ok := left.Int(); ok {
 		b, _ := right.Int()
 		return a < b
+	}
+	if a, ok := left.Money(); ok {
+		b, _ := right.Money()
+		return a.Minor() < b.Minor()
 	}
 	if a, ok := left.Float(); ok {
 		b, _ := right.Float()

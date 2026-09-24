@@ -2,6 +2,7 @@ package lang_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -19,18 +20,18 @@ func TestDocOnlyCarriesWhatAHostMustSay(t *testing.T) {
 		t.Fatal(err)
 	}
 	var settle lang.FunctionDescriptor
-	for _, function := range registry.Catalog().Functions {
-		if function.Name == "payout.settle_v1" {
+	for _, function := range registry.Catalog().Functions() {
+		if function.Name() == "payout.settle_v1" {
 			settle = function
 		}
 	}
-	if settle.Doc.Category != "payout" {
-		t.Fatalf("category = %q, want the name's namespace", settle.Doc.Category)
+	if settle.Doc().Category != "payout" {
+		t.Fatalf("category = %q, want the name's namespace", settle.Doc().Category)
 	}
-	if settle.Signature != "payout.settle_v1(int)->int" {
-		t.Fatalf("signature = %q, want %q", settle.Signature, "payout.settle_v1(int)->int")
+	if settle.Signature() != "payout.settle_v1(int)->int" {
+		t.Fatalf("signature = %q, want %q", settle.Signature(), "payout.settle_v1(int)->int")
 	}
-	if rendered := fmt.Sprint(settle.Doc); strings.Contains(rendered, "#") {
+	if rendered := fmt.Sprint(settle.Doc()); strings.Contains(rendered, "#") {
 		t.Fatalf("display carries styling: %s, want no colours", rendered)
 	}
 }
@@ -39,8 +40,15 @@ func TestDocOnlyCarriesWhatAHostMustSay(t *testing.T) {
 func TestHostCanListTheCatalog(t *testing.T) {
 	t.Parallel()
 	catalog := hostRegistry(t).Catalog()
-	if len(catalog.Functions) == 0 || len(catalog.SpecialForms) == 0 || catalog.ArtifactVersion != lang.ArtifactVersion {
-		t.Fatalf("catalog = %+v, want functions, special forms and artifact version %d", catalog, lang.ArtifactVersion)
+	if len(catalog.Functions()) == 0 || len(catalog.SpecialForms()) == 0 {
+		t.Fatalf("catalog has %d functions and %d special forms, want some of each", len(catalog.Functions()), len(catalog.SpecialForms()))
+	}
+	encoded, err := json.Marshal(catalog)
+	var shape struct {
+		ArtifactVersion int `json:"artifact_version"`
+	}
+	if err != nil || json.Unmarshal(encoded, &shape) != nil || shape.ArtifactVersion != lang.ArtifactVersion {
+		t.Fatalf("the catalog's JSON names artifact version %d (%v), want %d", shape.ArtifactVersion, err, lang.ArtifactVersion)
 	}
 }
 
@@ -69,20 +77,14 @@ func TestHostNamesTheRegistryAndArtifactTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	constant := artifact.Constants[0]
-	instruction := artifact.Instructions[0]
 	// The call reads no argument and the host marked it constexpr, so folding
-	// ran it at compile time and the pool holds the answer, not the input.
-	if constant.Int == nil || *constant.Int != 42 {
-		t.Fatalf("constant pool[0] = %+v, want the folded result 42", constant)
+	// ran it at compile time: the program is one load of the answer.
+	if artifact.InstructionCount() != 1 {
+		t.Fatalf("demo.double(21) compiled to %d instructions, want the folded answer alone", artifact.InstructionCount())
 	}
-	op := instruction.Op
 	runtime := mustInstantiate(t, artifact, registry)
 	batch := lang.NewBatch(runtime, lang.BatchOptions{MaxSize: 1})
 	defer batch.Close()
-	if op.String() == "" {
-		t.Fatalf("OpCode(%d).String() is empty, want its name", uint8(op))
-	}
 	value, err := batch.Run(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -95,9 +97,9 @@ func TestHostNamesTheRegistryAndArtifactTypes(t *testing.T) {
 func TestHostNamesTheCatalogTypes(t *testing.T) {
 	t.Parallel()
 	catalog := lang.CoreRegistry().Catalog()
-	function := catalog.Functions[0]
-	form := catalog.SpecialForms[0]
-	if function.Signature == "" || form.Syntax == "" || form.Doc.Label == "" {
+	function := catalog.Functions()[0]
+	form := catalog.SpecialForms()[0]
+	if function.Signature() == "" || form.Syntax() == "" || form.Doc().Label == "" {
 		t.Fatalf("catalog entries are unlabelled: %+v %+v", function, form)
 	}
 }

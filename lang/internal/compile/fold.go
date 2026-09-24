@@ -58,6 +58,10 @@ func (c *bytecodeCompiler) tryFold(expr syntax.Expr) (bool, error) {
 // is what keeps folding from reaching an engine or a clock, and it is also
 // what makes a failure found here a certainty rather than a circumstance.
 func constexprOnly(expr syntax.Expr, inferred *inference, registry *machine.Registry) bool {
+	// A using is only there for the conversions in it, which read the run.
+	if _, using := expr.(*syntax.UsingExpr); using {
+		return false
+	}
 	if call, ok := expr.(*syntax.CallExpr); ok {
 		key, found := inferred.Selections[call.ID]
 		if !found {
@@ -93,7 +97,11 @@ func (c *bytecodeCompiler) intern(value machine.Value) (int, bool) {
 // without emitting anything: a constant binding needs no local slot.
 func (c *bytecodeCompiler) foldBinding(value syntax.Expr) (int, bool, error) {
 	if literal, isLiteral := value.(*syntax.LiteralExpr); isLiteral {
-		index, ok := c.intern(literal.Value)
+		written, err := c.literalValue(literal)
+		if err != nil {
+			return 0, false, err
+		}
+		index, ok := c.intern(written)
 		return index, ok, nil
 	}
 	if !c.foldable(value) {
@@ -158,12 +166,15 @@ func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (*machine.Value, error) {
 	sub := newBytecodeCompiler(c.registry, c.inferred)
 	sub.folding = true
 	// The nested compiler inherits the constant pool and the constant bindings,
-	// so a name that already folded resolves to its value here too.
+	// so a name that already folded resolves to its value here too — and the
+	// rounding of the round(…) it sits in.
 	sub.constants = c.constants
 	sub.constIndex = c.constIndex
+	sub.rounding = c.rounding
 	if err := sub.compile(expr); err != nil {
 		return nil, nil
 	}
+	c.roundSteps += sub.roundSteps
 	value, err := machine.EvaluateClosed(sub.artifact(result), c.registry, foldFuel, foldStack)
 	if err != nil {
 		// Running out of the fold budget says nothing about the program: it is
@@ -171,14 +182,14 @@ func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (*machine.Value, error) {
 		if errors.Is(err, machine.ErrFuel) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, syntax.AroundError(expr, err)
 	}
 	return &value, nil
 }
 
 // artifact wraps what the compiler has emitted so far, for a compile-time run.
-func (c *bytecodeCompiler) artifact(result machine.Type) *machine.Artifact {
-	return &machine.Artifact{
+func (c *bytecodeCompiler) artifact(result machine.Type) machine.ArtifactParts {
+	return machine.ArtifactParts{
 		Version:      machine.ArtifactVersion,
 		Result:       result,
 		Constants:    c.constants,

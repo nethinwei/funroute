@@ -10,28 +10,34 @@ import { define, fieldStyles, labelStyles } from "./ui.ts";
 type Row = ArgSpec;
 
 export class ContractPanel extends LitElement {
-  static properties = { types: { state: true }, args: { state: true } };
+  static properties = { types: { state: true }, args: { state: true }, tables: { state: true } };
   declare types: Row[];
   declare args: Row[];
+  // tables is the named rate tables as typed, names apart by commas.
+  declare tables: string;
 
   constructor() {
     super();
     this.types = [];
     this.args = [];
+    this.tables = "";
   }
 
   set contract(contract: TextContract) {
     this.types = Object.entries(contract.types ?? {}).map(([name, type]) => ({ name, type }));
     this.args = (contract.args ?? []).map((arg) => ({ ...arg }));
+    this.tables = (contract.tables ?? []).join(", ");
   }
 
   // contract is the types and arguments as written, blank rows left out.
   get contract(): TextContract {
     const types: Record<string, string> = {};
     for (const row of this.types) if (row.name.trim()) types[row.name.trim()] = row.type.trim();
+    const tables = this.tables.split(",").map((name) => name.trim()).filter(Boolean);
     return {
       types: Object.keys(types).length ? types : undefined,
       args: this.args.filter((arg) => arg.name.trim()).map(({ name, type, doc }) => ({ name: name.trim(), type: type.trim(), doc: doc || undefined })),
+      tables: tables.length ? tables : undefined,
     };
   }
 
@@ -63,9 +69,14 @@ export class ContractPanel extends LitElement {
       </section>
       <section>
         <h3 class="label">参数</h3>
-        ${this.args.map((row) => html`<div class="row">${this.field(row, "name", "参数名", "名字")}${this.field(row, "type", "参数类型", "类型")}
+        ${this.args.map((row) => html`<div class="row">${this.field(row, "name", "参数名", "名字")}${this.field(row, "type", "参数类型", "类型，如 int、money<c>")}
           ${this.field(row, "doc", "参数说明", "说明", true)}${this.removeButton(this.args, row, "参数")}</div>`)}
         <button class="add" @click=${() => { this.args = [...this.args, { name: "", type: "", doc: "" }]; }}>+ 参数</button>
+      </section>
+      <section>
+        <h3 class="label">汇率表</h3>
+        <div class="row"><input class="wide" .value=${this.tables} placeholder="具名汇率表，如 settlement, market" aria-label="具名汇率表" spellcheck="false"
+          @change=${(event: Event) => { this.tables = (event.target as HTMLInputElement).value; this.changed(); }}></div>
       </section></div>`;
   }
 

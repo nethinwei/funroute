@@ -156,7 +156,7 @@ func registerArithmetic(registry *Registry) {
 	registerMixedNumeric(registry, "mul", "乘法", func(a, b float64) (Value, error) { return finiteResult(a*b, "mul") })
 	registerMixedNumeric(registry, "div", "除法", func(a, b float64) (Value, error) {
 		if b == 0 {
-			return Value{}, fmt.Errorf("division by zero")
+			return Value{}, errDivisionByZero
 		}
 		return finiteResult(a/b, "div")
 	})
@@ -194,7 +194,7 @@ func registerMixedNumeric(registry *Registry, name, label string, eval func(floa
 func numericFloat(value Value) (float64, error) {
 	if value.kind == IntKind {
 		if value.i < -maxExactFloatInt || value.i > maxExactFloatInt {
-			return 0, fmt.Errorf("int %d cannot be represented exactly as float", value.i)
+			return 0, errConversion("int %d cannot be represented exactly as float", value.i)
 		}
 		return float64(value.i), nil
 	}
@@ -211,15 +211,16 @@ func registerConversions(registry *Registry) {
 func registerIntConversions(registry *Registry) {
 	registerConversion(registry, "int", IntType, IntType, "转为整数", "保持整数不变。", func(_ context.Context, args []Value) (Value, error) { return args[0], nil })
 	registerConversion(registry, "int", FloatType, IntType, "转为整数", "只接受没有小数部分的浮点数，避免静默丢失精度。", func(_ context.Context, args []Value) (Value, error) {
-		if args[0].f < math.MinInt64 || args[0].f > math.MaxInt64 || math.Trunc(args[0].f) != args[0].f {
-			return Value{}, fmt.Errorf("float %v cannot be converted to int without data loss", args[0].f)
+		whole, ok := floatInt(args[0].f)
+		if !ok {
+			return Value{}, errConversion("float %v cannot be converted to int without data loss", args[0].f)
 		}
-		return Int(int64(args[0].f)), nil
+		return Int(whole), nil
 	})
 	registerConversion(registry, "int", StringType, IntType, "转为整数", "解析十进制整数字符串。", func(_ context.Context, args []Value) (Value, error) {
 		value, err := strconv.ParseInt(strings.TrimSpace(args[0].s), 10, 64)
 		if err != nil {
-			return Value{}, fmt.Errorf("cannot convert %q to int", args[0].s)
+			return Value{}, errConversion("cannot convert %q to int", args[0].s)
 		}
 		return Int(value), nil
 	})
@@ -237,7 +238,7 @@ func registerFloatConversions(registry *Registry) {
 	registerConversion(registry, "float", StringType, FloatType, "转为浮点数", "解析有限浮点数字符串。", func(_ context.Context, args []Value) (Value, error) {
 		value, err := strconv.ParseFloat(strings.TrimSpace(args[0].s), 64)
 		if err != nil {
-			return Value{}, fmt.Errorf("cannot convert %q to float", args[0].s)
+			return Value{}, errConversion("cannot convert %q to float", args[0].s)
 		}
 		return CheckedFloat(value)
 	})
@@ -289,6 +290,7 @@ func registerConversion(registry *Registry, name string, from, to Type, label, d
 
 func mustRegister(registry *Registry, spec FunctionSpec) {
 	spec.builtin = true
+	spec.Doc.Examples = kernelExamples[spec.Name]
 	if err := registry.Register(spec); err != nil {
 		panic(err)
 	}
@@ -311,7 +313,7 @@ func registerBinary(registry *Registry, name string, typ Type, label, descriptio
 func evalIntAdd(_ context.Context, args []Value) (Value, error) {
 	a, b := args[0].i, args[1].i
 	if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
-		return Value{}, fmt.Errorf("integer overflow in add")
+		return Value{}, overflowIn("add")
 	}
 	return Int(a + b), nil
 }
@@ -319,7 +321,7 @@ func evalIntAdd(_ context.Context, args []Value) (Value, error) {
 func evalIntSub(_ context.Context, args []Value) (Value, error) {
 	a, b := args[0].i, args[1].i
 	if (b < 0 && a > math.MaxInt64+b) || (b > 0 && a < math.MinInt64+b) {
-		return Value{}, fmt.Errorf("integer overflow in sub")
+		return Value{}, overflowIn("sub")
 	}
 	return Int(a - b), nil
 }
@@ -330,11 +332,11 @@ func evalIntMul(_ context.Context, args []Value) (Value, error) {
 		return Int(0), nil
 	}
 	if (a == math.MinInt64 && b == -1) || (b == math.MinInt64 && a == -1) {
-		return Value{}, fmt.Errorf("integer overflow in mul")
+		return Value{}, overflowIn("mul")
 	}
 	result := a * b
 	if result/b != a {
-		return Value{}, fmt.Errorf("integer overflow in mul")
+		return Value{}, overflowIn("mul")
 	}
 	return Int(result), nil
 }
@@ -342,10 +344,10 @@ func evalIntMul(_ context.Context, args []Value) (Value, error) {
 func evalIntDiv(_ context.Context, args []Value) (Value, error) {
 	a, b := args[0].i, args[1].i
 	if b == 0 {
-		return Value{}, fmt.Errorf("division by zero")
+		return Value{}, errDivisionByZero
 	}
 	if a == math.MinInt64 && b == -1 {
-		return Value{}, fmt.Errorf("integer overflow in div")
+		return Value{}, overflowIn("div")
 	}
 	return Int(a / b), nil
 }
@@ -362,14 +364,14 @@ func evalFloatMul(_ context.Context, args []Value) (Value, error) {
 
 func evalFloatDiv(_ context.Context, args []Value) (Value, error) {
 	if args[1].f == 0 {
-		return Value{}, fmt.Errorf("division by zero")
+		return Value{}, errDivisionByZero
 	}
 	return finiteResult(args[0].f/args[1].f, "div")
 }
 
 func finiteResult(value float64, operation string) (Value, error) {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return Value{}, fmt.Errorf("non-finite float result in %s", operation)
+		return Value{}, fmt.Errorf("%w: non-finite float result in %s", ErrArithmetic, operation)
 	}
 	return Float(value), nil
 }

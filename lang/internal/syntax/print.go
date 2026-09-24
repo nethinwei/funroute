@@ -62,6 +62,21 @@ func inline(expr Expr, parent int) string {
 		return literalSource(node.Value)
 	case *EnumExpr:
 		return node.Source()
+	case *MoneyExpr:
+		// The sign is the amount's: USD -1.70.
+		return node.Currency + " " + node.Amount
+	case *CurrencyExpr:
+		return node.Code
+	case *FxRateExpr:
+		// Next to * or / it is bracketed for the reader; the parser would
+		// read it as one literal either way.
+		text := node.Rate + " " + node.Quote + " / " + node.Base
+		if parent >= binaryOperators[tokenStar].precedence {
+			return "(" + text + ")"
+		}
+		return text
+	case *RateExpr:
+		return node.Value + node.Unit
 	case *FieldExpr:
 		return postfixBase(node.Value) + "." + node.Field
 	case *CallExpr:
@@ -84,7 +99,7 @@ func compoundSource(expr Expr) string {
 			return node.Fields[i].Name + ": " + inline(node.Fields[i].Value, 0)
 		}) + "}"
 	case *RecordUpdateExpr:
-		return "{..." + inline(node.Base, 0) + ", " + joinParts(len(node.Fields), func(i int) string {
+		return postfixBase(node.Base) + " with {" + joinParts(len(node.Fields), func(i int) string {
 			return node.Fields[i].Name + ": " + inline(node.Fields[i].Value, 0)
 		}) + "}"
 	case *SwitchExpr:
@@ -97,8 +112,23 @@ func compoundSource(expr Expr) string {
 		return "let(" + joinParts(len(node.Bindings), func(i int) string {
 			return node.Bindings[i].Name + " = " + inline(node.Bindings[i].Value, 0)
 		}) + ", " + inline(node.Body, 0) + ")"
+	case *UsingExpr:
+		return "using(" + strings.Join(usingParts(node), ", ") + ", " + inline(node.Body, 0) + ")"
 	}
 	panic("print: unknown node " + expr.kind())
+}
+
+// usingParts writes a using's table and rates in the order they were
+// written.
+func usingParts(node *UsingExpr) []string {
+	var parts []string
+	if node.Table != nil {
+		parts = append(parts, inline(node.Table, 0))
+	}
+	for _, rate := range node.Quotes {
+		parts = append(parts, inline(rate, 0))
+	}
+	return parts
 }
 
 func operatorSource(match operatorMatch, parent int) string {
@@ -110,10 +140,12 @@ func operatorSource(match operatorMatch, parent int) string {
 	case "prefix":
 		text = spec.token + inline(match.operands[0], spec.precedence)
 	default:
-		left := inline(match.operands[0], spec.precedence)
 		// Left associative: a right operand of the same precedence keeps its
-		// parentheses, so a - (b - c) stays and (a - b) - c loses them.
-		right := inline(match.operands[1], spec.precedence+1)
+		// parentheses, so a - (b - c) stays and (a - b) - c loses them; a
+		// comparison keeps them on both sides, and -> on any right operand
+		// that is not postfix (leftLevel, rightLevel).
+		left := inline(match.operands[0], spec.leftLevel())
+		right := inline(match.operands[1], spec.rightLevel())
 		text = left + " " + spec.token + " " + right
 	}
 	if spec.precedence < parent {
@@ -128,7 +160,15 @@ func operatorSource(match operatorMatch, parent int) string {
 // and an enum member are parenthesised because the lexer would read on into
 // them: (1).x is not 1.x, and (@a).b is not the qualified member @a.b.
 func postfixBase(expr Expr) string {
-	if _, isEnum := expr.(*EnumExpr); isNumber(expr) || isEnum {
+	// Anything that ends in a number or a code is parenthesized, or the
+	// lexer would read the . or [ into it: (1).x, (USD 1).x, (2.9%)[0],
+	// (150 JPY / USD).x.
+	_, isEnum := expr.(*EnumExpr)
+	_, isRate := expr.(*RateExpr)
+	_, isMoney := expr.(*MoneyExpr)
+	_, isFxRate := expr.(*FxRateExpr)
+	_, isCurrency := expr.(*CurrencyExpr)
+	if isNumber(expr) || isEnum || isRate || isMoney || isFxRate || isCurrency {
 		return "(" + inline(expr, 0) + ")"
 	}
 	return inline(expr, postfixPrecedence)
@@ -191,7 +231,7 @@ func switchSource(node *SwitchExpr) string {
 	if node.Default == nil {
 		return "switch(" + head + branches + ")"
 	}
-	return "switch(" + head + branches + ", else " + inline(node.Default, 0) + ")"
+	return "switch(" + head + branches + ", else => " + inline(node.Default, 0) + ")"
 }
 
 // A comprehension with a key builds a dictionary and is written in braces;

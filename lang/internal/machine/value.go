@@ -90,20 +90,20 @@ func Array(elem Type, values []Value) (Value, error) {
 
 // Record builds a record from the values of its fields, in the type's order.
 func Record(typ Type, fields []Value) (Value, error) {
-	if typ.Kind != RecordKind || !typ.IsConcrete() {
+	if typ.kind != RecordKind || !typ.IsConcrete() {
 		return Value{}, fmt.Errorf("record type must be concrete: %s", typ)
 	}
-	if len(fields) != len(typ.Fields) {
-		return Value{}, fmt.Errorf("record %s takes %d fields, got %d", typ, len(typ.Fields), len(fields))
+	if len(fields) != len(typ.fields) {
+		return Value{}, fmt.Errorf("record %s takes %d fields, got %d", typ, len(typ.fields), len(fields))
 	}
 	stored := make([]Value, len(fields))
 	for i, field := range fields {
-		if !field.hasType(typ.Fields[i].Type) {
+		if !field.hasType(typ.fields[i].typ) {
 			return Value{}, fmt.Errorf("field %q has type %s, want %s",
-				typ.Fields[i].Name, field.Type().Summary(), typ.Fields[i].Type.Summary())
+				typ.fields[i].name, field.Type().Summary(), typ.fields[i].typ.Summary())
 		}
 		if err := field.validateInvariant(); err != nil {
-			return Value{}, fmt.Errorf("field %q: %w", typ.Fields[i].Name, err)
+			return Value{}, fmt.Errorf("field %q: %w", typ.fields[i].name, err)
 		}
 		stored[i] = field
 	}
@@ -150,35 +150,41 @@ func (v Value) elemType() Type {
 		return FloatType
 	case []string, map[string]string:
 		return StringType
+	case []Money, map[string]Money:
+		return MoneyOf("")
 	case *nestedArray:
 		return box.elem
 	case *nestedDict:
 		return box.elem
 	default:
-		return Type{Kind: InvalidKind}
+		return Type{kind: InvalidKind}
 	}
 }
 
 // hasType answers the same question as Type().Equal(t) without building a Type,
 // which would allocate for every container check in the interpreter loop.
+// Containers and records compare by shape: the currency of the money inside
+// them is the currency checks' business, not the type test's.
 func (v Value) hasType(t Type) bool {
-	if t.Kind == EnumKind {
-		return v.kind == StringKind && slices.Contains(t.Values, v.s)
+	if t.kind == EnumKind {
+		return v.kind == StringKind && slices.Contains(t.values, v.s)
 	}
-	if v.kind != t.Kind {
+	if v.kind != t.kind {
 		return false
 	}
-	if v.kind == HandleKind {
-		return v.s == t.Name
-	}
-	if v.kind == RecordKind {
+	switch v.kind {
+	case HandleKind:
+		return v.s == t.name
+	case RecordKind:
 		record, ok := v.box.(*recordValue)
-		return ok && record.typ.Equal(t)
-	}
-	if v.kind != ArrayKind && v.kind != DictKind {
+		return ok && SameShape(record.typ, t)
+	case ArrayKind, DictKind:
+		return t.elem != nil && SameShape(v.elemType(), *t.elem)
+	case MoneyKind, CurrencyKind, FxRateKind:
+		return v.hasUnits(t)
+	default:
 		return true
 	}
-	return t.Elem != nil && v.elemType().Equal(*t.Elem)
 }
 
 func (v Value) Type() Type {
@@ -197,13 +203,17 @@ func (v Value) Type() Type {
 		return DictOf(CloneType(v.elemType()))
 	case HandleKind:
 		return HandleOf(v.s)
+	case RateKind:
+		return RateType
+	case MoneyKind, CurrencyKind, FxRateKind:
+		return v.unitType()
 	case RecordKind:
 		if record, ok := v.box.(*recordValue); ok {
 			return CloneType(record.typ)
 		}
-		return Type{Kind: InvalidKind}
+		return Type{kind: InvalidKind}
 	default:
-		return Type{Kind: InvalidKind}
+		return Type{kind: InvalidKind}
 	}
 }
 
@@ -292,6 +302,16 @@ func (v Value) Any() any {
 	case HandleKind:
 		// A handle has no JSON form; naming its type is all a log can show.
 		return v.Type().String()
+	case MoneyKind:
+		money, _ := v.Money()
+		return money
+	case RateKind:
+		return newRate(v.i)
+	case FxRateKind:
+		rate, _ := v.FxRate()
+		return rate
+	case CurrencyKind:
+		return v.s
 	default:
 		return nil
 	}
@@ -304,7 +324,7 @@ func (v Value) recordAny() any {
 	}
 	out := make(map[string]any, len(record.fields))
 	for i, field := range record.fields {
-		out[record.typ.Fields[i].Name] = field.Any()
+		out[record.typ.fields[i].name] = field.Any()
 	}
 	return out
 }
@@ -384,7 +404,7 @@ func (v Value) marshalRecord() ([]byte, error) {
 		if i > 0 {
 			out = append(out, ',')
 		}
-		name, err := json.Marshal(record.typ.Fields[i].Name)
+		name, err := json.Marshal(record.typ.fields[i].name)
 		if err != nil {
 			return nil, err
 		}
@@ -403,6 +423,9 @@ func (v Value) marshalRecord() ([]byte, error) {
 // language cannot see into them, and the VM refuses to compare them at all
 // (see compareEqual), so this answer is only a safe default.
 func (v Value) Equal(other Value) bool {
+	if IsUnitKind(v.kind) {
+		return v.kind == other.kind && v.equalUnits(other)
+	}
 	if !v.hasType(other.Type()) {
 		return false
 	}
@@ -421,6 +444,8 @@ func (v Value) Equal(other Value) bool {
 		return v.equalDict(other)
 	case RecordKind:
 		return v.equalRecord(other)
+	case RateKind:
+		return v.i == other.i
 	default:
 		return false
 	}
@@ -474,8 +499,19 @@ func compareEqual(left, right Value) (Value, error) {
 	if left.kind == HandleKind || right.kind == HandleKind {
 		return Value{}, fmt.Errorf("handles cannot be compared")
 	}
-	if !left.hasType(right.Type()) {
-		return Value{}, fmt.Errorf("equality requires one type, got %s and %s", left.Type(), right.Type())
+	if err := sameUnits(left, right); err != nil {
+		return Value{}, err
+	}
+	if IsUnitKind(left.kind) && left.kind == right.kind {
+		return Bool(left.Equal(right)), nil
+	}
+	typ := right.Type()
+	if !left.hasType(typ) {
+		return Value{}, fmt.Errorf("equality requires one type, got %s and %s", left.Type(), typ)
+	}
+	if (typ.kind == ArrayKind || typ.kind == DictKind || typ.kind == RecordKind) && containsUnits(typ) {
+		equal, err := equalInUnits(left, right)
+		return Bool(equal), err
 	}
 	return Bool(left.Equal(right)), nil
 }
@@ -499,7 +535,7 @@ func (v Value) validateInvariant() error {
 	case *recordValue:
 		for i, value := range box.fields {
 			if err := value.validateInvariant(); err != nil {
-				return fmt.Errorf("field %q: %w", box.typ.Fields[i].Name, err)
+				return fmt.Errorf("field %q: %w", box.typ.fields[i].name, err)
 			}
 		}
 	case *nestedArray:

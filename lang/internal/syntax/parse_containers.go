@@ -17,7 +17,6 @@ import (
 //	{"k": v}                 a dictionary — string keys, one value type
 //	{amount: 1200}           a record — named fields, each with its own type
 //	{k: v for k, v in rates} a dictionary comprehension — keys are computed
-//	{...order, amount: 1}    a record update — told apart by its first token
 //
 // The first two differ only in the key, so the comprehension is what makes the
 // lookahead necessary: its key is an expression, and only the "for" that
@@ -29,13 +28,13 @@ func (p *parser) parseBrace() (Expr, error) {
 		p.index++
 		return &DictExpr{ID: p.id(), Pos: start.pos}, nil
 	}
-	if p.peek().kind == tokenSpread {
-		return p.recordUpdate(start)
-	}
 	// The first key of a record is read as an expression, which would take a
 	// reserved word for a bad variable name; it is a bad field name.
 	if first := p.peek(); first.kind == tokenIdentifier && p.tokens[p.index+1].kind == tokenColon && machine.IsReservedName(first.text) {
 		return nil, p.errorf(first, "invalid field name %q", first.text)
+	}
+	if first := p.peek(); p.fieldOnlyName(first) && p.tokens[p.index+1].kind == tokenColon {
+		return p.recordNamedFirst(start, first)
 	}
 	key, err := p.parseExpr()
 	if err != nil {
@@ -52,6 +51,24 @@ func (p *parser) parseBrace() (Expr, error) {
 		return p.dictComprehension(start, key, value)
 	}
 	return p.parseBraceLiteral(start, key, value)
+}
+
+// fieldOnlyName reports a name a field may have and a variable may not —
+// if — so a brace starting with it and a colon can only be a record.
+func (p *parser) fieldOnlyName(tok token) bool {
+	return tok.kind == tokenIdentifier && machine.IsValidFieldName(tok.text) && !machine.IsValidVariableName(tok.text) && !machine.IsCurrencyCode(tok.text)
+}
+
+// recordNamedFirst reads a record whose first field has a name no expression
+// could have been read as.
+func (p *parser) recordNamedFirst(start, name token) (Expr, error) {
+	p.index += 2
+	p.mark(name, RoleField)
+	value, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	return p.recordLiteral(start, name.text, value)
 }
 
 // dictComprehension reads the tail of {key: value for item in source if cond}.
@@ -139,13 +156,17 @@ func (p *parser) parseBraceLiteral(start token, key, value Expr) (Expr, error) {
 		}
 		return p.dictLiteral(start, text, value)
 	}
-	name, ok := key.(*VariableExpr)
-	if !ok {
-		return nil, p.errorf(start, "a record field is written as name: value")
+	// It was read as an expression before the brace said what it is: a
+	// name, or a field shaped like a code, which read as a currency.
+	switch name := key.(type) {
+	case *VariableExpr:
+		p.markSpan(name.Pos, name.Pos+len(name.Name), RoleField)
+		return p.recordLiteral(start, name.Name, value)
+	case *CurrencyExpr:
+		p.markSpan(name.Pos, name.Pos+len(name.Code), RoleField)
+		return p.recordLiteral(start, name.Code, value)
 	}
-	// It was read as an expression before the brace said what it is.
-	p.markSpan(name.Pos, name.Pos+len(name.Name), RoleField)
-	return p.recordLiteral(start, name.Name, value)
+	return nil, p.errorf(start, "a record field is written as name: value")
 }
 
 func (p *parser) dictLiteral(start token, firstKey string, firstValue Expr) (Expr, error) {
@@ -185,23 +206,27 @@ func (p *parser) recordLiteral(start token, firstName string, firstValue Expr) (
 	return p.node(start, &RecordExpr{ID: p.id(), Pos: start.pos, Fields: fields})
 }
 
-// recordUpdate reads {...base, name: value, …}. The spread comes first and
-// only once, and at least one field follows: {...r} alone would be r.
-func (p *parser) recordUpdate(start token) (Expr, error) {
-	p.mark(p.peek(), RoleOperator)
-	p.index++
-	base, err := p.parseExpr()
+// parseWith reads what follows base in base with {name: value, …}: the
+// record base with those fields replaced. It is a postfix, as .field is, and
+// at least one field follows: with {} would be base itself.
+func (p *parser) parseWith(base Expr) (Expr, error) {
+	with := p.peek()
+	p.takeKeyword()
+	if err := p.expect(tokenLeftBrace, "'{' after with, as in order with {amount: 1}"); err != nil {
+		return nil, err
+	}
+	if closing := p.peek(); closing.kind == tokenRightBrace {
+		return nil, p.errorf(closing, "with {} changes nothing: name the fields to replace, as in order with {amount: 1}")
+	}
+	first, err := p.recordField()
 	if err != nil {
 		return nil, err
 	}
-	fields, err := p.recordFields(nil)
+	fields, err := p.recordFields([]RecordFieldExpr{first})
 	if err != nil {
 		return nil, err
 	}
-	if len(fields) == 0 {
-		return nil, p.errorf(start, "{...r} changes nothing: name the fields to replace, as in {...r, amount: 1}")
-	}
-	return p.node(start, &RecordUpdateExpr{ID: p.id(), Pos: start.pos, Base: base, Fields: fields})
+	return p.node(with, &RecordUpdateExpr{ID: p.id(), Pos: with.pos, Base: base, Fields: fields})
 }
 
 // recordFields reads ", name: value" entries up to the closing brace.
@@ -212,24 +237,33 @@ func (p *parser) recordFields(fields []RecordFieldExpr) ([]RecordFieldExpr, erro
 		} else if done {
 			return fields, nil
 		}
-		name := p.peek()
-		if name.kind != tokenIdentifier {
-			return nil, p.errorf(name, "record fields are written as name: value")
-		}
-		if machine.IsReservedName(name.text) {
-			return nil, p.errorf(name, "invalid field name %q", name.text)
-		}
-		p.index++
-		p.mark(name, RoleField)
-		if err := p.expect(tokenColon, "':' after the field name"); err != nil {
-			return nil, err
-		}
-		value, err := p.parseExpr()
+		field, err := p.recordField()
 		if err != nil {
 			return nil, err
 		}
-		fields = append(fields, RecordFieldExpr{Name: name.text, Value: value})
+		fields = append(fields, field)
 	}
+}
+
+// recordField reads one name: value.
+func (p *parser) recordField() (RecordFieldExpr, error) {
+	name := p.peek()
+	if name.kind != tokenIdentifier {
+		return RecordFieldExpr{}, p.errorf(name, "record fields are written as name: value")
+	}
+	if machine.IsReservedName(name.text) {
+		return RecordFieldExpr{}, p.errorf(name, "invalid field name %q", name.text)
+	}
+	p.index++
+	p.mark(name, RoleField)
+	if err := p.expect(tokenColon, "':' after the field name"); err != nil {
+		return RecordFieldExpr{}, err
+	}
+	value, err := p.parseExpr()
+	if err != nil {
+		return RecordFieldExpr{}, err
+	}
+	return RecordFieldExpr{Name: name.text, Value: value}, nil
 }
 
 // endOfBrace consumes the separator after an entry and reports whether the

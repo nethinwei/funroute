@@ -42,7 +42,7 @@ func format(expr Expr, indent string, used int) string {
 }
 
 func chainSource(match operatorMatch, indent string) (string, bool) {
-	if match.spec.fixity != "infix" {
+	if match.spec.fixity != "infix" || match.spec.nonAssociative {
 		return "", false
 	}
 	parts := chainParts(match)
@@ -56,11 +56,11 @@ func chainSource(match operatorMatch, indent string) (string, bool) {
 // it is the same operator.
 func chainParts(match operatorMatch) []string {
 	spec := match.spec
-	left := []string{inline(match.operands[0], spec.precedence)}
+	left := []string{inline(match.operands[0], spec.leftLevel())}
 	if inner, ok := readOperator(match.operands[0]); ok && inner.spec.token == spec.token && inner.spec.fixity == spec.fixity {
 		left = chainParts(inner)
 	}
-	return append(left, inline(match.operands[1], spec.precedence+1))
+	return append(left, inline(match.operands[1], spec.rightLevel()))
 }
 
 // split is a node laid out one part per line between an opening and a closing.
@@ -135,6 +135,12 @@ func splitNode(expr Expr) (split, bool) {
 			parts = append(parts, headedPart{binding.Name + " = ", binding.Value})
 		}
 		return listSplit("let(", ")", append(parts, exprPart{node.Body})), true
+	case *UsingExpr:
+		var parts []part
+		for _, text := range usingParts(node) {
+			parts = append(parts, textPart(text))
+		}
+		return listSplit("using(", ")", append(parts, exprPart{node.Body})), true
 	default:
 		return braceSplit(expr)
 	}
@@ -155,11 +161,11 @@ func braceSplit(expr Expr) (split, bool) {
 		}
 		return listSplit("{", "}", parts), true
 	case *RecordUpdateExpr:
-		parts := []part{headedPart{"...", node.Base}}
-		for _, field := range node.Fields {
-			parts = append(parts, headedPart{field.Name + ": ", field.Value})
+		parts := make([]part, len(node.Fields))
+		for i, field := range node.Fields {
+			parts[i] = headedPart{field.Name + ": ", field.Value}
 		}
-		return listSplit("{", "}", parts), true
+		return listSplit(postfixBase(node.Base)+" with {", "}", parts), true
 	default:
 		return split{}, false
 	}
@@ -175,7 +181,7 @@ func switchSplit(node *SwitchExpr) split {
 		parts = append(parts, branchPart{branch})
 	}
 	if node.Default != nil {
-		parts = append(parts, headedPart{"else ", node.Default})
+		parts = append(parts, headedPart{"else => ", node.Default})
 	}
 	return listSplit(open, ")", parts)
 }

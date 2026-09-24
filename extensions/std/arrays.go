@@ -14,7 +14,7 @@ import (
 // FunctionSpecs — reflection cannot express "array of any T".
 func registerArrays(registry *lang.Registry) error {
 	for _, spec := range arraySpecs() {
-		if err := registry.Register(spec); err != nil {
+		if err := register(registry, spec); err != nil {
 			return err
 		}
 	}
@@ -65,7 +65,7 @@ func registerSequences(registry *lang.Registry) error {
 			},
 		},
 	} {
-		if err := registry.Register(spec); err != nil {
+		if err := register(registry, spec); err != nil {
 			return err
 		}
 	}
@@ -298,11 +298,11 @@ func flattenItems(_ context.Context, args []lang.Value) (lang.Value, error) {
 	for _, inner := range itemsOf(args[0]) {
 		out = append(out, itemsOf(inner)...)
 	}
-	elem := elementType(args[0])
-	if elem.Elem == nil {
+	inner, ok := elementType(args[0]).Elem()
+	if !ok {
 		return lang.Value{}, fmt.Errorf("flatten needs an array of arrays")
 	}
-	return lang.Array(*elem.Elem, out)
+	return lang.Array(inner, out)
 }
 
 func containsValue(values []lang.Value, wanted lang.Value) bool {
@@ -322,9 +322,6 @@ func itemsOf(value lang.Value) []lang.Value {
 }
 
 func elementType(value lang.Value) lang.Type {
-	typ := value.Type()
-	if typ.Elem == nil {
-		return lang.Type{}
-	}
-	return *typ.Elem
+	elem, _ := value.Type().Elem()
+	return elem
 }

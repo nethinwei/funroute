@@ -54,7 +54,8 @@ func (s *Server) errorRange(doc *document, err error) Range {
 	if !errors.As(err, &positioned) {
 		return Range{}
 	}
-	return doc.rangeOf(syntax.Span{Start: positioned.Start, End: positioned.End}, s.encoding)
+	start, end := positioned.Span()
+	return doc.rangeOf(syntax.Span{Start: start, End: end}, s.encoding)
 }
 
 // applyContract reads the contract a client set. A nil one declares nothing,

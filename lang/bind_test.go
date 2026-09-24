@@ -102,8 +102,8 @@ func TestBindingLoadsWhatAnArtifactDeclares(t *testing.T) {
 	t.Parallel()
 	artifact := consoleArtifact(t, `{net: order.amount - amount}`, []lang.ArgSpec{
 		{Name: "amount", Type: lang.IntType},
-		{Name: "order", Type: lang.RecordOf(lang.Field{Name: "amount", Type: lang.IntType})},
-	}, lang.RecordOf(lang.Field{Name: "net", Type: lang.IntType}))
+		{Name: "order", Type: lang.RecordOf(lang.FieldOf("amount", lang.IntType))},
+	}, lang.RecordOf(lang.FieldOf("net", lang.IntType)))
 	program, err := routeBinding(t).Load(artifact)
 	if err != nil {
 		t.Fatal(err)
@@ -116,21 +116,21 @@ func TestBindingLoadsWhatAnArtifactDeclares(t *testing.T) {
 	if out.Net != 970 || out.Channel != "" || out.Score != 0 || out.SKUs != nil {
 		t.Fatalf("out = %+v, want only Net 970", out)
 	}
-	if program.Artifact().Digest != artifact.Digest {
-		t.Fatalf("program.Artifact().Digest = %s, want the loaded %s", program.Artifact().Digest, artifact.Digest)
+	if program.Artifact().Digest() != artifact.Digest() {
+		t.Fatalf("program.Artifact().Digest() = %s, want the loaded %s", program.Artifact().Digest(), artifact.Digest())
 	}
 }
 
 // What an artifact declares must be there with that type, by name.
 func TestBindingRefusesWhatItCannotCarry(t *testing.T) {
 	t.Parallel()
-	net := lang.RecordOf(lang.Field{Name: "net", Type: lang.IntType})
+	net := lang.RecordOf(lang.FieldOf("net", lang.IntType))
 	for name, artifact := range map[string]*lang.Artifact{
 		"retyped argument": consoleArtifact(t, `{net: 1}`, []lang.ArgSpec{{Name: "amount", Type: lang.FloatType}}, net),
 		"unknown argument": consoleArtifact(t, `{net: fee}`, []lang.ArgSpec{{Name: "fee", Type: lang.IntType}}, net),
 		"unknown field": consoleArtifact(t, `{net: order.discount}`, []lang.ArgSpec{{Name: "order", Type: lang.RecordOf(
-			lang.Field{Name: "discount", Type: lang.IntType})}}, net),
-		"unknown result field": consoleArtifact(t, `{bonus: 1}`, nil, lang.RecordOf(lang.Field{Name: "bonus", Type: lang.IntType})),
+			lang.FieldOf("discount", lang.IntType))}}, net),
+		"unknown result field": consoleArtifact(t, `{bonus: 1}`, nil, lang.RecordOf(lang.FieldOf("bonus", lang.IntType))),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -209,7 +209,7 @@ func TestBindingUpdatesARecordItWasGiven(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	program, err := binding.Compile(`{...order, amount: order.amount - 30}`)
+	program, err := binding.Compile(`order with {amount: order.amount - 30}`)
 	if err != nil {
 		t.Fatal(err)
 	}

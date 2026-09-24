@@ -22,7 +22,7 @@ func Bind[In, Out any](registry *machine.Registry) (*Binding[In, Out], error) {
 	result := codec.Result()
 	options := CompileOptions{Result: &result}
 	for _, param := range codec.Parameters() {
-		options.Args = append(options.Args, ArgSpec{Name: param.Name, Type: param.Type})
+		options.Args = append(options.Args, ArgSpec{Name: param.Name(), Type: param.Type()})
 	}
 	if err := ValidateContract(options); err != nil {
 		return nil, err

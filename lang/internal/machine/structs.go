@@ -56,7 +56,7 @@ func taggedFields(registry *Registry, typ reflect.Type) ([]Field, []int, error) 
 			continue
 		}
 		// A record's field names are its keys; two fields cannot share one.
-		if at := slices.IndexFunc(fields, func(field Field) bool { return field.Name == name }); at >= 0 {
+		if at := slices.IndexFunc(fields, func(field Field) bool { return field.name == name }); at >= 0 {
 			return nil, nil, fmt.Errorf("fields %s and %s of %s are both tagged %q",
 				typ.Field(indexes[at]).Name, structField.Name, typ, name)
 		}
@@ -64,7 +64,7 @@ func taggedFields(registry *Registry, typ reflect.Type) ([]Field, []int, error) 
 		if err != nil {
 			return nil, nil, fmt.Errorf("field %s: %w", structField.Name, err)
 		}
-		fields = append(fields, Field{Name: name, Type: fieldType})
+		fields = append(fields, Field{name: name, typ: fieldType})
 		indexes = append(indexes, i)
 	}
 	return fields, indexes, nil
@@ -103,7 +103,7 @@ func intoStruct(registry *Registry, value Value, typ reflect.Type) (reflect.Valu
 	out := reflect.New(typ).Elem()
 	filled := 0
 	for position, index := range indexes {
-		source := record.typ.FieldIndex(fields[position].Name)
+		source := record.typ.FieldIndex(fields[position].name)
 		if source < 0 {
 			continue
 		}
@@ -129,17 +129,17 @@ func outOfStruct(registry *Registry, value reflect.Value, typ Type) (Value, erro
 	}
 	available := make(map[string]int, len(declared))
 	for position, field := range declared {
-		available[field.Name] = indexes[position]
+		available[field.name] = indexes[position]
 	}
-	fields := make([]Value, len(typ.Fields))
-	for i, wanted := range typ.Fields {
-		index, ok := available[wanted.Name]
+	fields := make([]Value, len(typ.fields))
+	for i, wanted := range typ.fields {
+		index, ok := available[wanted.name]
 		if !ok {
-			return Value{}, fmt.Errorf("%s has no field %q for %s", value.Type(), wanted.Name, typ.Summary())
+			return Value{}, fmt.Errorf("%s has no field %q for %s", value.Type(), wanted.name, typ.Summary())
 		}
-		converted, err := outOfGo(registry, value.Field(index), wanted.Type)
+		converted, err := outOfGo(registry, value.Field(index), wanted.typ)
 		if err != nil {
-			return Value{}, fmt.Errorf("field %q: %w", wanted.Name, err)
+			return Value{}, fmt.Errorf("field %q: %w", wanted.name, err)
 		}
 		fields[i] = converted
 	}
@@ -157,7 +157,7 @@ func structValue(value reflect.Value) (Value, error) {
 	typ := RecordOf(fields...)
 	values := make([]Value, len(indexes))
 	for position, index := range indexes {
-		converted, err := outOfGo(registry, value.Field(index), fields[position].Type)
+		converted, err := outOfGo(registry, value.Field(index), fields[position].typ)
 		if err != nil {
 			return Value{}, fmt.Errorf("field %s: %w", value.Type().Field(index).Name, err)
 		}

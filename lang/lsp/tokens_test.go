@@ -25,3 +25,52 @@ func TestSemanticTokensNameEachPiece(t *testing.T) {
 		t.Errorf("tokens are %s\nwant       %s", strings.Join(got, " "), want)
 	}
 }
+
+// tokenNames is the type of each semantic token of the document, in order,
+// with +declaration where it is one.
+func tokenNames(s *session, uri string) []string {
+	s.t.Helper()
+	data := s.request("textDocument/semanticTokens/full", docParams(uri)).(map[string]any)["data"].([]any)
+	var got []string
+	for i := 0; i+4 < len(data); i += 5 {
+		name := tokenTypes[int(data[i+3].(float64))]
+		if data[i+4].(float64) == 1 {
+			name += "+declaration"
+		}
+		got = append(got, name)
+	}
+	return got
+}
+
+// A currency code is a currency, in an amount and on its own; an amount's
+// figure is a number, and the minus in front is an operator.
+func TestSemanticTokensNameMoney(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]string{
+		"amount + USD 0.30":       "parameter operator currency number",
+		"JPY -1_000":              "currency operator number",
+		"money(170, USD)":         "function number currency",
+		"round(amount, @half_up)": "function parameter enumMember",
+		"USD + 1":                 "currency operator number",
+		"150 JPY / USD":           "number currency operator currency",
+	} {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+			s := newSession(t, withMoney(t), `{}`)
+			s.open("file:///a.fr", text)
+			if got := strings.Join(tokenNames(s, "file:///a.fr"), " "); got != want {
+				t.Errorf("tokens of %q are %s, want %s", text, got, want)
+			}
+		})
+	}
+}
+
+// A rate literal is a number with its unit, and is marked as one.
+func TestSemanticTokensNameRates(t *testing.T) {
+	t.Parallel()
+	s := newSession(t, withMoney(t), `{}`)
+	s.open("file:///a.fr", "amount * 2.9% + 25bps")
+	if got, want := strings.Join(tokenNames(s, "file:///a.fr"), " "), "parameter operator number operator number"; got != want {
+		t.Errorf("tokens are %s, want %s", got, want)
+	}
+}

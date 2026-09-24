@@ -77,6 +77,18 @@ type runRequest struct {
 	URI  string          `json:"uri"`
 	Args json.RawMessage `json:"args"`
 	Fuel uint64          `json:"fuel"`
+	// Rates fill the run's rate table, the one amount -> JPY converts
+	// through; without them a conversion is the error kind "norate".
+	Rates []quote `json:"rates,omitempty"`
+	// Tables fill the named rate tables the contract declares, by name.
+	Tables map[string][]quote `json:"tables,omitempty"`
+}
+
+// quote is one exchange rate a run is given: one base buys rate of quote.
+type quote struct {
+	Base  string `json:"base"`
+	Quote string `json:"quote"`
+	Rate  string `json:"rate"`
 }
 
 // runResult says what a run returned, or why it did not, and which functions
@@ -159,7 +171,7 @@ func (s *Server) argumentList(params json.RawMessage) (any, error) {
 	}
 	out := []map[string]string{}
 	for _, arg := range s.arguments(doc) {
-		out = append(out, map[string]string{"name": arg.Name, "type": arg.Type.String(), "doc": arg.Doc})
+		out = append(out, map[string]string{"name": arg.Name(), "type": arg.Type().String(), "doc": arg.Doc()})
 	}
 	return out, nil
 }
@@ -177,10 +189,11 @@ func (s *Server) run(doc *document, request runRequest) runResult {
 		result.Error = describeError(err)
 		return result
 	}
-	result.Type = &artifact.Result
+	resultType := artifact.Result()
+	result.Type = &resultType
 	args, err := decodeArgs(request.Args)
 	if err == nil {
-		err = s.execute(artifact, args, request.Fuel, &result)
+		err = s.execute(artifact, args, request, &result)
 	}
 	if err != nil {
 		result.Error = describeError(err)
@@ -195,22 +208,65 @@ func (s *Server) compile(doc *document) (*machine.Artifact, error) {
 	return compile.CompileExpr(doc.text, s.registry, s.contract)
 }
 
-func (s *Server) execute(artifact *machine.Artifact, args map[string]any, fuel uint64, result *runResult) error {
+func (s *Server) execute(artifact *machine.Artifact, args map[string]any, request runRequest, result *runResult) error {
 	runtime, err := machine.Instantiate(artifact, s.registry)
 	if err != nil {
 		return err
 	}
-	if fuel == 0 {
-		fuel = machine.DefaultFuel
+	options := machine.RunOptions{Fuel: request.Fuel}
+	if options.Fuel == 0 {
+		options.Fuel = machine.DefaultFuel
+	}
+	if options.Rates, err = s.rateTable(request.Rates); err != nil {
+		return err
+	}
+	if options.RateTables, err = s.rateTables(request.Tables); err != nil {
+		return err
 	}
 	ctx, calls := machine.TrackUnavailable(context.Background())
-	value, err := runtime.Run(ctx, args, machine.RunOptions{Fuel: fuel})
+	value, err := runtime.Run(ctx, args, options)
 	result.Unavailable = calls()
 	if err != nil {
 		return err
 	}
-	result.Value, err = json.Marshal(value)
+	// Money comes back as "USD 1.70": the registry knows the places.
+	result.Value, err = s.registry.EncodeJSON(value)
 	return err
+}
+
+// rateTable is the rate table a run's quotes make, nil for none.
+func (s *Server) rateTable(quotes []quote) (*machine.Rates, error) {
+	if len(quotes) == 0 {
+		return nil, nil
+	}
+	currencies, declared := s.registry.Currencies()
+	if !declared {
+		return nil, fmt.Errorf("%w: exchange rates need a registry that declares money", machine.ErrCurrency)
+	}
+	rates := currencies.NewRates()
+	for _, q := range quotes {
+		if err := rates.Add(q.Base, q.Quote, q.Rate); err != nil {
+			return nil, err
+		}
+	}
+	return rates, nil
+}
+
+// rateTables are the named tables a run's quotes make, by name; nil for none.
+func (s *Server) rateTables(tables map[string][]quote) (map[string]*machine.Rates, error) {
+	if len(tables) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]*machine.Rates, len(tables))
+	for name, quotes := range tables {
+		// A table given no quotes is nil, and a nil table is an empty one.
+		rates, err := s.rateTable(quotes)
+		if err != nil {
+			return nil, fmt.Errorf("rate table %q: %w", name, err)
+		}
+		out[name] = rates
+	}
+	return out, nil
 }
 
 // decodeArgs reads the arguments as an object, or as the text of one: a
@@ -233,7 +289,8 @@ var errorKinds = []struct {
 	kind string
 	err  error
 }{
-	{"unavailable", machine.ErrUnavailable}, {"contract", machine.ErrContract}, {"compile", machine.ErrCompile},
+	{"unavailable", machine.ErrUnavailable}, {"norate", machine.ErrNoRate}, {"currency", machine.ErrCurrency}, {"arithmetic", machine.ErrArithmetic},
+	{"contract", machine.ErrContract}, {"compile", machine.ErrCompile},
 	{"fuel", machine.ErrFuel}, {"deadline", machine.ErrDeadline}, {"extension", machine.ErrExtension},
 }
 

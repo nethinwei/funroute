@@ -1,6 +1,7 @@
 package syntax
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -44,14 +45,14 @@ func checkNested(t *testing.T, source string, parent Expr) {
 func TestSpansCoverWhatWasWritten(t *testing.T) {
 	t.Parallel()
 	cases := map[string][]string{
-		`(a + b) * c`:                       {"(a + b)", "(a + b) * c", "c"},
-		`order.items[0].price`:              {"order", "order.items", "order.items[0]", "order.items[0].price", "0"},
-		`f(x).fee != -1.5`:                  {"f(x)", "f(x).fee", "-1.5", "f(x).fee != -1.5"},
-		`-x + !ok`:                          {"-x", "x", "!ok", "-x + !ok"},
-		`[x * 2 for x in xs if x > 0]`:      {"x * 2", "xs", "x > 0", "[x * 2 for x in xs if x > 0]"},
-		`let(r = 2, {amount: r, tags: []})`: {"2", "{amount: r, tags: []}", "[]"},
-		`switch(c, case "SG" => 1, else 2)`: {"c", `"SG"`, "1", "2"},
-		`reduce(p in ps, acc = 0, acc + p)`: {"ps", "0", "acc + p"},
+		`(a + b) * c`:                          {"(a + b)", "(a + b) * c", "c"},
+		`order.items[0].price`:                 {"order", "order.items", "order.items[0]", "order.items[0].price", "0"},
+		`f(x).fee != -1.5`:                     {"f(x)", "f(x).fee", "-1.5", "f(x).fee != -1.5"},
+		`-x + !ok`:                             {"-x", "x", "!ok", "-x + !ok"},
+		`[x * 2 for x in xs if x > 0]`:         {"x * 2", "xs", "x > 0", "[x * 2 for x in xs if x > 0]"},
+		`let(r = 2, {amount: r, tags: []})`:    {"2", "{amount: r, tags: []}", "[]"},
+		`switch(c, case "SG" => 1, else => 2)`: {"c", `"SG"`, "1", "2"},
+		`reduce(p in ps, acc = 0, acc + p)`:    {"ps", "0", "acc + p"},
 	}
 	for source, want := range cases {
 		t.Run(source, func(t *testing.T) {
@@ -121,11 +122,104 @@ func TestSwitchShapesAgree(t *testing.T) {
 	t.Parallel()
 	// The positional form and the branch form produce the same AST.
 	for _, pair := range [][2]string{
-		{`switch(country, case "SG" => "a", case "MY" => "b", else "c")`, `switch(country, case "SG" => "a", case "MY" => "b", else "c")`},
+		{`switch(country, case "SG" => "a", case "MY" => "b", else => "c")`, `switch(country, case "SG" => "a", case "MY" => "b", else => "c")`},
 	} {
 		t.Run(pair[0], func(t *testing.T) {
 			t.Parallel()
 			assertSameExprJSON(t, pair[0], pair[1])
 		})
+	}
+}
+
+// An amount spans its code and its figure, and its minus when it has one; a
+// rate spans its number and its unit.
+func TestMoneyAndRateSpanWhatWasWritten(t *testing.T) {
+	t.Parallel()
+	cases := map[string][]string{
+		`amount * 2.9% + USD 0.30`:    {"amount", "2.9%", "amount * 2.9%", "USD 0.30", "amount * 2.9% + USD 0.30"},
+		`f(JPY -5, 25bps)`:            {"JPY -5", "25bps"},
+		`- USD 1.70`:                  {"- USD 1.70"},
+		`(USD 1).x`:                   {"(USD 1)", "(USD 1).x"},
+		`-2.9%`:                       {"-2.9%", "2.9%"},
+		`[x * 0.5bps for x in xs]`:    {"0.5bps", "x * 0.5bps"},
+		"let(fee = USD \t 1.70, fee)": {"USD \t 1.70"},
+		`JPY 1_000 // yen`:            {"JPY 1_000"},
+	}
+	for source, want := range cases {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			checkSpans(t, source, want)
+		})
+	}
+}
+
+// A money literal's syntax errors point at the figure that is wrong, and a
+// name that cannot be a code at the number that follows it.
+func TestMoneySyntaxErrorsCoverTheirToken(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		`USD 1e3`:        "1e3",
+		`x + USD -1.5E2`: "1.5E2",
+		`US 1`:           "1",
+		`usd 1.70`:       "1.70",
+		`USD 1.70%`:      "1.70%",
+		`25bpsx`:         "bpsx",
+		`1e3%`:           "1e3%",
+		`1e3%3`:          "1e3%",
+		`1e3bps`:         "1e3bps",
+	}
+	for source, want := range cases {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(source)
+			positioned, ok := errors.AsType[*PosError](err)
+			if !ok {
+				t.Fatalf("Parse(%q) error = %v, want a *PosError", source, err)
+			}
+			if got := source[positioned.start:positioned.end]; got != want {
+				t.Errorf("%q: the error covers %q, want %q (%v)", source, got, want, err)
+			}
+		})
+	}
+}
+
+// Comparisons do not chain, and -> takes one currency on its right: both are
+// errors that say how to write what was meant, never another reading. A
+// comparison of comparisons at different levels, a conversion in a
+// comparison and conversions one after another still read.
+func TestComparisonsDoNotChainAndAConversionTakesOneCurrency(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		"a < b < c":             "comparisons do not chain",
+		"a == b == c":           "comparisons do not chain",
+		"a != b == c":           "comparisons do not chain",
+		"x in xs in ys":         "comparisons do not chain",
+		"a <= b > c":            "comparisons do not chain",
+		"amount -> JPY + fee":   "takes one currency on its right",
+		"amount -> JPY * 2":     "takes one currency on its right",
+		"x < amount -> JPY + 1": "takes one currency on its right",
+		"amount -> -JPY":        "expected an expression",
+	} {
+		if _, err := Parse(source); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Parse(%q) error = %v, want one saying %s", source, err, want)
+		}
+	}
+	for _, source := range []string{"a < b == c", "a == (b == c)", "(a < b) < c", "a -> JPY -> USD", "a -> JPY > b", "a + b -> JPY", "(a -> JPY) + fee", "a -> o.currency", "a -> currency(b)", "a -> (JPY)"} {
+		if _, err := Parse(source); err != nil {
+			t.Errorf("Parse(%q) error = %v, want it read", source, err)
+		}
+	}
+}
+
+// A switch's else leads to its result with =>, as every case does; the one
+// spelling without it is an error that shows the other.
+func TestElseLeadsToItsResultWithAnArrow(t *testing.T) {
+	t.Parallel()
+	if _, err := Parse(`switch(x, case 1 => 2, else 3)`); err == nil || !strings.Contains(err.Error(), "expected '=>' after else") {
+		t.Fatalf("Parse(else 3) error = %v, want one asking for =>", err)
+	}
+	expr := mustParse(t, `switch(x, case 1 => 2, else => 3)`)
+	if got := Inline(expr); got != `switch(x, case 1 => 2, else => 3)` {
+		t.Fatalf("Inline(switch …) = %q, want the else printed with =>", got)
 	}
 }

@@ -25,7 +25,7 @@ var opcodes = [...]opcodeSpec{
 		name:   "const",
 		effect: pushes(1),
 		validate: func(in Instruction, a *Artifact, fail failFunc) error {
-			if in.A < 0 || in.A >= len(a.Constants) {
+			if in.A < 0 || in.A >= len(a.parts.Constants) {
 				return fail("constant index %d", in.A)
 			}
 			return nil
@@ -35,7 +35,7 @@ var opcodes = [...]opcodeSpec{
 		name:   "load_arg",
 		effect: pushes(1),
 		validate: func(in Instruction, a *Artifact, fail failFunc) error {
-			if in.A < 0 || in.A >= len(a.Args) {
+			if in.A < 0 || in.A >= len(a.parts.Args) {
 				return fail("argument index %d", in.A)
 			}
 			return nil
@@ -117,6 +117,19 @@ var opcodes = [...]opcodeSpec{
 		effect:   func(in Instruction) int { return -len(in.Keys) },
 		validate: validateRecordWith,
 	},
+	// Checks the currency of the value A below the stack top, leaving the
+	// stack as it is. C says against what: a group slot D the first currency
+	// binds (0), the code Keys[0] (1), or the units of Type, walked (2). B's
+	// bit 1 clears the group slots first.
+	OpCurrencyCheck: {name: "currency_check", validate: validateCurrencyCheck},
+	// Opens a using: pops B quotes, exchange rates all, and runs what follows
+	// with them alone, or over the named table Keys[0]. OpFxPop closes it.
+	OpFxPush: {
+		name:     "fx_push",
+		effect:   func(in Instruction) int { return -in.B },
+		validate: validateFxPush,
+	},
+	OpFxPop: {name: "fx_pop"},
 }
 
 func pushes(n int) func(Instruction) int {
@@ -156,14 +169,14 @@ func StackEffect(instruction Instruction) int {
 }
 
 func validateLocalSlot(in Instruction, a *Artifact, fail failFunc) error {
-	if in.A < 0 || in.A >= a.Locals {
+	if in.A < 0 || in.A >= a.parts.Locals {
 		return fail("local index %d", in.A)
 	}
 	return nil
 }
 
 func validateJumpTarget(in Instruction, a *Artifact, fail failFunc) error {
-	if in.A < 0 || in.A > len(a.Instructions) {
+	if in.A < 0 || in.A > len(a.parts.Instructions) {
 		return fail("jump target %d", in.A)
 	}
 	return nil

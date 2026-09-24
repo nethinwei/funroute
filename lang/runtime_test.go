@@ -1,6 +1,8 @@
 package lang_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -43,8 +45,15 @@ func TestHostChecksArtifactIdentity(t *testing.T) {
 	}
 	// The digest is the identity: an artifact edited after compilation no
 	// longer loads, which is what a host relies on when it stores them.
-	artifact.Args[0].Name = "other"
-	if _, err := lang.Instantiate(artifact, registry); err == nil {
+	encoded, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edited lang.Artifact
+	if err := json.Unmarshal(bytes.Replace(encoded, []byte(`"name":"`), []byte(`"name":"other`), 1), &edited); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lang.Instantiate(&edited, registry); err == nil {
 		t.Fatal("Instantiate(artifact with an argument renamed) error = nil, want a digest mismatch")
 	}
 }
@@ -68,10 +77,9 @@ func TestAHostDrivesARuleFromDataToResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	params := artifact.Args
-	calls := artifact.Calls
-	if len(params) != 1 || params[0].Name != "order" || len(calls) == 0 {
-		t.Fatalf("the artifact takes %v and calls %v, want the one argument order and some calls", params, calls)
+	params := artifact.Args()
+	if len(params) != 1 || params[0].Name() != "order" || params[0].Type().Kind() != lang.RecordOf(lang.FieldOf("amount", lang.IntType)).Kind() {
+		t.Fatalf("the artifact takes %v, want the one argument order", params)
 	}
 	args, err := lang.DecodeArgs([]byte(`{"order": {"amount": 9007199254740993}}`))
 	if err != nil {

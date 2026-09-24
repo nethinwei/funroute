@@ -2,6 +2,7 @@ package compile
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"funroute/lang/internal/machine"
@@ -50,7 +51,7 @@ func CompileAST(expr syntax.Expr, registry *machine.Registry, options CompileOpt
 	if err != nil {
 		return nil, compileError(err)
 	}
-	artifact, err := sealArtifact(exprJSON, inferred, compiler)
+	artifact, err := sealArtifact(exprJSON, inferred, compiler, options.RateTables)
 	return artifact, compileError(err)
 }
 
@@ -67,7 +68,10 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	if err := options.validate(expr); err != nil {
 		return nil, nil, err
 	}
-	inferred, err := inferProgram(expr, registry, options.argTypes(), options.argOrder(), options.Result)
+	if err := validateMoneyContract(options, registry); err != nil {
+		return nil, nil, err
+	}
+	inferred, err := inferProgram(expr, registry, options.argTypes(), options.argOrder(), options.Result, options.RateTables)
 	if err != nil {
 		return nil, nil, compileError(err)
 	}
@@ -77,6 +81,7 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	if err := compiler.compile(expr); err != nil {
 		return inferred, nil, compileError(err)
 	}
+	compiler.checkResult(expr)
 	limit := options.MaxInstructions
 	if limit == 0 {
 		limit = 10_000
@@ -97,14 +102,13 @@ func newBytecodeCompiler(registry *machine.Registry, inferred *inference) *bytec
 		callIndex:  map[string]int{},
 	}
 	for i, param := range inferred.Params {
-		compiler.argIndex[param.Name] = i
+		compiler.argIndex[param.Name()] = i
 	}
 	return compiler
 }
 
-func sealArtifact(exprJSON []byte, inferred *inference, compiler *bytecodeCompiler) (*machine.Artifact, error) {
-	artifact := &machine.Artifact{
-		Version:      machine.ArtifactVersion,
+func sealArtifact(exprJSON []byte, inferred *inference, compiler *bytecodeCompiler, tables []string) (*machine.Artifact, error) {
+	return machine.SealArtifact(machine.ArtifactParts{
 		ExprJSON:     exprJSON,
 		Args:         inferred.Params,
 		Result:       inferred.Result,
@@ -114,13 +118,8 @@ func sealArtifact(exprJSON []byte, inferred *inference, compiler *bytecodeCompil
 		Locals:       compiler.nextLocal,
 		MaxStack:     maxStackDepth(compiler.instructions),
 		Instructions: compiler.instructions,
-	}
-	digest, err := machine.ArtifactDigest(artifact)
-	if err != nil {
-		return nil, err
-	}
-	artifact.Digest = digest
-	return artifact, nil
+		RateTables:   slices.Clone(tables),
+	}, compiler.registry)
 }
 
 type bytecodeCompiler struct {
@@ -141,6 +140,10 @@ type bytecodeCompiler struct {
 	// recurses into another fold. folded counts what was folded away.
 	folding bool
 	folded  int
+	// rounding is the mode of the round(…) being compiled, nil outside one;
+	// roundSteps counts the steps that took it.
+	rounding   *string
+	roundSteps int
 }
 
 func (c *bytecodeCompiler) compile(expr syntax.Expr) error {
@@ -155,7 +158,13 @@ func (c *bytecodeCompiler) compile(expr syntax.Expr) error {
 	case *syntax.LiteralExpr:
 		return c.compileLiteral(node)
 	case *syntax.EnumExpr:
-		return c.compileLiteral(&syntax.LiteralExpr{ID: node.ID, Pos: node.Pos, Value: machine.String(node.Member)})
+		return c.emitConstant(c.enumValue(node))
+	case *syntax.MoneyExpr, *syntax.RateExpr, *syntax.FxRateExpr, *syntax.CurrencyExpr:
+		value, err := moneyLiteral(node, c.registry)
+		if err != nil {
+			return err
+		}
+		return c.emitConstant(value)
 	case *syntax.VariableExpr:
 		return c.compileVariable(node)
 	case *syntax.ArrayExpr:
@@ -170,6 +179,8 @@ func (c *bytecodeCompiler) compile(expr syntax.Expr) error {
 		return c.compileReduce(node)
 	case *syntax.LetExpr:
 		return c.compileLet(node)
+	case *syntax.UsingExpr:
+		return c.compileUsing(node)
 	case *syntax.RecordExpr:
 		return c.compileRecord(node)
 	case *syntax.FieldExpr:
@@ -193,7 +204,15 @@ func (c *bytecodeCompiler) compileAll(exprs []syntax.Expr) error {
 }
 
 func (c *bytecodeCompiler) compileLiteral(node *syntax.LiteralExpr) error {
-	constant, err := machine.ConstantFromValue(node.Value)
+	value, err := c.literalValue(node)
+	if err != nil {
+		return err
+	}
+	return c.emitConstant(value)
+}
+
+func (c *bytecodeCompiler) emitConstant(value machine.Value) error {
+	constant, err := machine.ConstantFromValue(value)
 	if err != nil {
 		return err
 	}
@@ -225,7 +244,7 @@ func (c *bytecodeCompiler) compileArray(node *syntax.ArrayExpr) error {
 		return err
 	}
 	typ, ok := c.inferred.NodeTypes[node.ID]
-	if !ok || typ.Kind != machine.ArrayKind || typ.Elem == nil {
+	if !ok || typ.Kind() != machine.ArrayKind || !hasElem(typ) {
 		return fmt.Errorf("cannot compile array with unresolved type")
 	}
 	c.emit(machine.Instruction{Op: machine.OpMakeArray, A: len(node.Items), Type: &typ})
@@ -243,7 +262,7 @@ func (c *bytecodeCompiler) compileDict(node *syntax.DictExpr) error {
 		}
 	}
 	typ, ok := c.inferred.NodeTypes[node.ID]
-	if !ok || typ.Kind != machine.DictKind || typ.Elem == nil {
+	if !ok || typ.Kind() != machine.DictKind || !hasElem(typ) {
 		return fmt.Errorf("cannot compile dictionary with unresolved type")
 	}
 	c.emit(machine.Instruction{Op: machine.OpMakeDict, A: len(entries), Keys: keys, Type: &typ})
@@ -255,7 +274,7 @@ func (c *bytecodeCompiler) compileDict(node *syntax.DictExpr) error {
 // a field is one instruction and no name survives into the bytecode.
 func (c *bytecodeCompiler) compileRecord(node *syntax.RecordExpr) error {
 	resultType, ok := c.inferred.NodeTypes[node.ID]
-	if !ok || resultType.Kind != machine.RecordKind {
+	if !ok || resultType.Kind() != machine.RecordKind {
 		return fmt.Errorf("cannot compile record with unresolved type")
 	}
 	for _, field := range node.Fields {
@@ -272,7 +291,7 @@ func (c *bytecodeCompiler) compileField(node *syntax.FieldExpr) error {
 	// so a field that does not resolve here is the compiler's own mistake.
 	sourceType, ok := c.inferred.NodeTypes[node.Value.NodeID()]
 	index := sourceType.FieldIndex(node.Field)
-	if !ok || sourceType.Kind != machine.RecordKind || index < 0 {
+	if !ok || sourceType.Kind() != machine.RecordKind || index < 0 {
 		return fmt.Errorf("internal error: field %q was not resolved by inference", node.Field)
 	}
 	if err := c.compile(node.Value); err != nil {
@@ -298,6 +317,9 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	if function.IsLazyFallback() {
 		return c.compileFallback(node)
 	}
+	if function.IsRoundingScope() {
+		return c.compileRoundingScope(node)
+	}
 	if function.NeedsBoundedArgs() {
 		if err := c.requireBoundedArgs(node); err != nil {
 			return err
@@ -306,6 +328,12 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	if err := c.compileAll(node.Args); err != nil {
 		return err
 	}
+	c.emitUnitChecks(node, function)
+	function, extra, err := c.roundedStep(function)
+	if err != nil {
+		return err
+	}
+	key = function.Key()
 	callIndex, ok := c.callIndex[key]
 	if !ok {
 		callIndex = len(c.calls)
@@ -313,7 +341,7 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 		c.calls = append(c.calls, machine.CallReference{Name: function.Name, Signature: key, Cost: function.Cost()})
 	}
 	resultType := c.inferred.NodeTypes[node.ID]
-	c.emit(machine.Instruction{Op: machine.OpCall, A: callIndex, B: len(node.Args), Type: &resultType})
+	c.emit(machine.Instruction{Op: machine.OpCall, A: callIndex, B: len(node.Args) + extra, Type: &resultType})
 	return nil
 }
 
@@ -357,6 +385,11 @@ func (c *bytecodeCompiler) compileSwitch(node *syntax.SwitchExpr) error {
 // that is the one docs/termination.md rules out.
 func (c *bytecodeCompiler) requireBoundedArgs(node *syntax.CallExpr) error {
 	for i, arg := range node.Args {
+		// Only an integer can stand for a length; the amount allocate splits
+		// or anything else of another type says nothing about the size.
+		if typ, ok := c.inferred.NodeTypes[arg.NodeID()]; ok && typ.Kind() != machine.IntKind {
+			continue
+		}
 		if c.boundedExpr(arg) {
 			continue
 		}
@@ -471,8 +504,8 @@ func (c *bytecodeCompiler) compileFor(node *syntax.ForExpr) error {
 		return err
 	}
 	resultType, ok := c.inferred.NodeTypes[node.ID]
-	if !ok || resultType.Elem == nil ||
-		(resultType.Kind != machine.ArrayKind && resultType.Kind != machine.DictKind) {
+	if !ok || !hasElem(resultType) ||
+		(resultType.Kind() != machine.ArrayKind && resultType.Kind() != machine.DictKind) {
 		return fmt.Errorf("cannot compile for with unresolved result type")
 	}
 	slot := c.bindLocal(node.Variable)
@@ -522,7 +555,7 @@ func (c *bytecodeCompiler) compileYield(node *syntax.ForExpr, resultType machine
 		c.emit(machine.Instruction{Op: machine.OpLoopSpread, Type: &spliced})
 		return nil
 	}
-	yieldType := machine.CloneType(*resultType.Elem)
+	yieldType := machine.CloneType(elemOf(resultType))
 	c.emit(machine.Instruction{Op: machine.OpLoopCollect, A: pairs, Type: &yieldType})
 	return nil
 }
@@ -683,7 +716,7 @@ func maxStackDepth(instructions []machine.Instruction) int {
 
 // attachDocs copies the declaration prose onto the inferred parameters.
 func attachDocs(params []machine.Parameter, docs map[string]string) {
-	for i := range params {
-		params[i].Doc = docs[params[i].Name]
+	for i, param := range params {
+		params[i] = machine.NewParameter(param.Name(), param.Type(), docs[param.Name()])
 	}
 }

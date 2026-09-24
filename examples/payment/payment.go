@@ -12,12 +12,19 @@ import (
 	"funroute/lang"
 )
 
-// NewRegistry is the demo console: the minimal kernel, every lazy form, the
-// aggregation pack and the payment extensions. Every form iterates a finite
-// input, so any program this registry accepts terminates.
+// NewRegistry is the demo console: the minimal kernel, every lazy form, money
+// in the ISO 4217 currencies rounding half up, the aggregation pack and the
+// payment extensions. Every form iterates a finite input, so any program this
+// registry accepts terminates.
 func NewRegistry() (*lang.Registry, error) {
 	registry := lang.CoreRegistry()
 	if err := registry.EnableForm(lang.SwitchForm, lang.ForForm, lang.ReduceForm); err != nil {
+		return nil, err
+	}
+	// Money is declared before the pack, which registers its aggregates over
+	// money only when there is money to aggregate.
+	currencies := append(std.ISO4217(), cryptoCurrencies...)
+	if err := registry.DeclareMoney(lang.MoneySpec{Rounding: lang.RoundHalfUp, Currencies: currencies}); err != nil {
 		return nil, err
 	}
 	if err := std.Register(registry); err != nil {
@@ -43,6 +50,9 @@ func Register(registry *lang.Registry) error {
 		return err
 	}
 	if err := registerFeeQuote(registry); err != nil {
+		return err
+	}
+	if err := registerMoneyQuote(registry); err != nil {
 		return err
 	}
 	return registerModel(registry)
@@ -136,4 +146,13 @@ func registerFeeQuote(registry *lang.Registry) error {
 		}
 		return fee, nil
 	})
+}
+
+// cryptoCurrencies are the tokens a payment desk settles in, declared at the
+// precision the business keeps rather than the chain's: a stablecoin's six
+// places, eight for the rest. ETH's eighteen on chain do not fit an int64 of
+// wei past 9.2 ETH, so exact on-chain amounts are the ledger's to convert at
+// its edge; a rule decides and prices at eight places.
+var cryptoCurrencies = []lang.CurrencySpec{
+	{Code: "USDT", Digits: 6}, {Code: "USDC", Digits: 6}, {Code: "BTC", Digits: 8}, {Code: "ETH", Digits: 8},
 }

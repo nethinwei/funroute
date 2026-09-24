@@ -19,6 +19,9 @@ func reflectType(registry *Registry, typ reflect.Type) (Type, error) {
 	if name, ok := registry.handleName(typ); ok {
 		return HandleOf(name), nil
 	}
+	if money, ok := moneyGoKind(typ); ok {
+		return money, nil
+	}
 	switch typ.Kind() {
 	case reflect.Bool:
 		return BoolType, nil
@@ -74,6 +77,9 @@ func converterInto(registry *Registry, typ reflect.Type) func(Value) (reflect.Va
 func intoGo(registry *Registry, value Value, typ reflect.Type) (reflect.Value, error) {
 	if value.box != nil && reflect.TypeOf(value.box) == typ {
 		return reflect.ValueOf(value.box), nil
+	}
+	if converted, ok, err := intoMoneyGo(value, typ); ok {
+		return converted, err
 	}
 	switch typ.Kind() {
 	case reflect.Slice:
@@ -155,8 +161,8 @@ func intoMap(registry *Registry, value Value, typ reflect.Type) (reflect.Value, 
 
 // converterOutOf builds the Go → Value conversion for a result type.
 func converterOutOf(registry *Registry, result Type) func(reflect.Value) (Value, error) {
-	if result.Kind == HandleKind {
-		return func(value reflect.Value) (Value, error) { return NewHandle(result.Name, value.Interface()), nil }
+	if result.kind == HandleKind {
+		return func(value reflect.Value) (Value, error) { return NewHandle(result.name, value.Interface()), nil }
 	}
 	return func(value reflect.Value) (Value, error) { return outOfGo(registry, value, result) }
 }
@@ -164,7 +170,7 @@ func converterOutOf(registry *Registry, result Type) func(reflect.Value) (Value,
 // outOfGo converts a Go value into a Value of the known FunRoute type. An
 // exact native container is wrapped through fromGo; anything else is walked.
 func outOfGo(registry *Registry, value reflect.Value, typ Type) (Value, error) {
-	switch typ.Kind {
+	switch typ.kind {
 	case BoolKind:
 		return Bool(value.Bool()), nil
 	case IntKind:
@@ -174,12 +180,14 @@ func outOfGo(registry *Registry, value reflect.Value, typ Type) (Value, error) {
 	case StringKind:
 		return String(value.String()), nil
 	case EnumKind:
-		if !slices.Contains(typ.Values, value.String()) {
+		if !slices.Contains(typ.values, value.String()) {
 			return Value{}, fmt.Errorf("%q is not a member of %s", value.String(), typ.Summary())
 		}
 		return String(value.String()), nil
 	case HandleKind:
-		return NewHandle(typ.Name, value.Interface()), nil
+		return NewHandle(typ.name, value.Interface()), nil
+	case MoneyKind, RateKind, CurrencyKind:
+		return outOfMoneyGo(value)
 	case ArrayKind:
 		return outOfSlice(registry, value, typ)
 	case RecordKind:
@@ -203,9 +211,9 @@ func outOfSlice(registry *Registry, value reflect.Value, typ Type) (Value, error
 	if wrapped, err := fromGo(value.Interface()); err == nil && wrapped.hasType(typ) {
 		return wrapped, nil
 	}
-	builder := newArrayBuilder(*typ.Elem, value.Len())
+	builder := newArrayBuilder(*typ.elem, value.Len())
 	for i := 0; i < value.Len(); i++ {
-		item, err := outOfGo(registry, value.Index(i), *typ.Elem)
+		item, err := outOfGo(registry, value.Index(i), *typ.elem)
 		if err != nil {
 			return Value{}, fmt.Errorf("item %d: %w", i, err)
 		}
@@ -221,11 +229,11 @@ func outOfMap(registry *Registry, value reflect.Value, typ Type) (Value, error) 
 	entries := make(map[string]Value, value.Len())
 	iter := value.MapRange()
 	for iter.Next() {
-		item, err := outOfGo(registry, iter.Value(), *typ.Elem)
+		item, err := outOfGo(registry, iter.Value(), *typ.elem)
 		if err != nil {
 			return Value{}, fmt.Errorf("entry %q: %w", iter.Key().String(), err)
 		}
 		entries[iter.Key().String()] = item
 	}
-	return packDict(*typ.Elem, entries), nil
+	return packDict(*typ.elem, entries), nil
 }

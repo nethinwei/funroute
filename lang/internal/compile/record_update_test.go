@@ -2,7 +2,10 @@ package compile
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -48,7 +51,7 @@ func TestRecordUpdateReplacesFieldsInPlace(t *testing.T) {
 	args := map[string]any{"r": map[string]any{
 		"customer": map[string]any{"amount": 1200, "currency": "SGD"}, "tag": "vip", "channel": "adyen",
 	}}
-	got := runRecord(t, `{...r, channel: @stripe, customer: {...r.customer, amount: r.customer.amount - 30}}`, basket, args)
+	got := runRecord(t, `r with {channel: @stripe, customer: r.customer with {amount: r.customer.amount - 30}}`, basket, args)
 	if want := `{"customer":{"amount":1170,"currency":"SGD"},"tag":"vip","channel":"stripe"}`; got != want {
 		t.Fatalf("value = %s, want %s", got, want)
 	}
@@ -58,9 +61,9 @@ func TestRecordUpdateReplacesFieldsInPlace(t *testing.T) {
 // closed expression: one constant, no record_with at run time.
 func TestRecordUpdateFolds(t *testing.T) {
 	t.Parallel()
-	artifact := compileText(t, `let(o = {amount: 1, currency: "SGD"}, {...o, amount: o.amount + 1})`, `int`)
-	if len(artifact.Instructions) != 1 || artifact.Instructions[0].Op != machine.OpConstant {
-		t.Fatalf("instructions = %v, want one constant", artifact.Instructions)
+	artifact := compileText(t, `let(o = {amount: 1, currency: "SGD"}, o with {amount: o.amount + 1})`, `int`)
+	if len(machine.PartsOf(artifact).Instructions) != 1 || machine.PartsOf(artifact).Instructions[0].Op != machine.OpConstant {
+		t.Fatalf("instructions = %v, want one constant", machine.PartsOf(artifact).Instructions)
 	}
 }
 
@@ -68,10 +71,10 @@ func TestRecordUpdateKeepsTheType(t *testing.T) {
 	t.Parallel()
 	const order = `record{amount: int, currency: string}`
 	for source, want := range map[string]string{
-		`{...r, fee: 1}`:         `has no field "fee" to update`,
-		`{...r, amount: 1.5}`:    `field "amount" is int, and an update keeps its type`,
-		`{...r.amount, fee: 1}`:  "not a record with a known type",
-		`{...[r][0], amount: r}`: `field "amount" is int`,
+		`r with {fee: 1}`:         `has no field "fee" to update`,
+		`r with {amount: 1.5}`:    `field "amount" is int, and an update keeps its type`,
+		`r.amount with {fee: 1}`:  "not a record with a known type",
+		`[r][0] with {amount: r}`: `field "amount" is int`,
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
@@ -88,7 +91,7 @@ func TestRecordUpdateKeepsTheType(t *testing.T) {
 // record does not have, or one replaced twice, is refused before anything runs.
 func TestRecordWithIsValidatedOnLoad(t *testing.T) {
 	t.Parallel()
-	artifact := compileText(t, `{...r, amount: 1}`, `record{amount: int, currency: string}`)
+	artifact := compileText(t, `r with {amount: 1}`, `record{amount: int, currency: string}`)
 	for _, fields := range [][]string{{"fee"}, {"amount", "amount"}, {}} {
 		t.Run(fmt.Sprint(fields), func(t *testing.T) {
 			t.Parallel()
@@ -104,17 +107,154 @@ func TestRecordWithIsValidatedOnLoad(t *testing.T) {
 // replace fields instead, sealed with a digest that matches.
 func withRecordWithKeys(t *testing.T, artifact *machine.Artifact, fields []string) *machine.Artifact {
 	t.Helper()
-	tampered := *artifact
-	tampered.Instructions = append([]machine.Instruction(nil), artifact.Instructions...)
-	for i, instruction := range tampered.Instructions {
+	parts := machine.PartsOf(artifact)
+	parts.Instructions = slices.Clone(parts.Instructions)
+	for i, instruction := range parts.Instructions {
 		if instruction.Op == machine.OpRecordWith {
-			tampered.Instructions[i].Keys = fields
+			parts.Instructions[i].Keys = fields
 		}
 	}
-	digest, err := machine.ArtifactDigest(&tampered)
+	tampered, err := machine.SealArtifact(parts, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tampered.Digest = digest
-	return &tampered
+	return tampered
+}
+
+// An update keeps the record's type, currencies included: a proven other
+// currency does not compile, and one the run decides is checked.
+func TestAnUpdateKeepsTheFieldsCurrency(t *testing.T) {
+	t.Parallel()
+	contract := moneyContract(t, "a: money<c>; minor: int; cur: currency<?>")
+	_, err := CompileExpr("let(r = {fee: a}, r with {fee: money(1, USD)})", moneyRegistry(t), CompileOptions{Args: contract})
+	if err == nil || !strings.Contains(err.Error(), "USD") {
+		t.Fatalf("replacing money<c> with dollars: error = %v, want a currency error", err)
+	}
+	_, err = runMoney(t, "let(r = {fee: a}, r with {fee: money(minor, cur)}).fee + a", "a: money<c>; minor: int; cur: currency<?>",
+		map[string]any{"a": "EUR 2.00", "minor": 100, "cur": "USD"})
+	if !errors.Is(err, machine.ErrCurrency) {
+		t.Fatalf("a dollar put into a euro field: error = %v, want ErrCurrency", err)
+	}
+}
+
+// updateContract is a record with money, a rate and a count, one whose money
+// the run decides, and one in a contract currency.
+const updateContract = "r: record{fee: money<USD>, rt: rate, n: int}; q: record{fee: money<?>}; w: record{fee: money<c>}; " +
+	"usd: money<USD>; eur: money<EUR>; u: money<?>; a: money<c>; risk: float"
+
+// An update keeps each money field's currency: a value proven in it needs
+// nothing, one the run decides is checked before it goes in, a zero or a
+// decimal takes the field's kind, and a field of unknown currency takes any.
+func TestUpdatingMoneyFields(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ source, checks string }{
+		{"r with {fee: r.fee * 2}", ""},
+		{"r with {rt: 2.9%, fee: r.fee * 2.9%}", ""},
+		{"r with {fee: 0}", ""},
+		{"r with {rt: 0.5}", ""},
+		{"r with {n: 0}", ""},
+		{"r with {fee: u}", "pattern money<USD>@0"},
+		{"r with {fee: r.fee + u}", "pattern money<USD>@0"},
+		{"r with {fee: if(risk > 0.5, usd, eur)}", "pattern money<USD>@0"},
+		{"q with {fee: usd}", ""},
+		{"q with {fee: 0}", ""},
+		{"w with {fee: a}", ""},
+		{"w with {fee: like(w.fee, 5)}", ""},
+		{"w with {fee: w.fee * 1.5%}", ""},
+		{"w with {fee: u}", "pattern money<c>@0"},
+		{"r with {fee: u, rt: 1%}", "pattern money<USD>@0"},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			artifact, err := compileMoney(t, test.source, updateContract, "")
+			if err != nil {
+				t.Fatalf("CompileExpr(%q) error = %v", test.source, err)
+			}
+			if got := describeChecks(artifact); got != test.checks {
+				t.Fatalf("CompileExpr(%q) checks %q, want %q", test.source, got, test.checks)
+			}
+			if base := argumentType(artifact, test.source[:1]); !artifact.Result().Equal(base) {
+				t.Fatalf("CompileExpr(%q) result %s, want the updated record's type", test.source, artifact.Result())
+			}
+		})
+	}
+}
+
+// argumentType is the type the artifact gives the argument name.
+func argumentType(artifact *machine.Artifact, name string) machine.Type {
+	for _, param := range artifact.Args() {
+		if param.Name() == name {
+			return param.Type()
+		}
+	}
+	return machine.Type{}
+}
+
+// A new value proven in another currency, or not money at all, is refused.
+func TestUpdatingMoneyFieldsRefusesOtherCurrenciesAndKinds(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		"r with {fee: eur}":          "is in EUR",
+		"r with {fee: EUR 1}":        "is in EUR",
+		"w with {fee: usd}":          "is in USD",
+		"r with {fee: a}":            "is in c",
+		"r with {fee: 5}":            `field "fee" is money<USD>, and an update keeps its type`,
+		"r with {fee: risk}":         `field "fee" is money<USD>`,
+		"r with {rt: risk}":          `field "rt" is rate`,
+		"r with {rt: r.fee}":         `field "rt" is rate`,
+		"r with {n: r.fee}":          `field "n" is int`,
+		"r with {fee: r.fee -> EUR}": "is in EUR",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			_, err := compileMoney(t, source, updateContract, "")
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("CompileExpr(%q) error = %v, want %q", source, err, want)
+			}
+		})
+	}
+}
+
+// What an update puts in is what comes out, a checked value included.
+func TestUpdatingMoneyFieldsRuns(t *testing.T) {
+	t.Parallel()
+	args := func(extra map[string]any) map[string]any {
+		all := map[string]any{
+			"r": map[string]any{"fee": "USD 1.00", "rt": "0.01", "n": 2}, "q": map[string]any{"fee": "JPY 5"},
+			"w": map[string]any{"fee": "EUR 2.00"}, "usd": "USD 3.00", "eur": "EUR 3.00", "u": "USD 4.00", "a": "EUR 1.00", "risk": 0.1,
+		}
+		maps.Copy(all, extra)
+		return all
+	}
+	for _, test := range []struct {
+		source string
+		extra  map[string]any
+		want   string // "" for ErrCurrency
+	}{
+		{"(r with {fee: r.fee * 2}).fee", nil, "{USD 200}"},
+		{"(r with {rt: 2.9%, fee: r.fee * 2.9%}).fee", nil, "{USD 3}"},
+		{"(r with {fee: u}).fee", nil, "{USD 400}"},
+		{"(r with {fee: u}).fee", map[string]any{"u": "EUR 4.00"}, ""},
+		{"(r with {fee: if(risk > 0.5, usd, eur)}).fee", map[string]any{"risk": 0.9}, "{USD 300}"},
+		{"(r with {fee: if(risk > 0.5, usd, eur)}).fee", nil, ""},
+		{"(q with {fee: usd}).fee", nil, "{USD 300}"},
+		{"(w with {fee: w.fee * 1.5%}).fee", nil, "{EUR 3}"},
+		{"(w with {fee: u}).fee", map[string]any{"u": "EUR 4.00"}, "{EUR 400}"},
+		{"(w with {fee: u}).fee", nil, ""},
+		{"(r with {rt: 0.5}).rt", nil, "0.5"},
+		{"minor((r with {fee: 0}).fee)", nil, "0"},
+		{"(r with {fee: 0}).fee", nil, "{USD 0}"},
+		{"r with {fee: 0}", nil, "map[fee:{USD 0} n:2 rt:0.01]"},
+	} {
+		t.Run(fmt.Sprint(test.source, test.extra), func(t *testing.T) {
+			t.Parallel()
+			got, err := runMoney(t, test.source, updateContract, args(test.extra))
+			if test.want == "" && !errors.Is(err, machine.ErrCurrency) {
+				t.Fatalf("%s = %s, %v, want ErrCurrency", test.source, got, err)
+			}
+			if test.want != "" && (err != nil || got != test.want) {
+				t.Fatalf("%s = %s, %v, want %s", test.source, got, err, test.want)
+			}
+		})
+	}
 }

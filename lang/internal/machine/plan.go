@@ -26,6 +26,7 @@ const (
 	shapeRecord              // a struct
 	shapeSlice               // any other slice, walked element by element
 	shapeBoxed               // a handle or any other map, through reflection
+	shapeMoney               // Money, Rate, FxRate or Currency
 )
 
 // native is which Value backing a shapeNative codec hands over.
@@ -36,10 +37,12 @@ const (
 	nativeInts
 	nativeFloats
 	nativeStrings
+	nativeMonies
 	nativeBoolMap
 	nativeIntMap
 	nativeFloatMap
 	nativeStringMap
+	nativeMoneyMap
 )
 
 type codec struct {
@@ -66,10 +69,17 @@ type fieldCodec struct {
 func newCodecFor(registry *Registry, typ reflect.Type, want Type) (*codec, error) {
 	c := &codec{goType: typ, typ: want, registry: registry}
 	if name, ok := registry.handleName(typ); ok {
-		if want.Kind != HandleKind || want.Name != name {
+		if want.kind != HandleKind || want.name != name {
 			return nil, c.mismatch()
 		}
 		c.shape = shapeBoxed
+		return c, nil
+	}
+	if money, ok := moneyGoKind(typ); ok {
+		if money.kind != want.kind {
+			return nil, c.mismatch()
+		}
+		c.shape = shapeMoney
 		return c, nil
 	}
 	switch typ.Kind() {
@@ -95,7 +105,7 @@ func (c *codec) planScalar(registry *Registry) error {
 	if err != nil {
 		return err
 	}
-	enum := c.typ.Kind == EnumKind && derived.Kind == StringKind
+	enum := c.typ.kind == EnumKind && derived.kind == StringKind
 	if !enum && !derived.Equal(c.typ) {
 		return c.mismatch()
 	}
@@ -106,7 +116,7 @@ func (c *codec) planScalar(registry *Registry) error {
 // planRecord finds each field the record declares among the struct's tagged
 // fields, by name, and lays the codec out in the record's order.
 func (c *codec) planRecord(registry *Registry) error {
-	if c.typ.Kind != RecordKind {
+	if c.typ.kind != RecordKind {
 		return c.mismatch()
 	}
 	declared, indexes, err := structFields(registry, c.goType)
@@ -114,16 +124,16 @@ func (c *codec) planRecord(registry *Registry) error {
 		return err
 	}
 	c.shape = shapeRecord
-	c.fields = make([]fieldCodec, len(c.typ.Fields))
-	for i, wanted := range c.typ.Fields {
-		position := slices.IndexFunc(declared, func(field Field) bool { return field.Name == wanted.Name })
+	c.fields = make([]fieldCodec, len(c.typ.fields))
+	for i, wanted := range c.typ.fields {
+		position := slices.IndexFunc(declared, func(field Field) bool { return field.name == wanted.name })
 		if position < 0 {
-			return fmt.Errorf("%s has no field %q for %s", c.goType, wanted.Name, c.typ.Summary())
+			return fmt.Errorf("%s has no field %q for %s", c.goType, wanted.name, c.typ.Summary())
 		}
 		field := c.goType.Field(indexes[position])
-		plan, err := newCodecFor(registry, field.Type, wanted.Type)
+		plan, err := newCodecFor(registry, field.Type, wanted.typ)
 		if err != nil {
-			return fmt.Errorf("field %q: %w", wanted.Name, err)
+			return fmt.Errorf("field %q: %w", wanted.name, err)
 		}
 		c.fields[i] = fieldCodec{offset: field.Offset, codec: plan}
 	}
@@ -131,14 +141,14 @@ func (c *codec) planRecord(registry *Registry) error {
 }
 
 func (c *codec) planSlice(registry *Registry) error {
-	if c.typ.Kind != ArrayKind {
+	if c.typ.kind != ArrayKind {
 		return c.mismatch()
 	}
 	if kind, ok := nativeSlice(c.goType); ok && nativeCarries(registry, c.goType, c.typ) {
 		c.shape, c.native = shapeNative, kind
 		return nil
 	}
-	elem, err := newCodecFor(registry, c.goType.Elem(), *c.typ.Elem)
+	elem, err := newCodecFor(registry, c.goType.Elem(), *c.typ.elem)
 	if err != nil {
 		return err
 	}
@@ -150,14 +160,14 @@ func (c *codec) planSlice(registry *Registry) error {
 // reflection, whose outOfGo and intoGo already match struct fields by name.
 // The element is still planned, so a mismatch surfaces now and not per call.
 func (c *codec) planMap(registry *Registry) error {
-	if c.typ.Kind != DictKind || c.goType.Key().Kind() != reflect.String {
+	if c.typ.kind != DictKind || c.goType.Key().Kind() != reflect.String {
 		return c.mismatch()
 	}
 	if kind, ok := nativeMap(c.goType); ok && nativeCarries(registry, c.goType, c.typ) {
 		c.shape, c.native = shapeNative, kind
 		return nil
 	}
-	if _, err := newCodecFor(registry, c.goType.Elem(), *c.typ.Elem); err != nil {
+	if _, err := newCodecFor(registry, c.goType.Elem(), *c.typ.elem); err != nil {
 		return err
 	}
 	c.shape = shapeBoxed
@@ -166,9 +176,11 @@ func (c *codec) planMap(registry *Registry) error {
 
 // nativeCarries reports whether a native backing is exactly the container
 // wanted: an array<enum> held in a []string still has its members checked.
+// Currency units are not a backing's business — a []Money carries
+// array<money<c>> — so the comparison leaves them out.
 func nativeCarries(registry *Registry, typ reflect.Type, want Type) bool {
 	derived, err := reflectType(registry, typ)
-	return err == nil && derived.Equal(want)
+	return err == nil && SameShape(derived, want)
 }
 
 var (
@@ -191,6 +203,8 @@ func nativeSlice(typ reflect.Type) (native, bool) {
 		return nativeFloats, true
 	case stringGo:
 		return nativeStrings, true
+	case moneyGoType:
+		return nativeMonies, true
 	default:
 		return 0, false
 	}
@@ -220,14 +234,14 @@ func newArgsCodec(registry *Registry, typ reflect.Type, params []Parameter) (*ar
 	}
 	fields := make([]fieldCodec, len(params))
 	for i, param := range params {
-		position := slices.IndexFunc(declared, func(field Field) bool { return field.Name == param.Name })
+		position := slices.IndexFunc(declared, func(field Field) bool { return field.name == param.name })
 		if position < 0 {
-			return nil, fmt.Errorf("argument %q: %s has no such field", param.Name, typ)
+			return nil, fmt.Errorf("argument %q: %s has no such field", param.name, typ)
 		}
 		field := typ.Field(indexes[position])
-		plan, err := newCodecFor(registry, field.Type, param.Type)
+		plan, err := newCodecFor(registry, field.Type, param.typ)
 		if err != nil {
-			return nil, fmt.Errorf("argument %q: %w", param.Name, err)
+			return nil, fmt.Errorf("argument %q: %w", param.name, err)
 		}
 		fields[i] = fieldCodec{offset: field.Offset, codec: plan}
 	}

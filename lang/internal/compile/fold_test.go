@@ -1,10 +1,14 @@
 package compile
 
 import (
+	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"funroute/lang/internal/machine"
+	"funroute/lang/internal/syntax"
 )
 
 func foldRegistry(t *testing.T) *machine.Registry {
@@ -49,11 +53,11 @@ func TestClosedExpressionsAreFoldedAway(t *testing.T) {
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			artifact := compileFolded(t, registry, test.source)
-			if len(artifact.Instructions) != 1 || artifact.Instructions[0].Op != machine.OpConstant {
-				t.Fatalf("%s compiled to %d instructions, want one constant", test.source, len(artifact.Instructions))
+			if len(machine.PartsOf(artifact).Instructions) != 1 || machine.PartsOf(artifact).Instructions[0].Op != machine.OpConstant {
+				t.Fatalf("%s compiled to %d instructions, want one constant", test.source, len(machine.PartsOf(artifact).Instructions))
 			}
-			if len(artifact.Calls) != 0 {
-				t.Fatalf("%s kept %d calls, want 0", test.source, len(artifact.Calls))
+			if len(machine.PartsOf(artifact).Calls) != 0 {
+				t.Fatalf("%s kept %d calls, want 0", test.source, len(machine.PartsOf(artifact).Calls))
 			}
 			runtime, err := machine.Instantiate(artifact, registry)
 			if err != nil {
@@ -82,12 +86,12 @@ func TestConstantBindingsUseNoLocalSlots(t *testing.T) {
   total_bps = bps * 2,
   amount * total_bps / 10000 + base_fee
 )`, ArgSpec{Name: "amount", Type: machine.IntType})
-	if artifact.Locals != 0 {
-		t.Fatalf("locals = %d, want 0", artifact.Locals)
+	if machine.PartsOf(artifact).Locals != 0 {
+		t.Fatalf("locals = %d, want 0", machine.PartsOf(artifact).Locals)
 	}
-	for _, instruction := range artifact.Instructions {
+	for _, instruction := range machine.PartsOf(artifact).Instructions {
 		if instruction.Op == machine.OpStoreLocal || instruction.Op == machine.OpLoadLocal {
-			t.Fatalf("a folded binding still uses a local slot: %v", artifact.Instructions)
+			t.Fatalf("a folded binding still uses a local slot: %v", machine.PartsOf(artifact).Instructions)
 		}
 	}
 	runtime, err := machine.Instantiate(artifact, registry)
@@ -110,8 +114,8 @@ func TestRuntimeBindingKeepsItsSlot(t *testing.T) {
 	registry := foldRegistry(t)
 	artifact := compileFolded(t, registry, `let(fee = amount / 100, amount + fee)`,
 		ArgSpec{Name: "amount", Type: machine.IntType})
-	if artifact.Locals != 1 {
-		t.Fatalf("locals = %d, want 1", artifact.Locals)
+	if machine.PartsOf(artifact).Locals != 1 {
+		t.Fatalf("locals = %d, want 1", machine.PartsOf(artifact).Locals)
 	}
 }
 
@@ -150,8 +154,8 @@ func TestClosedContainersAreInterned(t *testing.T) {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			artifact := compileFolded(t, registry, source)
-			if len(artifact.Instructions) != 1 {
-				t.Fatalf("%s compiled to %d instructions, want one load", source, len(artifact.Instructions))
+			if len(machine.PartsOf(artifact).Instructions) != 1 {
+				t.Fatalf("%s compiled to %d instructions, want one load", source, len(machine.PartsOf(artifact).Instructions))
 			}
 			runtime, err := machine.Instantiate(artifact, registry)
 			if err != nil {
@@ -164,7 +168,7 @@ func TestClosedContainersAreInterned(t *testing.T) {
 	}
 	// A container that reads an argument is still built at run time.
 	built := compileFolded(t, registry, `[1, n]`, ArgSpec{Name: "n", Type: machine.IntType})
-	if len(built.Instructions) == 1 {
+	if len(machine.PartsOf(built).Instructions) == 1 {
 		t.Fatal("an array that reads an argument cannot be a constant")
 	}
 }
@@ -187,7 +191,7 @@ func TestFoldingPreservesResults(t *testing.T) {
 			map[string]any{"xs": []any{1, 2}}, int64(102),
 		},
 		{
-			`switch(s, case "a" => "x", else "y")`,
+			`switch(s, case "a" => "x", else => "y")`,
 			[]ArgSpec{{Name: "s", Type: machine.StringType}},
 			map[string]any{"s": "a"}, "x",
 		},
@@ -220,7 +224,7 @@ func TestClosedFailuresAreCompileErrors(t *testing.T) {
 		`1 / 0`,
 		`let(x = 10 / 0, x)`,
 		`if(use_bad, 1 / 0, 42)`,
-		`switch(case use_bad => 1 / 0, else 2)`,
+		`switch(case use_bad => 1 / 0, else => 2)`,
 		`fallback(1 / 0, 7)`,
 		`[1, 2][5]`,
 		`9223372036854775807 + 1`,
@@ -239,5 +243,47 @@ func TestClosedFailuresAreCompileErrors(t *testing.T) {
 	// failing one is left as work rather than reported.
 	if _, err := CompileExpr(`fold.boom_v1(1)`, registry, CompileOptions{}); err != nil {
 		t.Fatalf("a failing extension must not become a compile error: %v", err)
+	}
+}
+
+// A closed expression that fails is a compile error that says where: the
+// node that failed, not the start of the program.
+func TestAFailingFoldIsPlaced(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		"x + 1 / 0":                     "1 / 0",
+		"if(x > 0, [1, 2][5], 0)":       "[1, 2][5]",
+		"x * (9223372036854775807 + 1)": "(9223372036854775807 + 1)",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			_, err := CompileExpr(source, machine.CoreRegistry(), CompileOptions{Args: []ArgSpec{{Name: "x", Type: machine.IntType}}})
+			placed, ok := errors.AsType[*syntax.PosError](err)
+			if !ok || coveredBy(source, placed) != want {
+				t.Fatalf("CompileExpr(%q) error = %v, want one covering %q", source, err, want)
+			}
+		})
+	}
+}
+
+// coveredBy is the source a positioned error is about.
+func coveredBy(source string, err *syntax.PosError) string {
+	start, end := err.Span()
+	return source[start:end]
+}
+
+// A conversion reads the run's rate table, so a closed one is left as a call
+// rather than folded, and the missing table at compile time is no error.
+func TestConversionsAreNotFolded(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{"USD 1 -> JPY", "round(USD 1.00 -> JPY, @down)", "let(yen = USD 1 -> JPY, yen + yen)"} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			artifact := compileFolded(t, moneyRegistry(t), source)
+			calls := machine.PartsOf(artifact).Calls
+			if !slices.ContainsFunc(calls, func(call machine.CallReference) bool { return strings.HasPrefix(call.Signature, "convert(") }) {
+				t.Fatalf("%s kept calls %v, want a convert among them", source, calls)
+			}
+		})
 	}
 }

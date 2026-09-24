@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import "./dist/wasm_exec.js";
+import { BLOCKS, wrap } from "./src/projection.ts";
 
 async function start() {
   const go = new globalThis.Go();
@@ -40,4 +41,20 @@ test("the browser build answers a whole session", async () => {
   assert.deepEqual(run.result.unavailable, []);
   const hover = await server.request("textDocument/hover", { textDocument: { uri }, position: { line: 0, character: 4 } });
   assert.match(hover.result.contents.value, /route\.is_healthy_v1/);
+});
+
+test("every block the workbench drops in is a program the language compiles", async () => {
+  const server = await start();
+  await server.request("initialize", { capabilities: {} });
+  // No contract: the arguments are the free variables, so the names a block
+  // leaves to fill in are parameters. That one may have no concrete type yet
+  // is what a name to fill in is; any other diagnostic is the block's own.
+  await server.notify("funroute/setContract", { contract: {} });
+  for (const block of Object.keys(BLOCKS)) {
+    const uri = `file:///${block}.fr`;
+    await server.notify("textDocument/didOpen", { textDocument: { uri, version: 1, text: wrap(block, "x") } });
+    const published = server.received.find((message) => message.method === "textDocument/publishDiagnostics" && message.params.uri === uri);
+    const own = published.params.diagnostics.map((diagnostic) => diagnostic.message).filter((message) => !message.includes("cannot infer a concrete type"));
+    assert.deepEqual(own, [], `${block}: ${wrap(block, "x")}`);
+  }
 });

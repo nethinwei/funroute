@@ -1,6 +1,10 @@
 package compile
 
-import "funroute/lang/internal/machine"
+import (
+	"slices"
+
+	"funroute/lang/internal/machine"
+)
 
 // TextContract is a contract as a host writes it down as data — in a rule
 // record, a request, a language server's settings: every type as text, and
@@ -13,6 +17,8 @@ type TextContract struct {
 	Types  map[string]string `json:"types,omitempty"`
 	Args   []TextArg         `json:"args,omitempty"`
 	Result *TextResult       `json:"result,omitempty"`
+	// Tables are the named rate tables using(@name, …) may convert through.
+	Tables []string `json:"tables,omitempty"`
 }
 
 type TextArg struct {
@@ -52,7 +58,8 @@ func (c *TextContract) Options() (CompileOptions, error) {
 		options.Result = &typ
 		options.ResultDoc = c.Result.Doc
 	}
-	return options, nil
+	options.RateTables = slices.Clone(c.Tables)
+	return options, ValidateContract(options)
 }
 
 // Aliases resolves the declared types. They do not nest: one alias may not be

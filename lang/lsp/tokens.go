@@ -9,7 +9,7 @@ import (
 // Semantic tokens are the lexer's and the parser's reading of each piece of
 // source, in the protocol's vocabulary. The client decides how each looks.
 
-var tokenTypes = []string{"keyword", "operator", "variable", "parameter", "function", "property", "number", "string", "enumMember", "comment"}
+var tokenTypes = []string{"keyword", "operator", "variable", "parameter", "function", "property", "number", "string", "enumMember", "comment", "currency"}
 
 var tokenLegend = map[string][]string{"tokenTypes": tokenTypes, "tokenModifiers": {"declaration"}}
 
@@ -19,7 +19,7 @@ var roleTypes = map[syntax.Role]string{
 	syntax.RoleKeyword: "keyword", syntax.RoleForm: "keyword", syntax.RoleOperator: "operator",
 	syntax.RoleVariable: "variable", syntax.RoleLocalRead: "variable", syntax.RoleLocal: "variable",
 	syntax.RoleArgument: "parameter", syntax.RoleFunction: "function", syntax.RoleField: "property",
-	syntax.RoleEnumMember: "enumMember",
+	syntax.RoleEnumMember: "enumMember", syntax.RoleCurrency: "currency",
 }
 
 // literalTypes names a literal by what the lexer read: true and false are

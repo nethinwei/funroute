@@ -39,6 +39,7 @@ const (
 	RoleField      Role = "field"       // a record field, read or written
 	RoleLiteral    Role = "literal"     // a number, a string, true or false
 	RoleEnumMember Role = "enum_member" // @member or @enum.member
+	RoleCurrency   Role = "currency"    // a currency code: USD, in USD 1.70 and in 150 JPY / USD
 )
 
 type roleMark struct {
@@ -119,7 +120,7 @@ func classOf(kind tokenKind) Class {
 	switch kind {
 	case tokenIdentifier:
 		return ClassIdentifier
-	case tokenInt, tokenFloat:
+	case tokenInt, tokenFloat, tokenRate:
 		return ClassNumber
 	case tokenString:
 		return ClassString

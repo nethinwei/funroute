@@ -49,6 +49,17 @@ func FuzzImportExprJSON(f *testing.F) {
 		`{"version":1,"expr":{"node":"float","float":"nan"}}`,
 		`{"version":1,"expr":{"node":"var","name":"case"}}`,
 		`{"version":1,"expr":{"node":"record_update","base":{"node":"var","name":"r"},"fields":[]}}`,
+		`{"version":1,"expr":{"node":"money","currency":"USD","amount":"-0.5"}}`,
+		`{"version":1,"expr":{"node":"money","currency":"usd","amount":"1"}}`,
+		`{"version":1,"expr":{"node":"rate","value":"-2.9","unit":"%"}}`,
+		`{"version":1,"expr":{"node":"rate","value":"2.9","unit":"pct"}}`,
+		`{"version":1,"expr":{"node":"field","value":{"node":"rate","value":"25","unit":"bps"},"field":"x"}}`,
+		`{"version":1,"expr":{"node":"fxrate","rate":".5","quote":"JPY","base":"USD"}}`,
+		`{"version":1,"expr":{"node":"fxrate","rate":"1.","quote":"JPY","base":"USD"}}`,
+		`{"version":1,"expr":{"node":"fxrate","rate":"150","quote":"jpy","base":"USD"}}`,
+		`{"version":1,"expr":{"node":"currency","code":"U"}}`,
+		`{"version":1,"expr":{"node":"using","quotes":[],"body":{"node":"var","name":"a"}}}`,
+		`{"version":1,"expr":{"node":"using","outer":true,"quotes":[{"node":"fxrate","rate":"150","quote":"JPY","base":"USD"}],"body":{"node":"var","name":"a"}}}`,
 	} {
 		f.Add([]byte(document))
 	}
@@ -81,8 +92,8 @@ func mustExport(t testing.TB, expr Expr) string {
 func TestSwitchSurvivesExprJSONRoundTrip(t *testing.T) {
 	t.Parallel()
 	for _, source := range []string{
-		`switch(country, case "MY", "TH" => "asia", case "SG" => "sg", else "global")`,
-		`switch(case amount > 100 => "big", case risk > 0.5, country == "SG" => "check", else "ok")`,
+		`switch(country, case "MY", "TH" => "asia", case "SG" => "sg", else => "global")`,
+		`switch(case amount > 100 => "big", case risk > 0.5, country == "SG" => "check", else => "ok")`,
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
@@ -154,4 +165,118 @@ func assertExprJSONIsCanonical(t *testing.T, source string) []byte {
 		t.Fatalf("%s is not canonical:\n%s\n%s", source, first, second)
 	}
 	return first
+}
+
+// A money or rate node imported from ExprJSON meets the rules the parser's
+// own literals meet: a code's shape, a plain unsigned decimal (an amount may
+// carry one minus), and a unit that is % or bps.
+func TestImportChecksMoneyAndRateNodes(t *testing.T) {
+	t.Parallel()
+	money := func(currency, amount string) string {
+		return `{"version":1,"expr":{"node":"money","currency":` + currency + `,"amount":` + amount + `}}`
+	}
+	rate := func(value, unit string) string {
+		return `{"version":1,"expr":{"node":"rate","value":` + value + `,"unit":` + unit + `}}`
+	}
+	for name, test := range map[string]struct{ document, want string }{
+		"lower-case code":         {money(`"usd"`, `"1"`), `invalid currency code "usd"`},
+		"two-letter code":         {money(`"US"`, `"1"`), `invalid currency code "US"`},
+		"nine-letter code":        {money(`"ABCDEFGHI"`, `"1"`), `invalid currency code "ABCDEFGHI"`},
+		"code with a digit first": {money(`"1SD"`, `"1"`), `invalid currency code "1SD"`},
+		"empty code":              {money(`""`, `"1"`), `invalid currency code ""`},
+		"exponent":                {money(`"USD"`, `"1e3"`), `invalid amount "1e3"`},
+		"two points":              {money(`"USD"`, `"1.2.3"`), `invalid amount "1.2.3"`},
+		"empty amount":            {money(`"USD"`, `""`), `invalid amount ""`},
+		"bare minus":              {money(`"USD"`, `"-"`), `invalid amount "-"`},
+		"two minuses":             {money(`"USD"`, `"--1"`), `invalid amount "--1"`},
+		"negative zero":           {money(`"USD"`, `"-0.00"`), `no negative zero`},
+		"plus":                    {money(`"USD"`, `"+1"`), `invalid amount "+1"`},
+		"trailing point":          {money(`"USD"`, `"1."`), `invalid amount "1."`},
+		"leading point":           {money(`"USD"`, `".5"`), `invalid amount ".5"`},
+		"separator":               {money(`"USD"`, `"1_000"`), `invalid amount "1_000"`},
+		"space":                   {money(`"USD"`, `" 1"`), `invalid amount " 1"`},
+		"amount as a number":      {money(`"USD"`, `1.7`), `money amount: must be a string`},
+		"missing amount":          {`{"version":1,"expr":{"node":"money","currency":"USD"}}`, `money node is missing amount`},
+		"unit pct":                {rate(`"2.9"`, `"pct"`), `invalid rate unit "pct"`},
+		"empty unit":              {rate(`"2.9"`, `""`), `invalid rate unit ""`},
+		"upper-case unit":         {rate(`"2.9"`, `"BPS"`), `invalid rate unit "BPS"`},
+		"negative rate":           {rate(`"-2.9"`, `"%"`), `invalid rate "-2.9"`},
+		"empty rate":              {rate(`""`, `"%"`), `invalid rate ""`},
+		"rate with two points":    {rate(`"1.2.3"`, `"bps"`), `invalid rate "1.2.3"`},
+		"rate exponent":           {rate(`"1e3"`, `"%"`), `invalid rate "1e3"`},
+		"unknown field":           {`{"version":1,"expr":{"node":"rate","value":"1","unit":"%","scale":2}}`, `unknown field "scale"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ImportExprJSON([]byte(test.document))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Errorf("ImportExprJSON(%s) error = %v, want %q", test.document, err, test.want)
+			}
+		})
+	}
+}
+
+// What the checks accept imports, exports unchanged and prints as source
+// that reads back to it — including amounts the parser never writes itself.
+func TestImportedMoneyAndRatesPrintBack(t *testing.T) {
+	t.Parallel()
+	for document, source := range map[string]string{
+		`{"node":"money","currency":"USD","amount":"-0.5"}`:                                                    `USD -0.5`,
+		`{"node":"money","currency":"JPY","amount":"007"}`:                                                     `JPY 007`,
+		`{"node":"money","currency":"ABCDEFGH","amount":"1"}`:                                                  `ABCDEFGH 1`,
+		`{"node":"rate","value":"007","unit":"%"}`:                                                             `007%`,
+		`{"node":"rate","value":"0.25","unit":"bps"}`:                                                          `0.25bps`,
+		`{"node":"field","value":{"node":"money","currency":"USD","amount":"-1"},"field":"x"}`:                 `(USD -1).x`,
+		`{"node":"call","name":"at","args":[{"node":"rate","value":"1","unit":"bps"},{"node":"int","int":0}]}`: `(1bps)[0]`,
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			wrapped := `{"version":1,"expr":` + document + `}`
+			expr, err := ImportExprJSON([]byte(wrapped))
+			if err != nil {
+				t.Fatalf("ImportExprJSON(%s) error = %v, want nil", wrapped, err)
+			}
+			if got := mustExport(t, expr); got != wrapped {
+				t.Errorf("ImportExprJSON(%s) exports as %s, want it unchanged", wrapped, got)
+			}
+			if got := Inline(expr); got != source {
+				t.Errorf("Inline(ImportExprJSON(%s)) = %q, want %q", wrapped, got, source)
+			}
+			checkReparses(t, "Inline", wrapped, Inline(expr), wrapped)
+		})
+	}
+}
+
+func TestMoneySurvivesExprJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{
+		`let(fee = amount * 2.9% + USD 0.30, cap = USD -25.00, if(fee > cap, cap, fee))`,
+		`[x * 0.5bps + JPY 1_000 for x in xs if x > 1%]`,
+		`{a: (USD 1).b, r: (25bps)[0]}`,
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			assertExprJSONIsCanonical(t, source)
+		})
+	}
+}
+
+// An exchange rate literal's figure is read as the parser reads one — digits
+// on both sides of a point — so a document the importer takes prints back
+// as source that parses: ".5" and "1." are no figures.
+func TestAnExchangeRateFigureIsAPlainDecimal(t *testing.T) {
+	t.Parallel()
+	for _, figure := range []string{".5", "1.", "1.2.3", "", "-1", "1e3", "1_000"} {
+		document := `{"version":1,"expr":{"node":"fxrate","rate":"` + figure + `","quote":"JPY","base":"USD"}}`
+		if _, err := ImportExprJSON([]byte(document)); err == nil {
+			t.Errorf("ImportExprJSON(fxrate %q) = nil error, want the figure refused", figure)
+		}
+	}
+	expr, err := ImportExprJSON([]byte(`{"version":1,"expr":{"node":"fxrate","rate":"150.25","quote":"JPY","base":"USD"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Inline(expr); got != "150.25 JPY / USD" {
+		t.Fatalf("Inline(fxrate 150.25) = %q, want 150.25 JPY / USD", got)
+	}
 }

@@ -40,7 +40,7 @@ func encodeArgs[In any](plan *argsCodec, reads []int, args []Value, in *In) erro
 		field := plan.fields[i]
 		value, err := field.codec.load(unsafe.Add(base, field.offset))
 		if err != nil {
-			return fmt.Errorf("argument %q: %w", plan.params[i].Name, err)
+			return fmt.Errorf("argument %q: %w", plan.params[i].name, err)
 		}
 		args[i] = value
 	}
@@ -65,16 +65,51 @@ func (c *codec) load(p unsafe.Pointer) (Value, error) {
 		return c.loadRecord(p)
 	case shapeSlice:
 		return c.loadSlice(p)
+	case shapeMoney:
+		return loadMoney(c.goType, p), nil
 	default:
 		return c.loadBoxed(p)
 	}
+}
+
+// loadMoney reads a money Go type. An exchange rate boxes its quote.
+func loadMoney(typ reflect.Type, p unsafe.Pointer) Value {
+	switch typ {
+	case moneyGoType:
+		money := (*Money)(p)
+		return MoneyValue(money.minor, money.currency)
+	case rateGoType:
+		return RateValue(*(*Rate)(p))
+	case fxRateGoType:
+		return FxRateValue(*(*FxRate)(p))
+	default:
+		return CurrencyValue((*(*Currency)(p)).code)
+	}
+}
+
+// storeMoney writes a money Go type.
+func storeMoney(typ reflect.Type, p unsafe.Pointer, v Value) error {
+	if want, _ := moneyGoKind(typ); v.kind != want.kind {
+		return fmt.Errorf("value is %s, want %s", v.Type().Summary(), want)
+	}
+	switch typ {
+	case moneyGoType:
+		*(*Money)(p) = Money{currency: v.s, minor: v.i}
+	case rateGoType:
+		*(*Rate)(p) = newRate(v.i)
+	case fxRateGoType:
+		*(*FxRate)(p), _ = v.FxRate()
+	default:
+		*(*Currency)(p) = Currency{code: v.s}
+	}
+	return nil
 }
 
 // loadScalar also holds a string to the enum it carries: a member name is the
 // enum's value, anything else is not that enum.
 func (c *codec) loadScalar(p unsafe.Pointer) (Value, error) {
 	value, err := loadScalar(c.goKind, p)
-	if err == nil && c.typ.Kind == EnumKind && !slices.Contains(c.typ.Values, value.s) {
+	if err == nil && c.typ.kind == EnumKind && !slices.Contains(c.typ.values, value.s) {
 		return Value{}, fmt.Errorf("%q is not a member of %s", value.s, c.typ.Summary())
 	}
 	return value, err
@@ -131,6 +166,10 @@ func loadNative(kind native, p unsafe.Pointer) (Value, error) {
 		return loadBacking[[]float64](ArrayKind, p), checkFloats(*(*[]float64)(p))
 	case nativeStrings:
 		return loadBacking[[]string](ArrayKind, p), nil
+	case nativeMonies:
+		return loadBacking[[]Money](ArrayKind, p), nil
+	case nativeMoneyMap:
+		return loadBacking[map[string]Money](DictKind, p), nil
 	case nativeBoolMap:
 		return loadBacking[map[string]bool](DictKind, p), nil
 	case nativeIntMap:
@@ -154,7 +193,7 @@ func (c *codec) loadRecord(p unsafe.Pointer) (Value, error) {
 	for i, field := range c.fields {
 		value, err := field.codec.load(unsafe.Add(p, field.offset))
 		if err != nil {
-			return Value{}, fmt.Errorf("field %q: %w", c.typ.Fields[i].Name, err)
+			return Value{}, fmt.Errorf("field %q: %w", c.typ.fields[i].name, err)
 		}
 		fields[i] = value
 	}
@@ -163,7 +202,7 @@ func (c *codec) loadRecord(p unsafe.Pointer) (Value, error) {
 
 func (c *codec) loadSlice(p unsafe.Pointer) (Value, error) {
 	header := (*sliceHeader)(p)
-	builder := newArrayBuilder(*c.typ.Elem, header.len)
+	builder := newArrayBuilder(*c.typ.elem, header.len)
 	for i := 0; i < header.len; i++ {
 		item, err := c.elem.load(unsafe.Add(header.data, uintptr(i)*c.stride))
 		if err != nil {
@@ -176,8 +215,8 @@ func (c *codec) loadSlice(p unsafe.Pointer) (Value, error) {
 
 func (c *codec) loadBoxed(p unsafe.Pointer) (Value, error) {
 	boxed := c.box(p)
-	if c.typ.Kind == HandleKind {
-		return NewHandle(c.typ.Name, boxed), nil
+	if c.typ.kind == HandleKind {
+		return NewHandle(c.typ.name, boxed), nil
 	}
 	return outOfGo(c.registry, reflect.ValueOf(boxed), c.typ)
 }
@@ -222,6 +261,8 @@ func (c *codec) store(p unsafe.Pointer, v Value) error {
 		return c.storeRecord(p, v)
 	case shapeSlice:
 		return c.storeSlice(p, v)
+	case shapeMoney:
+		return storeMoney(c.goType, p, v)
 	default:
 		return c.storeBoxed(p, v)
 	}
@@ -306,6 +347,10 @@ func storeNative(kind native, p unsafe.Pointer, v Value) error {
 		return storeBacking[[]float64](p, v)
 	case nativeStrings:
 		return storeBacking[[]string](p, v)
+	case nativeMonies:
+		return storeBacking[[]Money](p, v)
+	case nativeMoneyMap:
+		return storeBacking[map[string]Money](p, v)
 	case nativeBoolMap:
 		return storeBacking[map[string]bool](p, v)
 	case nativeIntMap:
@@ -333,7 +378,7 @@ func (c *codec) storeRecord(p unsafe.Pointer, v Value) error {
 	}
 	for i, field := range c.fields {
 		if err := field.codec.store(unsafe.Add(p, field.offset), record.fields[i]); err != nil {
-			return fmt.Errorf("field %q: %w", c.typ.Fields[i].Name, err)
+			return fmt.Errorf("field %q: %w", c.typ.fields[i].name, err)
 		}
 	}
 	return nil
@@ -365,7 +410,7 @@ func (c *codec) storeBoxed(p unsafe.Pointer, v Value) error {
 }
 
 func (c *codec) intoGo(v Value) (reflect.Value, error) {
-	if c.typ.Kind != HandleKind {
+	if c.typ.kind != HandleKind {
 		return intoGo(c.registry, v, c.goType)
 	}
 	payload := reflect.ValueOf(v.box)

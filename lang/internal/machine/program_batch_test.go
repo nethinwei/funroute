@@ -327,7 +327,7 @@ func TestRunBatchIntoLeavesNothingFromTheLastRule(t *testing.T) {
 	}
 	netOnly, err := compile.CompileExpr(`{net: amount}`, registry, compile.CompileOptions{
 		Args:   []compile.ArgSpec{{Name: "amount", Type: machine.IntType}},
-		Result: &machine.Type{Kind: machine.RecordKind, Fields: []machine.Field{{Name: "net", Type: machine.IntType}}},
+		Result: new(machine.RecordOf(machine.FieldOf("net", machine.IntType))),
 	})
 	if err != nil {
 		t.Fatal(err)

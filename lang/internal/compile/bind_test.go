@@ -25,6 +25,30 @@ func TestProgramScalarsDoNotAllocate(t *testing.T) {
 	}
 }
 
+type moneyIn struct {
+	Amount machine.Money `funroute:"amount"`
+}
+
+// A Money field is read and the result written in place, like a scalar.
+func TestProgramMoneyDoesNotAllocate(t *testing.T) {
+	registry := moneyRegistry(t)
+	program := bindProgram[moneyIn, machine.Money](t, registry, `amount * 0.029`)
+	table, _ := registry.Currencies()
+	amount, _ := table.Minor("USD", 10_000)
+	fee, _ := table.Minor("USD", 290)
+	ctx := t.Context()
+	allocs := testing.AllocsPerRun(1000, func() {
+		in := moneyIn{Amount: amount}
+		out, err := program.Run(ctx, &in, machine.RunOptions{})
+		if err != nil || out != fee {
+			t.Fatalf("Run(%+v) = %v, %v, want USD 2.90", in, out, err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("Run allocated %v times, want 0", allocs)
+	}
+}
+
 type vectorIn struct {
 	Features []float64 `funroute:"features"`
 }

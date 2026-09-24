@@ -35,6 +35,7 @@ type fallbackFrame struct {
 	target int
 	stack  int
 	loops  int
+	scopes int
 }
 
 // item is the value the loop binds at index: an array item, or the entry
@@ -52,13 +53,16 @@ func (l *loopFrame) folds() bool { return l.acc != NoAccumulator }
 // frame is one activation of the bytecode: its own stack, locals and loops.
 // Without recursion there is exactly one activation per run.
 type frame struct {
-	runtime    *Runtime
-	args       []Value
-	stack      []Value
-	locals     []Value
-	localSet   []bool
-	loops      []loopFrame
-	fallbacks  []fallbackFrame
+	runtime   *Runtime
+	args      []Value
+	stack     []Value
+	locals    []Value
+	localSet  []bool
+	loops     []loopFrame
+	fallbacks []fallbackFrame
+	// scopes holds, for each using the run is inside, the context it
+	// replaced; the innermost last.
+	scopes     []context.Context
 	fuel       *uint64
 	fuelLeft   uint64
 	fuelCell   uint64 // budget storage for a top-level run, kept off the heap
@@ -69,8 +73,19 @@ type frame struct {
 	ctx        context.Context    // the request's budget; extension calls see it
 	deadline   bool               // whether ctx can expire at all; Background cannot
 	prefetched map[int]Prefetched // a Batch's answers for hoisted calls, by pc
+	// units is what this run bound each contract currency variable to, in
+	// the order of Runtime.money.units; "" while unbound.
+	units []string
+	// groups holds, for the currency checks before one call, the currency
+	// each group of operands must share.
+	groups     [maxCheckGroups]string
 	stackArray [16]Value
 	argsArray  [8]Value
+	// unitsArray holds as many currency variables as one call's checks can
+	// track; unitsSpill the bindings of a contract with more, kept with the
+	// pooled frame for the next run.
+	unitsArray [maxCheckGroups]string
+	unitsSpill []string
 }
 
 // reset rebinds a frame — pooled or fresh — to one activation.
@@ -83,10 +98,11 @@ func (f *frame) reset(runtime *Runtime, args []Value, fuel *uint64, maxStack int
 	f.stack = f.stackArray[:0]
 	f.loops = f.loops[:0]
 	f.fallbacks = f.fallbacks[:0]
+	f.scopes = f.scopes[:0]
 	// The compiler knows how deep the stack gets. Reserving it here is what
 	// lets push skip its bounds check; a run whose limit is below the figure
 	// keeps the per-push check instead.
-	f.reserved = runtime.artifact.MaxStack
+	f.reserved = runtime.artifact.parts.MaxStack
 	if f.reserved > maxStack {
 		f.reserved = 0
 	}
@@ -95,7 +111,7 @@ func (f *frame) reset(runtime *Runtime, args []Value, fuel *uint64, maxStack int
 	if f.reserved > cap(f.stack) {
 		f.stack = make([]Value, 0, f.reserved)
 	}
-	locals := runtime.artifact.Locals
+	locals := runtime.artifact.parts.Locals
 	if locals == 0 {
 		// Constant folding leaves many programs with no locals at all; there
 		// is nothing to clear.
@@ -137,6 +153,8 @@ func (f *frame) release() {
 	clearValues(f.locals)
 	f.loops = f.loops[:0]
 	f.fallbacks = f.fallbacks[:0]
+	clear(f.scopes)
+	f.scopes = f.scopes[:0]
 }
 
 // stackUsed is how much of the inline stack array may hold a value: the
@@ -164,7 +182,7 @@ func (f *frame) guardedRun() (value Value, err error) {
 }
 
 func (f *frame) run() (Value, error) {
-	code := f.runtime.artifact.Instructions
+	code := f.runtime.artifact.parts.Instructions
 	for pc := 0; pc < len(code); {
 		if f.fuelLeft == 0 {
 			*f.fuel = 0
@@ -227,6 +245,12 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 		return f.beginFallback(pc, instruction)
 	case OpEndFallback:
 		return f.endFallback(pc)
+	case OpCurrencyCheck:
+		return pc + 1, f.checkCurrency(instruction)
+	case OpFxPush:
+		return pc + 1, f.pushScope(pc, instruction)
+	case OpFxPop:
+		return pc + 1, f.popScope()
 	default:
 		return 0, fmt.Errorf("unknown opcode %q", instruction.Op)
 	}
@@ -234,7 +258,7 @@ func (f *frame) step(pc int, instruction Instruction) (int, error) {
 
 func (f *frame) beginFallback(pc int, instruction Instruction) (int, error) {
 	f.fallbacks = append(f.fallbacks, fallbackFrame{
-		target: instruction.A, stack: len(f.stack), loops: len(f.loops),
+		target: instruction.A, stack: len(f.stack), loops: len(f.loops), scopes: len(f.scopes),
 	})
 	return pc + 1, nil
 }
@@ -248,7 +272,7 @@ func (f *frame) endFallback(pc int) (int, error) {
 }
 
 func (f *frame) catchFallback(err error) (int, bool) {
-	if len(f.fallbacks) == 0 || (!errors.Is(err, ErrExtension) && !errors.Is(err, ErrDeadline)) {
+	if len(f.fallbacks) == 0 || (!errors.Is(err, ErrExtension) && !errors.Is(err, ErrDeadline) && !errors.Is(err, ErrNoRate)) || errors.Is(err, ErrCurrency) || errors.Is(err, ErrArithmetic) {
 		return 0, false
 	}
 	last := len(f.fallbacks) - 1
@@ -260,6 +284,11 @@ func (f *frame) catchFallback(err error) (int, bool) {
 		f.loops[i] = loopFrame{}
 	}
 	f.loops = f.loops[:handler.loops]
+	if len(f.scopes) > handler.scopes {
+		f.ctx = f.scopes[handler.scopes]
+		clear(f.scopes[handler.scopes:])
+		f.scopes = f.scopes[:handler.scopes]
+	}
 	return handler.target, true
 }
 
@@ -268,8 +297,11 @@ func (f *frame) result() (Value, error) {
 		return Value{}, fmt.Errorf("program finished with %d stack values", len(f.stack))
 	}
 	result := f.stack[0]
-	if !result.hasType(f.runtime.artifact.Result) {
-		return Value{}, fmt.Errorf("program returned %s, artifact declares %s", result.Type(), f.runtime.artifact.Result)
+	if !result.hasType(f.runtime.artifact.parts.Result) {
+		return Value{}, fmt.Errorf("program returned %s, artifact declares %s", result.Type(), f.runtime.artifact.parts.Result)
+	}
+	if f.runtime.money.result {
+		result, _ = f.fillUnits(result, f.runtime.artifact.parts.Result)
 	}
 	return result, nil
 }
@@ -368,7 +400,7 @@ func (f *frame) makeArray(instruction Instruction) error {
 	if err != nil {
 		return err
 	}
-	value, err := Array(*instruction.Type.Elem, items)
+	value, err := Array(*instruction.Type.elem, items)
 	if err != nil {
 		return fmt.Errorf("make array: %w", err)
 	}
@@ -384,7 +416,7 @@ func (f *frame) makeDict(instruction Instruction) error {
 	for i, item := range items {
 		entries[instruction.Keys[i]] = item
 	}
-	value, err := Dict(*instruction.Type.Elem, entries)
+	value, err := Dict(*instruction.Type.elem, entries)
 	if err != nil {
 		return fmt.Errorf("make dictionary: %w", err)
 	}
@@ -430,14 +462,14 @@ func (f *frame) recordWith(pc int, instruction Instruction) error {
 	// compiler typed the base, so the shape is all there is left to confirm —
 	// a full type comparison here would be paid by every item of a loop.
 	record, ok := base.box.(*recordValue)
-	if !ok || len(record.fields) != len(instruction.Type.Fields) {
+	if !ok || len(record.fields) != len(instruction.Type.fields) {
 		return fmt.Errorf("record update needs %s, got %s", instruction.Type.Summary(), base.Type().Summary())
 	}
 	fields := slices.Clone(record.fields)
 	for i, index := range indexes {
-		if !values[i].hasType(record.typ.Fields[index].Type) {
-			return fmt.Errorf("field %q takes %s, got %s", record.typ.Fields[index].Name,
-				record.typ.Fields[index].Type.Summary(), values[i].Type().Summary())
+		if !values[i].hasType(record.typ.fields[index].typ) {
+			return fmt.Errorf("field %q takes %s, got %s", record.typ.fields[index].name,
+				record.typ.fields[index].typ.Summary(), values[i].Type().Summary())
 		}
 		fields[index] = values[i]
 	}
@@ -454,139 +486,6 @@ func (f *frame) equal() error {
 		return err
 	}
 	return f.push(result)
-}
-
-func (f *frame) call(pc int, instruction Instruction) error {
-	function := f.runtime.functions[instruction.A]
-	if !function.IsBuiltin() && f.deadline && f.ctx.Err() != nil {
-		return fmt.Errorf("%s: %w: %v", function.Name, ErrDeadline, f.ctx.Err())
-	}
-	if f.fuelLeft < function.Doc.Cost {
-		return fmt.Errorf("%w before %s", ErrFuel, function.Name)
-	}
-	f.fuelLeft -= function.Doc.Cost
-	callArgs, err := f.popN(instruction.B)
-	if err != nil {
-		return err
-	}
-	// Three ways to get the value, cheapest first: a Batch already computed
-	// it; the plain call every kernel function takes; or the bounded call of
-	// a function with a Timeout or Detached. A hoisted call still costs its
-	// fuel so a program's budget does not depend on how it ran.
-	var value Value
-	if ready, ok := f.prefetchedAt(pc); ok {
-		value, err = ready.Value, ready.Err
-	} else if function.Doc.Timeout == 0 && !function.Doc.Detached {
-		if len(f.fallbacks) > 0 {
-			value, err = callSafely(f.ctx, function, callArgs)
-		} else {
-			value, err = function.Eval(f.ctx, callArgs)
-		}
-	} else {
-		value, err = f.invokeBounded(function, callArgs)
-	}
-	if err != nil {
-		return fmt.Errorf("%s: %w", function.Name, f.functionError(function, err))
-	}
-	if !value.hasType(*instruction.Type) {
-		err = fmt.Errorf("returned %s, contract requires %s", value.Type(), *instruction.Type)
-		return fmt.Errorf("%s: %w", function.Name, f.functionError(function, err))
-	}
-	if err := value.validateInvariant(); err != nil {
-		return fmt.Errorf("%s: %w", function.Name, f.functionError(function, fmt.Errorf("invalid result: %v", err)))
-	}
-	return f.push(value)
-}
-
-// prefetchedAt is small enough to inline, so the common case — no batch — is
-// one nil check on the call path.
-func (f *frame) prefetchedAt(pc int) (Prefetched, bool) {
-	if f.prefetched == nil {
-		return Prefetched{}, false
-	}
-	ready, ok := f.prefetched[pc]
-	return ready, ok
-}
-
-// invokeBounded caps one call by the function's Timeout and, for a Detached
-// function, stops waiting when it passes. The deadline check before the call
-// is what makes a program stop promptly once its time is up.
-func (f *frame) invokeBounded(function *RegisteredFunction, args []Value) (Value, error) {
-	if f.deadline && f.ctx.Err() != nil {
-		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, f.ctx.Err())
-	}
-	ctx := f.ctx
-	if function.Doc.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, function.Doc.Timeout)
-		defer cancel()
-	}
-	var value Value
-	var err error
-	if function.Doc.Detached {
-		value, err = callDetached(ctx, function, args)
-	} else if len(f.fallbacks) > 0 {
-		value, err = callSafely(ctx, function, args)
-	} else {
-		value, err = function.Eval(ctx, args)
-	}
-	if err != nil && ctx.Err() != nil {
-		return Value{}, fmt.Errorf("%w: %v", ErrDeadline, err)
-	}
-	return value, err
-}
-
-func (f *frame) functionError(function *RegisteredFunction, err error) error {
-	if function.IsBuiltin() {
-		return err
-	}
-	return f.classify(err)
-}
-
-// classify wraps an extension's failure as ErrDeadline when the request's
-// budget ran out and ErrExtension otherwise, so fallback and monitoring can
-// tell the two apart. An error a Batch or invokeBounded already classified is
-// left as it is.
-func (f *frame) classify(err error) error {
-	if errors.Is(err, ErrDeadline) || errors.Is(err, ErrExtension) {
-		return err
-	}
-	if f.ctx.Err() != nil {
-		return fmt.Errorf("%w: %v", ErrDeadline, err)
-	}
-	return fmt.Errorf("%w: %v", ErrExtension, err)
-}
-
-// callDetached runs the function on its own goroutine and stops waiting at the
-// deadline. The arguments are copied first: the stack window they live in is
-// reused once this returns, and the abandoned call may still be reading them.
-func callDetached(ctx context.Context, function *RegisteredFunction, args []Value) (Value, error) {
-	type outcome struct {
-		value Value
-		err   error
-	}
-	owned := make([]Value, len(args))
-	copy(owned, args)
-	done := make(chan outcome, 1)
-	go func() {
-		value, err := callSafely(ctx, function, owned)
-		done <- outcome{value, err}
-	}()
-	select {
-	case result := <-done:
-		return result.value, result.err
-	case <-ctx.Done():
-		return Value{}, ctx.Err()
-	}
-}
-
-func callSafely(ctx context.Context, function *RegisteredFunction, args []Value) (value Value, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("extension panicked: %v", recovered)
-		}
-	}()
-	return function.Eval(ctx, args)
 }
 
 func (f *frame) loopInit(pc int, instruction Instruction) (int, error) {
@@ -619,8 +518,8 @@ func (f *frame) loopInit(pc int, instruction Instruction) (int, error) {
 		local: instruction.B, keyLocal: instruction.D, acc: instruction.C,
 	}
 	if !loop.folds() {
-		loop.output = newArrayBuilder(*instruction.Type.Elem, length)
-		if instruction.Type.Kind == DictKind {
+		loop.output = newArrayBuilder(*instruction.Type.elem, length)
+		if instruction.Type.kind == DictKind {
 			loop.collected = make([]string, 0, length)
 		}
 	}
@@ -633,10 +532,10 @@ func (f *frame) loopInit(pc int, instruction Instruction) (int, error) {
 // an empty array.
 func (f *frame) loopSeed(instruction Instruction, values []Value, folds bool) (Value, error) {
 	if !folds {
-		if instruction.Type.Kind == DictKind {
-			return Dict(*instruction.Type.Elem, nil)
+		if instruction.Type.kind == DictKind {
+			return Dict(*instruction.Type.elem, nil)
 		}
-		return Array(*instruction.Type.Elem, nil)
+		return Array(*instruction.Type.elem, nil)
 	}
 	if !values[1].hasType(*instruction.Type) {
 		return Value{}, fmt.Errorf("loop init is %s, want %s", values[1].Type(), *instruction.Type)

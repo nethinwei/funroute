@@ -38,12 +38,14 @@ const (
 	tokenOrOr
 	tokenBang
 	tokenFatArrow
+	tokenArrow
 	tokenAssign
-	// tokenSpread is the "..." that opens a record update, {...r, a: 1}.
-	tokenSpread
 	// tokenEnum is @member or @enum.member: an enum member reference. The "@"
 	// keeps it apart from a string and keeps "." out of expression syntax.
 	tokenEnum
+	// tokenRate is a number written with a rate's unit, 2.9% or 25bps; its
+	// text keeps the unit.
+	tokenRate
 	// tokenInvalid is text the lexer could not read. It is produced only so
 	// the lexing can go on past it; the error that goes with it is reported.
 	tokenInvalid
@@ -100,8 +102,6 @@ func isSpace(ch byte) bool {
 	return false
 }
 
-const spreadText = "..."
-
 var singleCharTokens = map[byte]tokenKind{
 	'(': tokenLeftParen,
 	')': tokenRightParen,
@@ -147,7 +147,7 @@ func (l *lexer) next() (token, error) {
 	if err != nil {
 		bad := l.invalid(start)
 		if positioned, ok := errors.AsType[*PosError](err); ok {
-			positioned.End = bad.end
+			positioned.end = bad.end
 		}
 		return bad, err
 	}
@@ -157,11 +157,6 @@ func (l *lexer) next() (token, error) {
 
 func (l *lexer) lexeme(start int) (token, error) {
 	ch := l.source[l.pos]
-	// Ahead of the single characters, which would read it as three dots.
-	if strings.HasPrefix(l.source[l.pos:], spreadText) {
-		l.pos += len(spreadText)
-		return token{kind: tokenSpread, text: spreadText, pos: start}, nil
-	}
 	if kind, ok := singleCharTokens[ch]; ok {
 		l.pos++
 		return token{kind: kind, text: string(ch), pos: start}, nil
@@ -179,8 +174,18 @@ func (l *lexer) lexeme(start int) (token, error) {
 	case isIdentifierStart(ch):
 		return l.identifier(start)
 	default:
-		return token{}, At(start, "syntax error: unexpected %q", ch)
+		return token{}, unexpectedCharacter(l.source, start)
 	}
+}
+
+// unexpectedCharacter names what stopped the lexer: the character when the
+// bytes there are one, the byte when they are not UTF-8.
+func unexpectedCharacter(source string, start int) error {
+	r, size := utf8.DecodeRuneInString(source[start:])
+	if r == utf8.RuneError && size <= 1 {
+		return At(start, "syntax error: unexpected byte 0x%02x", source[start])
+	}
+	return At(start, "syntax error: unexpected %q", r)
 }
 
 // invalid covers what a failed lexeme consumed, at least one character, so
@@ -273,10 +278,36 @@ func (l *lexer) number() (token, error) {
 			return token{}, At(start, "syntax error: exponent requires digits")
 		}
 		l.digits()
+		// A % or bps against a number is a rate's unit, this one's too: and
+		// a rate is written plainly, never with an exponent.
+		if unit := l.rateUnit(); unit != "" {
+			return token{}, At(start, "syntax error: %s is a rate with an exponent: a rate is a plain decimal, such as 1000%%", l.source[start:l.pos])
+		}
+		// 1_000_000 reads as a million; the separator never reaches strconv.
+		return token{kind: kind, text: strings.ReplaceAll(l.source[start:l.pos], "_", ""), pos: start}, nil
 	}
-	// 1_000_000 reads as a million; the separator never reaches strconv.
 	text := strings.ReplaceAll(l.source[start:l.pos], "_", "")
+	if unit := l.rateUnit(); unit != "" {
+		return token{kind: tokenRate, text: text + unit, pos: start}, nil
+	}
 	return token{kind: kind, text: text, pos: start}, nil
+}
+
+// rateUnit reads the unit a rate is written with right after its number:
+// bps, or a % touching the number. There is no other reading — a % against a
+// number is always a rate, so 10%3 is a rate followed by a stray number and
+// 10%-3 is 10% - 3; the remainder is written with space before the %.
+func (l *lexer) rateUnit() string {
+	rest := l.source[l.pos:]
+	if strings.HasPrefix(rest, "bps") && (len(rest) == 3 || !isIdentifierPart(rest[3])) {
+		l.pos += 3
+		return "bps"
+	}
+	if strings.HasPrefix(rest, "%") {
+		l.pos++
+		return "%"
+	}
+	return ""
 }
 
 func (l *lexer) startsDigit() bool {

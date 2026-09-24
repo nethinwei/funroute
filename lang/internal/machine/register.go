@@ -21,6 +21,12 @@ type Doc struct {
 	Cost        uint64   `json:"cost"`
 	Params      []string `json:"params,omitempty"` // parameter labels, in order
 	Result      string   `json:"result,omitempty"` // result label
+	// Examples show the function at work, one call each with the value it
+	// gives. They are closed expressions — literals and the kernel, rates
+	// through using where a conversion needs them — so anyone can run one
+	// as written; the official functions' examples are run by a test, and
+	// between them they choose every overload of their name.
+	Examples []Example `json:"examples,omitempty"`
 	// Constexpr says the compiler may call this function while folding, the
 	// way C++ marks a function usable in a constant expression. The kernel's
 	// functions all are. A host function is not unless it says so: folding
@@ -44,6 +50,13 @@ type Doc struct {
 	// deadline, for a binding that cannot honour a context. The abandoned call
 	// keeps running until it returns on its own.
 	Detached bool `json:"-"`
+}
+
+// Example is one use of a function: a program's text and the JSON of the
+// value it gives, as Registry.EncodeJSON writes it.
+type Example struct {
+	Source string `json:"source"`
+	Result string `json:"result"`
 }
 
 // Logic registers a host function by its Go signature. fn is any func whose

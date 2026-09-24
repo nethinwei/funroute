@@ -27,10 +27,12 @@ type Doc = { label: string; description?: string; category: string };
 
 type Descriptor = { name: string; signature: string; special?: string; doc: Doc };
 
-export type Catalog = { artifact_version: number; functions: Descriptor[]; special_forms: Descriptor[] };
+// money is the registry's declared money feature, absent when it has none.
+export type MoneySpec = { rounding: string; currencies: { code: string; digits: number }[] };
+export type Catalog = { artifact_version: number; functions: Descriptor[]; special_forms: Descriptor[]; money?: MoneySpec };
 
 // A contract as the server reads it (compile.TextContract): every type is text.
 // funroute/arguments answers with ArgSpecs too.
 export type ArgSpec = { name: string; type: string; doc?: string };
 export type ResultSpec = { type: string; doc?: string };
-export type TextContract = { types?: Record<string, string>; args?: ArgSpec[]; result?: ResultSpec };
+export type TextContract = { types?: Record<string, string>; args?: ArgSpec[]; result?: ResultSpec; tables?: string[] };

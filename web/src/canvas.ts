@@ -26,6 +26,7 @@ const LOOKS: Record<string, { accent: string; icon: ReturnType<typeof svg> }> = 
   for: { accent: "var(--tok-number)", icon: svg`<path d="M2.5 7.5A4.5 4.5 0 0 1 7 3h5.5"/><path d="m10.5 1 2 2-2 2"/><path d="M13.5 8.5A4.5 4.5 0 0 1 9 13H3.5"/><path d="m5.5 15-2-2 2-2"/>` },
   reduce: { accent: "var(--blue-ink)", icon: svg`<path d="M2 2.8h12L9.4 8.4v4.4l-2.8 1.4V8.4z"/>` },
   let: { accent: "var(--green)", icon: svg`<rect x="2" y="2.8" width="12" height="10.4" rx="2.4"/><path d="M5.4 6.8h5.2M5.4 9.4h5.2"/>` },
+  using: { accent: "var(--amber)", icon: svg`<path d="M2.5 5.5h10l-2.5-2.5"/><path d="M13.5 10.5h-10l2.5 2.5"/>` },
 };
 
 const icon = (name: string) => html`<span class="icon" style="--accent: ${LOOKS[name]?.accent ?? "var(--slate)"}">
@@ -38,6 +39,7 @@ const FIELD_TEXT: Record<string, string> = {
   "switch.value": "待匹配值", "let.value": "值", cases: "分支", match: "匹配", result: "结果", default: "否则", source: "输入",
   variable: "元素名", key_variable: "键名", where: "筛选", yield_key: "键", yield: "产出",
   accumulator: "累加器", init: "初值", body: "主体", bindings: "绑定", name: "名字", args: "实参",
+  table: "汇率表", quotes: "报价",
 };
 
 export class StructureView extends LitElement {
