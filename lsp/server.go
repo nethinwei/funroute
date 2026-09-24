@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 
@@ -52,26 +53,72 @@ type requestHandler func(*Server, json.RawMessage) (any, error)
 type notificationHandler func(*Server, json.RawMessage) error
 
 var requests = map[string]requestHandler{
-	"initialize":                       (*Server).initialize,
+	"initialize":                       withParams((*Server).initialize),
 	"shutdown":                         func(*Server, json.RawMessage) (any, error) { return null, nil },
-	"textDocument/semanticTokens/full": (*Server).semanticTokens,
-	"textDocument/formatting":          (*Server).formatting,
-	"textDocument/hover":               (*Server).hover,
-	"textDocument/completion":          (*Server).completion,
-	"textDocument/signatureHelp":       (*Server).signatureHelp,
-	"funroute/syntaxTree":              (*Server).syntaxTree,
+	"textDocument/semanticTokens/full": onDocument((*Server).semanticTokens),
+	"textDocument/formatting":          onDocument((*Server).formatting),
+	"textDocument/hover":               atPosition((*Server).hover),
+	"textDocument/completion":          atPosition((*Server).completion),
+	"textDocument/signatureHelp":       atPosition((*Server).signatureHelp),
+	"funroute/syntaxTree":              onDocument((*Server).syntaxTree),
 	"funroute/catalog":                 (*Server).catalog,
-	"funroute/arguments":               (*Server).argumentList,
-	"workspace/executeCommand":         (*Server).executeCommand,
+	"funroute/arguments":               onDocument((*Server).argumentList),
+	"workspace/executeCommand":         withParams((*Server).executeCommand),
 }
 
 var notifications = map[string]notificationHandler{
 	"initialized":            func(*Server, json.RawMessage) error { return nil },
 	"exit":                   (*Server).exit,
-	"textDocument/didOpen":   (*Server).didOpen,
-	"textDocument/didChange": (*Server).didChange,
-	"textDocument/didClose":  (*Server).didClose,
-	"funroute/setContract":   (*Server).setContract,
+	"textDocument/didOpen":   notified((*Server).didOpen),
+	"textDocument/didChange": notified((*Server).didChange),
+	"textDocument/didClose":  notified((*Server).didClose),
+	"funroute/setContract":   notified((*Server).setContract),
+}
+
+// withParams reads a request's params into the shape its handler takes.
+func withParams[P any](handle func(*Server, P) (any, error)) requestHandler {
+	return func(s *Server, params json.RawMessage) (any, error) {
+		var in P
+		if err := decode(params, &in); err != nil {
+			return nil, err
+		}
+		return handle(s, in)
+	}
+}
+
+// notified is withParams for a notification.
+func notified[P any](handle func(*Server, P) error) notificationHandler {
+	return func(s *Server, params json.RawMessage) error {
+		var in P
+		if err := decode(params, &in); err != nil {
+			return err
+		}
+		return handle(s, in)
+	}
+}
+
+// onDocument hands a request the open document its {"textDocument": {"uri"}}
+// names.
+func onDocument(handle func(*Server, *document) (any, error)) requestHandler {
+	return withParams(func(s *Server, in documentParams) (any, error) {
+		doc, err := s.document(in.TextDocument.URI)
+		if err != nil {
+			return nil, err
+		}
+		return handle(s, doc)
+	})
+}
+
+// atPosition hands a request the open document and the byte its position
+// names.
+func atPosition(handle func(*Server, *document, int) (any, error)) requestHandler {
+	return withParams(func(s *Server, in textDocumentPosition) (any, error) {
+		doc, err := s.document(in.TextDocument.URI)
+		if err != nil {
+			return nil, err
+		}
+		return handle(s, doc, doc.offset(in.Position, s.encoding))
+	})
 }
 
 // Handle processes one message. A request is answered through send; a
@@ -179,11 +226,7 @@ type initializeParams struct {
 	} `json:"initializationOptions"`
 }
 
-func (s *Server) initialize(params json.RawMessage) (any, error) {
-	var in initializeParams
-	if err := decode(params, &in); err != nil {
-		return nil, err
-	}
+func (s *Server) initialize(in initializeParams) (any, error) {
 	if slices.Contains(in.Capabilities.General.PositionEncodings, utf8Encoding) {
 		s.encoding = utf8Encoding
 	}
@@ -200,7 +243,7 @@ func (s *Server) capabilities() map[string]any {
 		"hoverProvider":              true,
 		"completionProvider":         map[string]any{"triggerCharacters": []string{"@"}},
 		"signatureHelpProvider":      map[string]any{"triggerCharacters": []string{"(", ","}},
-		"executeCommandProvider":     map[string]any{"commands": []string{runCommand, renderCommand}},
+		"executeCommandProvider":     map[string]any{"commands": slices.Sorted(maps.Keys(commands))},
 	}
 }
 
@@ -209,51 +252,29 @@ func (s *Server) exit(json.RawMessage) error {
 	return nil
 }
 
-func (s *Server) didOpen(params json.RawMessage) error {
-	var in didOpenParams
-	if err := decode(params, &in); err != nil {
-		return err
-	}
-	doc := newDocument(in.TextDocument.URI, in.TextDocument.Version, in.TextDocument.Text)
-	s.documents[doc.uri] = doc
-	s.publish(doc)
+func (s *Server) didOpen(in didOpenParams) error {
+	s.open(in.TextDocument.URI, in.TextDocument.Version, in.TextDocument.Text)
 	return nil
 }
 
 // didChange takes the whole new text: the server asked for full sync.
-func (s *Server) didChange(params json.RawMessage) error {
-	var in didChangeParams
-	if err := decode(params, &in); err != nil || len(in.ContentChanges) == 0 {
-		return err
+func (s *Server) didChange(in didChangeParams) error {
+	if len(in.ContentChanges) > 0 {
+		s.open(in.TextDocument.URI, in.TextDocument.Version, in.ContentChanges[len(in.ContentChanges)-1].Text)
 	}
-	text := in.ContentChanges[len(in.ContentChanges)-1].Text
-	doc := newDocument(in.TextDocument.URI, in.TextDocument.Version, text)
-	s.documents[doc.uri] = doc
-	s.publish(doc)
 	return nil
 }
 
-func (s *Server) didClose(params json.RawMessage) error {
-	var in struct {
-		TextDocument textDocumentIdentifier `json:"textDocument"`
-	}
-	if err := decode(params, &in); err != nil {
-		return err
-	}
+func (s *Server) open(uri string, version int, text string) {
+	doc := newDocument(uri, version, text)
+	s.documents[uri] = doc
+	s.publish(doc)
+}
+
+func (s *Server) didClose(in documentParams) error {
 	delete(s.documents, in.TextDocument.URI)
 	s.notify("textDocument/publishDiagnostics", map[string]any{"uri": in.TextDocument.URI, "diagnostics": []diagnostic{}})
 	return nil
-}
-
-// documentOf is the open document a request's {"textDocument": {"uri"}} names.
-func (s *Server) documentOf(params json.RawMessage) (*document, error) {
-	var in struct {
-		TextDocument textDocumentIdentifier `json:"textDocument"`
-	}
-	if err := decode(params, &in); err != nil {
-		return nil, err
-	}
-	return s.document(in.TextDocument.URI)
 }
 
 // document is the open text a request names.

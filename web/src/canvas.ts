@@ -15,6 +15,10 @@ import { define, emit, fieldStyles } from "./ui.ts";
 // text, since a range into another would land in the wrong place.
 export type Edit = { range: Range; text: string; source: Text };
 
+// A block is what the catalog says of a function or a form: its doc, and for
+// one that takes in an expression, how it does.
+export type Block = { doc: Doc; wrap?: string };
+
 // How each block looks: an icon in the style of the page's own (16 units,
 // strokes of 1.4, no fill) and an accent from the palette in tokens.css. The
 // palette and the cards draw from this one table.
@@ -28,7 +32,9 @@ const LOOKS: Record<string, { accent: string; icon: ReturnType<typeof svg> }> = 
   using: { accent: "var(--amber)", icon: svg`<path d="M2.5 5.5h10l-2.5-2.5"/><path d="M13.5 10.5h-10l2.5 2.5"/>` },
 };
 
-const icon = (name: string) => html`<span class="icon" style="--accent: ${LOOKS[name]?.accent ?? "var(--slate)"}">
+const accentOf = (name: string) => LOOKS[name]?.accent ?? "var(--violet)";
+
+const icon = (name: string) => html`<span class="icon" style="--accent: ${accentOf(name)}">
   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LOOKS[name]?.icon}</svg></span>`;
 
 // The console's wording for the fields a node has; the fields themselves are
@@ -44,11 +50,9 @@ const FIELD_TEXT: Record<string, string> = {
 export class StructureView extends LitElement {
   @property({ attribute: false }) accessor tree: Tree | null = null;
   @property({ attribute: false }) accessor text: Text = Text.empty;
-  // blocks is what the catalog says of each function and form, by name, and
-  // wraps how each one that takes in an expression does: what the palette
-  // offers.
-  @property({ attribute: false }) accessor blocks = new Map<string, Doc>();
-  @property({ attribute: false }) accessor wraps = new Map<string, string>();
+  // blocks is every function and form by name; the ones with a wrap are what
+  // the palette offers.
+  @property({ attribute: false }) accessor blocks = new Map<string, Block>();
   @state() accessor selected = "";
   lazy = new Set<string>();
 
@@ -60,7 +64,7 @@ export class StructureView extends LitElement {
   // the block down.
   private wrapAt(tree: Tree) {
     if (!this.selected) return;
-    this.edit(tree.range, wrap(this.wraps.get(this.selected) ?? "$", slice(this.text, tree.range)));
+    this.edit(tree.range, wrap(this.blocks.get(this.selected)?.wrap ?? "$", slice(this.text, tree.range)));
     this.selected = "";
   }
 
@@ -90,10 +94,10 @@ export class StructureView extends LitElement {
       return html`<div class="plain"><code class="joins">${tree.operator ?? name}</code>${children(tree).map((node) => this.node(node))}</div>`;
     }
     const fields = (tree.fields ?? []).filter((field) => !(tree.node === "call" && field.name === "name"));
-    return html`<div class="card" style="--accent: ${LOOKS[name]?.accent ?? "var(--violet)"}">
+    return html`<div class="card" style="--accent: ${accentOf(name)}">
       <button type="button" class="title ${this.selected ? "ready" : ""}" ?disabled=${!this.selected} title=${this.selected ? "用选中的块包起来" : ""}
         @click=${() => this.wrapAt(tree)}>
-      ${icon(name)}${this.blocks.get(name)?.label ?? name}<code>${name}</code></button>${this.fields(tree.node, fields)}</div>`;
+      ${icon(name)}${this.blocks.get(name)?.doc.label ?? name}<code>${name}</code></button>${this.fields(tree.node, fields)}</div>`;
   }
 
   private fields(node: string, fields: TreeField[]): TemplateResult[] {
@@ -118,9 +122,9 @@ export class StructureView extends LitElement {
     const pick = (name: string) => { this.selected = this.selected === name ? "" : name; };
     return html`<aside class="palette" aria-label="控制块">
       <header><strong>控制块</strong><span>${this.selected ? "点一个表达式，用它包起来" : "选一个块，再点表达式"}</span></header>
-      <div class="list">${[...this.wraps.keys()].map((name) => [name, this.blocks.get(name)!] as const).map(([name, block]) => html`
+      <div class="list">${[...this.blocks].filter(([, block]) => block.wrap).map(([name, { doc }]) => html`
         <button type="button" class=${this.selected === name ? "on" : ""} aria-pressed=${this.selected === name} @click=${() => pick(name)}>
-          ${icon(name)}<span class="body"><strong>${block.label}<code>${name}</code></strong><small>${block.description}</small></span>
+          ${icon(name)}<span class="body"><strong>${doc.label}<code>${name}</code></strong><small>${doc.description}</small></span>
         </button>`)}</div></aside>`;
   }
 

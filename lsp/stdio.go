@@ -7,7 +7,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/nethinwei/funroute/internal/machine"
 )
@@ -16,10 +15,9 @@ import (
 // Content-Length header, a blank line, then the message. It returns when the
 // client sends exit or the stream ends.
 func Serve(r io.Reader, w io.Writer, registry *machine.Registry) error {
-	var mu sync.Mutex
+	// One loop hands the server every message, and the server writes only
+	// while it handles one, so the writes never overlap.
 	server := New(registry, func(message []byte) {
-		mu.Lock()
-		defer mu.Unlock()
 		_, _ = fmt.Fprintf(w, "Content-Length: %d\r\n\r\n", len(message))
 		_, _ = w.Write(message)
 	})

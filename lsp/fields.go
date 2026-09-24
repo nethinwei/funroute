@@ -19,9 +19,8 @@ import (
 // program with the update replaced by its base, which is the one thing it
 // does not need to see finished.
 func (s *Server) updateFields(doc *document, offset int) ([]completionItem, bool) {
-	prefix := doc.text[:offset]
-	entry := placeholder + ": 0"
-	for _, candidate := range []string{prefix + entry + doc.text[offset:], prefix + entry + openBrackets(prefix)} {
+	kept, closed := repaired(doc.text, offset, placeholder+": 0")
+	for _, candidate := range []string{kept, closed} {
 		tree, err := syntax.Parse(candidate)
 		if err != nil {
 			continue

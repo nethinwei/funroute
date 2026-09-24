@@ -1,7 +1,6 @@
 package lsp
 
 import (
-	"encoding/json"
 	"errors"
 
 	"github.com/nethinwei/funroute/internal/compile"
@@ -73,15 +72,13 @@ func (s *Server) applyContract(contract *compile.TextContract) {
 	s.contract, s.contractErr = options, err
 }
 
+type setContractParams struct {
+	Contract *compile.TextContract `json:"contract"`
+}
+
 // setContract replaces the contract and publishes every open document again,
 // since what each one means has changed.
-func (s *Server) setContract(params json.RawMessage) error {
-	var in struct {
-		Contract *compile.TextContract `json:"contract"`
-	}
-	if err := decode(params, &in); err != nil {
-		return err
-	}
+func (s *Server) setContract(in setContractParams) error {
 	s.applyContract(in.Contract)
 	for _, doc := range s.documents {
 		doc.analyzed = false

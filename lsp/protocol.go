@@ -64,6 +64,11 @@ type textDocumentIdentifier struct {
 	URI string `json:"uri"`
 }
 
+// documentParams is the params of a request about one open document.
+type documentParams struct {
+	TextDocument textDocumentIdentifier `json:"textDocument"`
+}
+
 type textDocumentPosition struct {
 	TextDocument textDocumentIdentifier `json:"textDocument"`
 	Position     Position               `json:"position"`

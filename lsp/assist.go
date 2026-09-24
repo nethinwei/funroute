@@ -1,7 +1,6 @@
 package lsp
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -14,11 +13,7 @@ import (
 	"github.com/nethinwei/funroute/internal/syntax"
 )
 
-func (s *Server) formatting(params json.RawMessage) (any, error) {
-	doc, err := s.documentOf(params)
-	if err != nil {
-		return nil, err
-	}
+func (s *Server) formatting(doc *document) (any, error) {
 	if formatted, err := syntax.FormatSource(doc.text); err == nil && formatted != doc.text {
 		return []textEdit{{Range: doc.whole(s.encoding), NewText: formatted}}, nil
 	}
@@ -28,27 +23,10 @@ func (s *Server) formatting(params json.RawMessage) (any, error) {
 	return []textEdit{}, nil
 }
 
-// at is the open document and the byte a position request names.
-func (s *Server) at(params json.RawMessage) (*document, int, error) {
-	var in textDocumentPosition
-	if err := decode(params, &in); err != nil {
-		return nil, 0, err
-	}
-	doc, err := s.document(in.TextDocument.URI)
-	if err != nil {
-		return nil, 0, err
-	}
-	return doc, doc.offset(in.Position, s.encoding), nil
-}
-
 // hover is what the compiler knows about the innermost node under the
 // cursor: its type, the signature a call resolved to and what the host says
 // about that function or argument.
-func (s *Server) hover(params json.RawMessage) (any, error) {
-	doc, offset, err := s.at(params)
-	if err != nil {
-		return nil, err
-	}
+func (s *Server) hover(doc *document, offset int) (any, error) {
 	analysis, _ := s.analysisOf(doc)
 	if analysis == nil {
 		return null, nil
@@ -57,11 +35,12 @@ func (s *Server) hover(params json.RawMessage) (any, error) {
 	if !ok {
 		return null, nil
 	}
-	text := doc.text[fact.Span.Start:fact.Span.End]
+	name := doc.text[fact.Span.Start:fact.Span.End]
+	text := name
 	if fact.Type != nil {
 		text += ": " + fact.Type.String()
 	}
-	explained := s.explain(fact, doc.text[fact.Span.Start:fact.Span.End])
+	explained := s.explain(doc, fact, name)
 	lines := make([]string, 0, 1+len(explained))
 	lines = append(lines, "```funroute\n"+text+"\n```")
 	lines = append(lines, explained...)
@@ -69,15 +48,15 @@ func (s *Server) hover(params json.RawMessage) (any, error) {
 	return hover{Contents: markupContent{Kind: "markdown", Value: strings.Join(lines, "\n\n")}, Range: &span}, nil
 }
 
-func (s *Server) explain(fact compile.NodeFact, name string) []string {
+func (s *Server) explain(doc *document, fact compile.NodeFact, name string) []string {
 	var out []string
 	if function, ok := s.registry.Resolve(fact.Signature); ok {
 		out = append(out, "`"+fact.Signature+"`", describe(function.Doc)+examples(function.Doc.Examples))
 	}
 	if fact.Reference == "argument" {
-		for _, arg := range s.contract.Args {
-			if arg.Name == name && arg.Doc != "" {
-				out = append(out, arg.Doc)
+		for _, arg := range s.arguments(doc) {
+			if arg.Name() == name && arg.Doc() != "" {
+				out = append(out, arg.Doc())
 			}
 		}
 	}
@@ -148,11 +127,7 @@ func (s *Server) namedExamples(name string) []machine.Example {
 // currencies — or, after @, the members of the contract's enums. sortText
 // orders them by kind, nearest first — locals, arguments, functions, forms,
 // currencies — then by name.
-func (s *Server) completion(params json.RawMessage) (any, error) {
-	doc, offset, err := s.at(params)
-	if err != nil {
-		return nil, err
-	}
+func (s *Server) completion(doc *document, offset int) (any, error) {
 	if offset > 0 && doc.text[offset-1] == '@' {
 		return s.enumMembers(), nil
 	}
@@ -213,15 +188,17 @@ func localsAt(text string, offset int) []string {
 }
 
 func completionCandidates(text string, offset int) []string {
-	prefix := text[:offset]
-	closers := openBrackets(prefix)
-	return []string{
-		text,
-		prefix + placeholder + text[offset:],
-		prefix + placeholder + closers,
-		// A let binding being written still needs its body after it.
-		prefix + placeholder + ", " + placeholder + closers,
-	}
+	kept, closed := repaired(text, offset, placeholder)
+	// A let binding being written still needs its body after it.
+	binding := closed[:offset] + placeholder + ", " + closed[offset:]
+	return []string{text, kept, closed, binding}
+}
+
+// repaired is text with filler written at offset: kept before the rest of
+// the text, closed in place of it with the brackets still open there closed.
+func repaired(text string, offset int, filler string) (kept, closed string) {
+	prefix := text[:offset] + filler
+	return prefix + text[offset:], prefix + openBrackets(text[:offset])
 }
 
 var closerOf = map[string]byte{"(": ')', "[": ']', "{": '}'}
@@ -323,11 +300,7 @@ func markdown(text string) *markupContent {
 // signatureHelp names the call the cursor is in and which argument it is on.
 // A call being typed does not parse yet, so it is found from the lexemes,
 // which the lexer produces for any text.
-func (s *Server) signatureHelp(params json.RawMessage) (any, error) {
-	doc, offset, err := s.at(params)
-	if err != nil {
-		return nil, err
-	}
+func (s *Server) signatureHelp(doc *document, offset int) (any, error) {
 	lexemes := lexemesOf(doc)
 	name, active, ok := enclosingCall(doc.text, lexemes, offset)
 	overloads := s.registry.Overloads(name)

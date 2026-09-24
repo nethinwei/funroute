@@ -7,10 +7,10 @@ import { formatDocument } from "@codemirror/lsp-client";
 import { startClient } from "./lsp.ts";
 import { createEditor, replaceAll } from "./editor.ts";
 import { argsText, offsetAt } from "./projection.ts";
-import type { Argument, Catalog, Diagnostic, Doc, MoneySpec, RunResult, TextContract, Tree } from "./protocol.ts";
+import type { Argument, Catalog, Diagnostic, MoneySpec, RunResult, TextContract, Tree } from "./protocol.ts";
 import type { ContractPanel } from "./contract.ts";
 import type { RunPanel } from "./runner.ts";
-import type { Edit, StructureView } from "./canvas.ts";
+import type { Block, Edit, StructureView } from "./canvas.ts";
 import { switchRefusal, type Checked, type View } from "./views.ts";
 import "./contract.ts";
 import "./runner.ts";
@@ -27,6 +27,17 @@ const client = startClient((method, params) => {
   if (method === "textDocument/publishDiagnostics" && params.uri === URI) void showDiagnostics(params.diagnostics);
 });
 const editor: EditorView = createEditor({ client, uri: URI, parent: $("#editor"), onRun: () => void run() });
+
+// ask sends a request about the document, command runs one of the server's
+// commands on it; each first gives the server the text as it is now.
+function ask<T>(method: string): Promise<T> {
+  client.sync();
+  return client.request<object, T>(method, DOC);
+}
+function command<T>(name: string, argument: object = {}): Promise<T> {
+  client.sync();
+  return client.request<object, T>("workspace/executeCommand", { command: name, arguments: [{ uri: URI, ...argument }] });
+}
 
 function setStatus(text: string, kind: "ok" | "warning" | "error" | "loading") {
   const status = $<HTMLElement>("#status");
@@ -47,12 +58,8 @@ async function showDiagnostics(diagnostics: Diagnostic[]) {
   const said = first ? `${first.range.start.line + 1}:${first.range.start.character + 1} ${first.message}` : "";
   if (first) setStatus(said, first.severity === 1 ? "error" : "warning");
   else setStatus("编译通过", "ok");
-  client.sync();
   const doc = editor.state.doc;
-  const [tree, args] = await Promise.all([
-    client.request<object, Tree | null>("funroute/syntaxTree", DOC),
-    client.request<object, Argument[]>("funroute/arguments", DOC),
-  ]);
+  const [tree, args] = await Promise.all([ask<Tree | null>("funroute/syntaxTree"), ask<Argument[]>("funroute/arguments")]);
   if (doc !== editor.state.doc) return;
   structure.text = doc;
   structure.tree = tree;
@@ -127,11 +134,10 @@ runner.addEventListener("returns-change", sendContract);
 
 async function run() {
   runner.busy = true;
-  client.sync();
   try {
     const args = argsText(runner.entries());
     const started = performance.now();
-    const result = await client.request<object, RunResult>("workspace/executeCommand", { command: "funroute.run", arguments: [{ uri: URI, args }] });
+    const result = await command<RunResult>("funroute.run", { args });
     runner.elapsed = performance.now() - started;
     runner.result = result;
   } catch (error) {
@@ -144,8 +150,7 @@ runner.addEventListener("run", () => void run());
 
 $("#format").addEventListener("click", () => formatDocument(editor));
 $("#copy").addEventListener("click", () => {
-  client.sync();
-  client.request<object, { source: string }>("workspace/executeCommand", { command: "funroute.render", arguments: [{ uri: URI }] })
+  command<{ source: string }>("funroute.render")
     .then((rendered) => navigator.clipboard.writeText(rendered.source))
     .then(() => setStatus("已复制，契约写在注释里", "ok"), failed("没有复制"));
 });
@@ -174,14 +179,13 @@ function showExamples(examples: Example[]) {
 function showCatalog(catalog: Catalog) {
   $("#version").textContent = `artifact v${catalog.artifact_version}`;
   structure.lazy = new Set(catalog.functions.filter((item) => item.special).map((item) => item.name));
-  const blocks = new Map<string, Doc>();
-  const wraps = new Map<string, string>();
+  const blocks = new Map<string, Block>();
   for (const item of [...catalog.special_forms, ...catalog.functions]) {
-    if (!blocks.has(item.name)) blocks.set(item.name, item.doc);
-    if (item.wrap) wraps.set(item.name, item.wrap);
+    const block = blocks.get(item.name) ?? { doc: item.doc };
+    if (item.wrap) block.wrap = item.wrap;
+    blocks.set(item.name, block);
   }
   structure.blocks = blocks;
-  structure.wraps = wraps;
   const groups = Object.groupBy(catalog.functions, (item) => item.doc.category);
   render(html`${moneySection(catalog.money)}${Object.keys(groups).sort().map((category) => html`<h4>${category}</h4><dl>${groups[category]!.map((item) => html`
     <dt><code>${item.signature}</code></dt><dd>${item.doc.label}${item.doc.description ? `：${item.doc.description}` : ""}</dd>`)}</dl>`)}`,

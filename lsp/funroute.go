@@ -34,11 +34,7 @@ type rangedField struct {
 
 // syntaxTree answers funroute/syntaxTree with the tree of the document, or
 // null when it does not parse; the diagnostics say why.
-func (s *Server) syntaxTree(params json.RawMessage) (any, error) {
-	doc, err := s.documentOf(params)
-	if err != nil {
-		return nil, err
-	}
+func (s *Server) syntaxTree(doc *document) (any, error) {
 	if tree, err := syntax.SyntaxTree(doc.text); err == nil {
 		return s.ranged(doc, *tree), nil
 	}
@@ -98,47 +94,38 @@ type runError struct {
 // for a rule that leaves the editor: {"uri": ...} gives {"source": ...}.
 const renderCommand = "funroute.render"
 
-// executeCommand runs one of the server's commands. Each takes one argument,
-// read into the shape that command takes: a run its document, arguments and
-// fuel, a render only its document.
-func (s *Server) executeCommand(params json.RawMessage) (any, error) {
-	var in struct {
-		Command   string            `json:"command"`
-		Arguments []json.RawMessage `json:"arguments"`
-	}
-	if err := decode(params, &in); err != nil {
-		return nil, err
-	}
+type renderRequest struct {
+	URI string `json:"uri"`
+}
+
+// commands are the server's commands, each reading its one argument into
+// the shape it takes: a run its document, arguments and fuel, a render only
+// its document.
+var commands = map[string]requestHandler{
+	runCommand:    withParams((*Server).run),
+	renderCommand: withParams((*Server).render),
+}
+
+type executeCommandParams struct {
+	Command   string            `json:"command"`
+	Arguments []json.RawMessage `json:"arguments"`
+}
+
+// executeCommand runs one of the server's commands.
+func (s *Server) executeCommand(in executeCommandParams) (any, error) {
 	if len(in.Arguments) != 1 {
 		return nil, fmt.Errorf("%w: %s takes one argument", errInvalidParams, in.Command)
 	}
-	switch in.Command {
-	case runCommand:
-		var request runRequest
-		if err := decode(in.Arguments[0], &request); err != nil {
-			return nil, err
-		}
-		doc, err := s.document(request.URI)
-		if err != nil {
-			return nil, err
-		}
-		return s.run(doc, request), nil
-	case renderCommand:
-		return s.render(in.Arguments[0])
-	default:
+	command, ok := commands[in.Command]
+	if !ok {
 		return nil, fmt.Errorf("%w: unknown command %s", errInvalidParams, in.Command)
 	}
+	return command(s, in.Arguments[0])
 }
 
 // render writes the document with the contract as comments above it. A
 // contract the server refused is not written out as if it held.
-func (s *Server) render(argument json.RawMessage) (any, error) {
-	var request struct {
-		URI string `json:"uri"`
-	}
-	if err := decode(argument, &request); err != nil {
-		return nil, err
-	}
+func (s *Server) render(request renderRequest) (any, error) {
 	doc, err := s.document(request.URI)
 	if err != nil {
 		return nil, err
@@ -153,13 +140,10 @@ func (s *Server) render(argument json.RawMessage) (any, error) {
 // in order — the contract's arguments, or the ones inferred from the text
 // when the contract declares none — for a client that asks for their values,
 // with a sample of each value's JSON.
-func (s *Server) argumentList(params json.RawMessage) (any, error) {
-	doc, err := s.documentOf(params)
-	if err != nil {
-		return nil, err
-	}
-	out := []map[string]string{}
-	for _, arg := range s.arguments(doc) {
+func (s *Server) argumentList(doc *document) (any, error) {
+	args := s.arguments(doc)
+	out := make([]map[string]string, 0, len(args))
+	for _, arg := range args {
 		out = append(out, map[string]string{"name": arg.Name(), "type": arg.Type().String(), "doc": arg.Doc(), "example": sample(arg.Type())})
 	}
 	return out, nil
@@ -171,12 +155,16 @@ func (s *Server) catalog(json.RawMessage) (any, error) {
 	return s.registry.Catalog(), nil
 }
 
-func (s *Server) run(doc *document, request runRequest) runResult {
+func (s *Server) run(request runRequest) (any, error) {
+	doc, err := s.document(request.URI)
+	if err != nil {
+		return nil, err
+	}
 	result := runResult{Unavailable: []string{}}
 	artifact, err := s.compile(doc)
 	if err != nil {
 		result.Error = describeError(err)
-		return result
+		return result, nil
 	}
 	resultType := artifact.Result()
 	result.Type = &resultType
@@ -187,7 +175,7 @@ func (s *Server) run(doc *document, request runRequest) runResult {
 	if err != nil {
 		result.Error = describeError(err)
 	}
-	return result
+	return result, nil
 }
 
 func (s *Server) compile(doc *document) (*machine.Artifact, error) {
