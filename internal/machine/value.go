@@ -346,12 +346,36 @@ func (v Value) containerAny() any {
 // records is walked too, or the field order would hold at the top level and
 // quietly go alphabetical one level down.
 func (v Value) MarshalJSON() ([]byte, error) {
-	return json.Marshal(jsonTree(v, holdsRecord, Value.Any))
+	return json.Marshal(jsonTree(v, opensForJSON, Value.jsonLeaf))
 }
 
-// holdsRecord reports whether v is a record or a container with one inside:
-// the values whose JSON is walked rather than handed to json.Marshal whole.
-func holdsRecord(v Value) bool {
+// jsonLeaf is Any as json.Marshal is to write it: an empty container is []
+// or {} whether its backing is empty or nil, which encoding/json would write
+// as null — a value no argument reads back.
+func (v Value) jsonLeaf() any {
+	switch {
+	case v.kind == ArrayKind && v.length() == 0:
+		return emptyJSONArray
+	case v.kind == DictKind && v.length() == 0:
+		return emptyJSONObject
+	}
+	return v.Any()
+}
+
+var (
+	emptyJSONArray  = []any{}
+	emptyJSONObject = map[string]any{}
+)
+
+// opensForJSON reports whether v's JSON is walked rather than handed to
+// json.Marshal whole: a record or a container with one inside, whose field
+// order a Go map would lose, and a container of containers, whose empty ones
+// still write [] or {}.
+func opensForJSON(v Value) bool {
+	switch v.box.(type) {
+	case *nestedArray, *nestedDict:
+		return true
+	}
 	return v.kind == RecordKind || (v.kind == ArrayKind || v.kind == DictKind) && TypeContains(v.Type(), RecordKind)
 }
 

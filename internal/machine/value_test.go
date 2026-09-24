@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 )
@@ -46,5 +47,27 @@ func TestValueConstructorsRejectNestedNonFiniteFloats(t *testing.T) {
 	}
 	if _, err := Dict(FloatType, map[string]Value{"risk": Float(math.NaN())}); err == nil {
 		t.Fatal("dictionary accepted NaN")
+	}
+}
+
+// An empty container writes [] or {}, whether its backing is empty or nil —
+// a host function may well answer nil — so its JSON reads back as an
+// argument; inside another container too.
+func TestAnEmptyContainerWritesItsEmptyJSON(t *testing.T) {
+	t.Parallel()
+	nested, err := ToValue([][]float64{nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for want, input := range map[string]any{"[]": []float64(nil), "{}": map[string]int64(nil), "[[]]": nested} {
+		value, ok := input.(Value)
+		if !ok {
+			if value, err = fromGo(input); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if encoded, err := json.Marshal(value); err != nil || string(encoded) != want {
+			t.Errorf("json.Marshal(%#v) = %s, %v, want %s", input, encoded, err, want)
+		}
 	}
 }

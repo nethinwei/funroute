@@ -132,7 +132,7 @@ func whileSpecs() []funroute.FunctionSpec {
 func cutWhile(name string, args []funroute.Value, prefix bool) (funroute.Value, error) {
 	items, flags := itemsOf(args[0]), itemsOf(args[1])
 	if len(items) != len(flags) {
-		return funroute.Value{}, fmt.Errorf("%s has %d candidates and %d tests", name, len(items), len(flags))
+		return funroute.Value{}, fmt.Errorf("%w: %s has %d candidates and %d tests", funroute.ErrDomain, name, len(items), len(flags))
 	}
 	cut := len(items)
 	for i, flag := range flags {
@@ -196,13 +196,13 @@ func indexOfItem(_ context.Context, args []funroute.Value) (funroute.Value, erro
 			return funroute.Int(int64(i)), nil
 		}
 	}
-	return funroute.Value{}, errors.New("the array does not contain that item")
+	return funroute.Value{}, fmt.Errorf("%w: the array does not contain that item", funroute.ErrDomain)
 }
 
 func sortedBy(args []funroute.Value, ascending bool) (funroute.Value, error) {
 	items, keys := itemsOf(args[0]), itemsOf(args[1])
 	if len(items) != len(keys) {
-		return funroute.Value{}, fmt.Errorf("sort_by has %d candidates and %d keys", len(items), len(keys))
+		return funroute.Value{}, fmt.Errorf("%w: sort_by has %d candidates and %d keys", funroute.ErrDomain, len(items), len(keys))
 	}
 	order := make([]int, len(items))
 	for i := range order {
@@ -242,7 +242,7 @@ func valueLess(left, right funroute.Value) bool {
 }
 
 // errNoExtreme is an arg_min or arg_max, or a money min or max, of nothing.
-var errNoExtreme = errors.New("an empty array has no extreme")
+var errNoExtreme = fmt.Errorf("%w: an empty array has no extreme", funroute.ErrDomain)
 
 // extremeIndex builds the arg_min / arg_max body for one key type.
 func extremeIndex[T cmp.Ordered](smallest bool) func([]T) (int64, error) {

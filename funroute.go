@@ -415,6 +415,10 @@ var (
 	// zero, a float that is not finite, an exchange rate that is not
 	// positive. fallback does not take it.
 	ErrArithmetic = machine.ErrArithmetic
+	// ErrDomain is data an operation has no answer for: an index past the
+	// end, a missing key, the first of an empty array, two arrays that were
+	// to line up and do not. fallback does not take it.
+	ErrDomain = machine.ErrDomain
 	// ErrUnavailable is an ErrExtension from a function this registry knows
 	// only by its signature, from a Manifest.
 	ErrUnavailable = machine.ErrUnavailable

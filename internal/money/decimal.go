@@ -17,7 +17,7 @@ import (
 func ParseDecimal(text string, digits int) (int64, error) {
 	body, negative := cutSign(text)
 	whole, fraction, _ := strings.Cut(body, ".")
-	if whole == "" && fraction == "" {
+	if whole == "" && fraction == "" || strings.Contains(fraction, ".") {
 		return 0, errors.New("is not a decimal")
 	}
 	if len(fraction) > digits {

@@ -1,7 +1,6 @@
 package std
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -54,7 +53,7 @@ func roundingTo(name string, apply func(float64) float64) func(float64) (int64, 
 	return func(value float64) (int64, error) {
 		rounded := apply(value)
 		if rounded < -9223372036854775808.0 || rounded >= 9223372036854775808.0 {
-			return 0, fmt.Errorf("%s(%g) is outside the range of an int", name, value)
+			return 0, fmt.Errorf("%w: %s(%g) is outside the range of an int", funroute.ErrArithmetic, name, value)
 		}
 		return int64(rounded), nil
 	}
@@ -92,22 +91,22 @@ func statisticSpecs() []funroute.FunctionSpec {
 func deviationOf[T int64 | float64](items []T) (float64, error) {
 	mean, err := averageOf(items)
 	if err != nil {
-		return 0, errors.New("stddev of an empty array")
+		return 0, fmt.Errorf("%w: stddev of an empty array", funroute.ErrDomain)
 	}
 	total := 0.0
 	for _, item := range items {
 		diff := float64(item) - mean
 		total += diff * diff
 	}
-	return math.Sqrt(total / float64(len(items))), nil
+	return finiteIn("stddev", math.Sqrt(total/float64(len(items))))
 }
 
 func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) {
 	if len(items) == 0 {
-		return 0, errors.New("percentile of an empty array")
+		return 0, fmt.Errorf("%w: percentile of an empty array", funroute.ErrDomain)
 	}
 	if ratio < 0 || ratio > 1 {
-		return 0, fmt.Errorf("a percentile is a ratio between 0 and 1, got %v", ratio)
+		return 0, fmt.Errorf("%w: a percentile is a ratio between 0 and 1, got %v", funroute.ErrArithmetic, ratio)
 	}
 	sorted := append([]T(nil), items...)
 	slices.Sort(sorted)
@@ -118,7 +117,7 @@ func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) 
 		return float64(sorted[lower]), nil
 	}
 	weight := position - float64(lower)
-	return float64(sorted[lower])*(1-weight) + float64(sorted[upper])*weight, nil
+	return finiteIn("percentile", float64(sorted[lower])*(1-weight)+float64(sorted[upper])*weight)
 }
 
 // pairwiseSpecs are min and max on two values rather than on a list: a fee
@@ -146,18 +145,18 @@ func pairwiseSpecs() []funroute.FunctionSpec {
 
 func averageOf[T int64 | float64](items []T) (float64, error) {
 	if len(items) == 0 {
-		return 0, errors.New("avg of an empty array")
+		return 0, fmt.Errorf("%w: avg of an empty array", funroute.ErrDomain)
 	}
 	total := 0.0
 	for _, item := range items {
 		total += float64(item)
 	}
-	return total / float64(len(items)), nil
+	return finiteIn("avg", total/float64(len(items)))
 }
 
 func medianOf[T int64 | float64](items []T) (float64, error) {
 	if len(items) == 0 {
-		return 0, errors.New("median of an empty array")
+		return 0, fmt.Errorf("%w: median of an empty array", funroute.ErrDomain)
 	}
 	sorted := append([]T(nil), items...)
 	slices.Sort(sorted)
@@ -165,7 +164,7 @@ func medianOf[T int64 | float64](items []T) (float64, error) {
 	if len(sorted)%2 == 1 {
 		return float64(sorted[middle]), nil
 	}
-	return (float64(sorted[middle-1]) + float64(sorted[middle])) / 2, nil
+	return finiteIn("median", (float64(sorted[middle-1])+float64(sorted[middle]))/2)
 }
 
 func pairwise[T int64 | float64 | string](smallest bool) func(T, T) (T, error) {
@@ -189,7 +188,7 @@ func powerSpecs() []funroute.FunctionSpec {
 	return eachType("pow", doc, powInt, func(base, exponent float64) (float64, error) {
 		result := math.Pow(base, exponent)
 		if math.IsNaN(result) || math.IsInf(result, 0) {
-			return 0, fmt.Errorf("pow(%v, %v) is not a finite number", base, exponent)
+			return 0, fmt.Errorf("%w: pow(%v, %v) is not a finite number", funroute.ErrArithmetic, base, exponent)
 		}
 		return result, nil
 	})
@@ -201,7 +200,7 @@ func powerSpecs() []funroute.FunctionSpec {
 // whose square is needed and overflows would overflow the result as well.
 func powInt(base, exponent int64) (int64, error) {
 	if exponent < 0 {
-		return 0, errors.New("a negative exponent has no integer result; use floats for that")
+		return 0, fmt.Errorf("%w: a negative exponent has no integer result; use floats for that", funroute.ErrArithmetic)
 	}
 	result := int64(1)
 	for exponent > 0 {

@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	errNoAbsolute      = errors.New("the smallest int has no absolute value")
+	errNoAbsolute      = fmt.Errorf("%w: the smallest int has no absolute value", funroute.ErrArithmetic)
 	errDivideByZero    = fmt.Errorf("%w: division by zero", funroute.ErrArithmetic)
 	errIntegerOverflow = fmt.Errorf("%w: integer overflow in sum", funroute.ErrArithmetic)
 	errNotFinite       = fmt.Errorf("%w: non-finite float result in sum", funroute.ErrArithmetic)
@@ -168,14 +168,18 @@ func argInt(args []funroute.Value, index int) int64 {
 
 func sequence(start, stop, step int64) (funroute.Value, error) {
 	if step == 0 {
-		return funroute.Value{}, errors.New("range step must not be zero")
+		return funroute.Value{}, fmt.Errorf("%w: range step must not be zero", funroute.ErrArithmetic)
 	}
 	items := []int64{}
 	for value := start; step > 0 && value < stop || step < 0 && value > stop; value += step {
 		if len(items) == maxRangeLength {
-			return funroute.Value{}, fmt.Errorf("range is longer than %d items", maxRangeLength)
+			return funroute.Value{}, fmt.Errorf("%w: range is longer than %d items", funroute.ErrArithmetic, maxRangeLength)
 		}
 		items = append(items, value)
+		// The next value would be past int64, so past stop as well.
+		if step > 0 && value > math.MaxInt64-step || step < 0 && value < math.MinInt64-step {
+			break
+		}
 	}
 	return funroute.ToValue(items)
 }
@@ -189,6 +193,15 @@ func sumInts(items []int64) (int64, error) {
 		total += item
 	}
 	return total, nil
+}
+
+// finiteIn is a float result of the named function, or ErrArithmetic when
+// it is not a finite number: an overflow the float could not hold.
+func finiteIn(name string, value float64) (float64, error) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, fmt.Errorf("%w: non-finite float result in %s", funroute.ErrArithmetic, name)
+	}
+	return value, nil
 }
 
 func sumFloats(items []float64) (float64, error) {
@@ -208,7 +221,7 @@ func extremeOf[T cmp.Ordered](name string, smallest bool) func([]T) (T, error) {
 		at, ok := best(items, smallest)
 		if !ok {
 			var zero T
-			return zero, fmt.Errorf("%s of an empty array", name)
+			return zero, fmt.Errorf("%w: %s of an empty array", funroute.ErrDomain, name)
 		}
 		return items[at], nil
 	}

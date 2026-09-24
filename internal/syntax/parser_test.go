@@ -224,22 +224,29 @@ func TestElseLeadsToItsResultWithAnArrow(t *testing.T) {
 	}
 }
 
-// An expression nests at most maxNesting levels — parentheses, calls,
-// containers and prefix operators alike — and one deeper is a syntax error
-// at the level it went too deep, however deep it goes: a Go stack overflow
-// would be fatal, not an error.
+// An expression's tree is at most maxNesting nodes deep — calls, operators,
+// containers and subscripts alike, whether the parser read them by recursion
+// or by a loop — and one deeper is a syntax error at the node that went too
+// deep, however deep it goes: a Go stack overflow would be fatal, not an
+// error. Parentheses add no node.
 func TestNestingIsBounded(t *testing.T) {
 	t.Parallel()
-	within := strings.Repeat("(", maxNesting-1) + "1" + strings.Repeat(")", maxNesting-1)
-	if _, err := Parse(within); err != nil {
-		t.Fatalf("Parse(%d levels) error = %v, want it read", maxNesting, err)
+	within := strings.Repeat("[", maxNesting-1) + "1" + strings.Repeat("]", maxNesting-1)
+	for _, source := range []string{within, strings.Repeat("(", maxNesting) + "1" + strings.Repeat(")", maxNesting)} {
+		if _, err := Parse(source); err != nil {
+			t.Fatalf("Parse(%.20s…) error = %v, want it read", source, err)
+		}
 	}
 	for name, source := range map[string]string{
-		"one level too deep":  "(" + within + ")",
-		"a million brackets":  strings.Repeat("(", 1_000_000) + "1" + strings.Repeat(")", 1_000_000),
-		"a million negations": strings.Repeat("!", 1_000_000) + "true",
-		"a million arrays":    strings.Repeat("[", 1_000_000) + strings.Repeat("]", 1_000_000),
-		"a million calls":     strings.Repeat("f(", 1_000_000) + strings.Repeat(")", 1_000_000),
+		"one level too deep":      "[" + within + "]",
+		"a million brackets":      strings.Repeat("(", 1_000_000) + "1" + strings.Repeat(")", 1_000_000),
+		"a million negations":     strings.Repeat("!", 1_000_000) + "true",
+		"a million arrays":        strings.Repeat("[", 1_000_000) + strings.Repeat("]", 1_000_000),
+		"a million calls":         strings.Repeat("f(", 1_000_000) + strings.Repeat(")", 1_000_000),
+		"a million additions":     "x" + strings.Repeat(" + x", 1_000_000),
+		"a million subscripts":    "x" + strings.Repeat("[0]", 1_000_000),
+		"a million field reads":   "x" + strings.Repeat(".a", 1_000_000),
+		"a million postfix reads": "f(x)" + strings.Repeat(".a", 1_000_000),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

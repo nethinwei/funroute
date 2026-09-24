@@ -206,6 +206,11 @@ func validateInstruction(index int, instruction Instruction, artifact *Artifact)
 	if instruction.Op == OpInvalid || spec.name == opcodes[OpInvalid].name {
 		return fail("unknown opcode %q", instruction.Op)
 	}
+	// Every type the walk reads off an instruction is whole: an array with
+	// its element, a record with its fields.
+	if instruction.Type != nil && !instruction.Type.IsConcrete() {
+		return fail("type %s is not concrete", instruction.Type)
+	}
 	if spec.validate == nil {
 		return nil
 	}

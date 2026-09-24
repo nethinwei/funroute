@@ -34,7 +34,7 @@
 - 类型化绑定 `funroute.Bind[In, Out]`：契约就是两个 Go 类型，`Program.Run` 从 struct 直接读参数。
 - 注册：只有 `Registry.Register(FunctionSpec)`；`Go`/`GoBatch` 按 Go 签名反射注册单条与批量实现，或手写 `Params`/`Result`/`Eval`。
 - 预算：`ctx` 贯通、函数级 `Doc.Timeout`、无法取消的引擎用 `Doc.Detached`、fuel 成本上限。
-- 类型化错误：`ErrCompile`、`ErrContract`、`ErrFuel`、`ErrDeadline`、`ErrExtension`、`ErrCurrency`、`ErrArithmetic`、`ErrNoFxRate`，一律 `errors.Is`。
+- 类型化错误：`ErrCompile`、`ErrContract`、`ErrFuel`、`ErrDeadline`、`ErrExtension`、`ErrCurrency`、`ErrArithmetic`、`ErrDomain`、`ErrNoFxRate`，一律 `errors.Is`。
 - 批处理第一级：字节码证明可以提前算的模型调用按批合并，惰性 `if` 不受影响。
 - 标准库 `extensions/std`：聚合、序列、选择与分组、字典、字符串、数值，全部可在编译期折叠；每个函数带可运行的案例。
 
@@ -55,7 +55,7 @@
 | 语言不图灵完备：只遍历有限输入，没有递归与无界循环 | 每个程序都终止，最坏延迟有多项式上界（见 `docs/termination.md`） | lambda、递归、`while` |
 | 聚合不进内核：`sum`/`min`/`max` 等是 `extensions/std` 的普通函数，`reduce` 留给自定义折叠 | 内核保持 19 个函数名；日常写法是"推导式 + 聚合函数" | 为每种聚合加语法 |
 | 能凭空造数组的函数（`range`、`allocate(m, n)`）的整数实参必须由输入规模界定：字面量、`len(容器)` 或它们的算术组合 | 否则一个整数参数就能让规则跑任意久，多项式上界失效 | 要求实参是常量（会误伤 `range(len(fees))`） |
-| 没有 null：越界、缺键、除零都是错误；兜底写 `get(d, k, 默认值)` 或 `fallback` | null 会静默传播 | `nil`、`??`、`?.`、Option |
+| 没有 null：越界、缺键、除零都是错误（`ErrDomain`、`ErrArithmetic`，`fallback` 不接）；兜底写 `get(d, k, 默认值)` 或先判断 | null 会静默传播 | `nil`、`??`、`?.`、Option |
 | 编译期求值由 `Doc.Constexpr` 授权：内核与 std 有，模型、时钟、远程调用没有 | 否则编译规则时会调用推理引擎，同一条规则不同时间编译出不同结果 | 显式的编译期关键字（如 `const`、`comptime`） |
 | 运算符与推导式都是 parser 里的糖，不新增节点；格式化结果必须解析回同一个程序 | 语法节点只有一份定义，ExprJSON 与 digest 稳定 | 为运算符加节点 |
 | `%` 紧贴数字一律是比例（`2.9%`）；取模要留空格（`10 % 3`） | 同一个 `%` 不靠后文或空白改变意思 | 按后文猜是比例还是取模 |
@@ -113,10 +113,11 @@
 | 注册只有 `Registry.Register(FunctionSpec)` 一个入口；`Go`/`GoBatch` 字段按 Go 签名反射（约 300 ns 一次调用，返回 `R` 或 `(R, error)`），要零开销就手写 `Params`/`Result`/`Eval`，两者二选一 | 任意元数与嵌套，签名从 Go 类型读出；一个入口，不必在三个函数间选 | 按元数展开的 `Fn1/Fn2/…` 泛型；`Logic`/`Model` 两个以 registry 为首参、`fn, batch any` 的包级函数 |
 | 一个错误 = 类别 + 原因：分类层自己就是 `ErrExtension`/`ErrDeadline`/`ErrContract`，`Unwrap` 通向原因（`money.Classify`）；已带任何类别的错误原样传递 | `errors.Is` 答类别，宿主仍认得出自己的错误与 `context.DeadlineExceeded`，文案不变 | `%w: %v`（原因只剩文字，身份丢失）；`%w: %w`（一个错误并列两个错误） |
 | 超时默认信任 `ctx`；无法取消的引擎注册时标 `Detached`，VM 在独立 goroutine 里等，到点放弃 | 大多数引擎能响应取消；`Detached` 每次约 1 µs，只给不能取消的用 | 所有调用都起 goroutine |
-| `fallback` 只接扩展函数失败、超时与 `ErrNoFxRate`；不接 fuel 耗尽、类型错误、`ErrArithmetic`、`ErrCurrency` | 规则不能吞掉自身或数据的错误 | 什么都接 |
+| `fallback` 只接扩展函数失败、超时与 `ErrNoFxRate`；不接 fuel 耗尽、类型错误、`ErrArithmetic`、`ErrDomain`、`ErrCurrency` | 规则不能吞掉自身或数据的错误 | 什么都接 |
 | 装载时对字节码做一遍带类型的抽象解释（`machine/verify.go`）：每条路径上栈与局部槽的类型、每条指令的输入输出、调用按签名实例化、合流处栈一致；同时得出栈的深度。执行时只检查宿主函数的回答 | 编译器证明过的，对来自任何地方的 Artifact 再证明一次，执行循环因此快约 15%；栈深只有一个来源 | 执行时逐元素检查类型（旧做法）；Artifact 自带 `max_stack` |
 | 常量是"静态类型 + 值的 JSON"，读回走与宿主入参相同的 `coerce` | 常量没有自己的编码；`@member` 以枚举类型存入，读回时校验成员 | 按值的种类手写的常量结构体 |
 | 错误类别只有一张表（`machine/errors.go` 的 `errorClasses`），一个错误由它最具体的类别命名，并决定 `fallback` 接不接 | 机器、`fallback` 与语言服务读同一张表，README 的表由测试对照 | 各处各写一份类别清单 |
+| 数据上没有答案（越界、缺键、空数组、长度对不上、重复键）是 `ErrDomain`；数值参数超出取值范围仍是 `ErrArithmetic`；栈深超出 `MaxStack` 是 `ErrFuel`。运行时错误都有类别 | 内核的这类错误原本没有类别（`fallback` 不接），std 的同类错误却被包成 `ErrExtension` 而被接住，同一件事两种结果 | 并入 `ErrArithmetic`（类别的含义变宽）；维持无类别（std 无法表达"不接"） |
 | 两座 Go 桥各有其位：规划好的 codec 走参数与结果的热路径（unsafe、零分配），反射桥走 `FunctionSpec.Go` 的 `reflect.Call`、handle 与非原生 map；记录与结构体只按一条规则匹配（`structFieldFor`：记录的每个字段都要在结构体里有位置，结构体多出的字段保持零值） | 反射调用本来就要 `reflect.Value`，热路径不能反射；规则不同曾让反射桥悄悄丢字段 | 合成一座桥 |
 | Manifest 与 Catalog 分开：Manifest 是能装回注册表的签名数据（`Apply`），Catalog 是给前端的只读说明（语言形式的语法与包裹模板、签名文本） | 方向相反，一种形状只会让两种用途都变差 | 合成一份 |
 | 语言形式只有一张表（`languageForms`），节点的 kind tag 说哪些节点是形式、哪些可开关，由测试对照；前端从语法树的 `form` 与目录的 `wrap` 得知一切 | 前端不写语法 | 前端的 `FORM_NODES`/`BLOCKS` |

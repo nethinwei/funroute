@@ -71,7 +71,7 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 - 嵌套至多 1000 层：Go 栈溢出是 `recover` 接不住的致命错误。ExprJSON 只解码一次，值槽位不接受 `null`。
 
 **错误**
-- 宿主只用 `errors.Is`；新增错误路径必须选一个类别。`fallback` 只接"数据暂不可得"（`ErrExtension`、`ErrDeadline`、`ErrNoFxRate`），规则或数据的错（`ErrArithmetic`、`ErrCurrency`、`ErrFuel`）不接，扩展函数里发生也保留原类别。
+- 宿主只用 `errors.Is`；新增错误路径必须选一个类别。`fallback` 只接"数据暂不可得"（`ErrExtension`、`ErrDeadline`、`ErrNoFxRate`），规则或数据的错（`ErrArithmetic`、`ErrDomain`、`ErrCurrency`、`ErrFuel`）不接，扩展函数里发生也保留原类别。
 - 编译错误必须带位置，只经 `syntax.At`、`syntax.Around(node, …)` 或 parser 内部的 `over` 产生。
 
 **执行性能**

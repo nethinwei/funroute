@@ -18,12 +18,15 @@ const (
 	utf16Encoding = "utf-16"
 )
 
-// document is one open text and where each of its lines starts.
+// document is one open text and where each of its lines starts and ends.
+// A line ends at \n, \r\n or a lone \r, as the protocol counts them, and
+// its end is where that terminator starts.
 type document struct {
 	uri     string
 	version int
 	text    string
 	lines   []int
+	ends    []int
 
 	// What the language made of the text, worked out on first use: every
 	// request on one version reads the same answer. A change is a new
@@ -36,21 +39,27 @@ type document struct {
 }
 
 func newDocument(uri string, version int, text string) *document {
-	lines := []int{0}
-	for i := range len(text) {
-		if text[i] == '\n' {
-			lines = append(lines, i+1)
+	lines, ends := []int{0}, []int{}
+	for i := 0; i < len(text); i++ {
+		if text[i] != '\n' && text[i] != '\r' {
+			continue
 		}
+		ends = append(ends, i)
+		if text[i] == '\r' && i+1 < len(text) && text[i+1] == '\n' {
+			i++
+		}
+		lines = append(lines, i+1)
 	}
-	return &document{uri: uri, version: version, text: text, lines: lines}
+	return &document{uri: uri, version: version, text: text, lines: lines, ends: append(ends, len(text))}
 }
 
 // position is where byte offset falls, counted in encoding.
 func (d *document) position(offset int, encoding string) Position {
 	offset = min(max(offset, 0), len(d.text))
 	line := sort.Search(len(d.lines), func(i int) bool { return d.lines[i] > offset }) - 1
-	start := d.lines[line]
-	return Position{Line: line, Character: units(d.text[start:offset], encoding)}
+	// A byte inside a line's terminator is at the line's end.
+	start, end := d.lines[line], min(offset, d.ends[line])
+	return Position{Line: line, Character: units(d.text[start:end], encoding)}
 }
 
 // offset is the byte a position names. A position past a line's end is its
@@ -62,10 +71,7 @@ func (d *document) offset(position Position, encoding string) int {
 	if line >= len(d.lines) {
 		return len(d.text)
 	}
-	start, end := d.lines[line], len(d.text)
-	if line+1 < len(d.lines) {
-		end = d.lines[line+1] - 1
-	}
+	start, end := d.lines[line], d.ends[line]
 	for at, counted := start, 0; at < end; {
 		if counted >= position.Character {
 			return at

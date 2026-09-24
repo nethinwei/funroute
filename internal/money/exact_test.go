@@ -3,6 +3,7 @@ package money
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"testing"
 )
 
@@ -47,6 +48,15 @@ func TestExactMoneyComputesAsMoneyDoes(t *testing.T) {
 		if got, err := test.run(); err != nil || got.String() != test.want {
 			t.Errorf("%s = %s, %v, want %s", name, got, err, test.want)
 		}
+	}
+	// Exact money is as wide as money: the smallest amount taken from five
+	// cents overflows as it does for Money, and taken from itself is zero.
+	smallest := Money{currency: "USD", minor: math.MinInt64}.Exact()
+	if got, err := (Money{currency: "USD", minor: 5}).Exact().Sub(smallest); !errors.Is(err, ErrArithmetic) {
+		t.Fatalf("USD 0.05 - the smallest amount = %s, %v, want ErrArithmetic", got, err)
+	}
+	if got, err := smallest.Sub(smallest); err != nil || got.Sign() != 0 {
+		t.Fatalf("the smallest amount less itself = %s, %v, want zero", got, err)
 	}
 	if _, err := third.Add(Money{currency: "EUR", minor: 1}.Exact()); !errors.Is(err, ErrCurrency) {
 		t.Fatalf("dollars plus euros: error = %v, want ErrCurrency", err)

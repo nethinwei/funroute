@@ -2,7 +2,7 @@ package money
 
 import (
 	"cmp"
-	"errors"
+	"fmt"
 	"slices"
 )
 
@@ -42,7 +42,7 @@ func MedianMoney(amounts []Money, mode Rounding) (Money, error) {
 // currency-less zero goes with any.
 func oneCurrency(amounts []Money) (string, error) {
 	if len(amounts) == 0 {
-		return "", errors.New("an empty array has no average")
+		return "", fmt.Errorf("%w: an empty array has no average", ErrDomain)
 	}
 	currency := ""
 	for _, amount := range amounts {

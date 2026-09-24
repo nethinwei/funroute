@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"math/big"
+	"math/rand/v2"
 	"strings"
 	"testing"
 )
@@ -34,10 +36,19 @@ func TestARatioIsCanonical(t *testing.T) {
 			t.Errorf("%s: %+v != %+v", name, test[0], test[1])
 		}
 	}
-	for _, pair := range [][2]int64{{math.MinInt64, 1}, {1, math.MinInt64}} {
-		if _, err := ratioOf(pair[0], pair[1]); !errors.Is(err, ErrArithmetic) {
-			t.Errorf("ratioOf(%d, %d) error = %v, want ErrArithmetic: MinInt64 has no negation", pair[0], pair[1], err)
+	// A ratio is held to int64 once reduced: MinInt64 fits on top, and its
+	// half is no overflow; a denominator of 2^63 does not fit.
+	for pair, want := range map[[2]int64]Ratio{
+		{math.MinInt64, 1}:  {num: math.MinInt64, den: 1},
+		{math.MinInt64, 2}:  {num: math.MinInt64 / 2, den: 1},
+		{math.MinInt64, -2}: {num: 1 << 62, den: 1},
+	} {
+		if got, err := ratioOf(pair[0], pair[1]); err != nil || got != want {
+			t.Errorf("ratioOf(%d, %d) = %+v, %v, want %+v", pair[0], pair[1], got, err, want)
 		}
+	}
+	if _, err := ratioOf(1, math.MinInt64); !errors.Is(err, ErrArithmetic) {
+		t.Errorf("ratioOf(1, MinInt64) error = %v, want ErrArithmetic: 2^63 does not fit a denominator", err)
 	}
 }
 
@@ -61,7 +72,10 @@ func TestARatioWritesItsTextAndReadsItBack(t *testing.T) {
 		"1/3": ratio(1, 3), "-7/6": ratio(-7, 6), "9223372036854775807": ratio(math.MaxInt64, 1),
 		"1/9223372036854775807": ratio(1, math.MaxInt64), "0.000000000000000001": ratio(1, 1_000_000_000_000_000_000),
 		"-9223372036854775807": ratio(-math.MaxInt64, 1),
-		"1/1048576":            ratio(1, 1<<20),
+		"-9223372036854775808": ratio(math.MinInt64, 1),
+		// Its decimal's digits are 2^63, which only a negative one fits.
+		"-922337203685477580.8": ratio(math.MinInt64/2, 5),
+		"1/1048576":             ratio(1, 1<<20),
 	} {
 		if got := r.String(); got != want {
 			t.Errorf("String() = %q, want %q", got, want)
@@ -249,4 +263,47 @@ func TestRatiosDoNotAllocate(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("rate arithmetic allocated %v times, want 0", allocs)
 	}
+}
+
+// A sum or a difference is exact, 128 bits wide in between, and overflows
+// only when the reduced result does not fit: each one agrees with math/big,
+// at the edges of int64 and between them.
+func TestRatioSumsAgreeWithBigRat(t *testing.T) {
+	t.Parallel()
+	edges := []int64{0, 1, -1, 2, 8, 1 << 32, math.MaxInt64, -math.MaxInt64, math.MinInt64, math.MaxInt64 / 8, 1257006497109667597}
+	random := rand.New(rand.NewPCG(1, 2))
+	pick := func() int64 {
+		if random.IntN(3) == 0 {
+			return edges[random.IntN(len(edges))]
+		}
+		return random.Int64() >> random.IntN(63)
+	}
+	positive := func() int64 {
+		for {
+			if value := pick(); value > 0 {
+				return value
+			}
+		}
+	}
+	for range 20_000 {
+		left, right := ratio(pick(), positive()), ratio(pick(), positive())
+		for name, op := range map[string]func(Ratio) (Ratio, error){"+": left.Add, "-": left.Sub} {
+			got, err := op(right)
+			want := new(big.Rat)
+			if name == "+" {
+				want.Add(bigRat(left), bigRat(right))
+			} else {
+				want.Sub(bigRat(left), bigRat(right))
+			}
+			fits := want.Num().IsInt64() && want.Denom().IsInt64()
+			if fits && (err != nil || bigRat(got).Cmp(want) != 0) || !fits && !errors.Is(err, ErrArithmetic) {
+				t.Fatalf("%s %s %s = %s, %v, want %s", left, name, right, got, err, want.RatString())
+			}
+		}
+	}
+}
+
+func bigRat(r Ratio) *big.Rat {
+	num, den := r.parts()
+	return big.NewRat(num, den)
 }

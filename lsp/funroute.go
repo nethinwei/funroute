@@ -142,9 +142,10 @@ func (s *Server) render(request renderRequest) (any, error) {
 // with a sample of each value's JSON.
 func (s *Server) argumentList(doc *document) (any, error) {
 	args := s.arguments(doc)
+	samples := samplerFor(s.registry)
 	out := make([]map[string]string, 0, len(args))
 	for _, arg := range args {
-		out = append(out, map[string]string{"name": arg.Name(), "type": arg.Type().String(), "doc": arg.Doc(), "example": sample(arg.Type())})
+		out = append(out, map[string]string{"name": arg.Name(), "type": arg.Type().String(), "doc": arg.Doc(), "example": samples.sample(arg.Type())})
 	}
 	return out, nil
 }

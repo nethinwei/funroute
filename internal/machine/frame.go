@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // NoAccumulator marks a loop instruction as a mapping rather than a fold, and
@@ -277,7 +279,7 @@ func (f *frame) push(value Value) error {
 		return nil
 	}
 	if len(f.stack) >= f.maxStack {
-		return fmt.Errorf("stack limit %d exceeded", f.maxStack)
+		return kit.Errorf(ErrFuel, "stack limit %d exceeded", f.maxStack)
 	}
 	f.stack = append(f.stack, value)
 	// Past the reservation, remember how far we got: release clears exactly
@@ -544,7 +546,7 @@ func (f *frame) loopResult(loop *loopFrame) (Value, error) {
 	entries := make(map[string]Value, len(loop.collected))
 	for i, key := range loop.collected {
 		if _, taken := entries[key]; taken {
-			return Value{}, fmt.Errorf("the comprehension produced the key %q twice", key)
+			return Value{}, kit.Errorf(ErrDomain, "the comprehension produced the key %q twice", key)
 		}
 		entries[key] = built.at(i)
 	}

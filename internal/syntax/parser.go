@@ -14,7 +14,7 @@ type parser struct {
 	index  int
 	nextID int
 	// depth is how many expressions the parser is inside, held to
-	// maxNesting.
+	// maxParseDepth.
 	depth int
 	// roles records what the parser took each token to be, keyed by where
 	// it starts. Only Lexemes asks for it; Parse leaves it nil and pays nothing.
@@ -68,6 +68,9 @@ func (p *parser) program() (Expr, error) {
 	}
 	if p.peek().kind != tokenEOF {
 		return nil, p.errorf(p.peek(), "unexpected token %q", p.peek().text)
+	}
+	if deep := tooDeep(expr); deep != nil {
+		return nil, Around(deep, "the expression nests deeper than %d levels", maxNesting)
 	}
 	return expr, nil
 }
@@ -186,18 +189,47 @@ func (p *parser) expandOperator(operator token, spec operatorSpec, operands ...E
 	}
 }
 
-// maxNesting is how deep one expression may nest: parentheses, calls,
-// containers and prefix operators each count a level. A rule is a few levels
-// deep; the parser, the importer and everything after them recurse over the
-// tree, and a Go stack that overflows is a fatal error no recover catches —
-// a million parentheses in a two-megabyte text would take the process down.
-// Source and ExprJSON are held to the same limit.
+// maxNesting is how deep one expression's tree may be, counted in nodes: a
+// call, an operator, a container, a subscript each count a level. A rule is a
+// few levels deep; everything after the parser recurses over the tree, and a
+// Go stack that overflows is a fatal error no recover catches — a million
+// additions in a four-megabyte text would take the process down. Source and
+// ExprJSON are held to the same limit, so every program either one can
+// write the other can too.
 const maxNesting = 1000
 
+// maxParseDepth bounds the parser's own recursion, which parentheses deepen
+// without adding a node. The formatter writes at most one pair of them for a
+// level, so every tree within maxNesting prints as text within this.
+const maxParseDepth = 3 * maxNesting
+
+// tooDeep is the first node of root deeper than maxNesting, or nil. It keeps
+// its own stack rather than recursing: a tree that deep is exactly the one a
+// recursion must not walk. A chain of operators or subscripts is read by a
+// loop, not a recursion, so only the finished tree can say how deep it is.
+func tooDeep(root Expr) Expr {
+	type entry struct {
+		expr  Expr
+		depth int
+	}
+	stack := []entry{{root, 1}}
+	for len(stack) > 0 {
+		top := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if top.depth > maxNesting {
+			return top.expr
+		}
+		for _, child := range Children(top.expr) {
+			stack = append(stack, entry{child, top.depth + 1})
+		}
+	}
+	return nil
+}
+
 // parseUnary is where every nested expression passes, so it is where the
-// depth is counted.
+// parser's depth is counted.
 func (p *parser) parseUnary() (Expr, error) {
-	if p.depth == maxNesting {
+	if p.depth == maxParseDepth {
 		return nil, p.errorf(p.peek(), "the expression nests deeper than %d levels", maxNesting)
 	}
 	p.depth++

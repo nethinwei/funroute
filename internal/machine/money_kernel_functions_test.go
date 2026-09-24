@@ -306,3 +306,21 @@ func TestProrateAndRoundToInARule(t *testing.T) {
 		t.Fatalf("prorate by euros over dollars: error = %v, want ErrCurrency", err)
 	}
 }
+
+// A proportion is held to int64 once reduced, so the smallest amount's half
+// is no overflow, and prorate gives one answer whether it rounds itself or a
+// round rounds it.
+func TestAProportionOfTheSmallestAmountIsReducedFirst(t *testing.T) {
+	t.Parallel()
+	args := map[string]any{"m": "USD -92233720368547758.08"}
+	for source, want := range map[string]string{
+		"prorate(USD 0.02, minor(m), 4, @down)":        "{USD -4611686018427387904}",
+		"round(prorate(USD 0.02, minor(m), 4), @down)": "{USD -4611686018427387904}",
+		"m / USD 0.02": "-4611686018427387904",
+	} {
+		value, err := evalMoney(t, source, "m: money", args)
+		if got := fmt.Sprint(value.Any()); err != nil || got != want {
+			t.Errorf("%s = %s, %v, want %s", source, got, err, want)
+		}
+	}
+}

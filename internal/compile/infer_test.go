@@ -235,3 +235,15 @@ func mustCompile(b *testing.B, source string, registry *machine.Registry) {
 		b.Fatal(err)
 	}
 }
+
+// A type error found once every choice is settled keeps the place it was
+// found at, and says so once: x.a is what has no known record type, not the
+// sum around it.
+func TestASettledTypeErrorKeepsItsPlace(t *testing.T) {
+	t.Parallel()
+	assertErrorCovers(t, "1 + x.a", CompileOptions{}, "x.a")
+	_, err := CompileExpr("1 + x.a", machine.CoreRegistry(), CompileOptions{})
+	if err == nil || strings.Count(err.Error(), "type error") != 1 {
+		t.Fatalf("CompileExpr(1 + x.a) error = %v, want one saying type error once", err)
+	}
+}

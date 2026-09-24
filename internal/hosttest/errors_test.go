@@ -64,6 +64,28 @@ func TestHostTellsArithmeticApart(t *testing.T) {
 	}
 }
 
+// Data a rule has no answer for — an index past the end — is ErrDomain, and
+// fallback does not take it: it is the rule's or the data's error, as
+// arithmetic with no answer is.
+func TestHostTellsDataWithNoAnswerApart(t *testing.T) {
+	t.Parallel()
+	registry := funroute.CoreRegistry()
+	artifact, err := funroute.CompileExpr("fallback(fees[i], 0)", registry, funroute.CompileOptions{Args: []funroute.ArgSpec{
+		{Name: "fees", Type: funroute.ArrayOf(funroute.IntType)}, {Name: "i", Type: funroute.IntType},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := funroute.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runtime.Run(t.Context(), map[string]any{"fees": []int64{30}, "i": 5}, funroute.RunOptions{})
+	if !errors.Is(err, funroute.ErrDomain) || errors.Is(err, funroute.ErrExtension) {
+		t.Fatalf("fallback(fees[5], 0) error = %v, want ErrDomain, not caught", err)
+	}
+}
+
 // A conversion whose using has no quote of the pair is ErrNoFxRate, and
 // fallback takes it: the rate is data not at hand, not a mistake.
 func TestHostTellsAMissingRateApart(t *testing.T) {

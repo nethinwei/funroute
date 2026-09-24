@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/nethinwei/funroute"
@@ -53,7 +54,7 @@ func sequenceSpecs() []funroute.FunctionSpec {
 		Label: "相邻差", Category: "数组", Cost: 6,
 		Description: "每一项与前一项的差，所以结果比输入少一个；一项或空数组得到空数组。与上一笔比较用它。",
 		Params:      []string{"数组"}, Result: "差值序列",
-	}, deltasOf[int64], deltasOf[float64])...)
+	}, deltasOf(subtractInts), deltasOf(subtractFloats))...)
 }
 
 func slidingWindows(_ context.Context, args []funroute.Value) (funroute.Value, error) {
@@ -69,7 +70,7 @@ func chunkItems(_ context.Context, args []funroute.Value) (funroute.Value, error
 func groupsOf(args []funroute.Value, name string, windows bool) (funroute.Value, error) {
 	size, _ := args[1].Int()
 	if size <= 0 {
-		return funroute.Value{}, fmt.Errorf("%s needs a size of at least one, got %d", name, size)
+		return funroute.Value{}, fmt.Errorf("%w: %s needs a size of at least one, got %d", funroute.ErrArithmetic, name, size)
 	}
 	items, width := itemsOf(args[0]), int(size)
 	stride, starts := width, len(items)
@@ -113,15 +114,32 @@ func distinct(args []funroute.Value, keepShared bool) (funroute.Value, error) {
 	return funroute.Array(elementType(args[0]), out)
 }
 
-func deltasOf[T int64 | float64](items []T) []T {
-	if len(items) < 2 {
-		return []T{}
+func deltasOf[T int64 | float64](subtract func(T, T) (T, error)) func([]T) ([]T, error) {
+	return func(items []T) ([]T, error) {
+		if len(items) < 2 {
+			return []T{}, nil
+		}
+		out := make([]T, len(items)-1)
+		for i := 1; i < len(items); i++ {
+			difference, err := subtract(items[i], items[i-1])
+			if err != nil {
+				return nil, err
+			}
+			out[i-1] = difference
+		}
+		return out, nil
 	}
-	out := make([]T, len(items)-1)
-	for i := 1; i < len(items); i++ {
-		out[i-1] = items[i] - items[i-1]
+}
+
+func subtractInts(left, right int64) (int64, error) {
+	if right < 0 && left > math.MaxInt64+right || right > 0 && left < math.MinInt64+right {
+		return 0, fmt.Errorf("%w: integer overflow in deltas", funroute.ErrArithmetic)
 	}
-	return out
+	return left - right, nil
+}
+
+func subtractFloats(left, right float64) (float64, error) {
+	return finiteIn("deltas", left-right)
 }
 
 // shapeSpecs are the array functions that are about the shape of a list
@@ -200,7 +218,7 @@ func sorter[T cmp.Ordered](descending bool) func([]T) []T {
 func firstItem(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	value, ok := args[0].At(0)
 	if !ok {
-		return funroute.Value{}, errors.New("first of an empty array")
+		return funroute.Value{}, fmt.Errorf("%w: first of an empty array", funroute.ErrDomain)
 	}
 	return value, nil
 }
@@ -209,7 +227,7 @@ func lastItem(_ context.Context, args []funroute.Value) (funroute.Value, error) 
 	length, _ := args[0].Length()
 	value, ok := args[0].At(length - 1)
 	if !ok {
-		return funroute.Value{}, errors.New("last of an empty array")
+		return funroute.Value{}, fmt.Errorf("%w: last of an empty array", funroute.ErrDomain)
 	}
 	return value, nil
 }
@@ -221,7 +239,7 @@ func sliceItems(_ context.Context, args []funroute.Value) (funroute.Value, error
 		return part, nil
 	}
 	length, _ := args[0].Length()
-	return funroute.Value{}, fmt.Errorf("slice [%d, %d) is outside an array of %d items", start, end, length)
+	return funroute.Value{}, fmt.Errorf("%w: slice [%d, %d) is outside an array of %d items", funroute.ErrDomain, start, end, length)
 }
 
 func takeItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
@@ -233,7 +251,7 @@ func takeItems(_ context.Context, args []funroute.Value) (funroute.Value, error)
 // a negative count is an error, in the caller's words.
 func takeFirst(array funroute.Value, count int64, negative string) (funroute.Value, error) {
 	if count < 0 {
-		return funroute.Value{}, fmt.Errorf(negative, count)
+		return funroute.Value{}, fmt.Errorf("%w: "+negative, funroute.ErrArithmetic, count)
 	}
 	length, _ := array.Length()
 	if first, ok := array.Slice(0, int(min(count, int64(length)))); ok {

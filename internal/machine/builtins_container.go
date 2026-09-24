@@ -3,9 +3,10 @@ package machine
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // The container half of the kernel's functions — the rest of CoreRegistry is in
@@ -100,7 +101,7 @@ func registerLength(registry *Registry, t Type) {
 func evalArrayAt(_ context.Context, args []Value) (Value, error) {
 	index, length := args[1].i, int64(args[0].length())
 	if index < 0 || index >= length {
-		return Value{}, fmt.Errorf("index %d is outside an array of %d items", index, length)
+		return Value{}, kit.Errorf(ErrDomain, "index %d is outside an array of %d items", index, length)
 	}
 	return args[0].at(int(index)), nil
 }
@@ -108,14 +109,15 @@ func evalArrayAt(_ context.Context, args []Value) (Value, error) {
 func evalDictAt(_ context.Context, args []Value) (Value, error) {
 	value, ok := args[0].lookup(args[1].s)
 	if !ok {
-		return Value{}, fmt.Errorf("the dictionary has no key %q", args[1].s)
+		return Value{}, kit.Errorf(ErrDomain, "the dictionary has no key %q", args[1].s)
 	}
 	return value, nil
 }
 
 // evalStringAt counts in code points, the same unit len(string) reports, and
 // walks to the index instead of building a []rune: taking one character out of
-// a card number should not copy the card number.
+// a card number should not copy the card number. The character is the bytes
+// the text has there, so a byte that is not UTF-8 comes out as itself.
 func evalStringAt(_ context.Context, args []Value) (Value, error) {
 	text, index := args[0].s, args[1].i
 	rest := text
@@ -123,11 +125,11 @@ func evalStringAt(_ context.Context, args []Value) (Value, error) {
 		_, size := utf8.DecodeRuneInString(rest)
 		rest = rest[size:]
 	}
-	character, size := utf8.DecodeRuneInString(rest)
+	_, size := utf8.DecodeRuneInString(rest)
 	if index < 0 || size == 0 {
-		return Value{}, fmt.Errorf("index %d is outside a string of %d characters", index, utf8.RuneCountInString(text))
+		return Value{}, kit.Errorf(ErrDomain, "index %d is outside a string of %d characters", index, utf8.RuneCountInString(text))
 	}
-	return String(string(character)), nil
+	return String(rest[:size]), nil
 }
 
 func evalStringMember(_ context.Context, args []Value) (Value, error) {

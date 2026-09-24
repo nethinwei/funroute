@@ -61,3 +61,15 @@ test("a slot shows its lines without the indentation of where they sit, and puts
   assert.equal(indent(dedent(source, shared), shared), source);
   assert.equal(commonIndent("a + b"), "");
 });
+
+// What the lines share is a prefix of every one of them, and a line of
+// blanks is left alone, so a slot's text comes back as it was whatever the
+// indentation is made of.
+test("dedent and indent undo each other", () => {
+  for (const source of ["f(a,\n\tb,\n  c)", "f(a,\n \n    b)", "f(a,\n\n  b,\n  c)", "{\n    x,\n  \t y\n  }"]) {
+    assert.equal(indent(dedent(source, commonIndent(source)), commonIndent(source)), source, JSON.stringify(source));
+  }
+  assert.equal(commonIndent("f(a,\n\tb,\n  c)"), "");
+  assert.equal(commonIndent("{\n    x,\n  \t y\n  }"), "  ");
+});
+

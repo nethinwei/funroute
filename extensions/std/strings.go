@@ -1,9 +1,9 @@
 package std
 
 import (
-	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/nethinwei/funroute"
@@ -20,8 +20,8 @@ func caseSpecs() []funroute.FunctionSpec {
 		name, label, description, param, result string
 		apply                                   func(string) string
 	}{
-		{"upper", "转大写", "把字符串转成大写。", "文本", "大写文本", strings.ToUpper},
-		{"lower", "转小写", "把字符串转成小写。", "文本", "小写文本", strings.ToLower},
+		{"upper", "转大写", "把字符串转成大写。", "文本", "大写文本", keepingBytes(strings.ToUpper, unicode.ToUpper)},
+		{"lower", "转小写", "把字符串转成小写。", "文本", "小写文本", keepingBytes(strings.ToLower, unicode.ToLower)},
 		{"trim", "去空白", "去掉字符串两端的空白字符。", "文本", "去掉空白的文本", strings.TrimSpace},
 	} {
 		doc := funroute.Doc{
@@ -34,6 +34,28 @@ func caseSpecs() []funroute.FunctionSpec {
 		}))
 	}
 	return specs
+}
+
+// keepingBytes is whole, a case mapping, for text that is UTF-8, and for
+// text that is not, each character mapped by to with every byte that is no
+// character kept as it is: strings.ToUpper would write U+FFFD for them, and
+// changing a text's case should not change its other bytes.
+func keepingBytes(whole func(string) string, to func(rune) rune) func(string) string {
+	return func(text string) string {
+		if utf8.ValidString(text) {
+			return whole(text)
+		}
+		var out strings.Builder
+		out.Grow(len(text))
+		for i, r := range text {
+			if _, size := utf8.DecodeRuneInString(text[i:]); r == utf8.RuneError && size == 1 {
+				out.WriteByte(text[i])
+				continue
+			}
+			out.WriteRune(to(r))
+		}
+		return out.String()
+	}
 }
 
 func testSpecs() []funroute.FunctionSpec {
@@ -123,10 +145,10 @@ const maxPadWidth = 10_000
 
 func padTo(text string, width int64, fill string, left bool) (string, error) {
 	if utf8.RuneCountInString(fill) != 1 {
-		return "", fmt.Errorf("the padding must be exactly one character, got %q", fill)
+		return "", fmt.Errorf("%w: the padding must be exactly one character, got %q", funroute.ErrDomain, fill)
 	}
 	if width < 0 || width > maxPadWidth {
-		return "", fmt.Errorf("a width is 0 to %d characters, got %d", maxPadWidth, width)
+		return "", fmt.Errorf("%w: a width is 0 to %d characters, got %d", funroute.ErrArithmetic, maxPadWidth, width)
 	}
 	missing := int(width) - utf8.RuneCountInString(text)
 	if missing <= 0 {
@@ -139,18 +161,30 @@ func padTo(text string, width int64, fill string, left bool) (string, error) {
 	return text + padding, nil
 }
 
+// sliceString cuts the text itself at the characters' bytes, so a byte that
+// is not UTF-8 is kept as it is, and nothing is copied.
 func sliceString(text string, start, end int64) (string, error) {
-	runes := []rune(text)
-	length := int64(len(runes))
+	length := int64(utf8.RuneCountInString(text))
 	if start < 0 || end < start || end > length {
-		return "", fmt.Errorf("slice [%d, %d) is outside a string of %d characters", start, end, length)
+		return "", fmt.Errorf("%w: slice [%d, %d) is outside a string of %d characters", funroute.ErrDomain, start, end, length)
 	}
-	return string(runes[start:end]), nil
+	return text[byteOf(text, start):byteOf(text, end)], nil
+}
+
+// byteOf is where character n of text starts, len(text) past its last.
+func byteOf(text string, n int64) int {
+	for i := range text {
+		if n == 0 {
+			return i
+		}
+		n--
+	}
+	return len(text)
 }
 
 func splitString(text, separator string) ([]string, error) {
 	if separator == "" {
-		return nil, errors.New("split needs a separator")
+		return nil, fmt.Errorf("%w: split needs a separator", funroute.ErrDomain)
 	}
 	return strings.Split(text, separator), nil
 }

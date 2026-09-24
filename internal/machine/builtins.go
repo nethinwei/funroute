@@ -272,7 +272,7 @@ func registerBoolConversions(registry *Registry) {
 		case "false":
 			return Bool(false), nil
 		default:
-			return Value{}, fmt.Errorf("cannot convert %q to bool", args[0].s)
+			return Value{}, kit.Errorf(ErrArithmetic, "cannot convert %q to bool", args[0].s)
 		}
 	})
 }

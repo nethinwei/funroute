@@ -18,10 +18,25 @@ import (
 type vstate struct {
 	stack []Type
 	// locals is each slot's type while it is bound, nil while it is not.
-	locals    []*Type
-	loops     []vloop
-	fallbacks int
+	locals []*Type
+	loops  []vloop
+	// fallbacks is every fallback the walk is inside, innermost last.
+	fallbacks []vfallback
 	scopes    int
+}
+
+// vfallback is what a fallback's handler is entered with: the state at its
+// begin_fallback, since a failure cuts the stack, the loops and the usings
+// back to how they were there. That holds only if the candidate leaves what
+// was there alone: it pops nothing under the stack it began on, rebinds no
+// local that was bound, and closes no loop or using it did not open.
+type vfallback struct {
+	depth, loops, scopes int
+	bound                []bool
+}
+
+func (f vfallback) same(other vfallback) bool {
+	return f.depth == other.depth && f.loops == other.loops && f.scopes == other.scopes
 }
 
 // vloop is a loop the walk is inside: its loop_init's type and slots.
@@ -36,7 +51,7 @@ func (l vloop) same(other vloop) bool {
 }
 
 func (s *vstate) clone() *vstate {
-	return &vstate{stack: slices.Clone(s.stack), locals: slices.Clone(s.locals), loops: slices.Clone(s.loops), fallbacks: s.fallbacks, scopes: s.scopes}
+	return &vstate{stack: slices.Clone(s.stack), locals: slices.Clone(s.locals), loops: slices.Clone(s.loops), fallbacks: slices.Clone(s.fallbacks), scopes: s.scopes}
 }
 
 func (s *vstate) push(typ Type) { s.stack = append(s.stack, typ) }
@@ -45,6 +60,9 @@ func (s *vstate) push(typ Type) { s.stack = append(s.stack, typ) }
 func (s *vstate) pop(n int) ([]Type, error) {
 	if n < 0 || len(s.stack) < n {
 		return nil, fmt.Errorf("needs %d values, has %d", n, len(s.stack))
+	}
+	if guard, inside := s.fallback(); inside && len(s.stack)-n < guard.depth {
+		return nil, errors.New("a fallback's candidate takes a value from under it")
 	}
 	out := slices.Clone(s.stack[len(s.stack)-n:])
 	s.stack = s.stack[:len(s.stack)-n]
@@ -63,7 +81,25 @@ func (s *vstate) pop1(want *Type) (Type, error) {
 	return types[0], nil
 }
 
-func (s *vstate) bind(slot int, typ Type) { s.locals[slot] = &typ }
+// bind binds a local slot. One a fallback's handler reads is not rebound
+// inside its candidate.
+func (s *vstate) bind(slot int, typ Type) error {
+	for _, guard := range s.fallbacks {
+		if guard.bound[slot] {
+			return fmt.Errorf("a fallback's candidate rebinds local %d", slot)
+		}
+	}
+	s.locals[slot] = &typ
+	return nil
+}
+
+// fallback is the innermost fallback the walk is inside, if any.
+func (s *vstate) fallback() (vfallback, bool) {
+	if len(s.fallbacks) == 0 {
+		return vfallback{}, false
+	}
+	return s.fallbacks[len(s.fallbacks)-1], true
+}
 
 // edge is a path out of an instruction: where it goes, in which state.
 type edge struct {
@@ -114,7 +150,7 @@ func (v *verifier) merge(next edge) error {
 		return nil
 	}
 	if !slices.EqualFunc(known.stack, next.state.stack, Type.Equal) || !slices.EqualFunc(known.loops, next.state.loops, vloop.same) ||
-		known.fallbacks != next.state.fallbacks || known.scopes != next.state.scopes {
+		!slices.EqualFunc(known.fallbacks, next.state.fallbacks, vfallback.same) || known.scopes != next.state.scopes {
 		return errors.New("paths meet with different stacks")
 	}
 	changed := false
@@ -146,7 +182,11 @@ func (v *verifier) step(pc int, s *vstate) ([]edge, error) {
 		return []edge{{pc + 1, s}, {in.A, s.clone()}}, nil
 	case OpBeginFallback:
 		handler := s.clone()
-		s.fallbacks++
+		bound := make([]bool, len(s.locals))
+		for slot, typ := range s.locals {
+			bound[slot] = typ != nil
+		}
+		s.fallbacks = append(s.fallbacks, vfallback{depth: len(s.stack), loops: len(s.loops), scopes: s.scopes, bound: bound})
 		return []edge{{pc + 1, s}, {in.A, handler}}, nil
 	case OpLoopInit:
 		return v.loopInit(pc, in, s)
@@ -158,7 +198,7 @@ func (v *verifier) step(pc int, s *vstate) ([]edge, error) {
 
 // finish holds the end of the program: its result, and nothing open.
 func (v *verifier) finish(s *vstate) error {
-	if len(s.stack) != 1 || !s.stack[0].Equal(v.artifact.parts.Result) || len(s.loops) > 0 || s.fallbacks > 0 || s.scopes > 0 {
+	if len(s.stack) != 1 || !s.stack[0].Equal(v.artifact.parts.Result) || len(s.loops) > 0 || len(s.fallbacks) > 0 || s.scopes > 0 {
 		return fmt.Errorf("the program ends with %d values, want its %s alone", len(s.stack), v.artifact.parts.Result.Summary())
 	}
 	return nil
@@ -178,8 +218,10 @@ func (v *verifier) straight(in Instruction, s *vstate) error {
 		s.push(*s.locals[in.A])
 	case OpStoreLocal:
 		typ, err := s.pop1(nil)
-		s.bind(in.A, typ)
-		return err
+		if err != nil {
+			return err
+		}
+		return s.bind(in.A, typ)
 	case OpMakeArray, OpMakeDict, OpMakeRecord:
 		return v.make(in, s)
 	case OpField:
@@ -205,14 +247,15 @@ func (v *verifier) scoped(in Instruction, s *vstate) error {
 	case OpLoopSpread:
 		return v.loopSpread(in, s)
 	case OpEndFallback:
-		if s.fallbacks == 0 {
-			return errors.New("end_fallback without a fallback")
+		guard, inside := s.fallback()
+		if !inside || len(s.stack) != guard.depth+1 {
+			return errors.New("end_fallback without a fallback that made one value")
 		}
-		s.fallbacks--
+		s.fallbacks = s.fallbacks[:len(s.fallbacks)-1]
 	case OpFxPush:
 		return v.fxPush(in, s)
 	case OpFxPop:
-		if s.scopes == 0 {
+		if guard, inside := s.fallback(); s.scopes == 0 || inside && s.scopes == guard.scopes {
 			return errors.New("fx_pop without a using")
 		}
 		s.scopes--
@@ -327,15 +370,28 @@ func (v *verifier) loopInit(pc int, in Instruction, s *vstate) ([]edge, error) {
 	}
 	past := s.clone()
 	past.push(*in.Type)
-	s.bind(in.B, *source.elem)
-	if in.D != NoKey {
-		s.bind(in.D, StringType)
-	}
-	if loop.folds {
-		s.bind(in.C, *in.Type)
+	if err := v.bindLoop(in, s, *source.elem); err != nil {
+		return nil, err
 	}
 	s.loops = append(s.loops, loop)
 	return []edge{{pc + 1, s}, {in.A, past}}, nil
+}
+
+// bindLoop binds a loop's names: the item, the key of a dictionary's entry
+// and a fold's accumulator.
+func (v *verifier) bindLoop(in Instruction, s *vstate, item Type) error {
+	if err := s.bind(in.B, item); err != nil {
+		return err
+	}
+	if in.D != NoKey {
+		if err := s.bind(in.D, StringType); err != nil {
+			return err
+		}
+	}
+	if in.C != NoAccumulator {
+		return s.bind(in.C, *in.Type)
+	}
+	return nil
 }
 
 // loopKind is the kind a loop's source is: a dictionary when the loop binds
@@ -400,6 +456,9 @@ func (v *verifier) loopNext(pc int, in Instruction, s *vstate) ([]edge, error) {
 	}
 	if !in.Type.Equal(loop.result) {
 		return nil, fmt.Errorf("the loop is %s, loop_next says %s", loop.result.Summary(), in.Type.Summary())
+	}
+	if guard, inside := s.fallback(); inside && len(s.loops) == guard.loops {
+		return nil, errors.New("a fallback's candidate ends a loop it is inside")
 	}
 	past := s.clone()
 	past.loops = past.loops[:len(past.loops)-1]

@@ -210,6 +210,18 @@ func decodeDocument(data []byte) (exprJSONDocument, error) {
 	return document, nil
 }
 
+// errTooDeep is a document nested past maxNesting.
+var errTooDeep = fmt.Errorf("expression JSON nests deeper than %d levels", maxNesting)
+
+// within says where in its parent a child's error happened. The nesting
+// error is said once, not once for every level above where it happened.
+func within(err error, format string, args ...any) error {
+	if errors.Is(err, errTooDeep) {
+		return err
+	}
+	return fmt.Errorf(format+": %w", append(args, err)...)
+}
+
 type importer struct {
 	nextID int
 	depth  int // how many nodes the importer is inside, held to maxNesting
@@ -244,7 +256,7 @@ func decodeObject(value any) (object, error) {
 
 func (m *importer) node(value any) (Expr, error) {
 	if m.depth == maxNesting {
-		return nil, fmt.Errorf("expression JSON nests deeper than %d levels", maxNesting)
+		return nil, errTooDeep
 	}
 	m.depth++
 	defer func() { m.depth-- }()
@@ -337,7 +349,7 @@ func (m *importer) fill(target reflect.Value, fields object, plan *structPlan, c
 			return fmt.Errorf("%s node is missing %s", context, field.name)
 		}
 		if err := m.setField(target.Field(field.index), raw, field); err != nil {
-			return fmt.Errorf("%s %s: %w", context, field.name, err)
+			return within(err, "%s %s", context, field.name)
 		}
 	}
 	if err := fields.unknown(); err != nil {
@@ -429,7 +441,7 @@ func (m *importer) setList(target reflect.Value, raw any, field fieldPlan) error
 func (m *importer) setItem(slot reflect.Value, raw any, field fieldPlan, index int) error {
 	if field.kind == fieldExprs {
 		if err := m.setExpr(slot, raw); err != nil {
-			return fmt.Errorf("item %d: %w", index, err)
+			return within(err, "item %d", index)
 		}
 		return nil
 	}

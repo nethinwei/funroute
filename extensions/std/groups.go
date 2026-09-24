@@ -38,7 +38,7 @@ func groupSpecs() []funroute.FunctionSpec {
 func groupByKeys(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	items, keys := itemsOf(args[0]), itemsOf(args[1])
 	if len(items) != len(keys) {
-		return funroute.Value{}, fmt.Errorf("group_by has %d values and %d keys", len(items), len(keys))
+		return funroute.Value{}, fmt.Errorf("%w: group_by has %d values and %d keys", funroute.ErrDomain, len(items), len(keys))
 	}
 	grouped := map[string][]funroute.Value{}
 	var order []string

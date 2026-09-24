@@ -1,6 +1,9 @@
 package std_test
 
 import (
+	"errors"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -93,19 +96,86 @@ func TestPackIsConstexpr(t *testing.T) {
 	}
 }
 
-// Out-of-range and empty cases are errors, not quiet answers.
+// Out-of-range and empty cases are errors, not quiet answers, and the
+// rule's or the data's own: data with no answer is ErrDomain, a number out
+// of its range ErrArithmetic, and fallback takes neither. The arguments make
+// each one fail at run time, not while compiling.
 func TestPackRefusesWhatHasNoAnswer(t *testing.T) {
 	t.Parallel()
-	for _, source := range []string{
-		`slice("abc", 0, 9)`,
-		`first([n for n in [1] if n > 9])`,
-		`split("a,b", "")`,
-		`take([1, 2], 0 - 1)`,
+	xs := funroute.ArgSpec{Name: "xs", Type: funroute.ArrayOf(funroute.IntType)}
+	n := funroute.ArgSpec{Name: "n", Type: funroute.IntType}
+	s := funroute.ArgSpec{Name: "s", Type: funroute.StringType}
+	input := map[string]any{"xs": []int64{}, "n": -1, "s": "abc"}
+	for source, want := range map[string]error{
+		`fallback(slice(s, 0, 9), "x")`:               funroute.ErrDomain,
+		`fallback(first(xs), 7)`:                      funroute.ErrDomain,
+		`fallback(avg(xs), 7.0)`:                      funroute.ErrDomain,
+		`fallback(arg_min(xs), 7)`:                    funroute.ErrDomain,
+		`fallback(index_of(xs, 1), 7)`:                funroute.ErrDomain,
+		`fallback(len(sort_by([1, 2], xs)), 7)`:       funroute.ErrDomain,
+		`fallback(len(split(s, slice(s, 0, 0))), 7)`:  funroute.ErrDomain,
+		`fallback(len(take([1, 2], n)), 7)`:           funroute.ErrArithmetic,
+		`fallback(len(windows([1, 2], n)), 7)`:        funroute.ErrArithmetic,
+		`fallback(percentile([1, 2], float(n)), 7.0)`: funroute.ErrArithmetic,
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
-			if _, err := run(t, source, nil); err == nil {
-				t.Fatalf("%s must fail", source)
+			if value, err := run(t, source, input, xs, n, s); !errors.Is(err, want) {
+				t.Fatalf("%s = %v, %v, want %v", source, value, err, want)
+			}
+		})
+	}
+}
+
+// Arithmetic with no answer — an overflow, a float past its range, an int no
+// float fits — is ErrArithmetic wherever it happens, so fallback does not
+// take it: the arguments make each one fail at run time, not while compiling.
+func TestArithmeticWithNoAnswerIsNotTakenByFallback(t *testing.T) {
+	t.Parallel()
+	ints := funroute.ArgSpec{Name: "xs", Type: funroute.ArrayOf(funroute.IntType)}
+	floats := funroute.ArgSpec{Name: "fs", Type: funroute.ArrayOf(funroute.FloatType)}
+	x := funroute.ArgSpec{Name: "x", Type: funroute.IntType}
+	f := funroute.ArgSpec{Name: "f", Type: funroute.FloatType}
+	huge := map[string]any{"fs": []float64{1e308, 1e308}}
+	apart := map[string]any{"fs": []float64{1e308, -1e308}}
+	for _, test := range []struct {
+		source string
+		args   map[string]any
+		spec   funroute.ArgSpec
+	}{
+		{`fallback(abs(x), 7)`, map[string]any{"x": int64(math.MinInt64)}, x},
+		{`fallback(pow(x, 0 - 1), 7)`, map[string]any{"x": 2}, x},
+		{`fallback(pow(f, 2.0), 7.0)`, map[string]any{"f": 1e200}, f},
+		{`fallback(round(f), 7)`, map[string]any{"f": 1e300}, f},
+		{`fallback(avg(fs), 7.0)`, huge, floats},
+		{`fallback(median(fs), 7.0)`, huge, floats},
+		{`fallback(stddev(fs), 7.0)`, apart, floats},
+		{`fallback(deltas(fs), [7.0])`, apart, floats},
+		{`fallback(deltas(xs), [7])`, map[string]any{"xs": []int64{math.MaxInt64, -2}}, ints},
+		{`fallback(bool(s), false)`, map[string]any{"s": "yes"}, funroute.ArgSpec{Name: "s", Type: funroute.StringType}},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			value, err := run(t, test.source, test.args, test.spec)
+			if !errors.Is(err, funroute.ErrArithmetic) {
+				t.Fatalf("%s with %v = %v, %v, want ErrArithmetic", test.source, test.args, value, err)
+			}
+		})
+	}
+}
+
+// A range stops where int64 does: the value after the last one is past stop.
+func TestARangeEndsAtTheEdgeOfInt(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		`range(9223372036854775806, 9223372036854775807, 10)`:                 "[9223372036854775806]",
+		`range(0 - 9223372036854775807, 0 - 9223372036854775807 - 1, 0 - 10)`: "[-9223372036854775807]",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			value, err := run(t, source, nil)
+			if got := fmt.Sprint(value); err != nil || got != want {
+				t.Fatalf("%s = %s, %v, want %s", source, got, err, want)
 			}
 		})
 	}

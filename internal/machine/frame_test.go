@@ -37,6 +37,50 @@ func TestFallbackCatchesOnlyExtensionAndDeadline(t *testing.T) {
 	}
 }
 
+// Every error a run meets has a class, and data the program has no answer
+// for is the program's own, which fallback does not take: an index past the
+// end, a missing key, a key a comprehension makes twice. A stack past
+// MaxStack is a budget run out, as fuel is.
+func TestARunsOwnErrorsHaveAClassFallbackDoesNotTake(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	args := []compile.ArgSpec{
+		{Name: "xs", Type: machine.ArrayOf(machine.IntType)}, {Name: "d", Type: machine.DictOf(machine.IntType)},
+		{Name: "s", Type: machine.StringType},
+	}
+	input := map[string]any{"xs": []int64{1, 2}, "d": map[string]int64{"a": 1}, "s": "ab"}
+	for _, test := range []struct {
+		source string
+		stack  int
+		want   error
+	}{
+		{`fallback(xs[9], 7)`, 0, machine.ErrDomain},
+		{`fallback(d["z"], 7)`, 0, machine.ErrDomain},
+		{`fallback(len(s[9]), 7)`, 0, machine.ErrDomain},
+		{`fallback(len({"k": x for x in xs}), 7)`, 0, machine.ErrDomain},
+		{`len([xs[0], xs[0], xs[0], xs[0]])`, 2, machine.ErrFuel},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			artifact, err := compile.CompileExpr(test.source, registry, compile.CompileOptions{Args: args})
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime, err := machine.Instantiate(artifact, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value, err := runtime.Run(t.Context(), input, machine.RunOptions{Fuel: 1000, MaxStack: test.stack})
+			if !errors.Is(err, test.want) || machine.ClassName(err) == "" {
+				t.Fatalf("%s = %v, %v, want %v", test.source, value.Any(), err, test.want)
+			}
+		})
+	}
+}
+
 // assertFallsBackTo runs source in a synctest bubble, so a candidate that
 // times out does so on the fake clock.
 func assertFallsBackTo(t *testing.T, registry *machine.Registry, source string, want int64) {

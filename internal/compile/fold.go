@@ -137,7 +137,7 @@ func (c *bytecodeCompiler) constantExpr(expr syntax.Expr) bool {
 		return false
 	}
 	for _, name := range syntax.FreeVariables(expr) {
-		if _, folded := c.constIndex.top(name); !folded {
+		if !c.foldedName(name) {
 			return false
 		}
 	}
@@ -183,11 +183,12 @@ func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (machine.Value, bool, erro
 func (c *bytecodeCompiler) compileNested(expr syntax.Expr) (*bytecodeCompiler, bool) {
 	sub := newBytecodeCompiler(c.registry, c.inferred)
 	sub.folding = true
-	// The nested compiler inherits the constant pool and the constant bindings,
+	// The nested compiler inherits the constant pool and the names in scope,
 	// so a name that already folded resolves to its value here too — and the
-	// round(…) it sits in.
+	// round(…) it sits in. Only a closed expression gets here, so every free
+	// name it reads is a constant; the local slots it binds are its own.
 	sub.constants = c.constants
-	sub.constIndex = c.constIndex
+	sub.names = c.names
 	sub.readsArgument = c.readsArgument
 	sub.inRound = c.inRound
 	return sub, sub.compile(expr) == nil

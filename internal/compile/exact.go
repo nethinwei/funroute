@@ -59,9 +59,13 @@ func (w exactness) of(expr syntax.Expr) (bool, error) {
 		}
 		return w.of(node.Body)
 	case *syntax.ForExpr:
-		return false, w.scoped([]string{node.Variable, node.KeyVariable}, expr, "a comprehension")
+		return false, w.loop([]syntax.Expr{node.Source}, []string{node.Variable, node.KeyVariable}, "a comprehension", node.Where, node.YieldKey, node.Yield)
 	case *syntax.ReduceExpr:
-		return false, w.scoped([]string{node.Variable, node.KeyVariable, node.Accumulator}, expr, "a reduce")
+		// The accumulator is bound in the body alone.
+		if err := w.loop([]syntax.Expr{node.Source, node.Init}, []string{node.Variable, node.KeyVariable}, "a reduce", node.Where); err != nil {
+			return false, err
+		}
+		return false, w.loop(nil, []string{node.Variable, node.KeyVariable, node.Accumulator}, "a reduce", node.Body)
 	}
 	return false, w.children(expr, containerName(expr))
 }
@@ -71,9 +75,13 @@ func (w exactness) children(expr syntax.Expr, where string) error {
 	return w.plainAll(syntax.Children(expr), where)
 }
 
-// plainAll requires every one of exprs to be plain.
+// plainAll requires every one of exprs to be plain; a nil one is a part the
+// node does not have.
 func (w exactness) plainAll(exprs []syntax.Expr, where string) error {
 	for _, expr := range exprs {
+		if expr == nil {
+			continue
+		}
 		if err := w.plain(expr, where); err != nil {
 			return err
 		}
@@ -81,16 +89,20 @@ func (w exactness) plainAll(exprs []syntax.Expr, where string) error {
 	return nil
 }
 
-// scoped is children for a loop, whose names hold no exact money however a
-// let outside it binds them.
-func (w exactness) scoped(names []string, expr syntax.Expr, where string) error {
+// loop requires the parts of a loop to be plain: outside, the ones the loop
+// reads before it binds anything, then inside, the ones it runs with names
+// bound — names that hold no exact money however a let outside binds them.
+func (w exactness) loop(outside []syntax.Expr, names []string, where string, inside ...syntax.Expr) error {
+	if err := w.plainAll(outside, where); err != nil {
+		return err
+	}
 	for _, name := range names {
 		if name != "" {
 			w.locals.push(name, false)
 			defer w.locals.pop(name)
 		}
 	}
-	return w.children(expr, where)
+	return w.plainAll(inside, where)
 }
 
 func (w exactness) let(node *syntax.LetExpr) (bool, error) {

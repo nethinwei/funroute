@@ -10,10 +10,11 @@ import (
 // The errors a host tells apart. A caller uses errors.Is and never parses a
 // message: malformed source, a contract violation, a rule that reached its
 // fuel limit, a request that ran out of time, an extension that failed, two
-// currencies meeting where one is required, and arithmetic with no answer
-// are seven different things to report or monitor. fallback catches only the
-// deadline and the extension, never a program's own limits, authoring errors,
-// currency mismatches or arithmetic failures.
+// currencies meeting where one is required, arithmetic with no answer and
+// data with no answer are different things to report or monitor. fallback
+// catches only data not at hand — the deadline, the extension, the missing
+// rate — never a program's own limits, authoring errors, currency
+// mismatches, or an arithmetic or a data failure.
 var (
 	ErrCompile   = errors.New("expression compilation failed")
 	ErrContract  = errors.New("runtime contract failed")
@@ -34,6 +35,12 @@ var (
 	// ErrNoFxRate is a conversion whose using has no quote of the pair:
 	// data not at hand, which fallback takes.
 	ErrNoFxRate = money.ErrNoFxRate
+	// ErrDomain is data an operation has no answer for: an index past the
+	// end, a key the dictionary does not have, the first of an empty array,
+	// two arrays that were to line up and do not, a key a comprehension
+	// makes twice. Like arithmetic with no answer it is the rule's or the
+	// data's, wherever it happens, and fallback does not take it.
+	ErrDomain = money.ErrDomain
 )
 
 // errorClass is one class an error can have: its sentinel, the name a
@@ -52,6 +59,7 @@ var errorClasses = []errorClass{
 	{ErrNoFxRate, "nofxrate", true},
 	{ErrCurrency, "currency", false},
 	{ErrArithmetic, "arithmetic", false},
+	{ErrDomain, "domain", false},
 	{ErrContract, "contract", false},
 	{ErrCompile, "compile", false},
 	{ErrFuel, "fuel", false},

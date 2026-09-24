@@ -7,7 +7,7 @@ import (
 
 // The errors of money, which the machine reports as its own: a currency
 // where another is required or one not declared, arithmetic with no answer,
-// and an exchange rate not at hand.
+// data with no answer, and an exchange rate not at hand.
 var (
 	// ErrCurrency is money meeting money of another currency where one is
 	// required, or a currency the table does not declare.
@@ -19,6 +19,9 @@ var (
 	// has no quote between the two currencies, either way. It is data not
 	// yet at hand, like a failed extension, so fallback takes it.
 	ErrNoFxRate = errors.New("no exchange rate")
+	// ErrDomain is data an operation has no answer for: the average of no
+	// amounts, an index past the end, a key a dictionary does not have.
+	ErrDomain = errors.New("no answer for the data")
 )
 
 // errDivisionByZero is every division by zero money refuses.

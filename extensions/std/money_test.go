@@ -204,7 +204,7 @@ func TestEmptyMoneyLists(t *testing.T) {
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
-			expectMoneyError(t, source, empty, funroute.ErrExtension, unknownFees, anyAmount, candidates)
+			expectMoneyError(t, source, empty, funroute.ErrDomain, unknownFees, anyAmount, candidates)
 		})
 	}
 }
@@ -444,7 +444,7 @@ func TestMoneyKeysSelectCandidates(t *testing.T) {
 		t.Run("报错 "+source, func(t *testing.T) {
 			t.Parallel()
 			for _, args := range []map[string]any{short, long} {
-				expectMoneyError(t, source, args, funroute.ErrExtension, candidates, unknownFees)
+				expectMoneyError(t, source, args, funroute.ErrDomain, candidates, unknownFees)
 			}
 		})
 	}

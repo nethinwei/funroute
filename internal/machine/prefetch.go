@@ -5,7 +5,8 @@ package machine
 // the bytecode has to prove three things about the call:
 //
 //   - its arguments are program arguments or constants, so they are known
-//     before the program runs;
+//     before the program runs, and no branch put them there — the call after
+//     if(c, a, b) is reached from both, but its argument is a or b;
 //   - it is not inside a loop, so it runs at most once;
 //   - no conditional jump can skip it, so it runs at least once — the lazy
 //     branches of if and switch stay lazy.
@@ -39,7 +40,7 @@ func PrefetchSites(artifact *Artifact) []PrefetchSite {
 		if instruction.Op != OpCall || guarded[pc] {
 			continue
 		}
-		operands, ok := callOperands(artifact.parts.Instructions, pc, instruction.B)
+		operands, ok := callOperands(artifact.parts.Instructions, guarded, pc, instruction.B)
 		if !ok {
 			continue
 		}
@@ -70,8 +71,10 @@ func markRange(guarded []bool, from, to int) {
 
 // callOperands reads the count instructions before a call, which on a stack
 // machine are exactly its arguments, and accepts them only when each is an
-// argument load or a constant.
-func callOperands(code []Instruction, pc, count int) ([]Operand, bool) {
+// argument load or a constant that every path to the call runs. A call no
+// jump skips whose operand one does is where branches meet: the operand is
+// the last of one branch, and the others push something else.
+func callOperands(code []Instruction, guarded []bool, pc, count int) ([]Operand, bool) {
 	// A call the compiler put currency checks before is not hoisted: a Batch
 	// would hand the engine operands in currencies the checks would refuse.
 	if count > pc {
@@ -79,6 +82,9 @@ func callOperands(code []Instruction, pc, count int) ([]Operand, bool) {
 	}
 	operands := make([]Operand, count)
 	for i := range operands {
+		if guarded[pc-count+i] {
+			return nil, false
+		}
 		instruction := code[pc-count+i]
 		switch instruction.Op {
 		case OpLoadArg:

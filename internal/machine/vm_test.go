@@ -3,6 +3,7 @@ package machine_test
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
@@ -340,5 +341,19 @@ func TestInstantiateRefusesForgedMoneyConstants(t *testing.T) {
 	}
 	if err := forgedLoad(t, "a + USD 0.05", "a: money", func(*machine.ArtifactParts) {}); err != nil {
 		t.Fatalf("Instantiate of an honest artifact = %v", err)
+	}
+}
+
+// Every type an instruction carries is whole: an array with no element type
+// is refused when the artifact loads, not met as a nil when it is walked.
+func TestLoadingRefusesATypeWithAPartMissing(t *testing.T) {
+	t.Parallel()
+	var partial machine.Type
+	if err := json.Unmarshal([]byte(`{"kind":"array"}`), &partial); err != nil {
+		t.Fatal(err)
+	}
+	err := forgedLoad(t, "[a]", "a: int", func(p *machine.ArtifactParts) { op(t, p, machine.OpMakeArray).Type = &partial })
+	if err == nil || !strings.Contains(err.Error(), "not concrete") {
+		t.Fatalf("Instantiate of an array with no element type = %v, want it refused", err)
 	}
 }

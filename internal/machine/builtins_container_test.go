@@ -38,6 +38,7 @@ func TestStringIsAContainerLikeTheOthers(t *testing.T) {
 		{"取字符", `card[0]`, "card", "4111111111111111", "4"},
 		{"按码点而不是字节", `note[1]`, "note", "银行卡", "行"},
 		{"长度也按码点", `len(note)`, "note", "银行卡", int64(3)},
+		{"不是 UTF-8 的字节原样取出", `note[1]`, "note", "1\xff", "\xff"},
 		{"含子串", `"timeout" in reason`, "reason", "gateway_timeout", true},
 		{"不含子串", `"fraud" in reason`, "reason", "gateway_timeout", false},
 	} {

@@ -50,20 +50,27 @@ export function slice(doc: Text, range: Range): string {
 // whole text: its first line starts mid-line, the rest carry the columns of
 // where it sits. dedent takes off what the later lines share, so the slot
 // shows the expression as if it stood alone; indent puts it back on what was
-// typed, so an edit leaves the text around it laid out as it was.
-// Blank lines count for nothing, and the shortest indentation wins.
+// typed, so an edit leaves the text around it laid out as it was. What they
+// share is the longest prefix every one of them starts with — a tab and two
+// spaces share nothing — and a line of nothing but blanks is left as it is,
+// both ways, so the two undo each other exactly.
+const LATER_LINE = /\n(?=[^\S\n]*\S)/g;
+
 export function commonIndent(source: string): string {
-  const indents = [...source.matchAll(/\n([ \t]*)(?=[^\S\n]*\S)/g)].map((match) => match[1]);
-  return indents.reduce((a, b) => (b.length < a.length ? b : a), indents[0] ?? "");
+  const indents = [...source.matchAll(/\n([ \t]*)\S/g)].map((match) => match[1]);
+  return indents.reduce((shared, next) => {
+    let length = 0;
+    while (length < shared.length && shared[length] === next[length]) length++;
+    return shared.slice(0, length);
+  }, indents[0] ?? "");
 }
 
 export function dedent(source: string, indent: string): string {
-  return source.replaceAll(`\n${indent}`, "\n");
+  return source.split("\n").map((line, i) => (i > 0 && /\S/.test(line) ? line.slice(indent.length) : line)).join("\n");
 }
 
-// An empty line stays empty.
 export function indent(source: string, indent: string): string {
-  return source.replace(/\n(?!\n|$)/g, () => `\n${indent}`);
+  return source.replace(LATER_LINE, () => `\n${indent}`);
 }
 
 // A block dropped on an expression takes it into the place the catalog's

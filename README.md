@@ -808,7 +808,7 @@ decision, err := batch.Run(ctx, &request)
 fallback(primary.quote_v1(order), secondary.quote_v1(order), 0.0)
 ```
 
-`fallback` 只接住**数据暂时不可得**：扩展函数失败、超时、换汇找不到汇率。**规则或数据自身的错误**（fuel 耗尽、算术失败、币种不一致）不会被吞掉，即使发生在扩展函数里：扩展函数返回的错误已经带上面任何一个类别（如 `ErrCurrency`、`ErrArithmetic`、`ErrNoFxRate`）时原样保留，不会被包成 `ErrExtension`。前一个候选在 `using` 里失败时，下一个候选从 `fallback` 所在处的汇率重新开始。
+`fallback` 只接住**数据暂时不可得**：扩展函数失败、超时、换汇找不到汇率。**规则或数据自身的错误**（fuel 耗尽、算术失败、数据上没有答案、币种不一致）不会被吞掉，即使发生在扩展函数里：扩展函数返回的错误已经带上面任何一个类别（如 `ErrCurrency`、`ErrArithmetic`、`ErrNoFxRate`）时原样保留，不会被包成 `ErrExtension`。前一个候选在 `using` 里失败时，下一个候选从 `fallback` 所在处的汇率重新开始。
 
 所有错误都可以用 `errors.Is` 区分。扩展函数自己的错误被归类后仍在错误链上：`errors.Is(err, funroute.ErrExtension)` 与 `errors.Is(err, 你的哨兵错误)` 都成立，`errors.As` 也取得到你的错误类型，超时同样认得出 `context.DeadlineExceeded`。
 
@@ -820,11 +820,16 @@ fallback(primary.quote_v1(order), secondary.quote_v1(order), 0.0)
 | `ErrExtension` | 扩展函数报错 | 接 |
 | `ErrUnavailable` | 调用了只登记签名、没有实现的函数；同时是 `ErrExtension` | 接 |
 | `ErrNoFxRate` | 换汇时 `using` 里没有这一对货币的汇率 | 接 |
-| `ErrFuel` | 超出成本上限 | 不接 |
+| `ErrFuel` | 超出成本上限：fuel 或栈深 | 不接 |
 | `ErrCurrency` | 币种不一致或未声明 | 不接 |
 | `ErrArithmetic` | 算术没有答案，见下 | 不接 |
+| `ErrDomain` | 数据上没有答案，见下 | 不接 |
 
-`ErrArithmetic` 包括：溢出、除零、float 非有限、汇率不为正或同币种汇率不是 1、比例或汇率的分子分母放不进 int64，以及转换没有答案（`int("x")`、`int(2.5)`、`ratio("abc")`、float 表示不了的 int）。在内核、扩展函数还是 Go 方法里发生都一样；由入参带来的同时也是 `ErrContract`。
+`ErrArithmetic` 包括：溢出、除零、float 非有限、汇率不为正或同币种汇率不是 1、比例或汇率的分子分母放不进 int64，转换没有答案（`int("x")`、`int(2.5)`、`bool("yes")`、`ratio("abc")`、float 表示不了的 int），以及数值参数超出它的取值范围（`range` 的步长与长度、`percentile` 的比例、`pad_left` 的宽度、`allocate` 的份数与权重、`pow` 的负整数指数）。
+
+`ErrDomain` 包括：下标越界、字典没有这个键、空数组的 `first`/`last`/`avg`/`median`/极值、要逐项对齐的两个数组长度不同（`sort_by`、`group_by`）、字典推导产生重复的键、数组里没有要找的元素。要兜底就先判断（`len(xs) > 0`、`"k" in d`）或写 `get(d, "k", 默认值)`，`fallback` 不接它。
+
+这两类在内核、扩展函数还是 Go 方法里发生都一样；由入参带来的同时也是 `ErrContract`。
 
 编译错误带位置：`errors.As` 取出 `*funroute.PositionError`，`Offset()` 与 `Span()` 是字节偏移与区间，`funroute.LineColumn(err, source)` 换算成行列。
 

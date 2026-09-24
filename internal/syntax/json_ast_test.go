@@ -326,7 +326,37 @@ func TestImportedNestingIsBounded(t *testing.T) {
 	if _, err := ImportExprJSON([]byte(nested(maxNesting))); err != nil {
 		t.Fatalf("ImportExprJSON(%d levels) error = %v, want it read", maxNesting, err)
 	}
-	if _, err := ImportExprJSON([]byte(nested(maxNesting + 1))); err == nil || !strings.Contains(err.Error(), "nests deeper than 1000 levels") {
+	// The error says it once, not once for every level above it.
+	if _, err := ImportExprJSON([]byte(nested(maxNesting + 1))); err == nil || err.Error() != "expression JSON nests deeper than 1000 levels" {
 		t.Fatalf("ImportExprJSON(%d levels) error = %v, want a nesting error", maxNesting+1, err)
+	}
+}
+
+// A tree as deep as the limit goes both ways: source that deep has ExprJSON
+// that reads back, and ExprJSON that deep formats as source that parses —
+// even where every level needs parentheses.
+func TestTheNestingLimitIsTheSameBothWays(t *testing.T) {
+	t.Parallel()
+	additions := "x" + strings.Repeat(" + x", maxNesting-1)
+	expr, err := Parse(additions)
+	if err != nil {
+		t.Fatalf("Parse(%d levels of +) error = %v", maxNesting, err)
+	}
+	document, err := ExportExprJSON(expr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportExprJSON(document); err != nil {
+		t.Fatalf("ImportExprJSON(the ExprJSON of %d levels of +) error = %v, want it read", maxNesting, err)
+	}
+	subtractions := strings.Repeat("x - (", maxNesting-2) + "x - x" + strings.Repeat(")", maxNesting-2)
+	for _, source := range []string{additions, subtractions} {
+		expr, err := Parse(source)
+		if err != nil {
+			t.Fatalf("Parse(%.20s…) error = %v", source, err)
+		}
+		if _, err := Parse(Format(expr)); err != nil {
+			t.Fatalf("Parse(Format(%.20s…)) error = %v, want the formatted text read", source, err)
+		}
 	}
 }

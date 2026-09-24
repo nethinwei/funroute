@@ -278,18 +278,14 @@ func TestFromValueErrorNamesBothSides(t *testing.T) {
 	}
 }
 
-// A whole number read as a ratio is that number; MinInt64, whose negation
-// does not fit, is ErrArithmetic.
+// A whole number read as a ratio is that number, MinInt64 included.
 func TestWholeRatiosAreExact(t *testing.T) {
 	t.Parallel()
-	for _, whole := range []int64{0, 1, -1, 922_337_204, math.MaxInt64, -math.MaxInt64} {
+	for _, whole := range []int64{0, 1, -1, 922_337_204, math.MaxInt64, -math.MaxInt64, math.MinInt64} {
 		got, err := coerceRatio(whole)
 		if want := strconv.FormatInt(whole, 10); err != nil || got.String() != want {
 			t.Fatalf("coerceRatio(%d) = %s, %v, want %s", whole, got, err, want)
 		}
-	}
-	if got, err := coerceRatio(int64(math.MinInt64)); !errors.Is(err, ErrArithmetic) {
-		t.Fatalf("coerceRatio(MinInt64) = %s, %v, want ErrArithmetic", got, err)
 	}
 }
 

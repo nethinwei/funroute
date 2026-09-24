@@ -2,6 +2,7 @@ package compile
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -286,6 +287,35 @@ func TestConversionsAreNotFolded(t *testing.T) {
 			calls := machine.PartsOf(artifact).Calls
 			if !slices.ContainsFunc(calls, func(call machine.CallReference) bool { return strings.HasPrefix(call.Signature, "convert(") }) {
 				t.Fatalf("%s kept calls %v, want a convert among them", source, calls)
+			}
+		})
+	}
+}
+
+// A let binding that folds to a constant is still an ordinary name: a loop
+// variable, an accumulator or an inner let of the same name hides it.
+func TestAFoldedBindingIsHiddenByAnInnerOne(t *testing.T) {
+	t.Parallel()
+	registry := foldRegistry(t)
+	xs := map[string]any{"xs": []int64{10, 20, 30}}
+	for _, test := range []struct {
+		source string
+		args   map[string]any
+		want   string
+	}{
+		{`let(a = 1, [a + 1 for a in xs])`, xs, "[11 21 31]"},
+		{`let(a = 1, let(a = x, a + 1))`, map[string]any{"x": 5}, "6"},
+		{`let(a = 1, reduce(x in xs, a = 0, a + x))`, xs, "60"},
+		{`let(n = 2, [x * n for x in ys for n in ys])`, map[string]any{"ys": []int64{1, 2}}, "[1 2 2 4]"},
+		{`let(a = 1, {k: a + 1 for k, a in d})`, map[string]any{"d": map[string]int64{"k": 7}}, "map[k:8]"},
+		{`let(a = "s", [a + 0 for a in xs])`, xs, "[10 20 30]"},
+		{`let(a = 1, [a for a in [a + 1]])`, nil, "[2]"},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			value, _ := compileAndRun(t, test.source, registry, test.args, machine.RunOptions{Fuel: 10_000})
+			if got := fmt.Sprint(value.Any()); got != test.want {
+				t.Fatalf("%s = %s, want %s", test.source, got, test.want)
 			}
 		})
 	}

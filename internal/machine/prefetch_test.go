@@ -18,6 +18,7 @@ func TestPrefetchSitesAreTheUnconditionalTopLevelCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	features := compile.ArgSpec{Name: "features", Type: machine.ArrayOf(machine.FloatType)}
+	other := compile.ArgSpec{Name: "other", Type: machine.ArrayOf(machine.FloatType)}
 	flag := compile.ArgSpec{Name: "flag", Type: machine.BoolType}
 	for _, test := range []struct {
 		source string
@@ -30,10 +31,15 @@ func TestPrefetchSitesAreTheUnconditionalTopLevelCalls(t *testing.T) {
 		{`switch(case flag => model.fraud_v1(model.embed_v1(features)), else => 1.0)`, 0}, // a case body
 		{`fallback(model.fraud_v1(model.embed_v1(features)), 0.0)`, 0},                    // an error boundary
 		{`fallback(model.fraud_v1(model.embed_v1(features)), model.fraud_v1(model.embed_v1(features)), 0.0)`, 0},
+		// The call after a branch is reached from every one, but its argument
+		// is whichever branch ran.
+		{`model.fraud_v1(model.embed_v1(if(flag, features, other)))`, 0},
+		{`model.fraud_v1(model.embed_v1(switch(case flag => features, else => other)))`, 0},
+		{`model.fraud_v1(model.embed_v1(fallback(features, other)))`, 0},
 	} {
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
-			artifact, err := compile.CompileExpr(test.source, registry, compile.CompileOptions{Args: []compile.ArgSpec{features, flag}})
+			artifact, err := compile.CompileExpr(test.source, registry, compile.CompileOptions{Args: []compile.ArgSpec{features, other, flag}})
 			if err != nil {
 				t.Fatalf("%s: %v", test.source, err)
 			}

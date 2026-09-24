@@ -49,6 +49,34 @@ func TestPositionsCountTheAgreedUnits(t *testing.T) {
 	}
 }
 
+// A line ends at \n, \r\n or a lone \r, as the protocol counts them, and a
+// position past a line's end is its end — before the terminator, all of it.
+func TestLinesEndWhereTheProtocolSays(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]struct {
+		past     int
+		position Position
+	}{
+		"a\r\nb": {past: 1, position: Position{Line: 1, Character: 0}},
+		"a\rb":   {past: 1, position: Position{Line: 1, Character: 0}},
+		"a\nb":   {past: 1, position: Position{Line: 1, Character: 0}},
+	} {
+		t.Run(fmt.Sprintf("%q", text), func(t *testing.T) {
+			t.Parallel()
+			doc := newDocument("x", 0, text)
+			if got := doc.offset(Position{Line: 0, Character: 99}, utf16Encoding); got != want.past {
+				t.Errorf("past the end of line 0 names byte %d, want %d", got, want.past)
+			}
+			if got := doc.position(len(text)-1, utf16Encoding); got != want.position {
+				t.Errorf("b is at %+v, want %+v", got, want.position)
+			}
+		})
+	}
+	if got := newDocument("x", 0, "a\r\nb").position(2, utf16Encoding); got != (Position{Line: 0, Character: 1}) {
+		t.Errorf("the \\n of a \\r\\n is at %+v, want the end of line 0", got)
+	}
+}
+
 // position names a character on the first line of the document at uri.
 func position(uri string, character int) map[string]any {
 	return map[string]any{"textDocument": map[string]string{"uri": uri}, "position": map[string]int{"line": 0, "character": character}}

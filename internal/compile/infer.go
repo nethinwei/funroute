@@ -477,6 +477,11 @@ func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string
 		return nil, err
 	}
 	if err := state.solve(); err != nil {
+		// A choice that settled wrong says where it is; only what has no
+		// place of its own is placed on the whole program.
+		if _, placed := errors.AsType[*syntax.PosError](err); placed {
+			return nil, err
+		}
 		return nil, syntax.Around(expr, "type error: %v", err)
 	}
 	inferred, err := state.inference(names, context.args, result)

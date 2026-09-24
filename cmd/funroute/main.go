@@ -332,17 +332,24 @@ func newRegistry(money *funroute.MoneySpec) (*funroute.Registry, error) {
 // that order is the artifact's ABI.
 func textContract(aliases, types string) (*funroute.TextContract, error) {
 	contract := &funroute.TextContract{}
-	err := declarations(aliases, func(name, typ string) {
+	// The aliases become a map, which would keep the last of two with one
+	// name, so a second one is refused here as a second argument is later.
+	err := declarations(aliases, func(name, typ string) error {
+		if _, twice := contract.Types[name]; twice {
+			return fmt.Errorf("type %q is declared twice", name)
+		}
 		if contract.Types == nil {
 			contract.Types = map[string]string{}
 		}
 		contract.Types[name] = typ
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	err = declarations(types, func(name, typ string) {
+	err = declarations(types, func(name, typ string) error {
 		contract.Args = append(contract.Args, funroute.TextArg{Name: name, Type: typ})
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -353,7 +360,7 @@ func textContract(aliases, types string) (*funroute.TextContract, error) {
 // declarations cuts "a=t1,b=t2" into its name=type pairs and gives each to
 // declare, in order. A type's own commas are inside <> or {}, so only the
 // top-level ones separate.
-func declarations(source string, declare func(name, typ string)) error {
+func declarations(source string, declare func(name, typ string) error) error {
 	if strings.TrimSpace(source) == "" {
 		return nil
 	}
@@ -362,7 +369,9 @@ func declarations(source string, declare func(name, typ string)) error {
 		if name = strings.TrimSpace(name); !ok || name == "" {
 			return fmt.Errorf("invalid declaration %q, expected name=type", part)
 		}
-		declare(name, strings.TrimSpace(typ))
+		if err := declare(name, strings.TrimSpace(typ)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

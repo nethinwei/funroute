@@ -95,12 +95,11 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 
 func newBytecodeCompiler(registry *machine.Registry, inferred *inference) *bytecodeCompiler {
 	compiler := &bytecodeCompiler{
-		registry:   registry,
-		inferred:   inferred,
-		argIndex:   map[string]int{},
-		localIndex: scoped[int]{},
-		constIndex: scoped[int]{},
-		callIndex:  map[string]int{},
+		registry:  registry,
+		inferred:  inferred,
+		argIndex:  map[string]int{},
+		names:     scoped[nameSlot]{},
+		callIndex: map[string]int{},
 	}
 	for i, param := range inferred.Params {
 		compiler.argIndex[param.Name()] = i
@@ -123,11 +122,12 @@ type bytecodeCompiler struct {
 	// one that never folds, known without walking it again.
 	readsArgument map[int]bool
 	argIndex      map[string]int
-	localIndex    scoped[int]
-	// constIndex holds the bindings that folded to a constant: they occupy a
-	// constant-pool slot instead of a local one, so nothing is stored at run
-	// time and every read is a single OpConstant.
-	constIndex   scoped[int]
+	// names is every bound name in scope, innermost last: a local slot, or
+	// a let binding that folded to a constant, which occupies a constant-pool
+	// slot instead, so nothing is stored at run time and every read is a
+	// single OpConstant. One stack for both, so an inner binding hides an
+	// outer one of the same name whichever kind each is.
+	names        scoped[nameSlot]
 	nextLocal    int
 	callIndex    map[string]int
 	constants    []machine.Constant
@@ -222,12 +222,12 @@ func (c *bytecodeCompiler) emitConstant(value machine.Value, typ machine.Type) e
 }
 
 func (c *bytecodeCompiler) compileVariable(node *syntax.VariableExpr) error {
-	if index, ok := c.constIndex.top(node.Name); ok {
-		c.emit(machine.Instruction{Op: machine.OpConstant, A: index})
-		return nil
-	}
-	if slot, ok := c.localIndex.top(node.Name); ok {
-		c.emit(machine.Instruction{Op: machine.OpLoadLocal, A: slot})
+	if bound, ok := c.names.top(node.Name); ok {
+		op := machine.OpLoadLocal
+		if bound.constant {
+			op = machine.OpConstant
+		}
+		c.emit(machine.Instruction{Op: op, A: bound.index})
 		return nil
 	}
 	index, ok := c.argIndex[node.Name]
@@ -404,8 +404,7 @@ func (c *bytecodeCompiler) boundedExpr(expr syntax.Expr) bool {
 		return true
 	case *syntax.VariableExpr:
 		// A binding that folded to a constant is as good as a literal.
-		_, folded := c.constIndex.top(node.Name)
-		return folded
+		return c.foldedName(node.Name)
 	case *syntax.CallExpr:
 		return c.boundedCall(node)
 	}
@@ -574,7 +573,7 @@ func (c *bytecodeCompiler) bindLocal(name string) int {
 	}
 	slot := c.nextLocal
 	c.nextLocal++
-	c.localIndex.push(name, slot)
+	c.names.push(name, nameSlot{index: slot})
 	return slot
 }
 
@@ -582,7 +581,7 @@ func (c *bytecodeCompiler) unbindLocal(name string) {
 	if name == "" {
 		return
 	}
-	c.localIndex.pop(name)
+	c.names.pop(name)
 }
 
 // compileReduce lays out: source, init, loop_init, condition, body,
@@ -620,8 +619,8 @@ func (c *bytecodeCompiler) compileLet(node *syntax.LetExpr) error {
 			return err
 		}
 		if folded {
-			c.constIndex.push(binding.Name, index)
-			defer c.constIndex.pop(binding.Name)
+			c.names.push(binding.Name, nameSlot{index: index, constant: true})
+			defer c.names.pop(binding.Name)
 			c.folded++
 			continue
 		}
@@ -657,6 +656,19 @@ func (c *bytecodeCompiler) compileIf(node *syntax.CallExpr) error {
 }
 
 // scoped is names bound in nested scopes, each name's innermost binding last.
+// nameSlot is where a bound name's value is: the local slot index, or, for a
+// constant one, the constant-pool index.
+type nameSlot struct {
+	index    int
+	constant bool
+}
+
+// foldedName reports whether name's innermost binding folded to a constant.
+func (c *bytecodeCompiler) foldedName(name string) bool {
+	bound, ok := c.names.top(name)
+	return ok && bound.constant
+}
+
 type scoped[T any] map[string][]T
 
 func (s scoped[T]) push(name string, value T) { s[name] = append(s[name], value) }

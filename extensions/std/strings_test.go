@@ -23,6 +23,10 @@ func TestStringsAndArrays(t *testing.T) {
 		{"规范化", `upper(card) == "AB"`, []funroute.ArgSpec{card}, map[string]any{"card": "ab"}, true},
 		{"拆分再拼", `join(split(card, ","), "|")`, []funroute.ArgSpec{card}, map[string]any{"card": "a,b"}, "a|b"},
 		{"替换", `replace(card, "_", ":")`, []funroute.ArgSpec{card}, map[string]any{"card": "a_b"}, "a:b"},
+		// A byte that is not UTF-8 is kept as it is, not written as U+FFFD.
+		{"大写不改别的字节", `upper(card)`, []funroute.ArgSpec{card}, map[string]any{"card": "a\xffé"}, "A\xffÉ"},
+		{"小写不改别的字节", `lower(card)`, []funroute.ArgSpec{card}, map[string]any{"card": "A\xff"}, "a\xff"},
+		{"切片不改别的字节", `slice(card, 1, 2)`, []funroute.ArgSpec{card}, map[string]any{"card": "a\xffb"}, "\xff"},
 		{"最便宜", `first(sort(fees))`, []funroute.ArgSpec{fees}, map[string]any{"fees": []any{30, 10, 20}}, int64(10)},
 		{"最贵", `last(sort(fees))`, []funroute.ArgSpec{fees}, map[string]any{"fees": []any{30, 10, 20}}, int64(30)},
 		{"取前两个", `len(take(fees, 2))`, []funroute.ArgSpec{fees}, map[string]any{"fees": []any{1, 2, 3}}, int64(2)},
