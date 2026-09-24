@@ -1,6 +1,7 @@
 // Command lint enforces the repository style budget — file length, function
-// length and nesting depth — and, in _test.go files, the testing package's
-// current idioms (see checkTestFile). It uses only the standard library so the
+// length and nesting depth — that only the root package and lsp import
+// internal/ (see checkInternalImports), and, in _test.go files, the testing
+// package's current idioms (see checkTestFile). It uses only the standard library so the
 // project keeps zero third-party dependencies.
 package main
 
@@ -54,8 +55,12 @@ func main() {
 }
 
 func run(root string) ([]violation, error) {
+	module, err := modulePath(root)
+	if err != nil {
+		return nil, err
+	}
 	var violations []violation
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -65,7 +70,7 @@ func run(root string) ([]violation, error) {
 			}
 			return nil
 		}
-		found, err := checkFile(path)
+		found, err := checkFile(root, module, path)
 		if err != nil {
 			return err
 		}
@@ -79,7 +84,7 @@ func skipDir(name string) bool {
 	return strings.HasPrefix(name, ".") || name == "testdata" || name == "dist" || name == "node_modules"
 }
 
-func checkFile(path string) ([]violation, error) {
+func checkFile(root, module, path string) ([]violation, error) {
 	extension := filepath.Ext(path)
 	if extension != ".go" && extension != ".js" && extension != ".ts" {
 		return nil, nil
@@ -92,7 +97,7 @@ func checkFile(path string) ([]violation, error) {
 	if extension != ".go" {
 		return violations, nil
 	}
-	functions, err := checkGoFunctions(path, source)
+	functions, err := checkGoFunctions(root, module, path, source)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +119,7 @@ func checkFileLength(path string, source []byte) []violation {
 	}}
 }
 
-func checkGoFunctions(path string, source []byte) ([]violation, error) {
+func checkGoFunctions(root, module, path string, source []byte) ([]violation, error) {
 	fileSet := token.NewFileSet()
 	file, err := parser.ParseFile(fileSet, path, source, parser.SkipObjectResolution)
 	if err != nil {
@@ -129,6 +134,8 @@ func checkGoFunctions(path string, source []byte) ([]violation, error) {
 		position := fileSet.Position(function.Pos())
 		violations = append(violations, checkFunction(path, position, fileSet, function)...)
 	}
+	line := func(node ast.Node) int { return fileSet.Position(node.Pos()).Line }
+	violations = append(violations, checkInternalImports(root, module, path, file, line)...)
 	if strings.HasSuffix(path, "_test.go") {
 		violations = append(violations, checkTestPairing(path)...)
 		violations = append(violations, checkTestFile(path, fileSet, file)...)

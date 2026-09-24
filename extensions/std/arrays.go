@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"sort"
 
-	"funroute/lang"
+	"github.com/nethinwei/funroute"
 )
 
 // The array functions that are about the shape of a list rather than about
 // what is in it: take one end, cut it short, turn it around, put two together,
 // drop repeats, flatten one level. They are generic, so they are written as
 // FunctionSpecs — reflection cannot express "array of any T".
-func registerArrays(registry *lang.Registry) error {
+func registerArrays(registry *funroute.Registry) error {
 	for _, spec := range arraySpecs() {
 		if err := register(registry, spec); err != nil {
 			return err
@@ -28,37 +28,37 @@ func registerArrays(registry *lang.Registry) error {
 // "no missing value" rule by shortening the result rather than inventing a
 // hole: deltas of n items has n-1 entries, and a window wider than the array
 // yields nothing at all.
-func registerSequences(registry *lang.Registry) error {
-	item := lang.TypeVar("T")
-	list := lang.ArrayOf(item)
-	for _, spec := range []lang.FunctionSpec{
+func registerSequences(registry *funroute.Registry) error {
+	item := funroute.TypeVar("T")
+	list := funroute.ArrayOf(item)
+	for _, spec := range []funroute.FunctionSpec{
 		{
-			Name: "windows", Params: []lang.Type{list, lang.IntType}, Result: lang.ArrayOf(list), Eval: slidingWindows,
-			Doc: lang.Doc{
+			Name: "windows", Params: []funroute.Type{list, funroute.IntType}, Result: funroute.ArrayOf(list), Eval: slidingWindows,
+			Doc: funroute.Doc{
 				Constexpr: true, Label: "滑动窗口", Category: "数组", Cost: 8,
 				Description: "每 size 个相邻元素一组，逐格滑动；窗口比数组还宽就一个都没有。近三笔合计写 [sum(w) for w in windows(amounts, 3)]。",
 				Params:      []string{"数组", "窗口大小"}, Result: "各窗口",
 			},
 		},
 		{
-			Name: "chunk", Params: []lang.Type{list, lang.IntType}, Result: lang.ArrayOf(list), Eval: chunkItems,
-			Doc: lang.Doc{
+			Name: "chunk", Params: []funroute.Type{list, funroute.IntType}, Result: funroute.ArrayOf(list), Eval: chunkItems,
+			Doc: funroute.Doc{
 				Constexpr: true, Label: "分批", Category: "数组", Cost: 6,
 				Description: "按固定大小切成不重叠的几批，最后一批可能不满。批量提交用它。",
 				Params:      []string{"数组", "每批大小"}, Result: "各批",
 			},
 		},
 		{
-			Name: "intersect", Params: []lang.Type{list, list}, Result: list, Eval: intersectItems,
-			Doc: lang.Doc{
+			Name: "intersect", Params: []funroute.Type{list, list}, Result: list, Eval: intersectItems,
+			Doc: funroute.Doc{
 				Constexpr: true, Label: "交集", Category: "数组", Cost: 7,
 				Description: "两个数组里都有的元素，按第一个数组的顺序，重复只留一次。",
 				Params:      []string{"前一个", "后一个"}, Result: "交集",
 			},
 		},
 		{
-			Name: "except", Params: []lang.Type{list, list}, Result: list, Eval: exceptItems,
-			Doc: lang.Doc{
+			Name: "except", Params: []funroute.Type{list, list}, Result: list, Eval: exceptItems,
+			Doc: funroute.Doc{
 				Constexpr: true, Label: "差集", Category: "数组", Cost: 7,
 				Description: "在第一个数组里、不在第二个数组里的元素，保持原顺序，重复只留一次。",
 				Params:      []string{"前一个", "后一个"}, Result: "差集",
@@ -72,8 +72,8 @@ func registerSequences(registry *lang.Registry) error {
 	return registerDeltas(registry)
 }
 
-func registerDeltas(registry *lang.Registry) error {
-	doc := lang.Doc{
+func registerDeltas(registry *funroute.Registry) error {
+	doc := funroute.Doc{
 		Constexpr: true, Label: "相邻差", Category: "数组", Cost: 6,
 		Description: "每一项与前一项的差，所以结果比输入少一个；一项或空数组得到空数组。与上一笔比较用它。",
 		Params:      []string{"数组"}, Result: "差值序列",
@@ -81,40 +81,40 @@ func registerDeltas(registry *lang.Registry) error {
 	return eachType(registry, "deltas", doc, deltasOf[int64], deltasOf[float64])
 }
 
-func slidingWindows(_ context.Context, args []lang.Value) (lang.Value, error) {
+func slidingWindows(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	items, size, err := sizedGroups(args, "windows")
 	if err != nil {
-		return lang.Value{}, err
+		return funroute.Value{}, err
 	}
-	var groups []lang.Value
+	var groups []funroute.Value
 	for start := 0; start+size <= len(items); start++ {
-		window, err := lang.Array(elementType(args[0]), items[start:start+size])
+		window, err := funroute.Array(elementType(args[0]), items[start:start+size])
 		if err != nil {
-			return lang.Value{}, err
+			return funroute.Value{}, err
 		}
 		groups = append(groups, window)
 	}
-	return lang.Array(args[0].Type(), groups)
+	return funroute.Array(args[0].Type(), groups)
 }
 
-func chunkItems(_ context.Context, args []lang.Value) (lang.Value, error) {
+func chunkItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	items, size, err := sizedGroups(args, "chunk")
 	if err != nil {
-		return lang.Value{}, err
+		return funroute.Value{}, err
 	}
-	var groups []lang.Value
+	var groups []funroute.Value
 	for start := 0; start < len(items); start += size {
 		end := min(start+size, len(items))
-		batch, err := lang.Array(elementType(args[0]), items[start:end])
+		batch, err := funroute.Array(elementType(args[0]), items[start:end])
 		if err != nil {
-			return lang.Value{}, err
+			return funroute.Value{}, err
 		}
 		groups = append(groups, batch)
 	}
-	return lang.Array(args[0].Type(), groups)
+	return funroute.Array(args[0].Type(), groups)
 }
 
-func sizedGroups(args []lang.Value, name string) ([]lang.Value, int, error) {
+func sizedGroups(args []funroute.Value, name string) ([]funroute.Value, int, error) {
 	size, _ := args[1].Int()
 	if size <= 0 {
 		return nil, 0, fmt.Errorf("%s needs a size of at least one, got %d", name, size)
@@ -122,23 +122,23 @@ func sizedGroups(args []lang.Value, name string) ([]lang.Value, int, error) {
 	return itemsOf(args[0]), int(size), nil
 }
 
-func intersectItems(_ context.Context, args []lang.Value) (lang.Value, error) {
+func intersectItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	return setOperation(args, true)
 }
 
-func exceptItems(_ context.Context, args []lang.Value) (lang.Value, error) {
+func exceptItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	return setOperation(args, false)
 }
 
-func setOperation(args []lang.Value, keepShared bool) (lang.Value, error) {
+func setOperation(args []funroute.Value, keepShared bool) (funroute.Value, error) {
 	other := itemsOf(args[1])
-	var out []lang.Value
+	var out []funroute.Value
 	for _, item := range itemsOf(args[0]) {
 		if containsValue(other, item) == keepShared && !containsValue(out, item) {
 			out = append(out, item)
 		}
 	}
-	return lang.Array(elementType(args[0]), out)
+	return funroute.Array(elementType(args[0]), out)
 }
 
 func deltasOf[T int64 | float64](items []T) ([]T, error) {
@@ -154,50 +154,50 @@ func deltasOf[T int64 | float64](items []T) ([]T, error) {
 
 // arraySpecs is the shape-of-a-list family: take one end, cut it short, turn
 // it around, put two together, drop repeats, flatten one level.
-func arraySpecs() []lang.FunctionSpec {
-	item := lang.TypeVar("T")
-	list := lang.ArrayOf(item)
-	shaped := func(name, label, description, result string, params []lang.Type, labels []string, cost uint64, eval lang.EvalFunc) lang.FunctionSpec {
-		return lang.FunctionSpec{
+func arraySpecs() []funroute.FunctionSpec {
+	item := funroute.TypeVar("T")
+	list := funroute.ArrayOf(item)
+	shaped := func(name, label, description, result string, params []funroute.Type, labels []string, cost uint64, eval funroute.EvalFunc) funroute.FunctionSpec {
+		return funroute.FunctionSpec{
 			Name: name, Params: params, Result: list, Eval: eval,
-			Doc: lang.Doc{
+			Doc: funroute.Doc{
 				Constexpr: true, Label: label, Category: "数组", Cost: cost,
 				Description: description, Params: labels, Result: result,
 			},
 		}
 	}
-	end := func(name, label, description, result string, eval lang.EvalFunc) lang.FunctionSpec {
-		return lang.FunctionSpec{
-			Name: name, Params: []lang.Type{list}, Result: item, Eval: eval,
-			Doc: lang.Doc{
+	end := func(name, label, description, result string, eval funroute.EvalFunc) funroute.FunctionSpec {
+		return funroute.FunctionSpec{
+			Name: name, Params: []funroute.Type{list}, Result: item, Eval: eval,
+			Doc: funroute.Doc{
 				Constexpr: true, Label: label, Category: "数组", Cost: 2,
 				Description: description, Params: []string{"数组"}, Result: result,
 			},
 		}
 	}
-	return []lang.FunctionSpec{
+	return []funroute.FunctionSpec{
 		end("first", "首个元素", "取数组的第一个元素；空数组报错，因为没有元素可取。", "首个元素", firstItem),
 		end("last", "末个元素", "取数组的最后一个元素；空数组报错。", "末个元素", lastItem),
 		shaped("slice", "取一段", "按下标取 [start, end) 这一段，下标从 0 开始；越界报错，不静默截断。", "这一段",
-			[]lang.Type{list, lang.IntType, lang.IntType}, []string{"数组", "起点", "终点"}, 4, sliceItems),
+			[]funroute.Type{list, funroute.IntType, funroute.IntType}, []string{"数组", "起点", "终点"}, 4, sliceItems),
 		shaped("take", "取前 n 个", "取数组的前 n 个元素；n 大于长度就取完，n 为负是错误。", "前 n 个",
-			[]lang.Type{list, lang.IntType}, []string{"数组", "个数"}, 4, takeItems),
+			[]funroute.Type{list, funroute.IntType}, []string{"数组", "个数"}, 4, takeItems),
 		shaped("reverse", "反转", "把数组倒过来。", "反转后的数组",
-			[]lang.Type{list}, []string{"数组"}, 4, reverseItems),
+			[]funroute.Type{list}, []string{"数组"}, 4, reverseItems),
 		shaped("concat", "拼接数组", "把两个同型数组接成一个。", "拼接结果",
-			[]lang.Type{list, list}, []string{"前一个", "后一个"}, 5, concatItems),
+			[]funroute.Type{list, list}, []string{"前一个", "后一个"}, 5, concatItems),
 		shaped("unique", "去重", "按相等判断去掉重复元素，保留第一次出现的顺序。", "去重后的数组",
-			[]lang.Type{list}, []string{"数组"}, 6, uniqueItems),
+			[]funroute.Type{list}, []string{"数组"}, 6, uniqueItems),
 		shaped("flatten", "拉平一层", "把数组的数组拉平成一层；嵌套推导式配它就是多层遍历。", "拉平后的数组",
-			[]lang.Type{lang.ArrayOf(list)}, []string{"嵌套数组"}, 6, flattenItems),
+			[]funroute.Type{funroute.ArrayOf(list)}, []string{"嵌套数组"}, 6, flattenItems),
 	}
 }
 
 // registerSort covers both directions of a plain sort. Sorting by a separate
 // array of keys is a different question with a different shape — that is
 // sort_by, and it lives with the other two-list functions in select.go.
-func registerSort(registry *lang.Registry) error {
-	up := lang.Doc{Constexpr: true,
+func registerSort(registry *funroute.Registry) error {
+	up := funroute.Doc{Constexpr: true,
 		Label: "排序", Category: "数组", Cost: 8,
 		Description: "按自然顺序升序排列（数值按大小，字符串按 UTF-8 字节序）。要按别的键排，先用推导式算出键。",
 		Params:      []string{"数组"}, Result: "升序数组",
@@ -205,7 +205,7 @@ func registerSort(registry *lang.Registry) error {
 	if err := eachType(registry, "sort", up, ascending[int64], ascending[float64], ascending[string]); err != nil {
 		return err
 	}
-	down := lang.Doc{Constexpr: true,
+	down := funroute.Doc{Constexpr: true,
 		Label: "降序排序", Category: "数组", Cost: 8,
 		Description: "按自然顺序降序排列，省得写 reverse(sort(xs))。",
 		Params:      []string{"数组"}, Result: "降序数组",
@@ -227,85 +227,85 @@ func descending[T int64 | float64 | string](items []T) ([]T, error) {
 	return out, nil
 }
 
-func firstItem(_ context.Context, args []lang.Value) (lang.Value, error) {
+func firstItem(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	value, ok := args[0].At(0)
 	if !ok {
-		return lang.Value{}, fmt.Errorf("first of an empty array")
+		return funroute.Value{}, fmt.Errorf("first of an empty array")
 	}
 	return value, nil
 }
 
-func lastItem(_ context.Context, args []lang.Value) (lang.Value, error) {
+func lastItem(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	length, _ := args[0].Length()
 	value, ok := args[0].At(length - 1)
 	if !ok {
-		return lang.Value{}, fmt.Errorf("last of an empty array")
+		return funroute.Value{}, fmt.Errorf("last of an empty array")
 	}
 	return value, nil
 }
 
-func sliceItems(_ context.Context, args []lang.Value) (lang.Value, error) {
+func sliceItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	items := itemsOf(args[0])
 	start, _ := args[1].Int()
 	end, _ := args[2].Int()
 	if start < 0 || end < start || end > int64(len(items)) {
-		return lang.Value{}, fmt.Errorf("slice [%d, %d) is outside an array of %d items", start, end, len(items))
+		return funroute.Value{}, fmt.Errorf("slice [%d, %d) is outside an array of %d items", start, end, len(items))
 	}
-	return lang.Array(elementType(args[0]), items[start:end])
+	return funroute.Array(elementType(args[0]), items[start:end])
 }
 
-func takeItems(_ context.Context, args []lang.Value) (lang.Value, error) {
+func takeItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	count, _ := args[1].Int()
 	if count < 0 {
-		return lang.Value{}, fmt.Errorf("take needs a count of zero or more, got %d", count)
+		return funroute.Value{}, fmt.Errorf("take needs a count of zero or more, got %d", count)
 	}
 	items := itemsOf(args[0])
 	if count > int64(len(items)) {
 		count = int64(len(items))
 	}
-	return lang.Array(elementType(args[0]), items[:count])
+	return funroute.Array(elementType(args[0]), items[:count])
 }
 
-func reverseItems(_ context.Context, args []lang.Value) (lang.Value, error) {
+func reverseItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	items := itemsOf(args[0])
-	out := make([]lang.Value, len(items))
+	out := make([]funroute.Value, len(items))
 	for i, item := range items {
 		out[len(items)-1-i] = item
 	}
-	return lang.Array(elementType(args[0]), out)
+	return funroute.Array(elementType(args[0]), out)
 }
 
-func concatItems(_ context.Context, args []lang.Value) (lang.Value, error) {
+func concatItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	left, right := itemsOf(args[0]), itemsOf(args[1])
-	out := make([]lang.Value, 0, len(left)+len(right))
+	out := make([]funroute.Value, 0, len(left)+len(right))
 	out = append(out, left...)
 	out = append(out, right...)
-	return lang.Array(elementType(args[0]), out)
+	return funroute.Array(elementType(args[0]), out)
 }
 
-func uniqueItems(_ context.Context, args []lang.Value) (lang.Value, error) {
-	var out []lang.Value
+func uniqueItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+	var out []funroute.Value
 	for _, item := range itemsOf(args[0]) {
 		if !containsValue(out, item) {
 			out = append(out, item)
 		}
 	}
-	return lang.Array(elementType(args[0]), out)
+	return funroute.Array(elementType(args[0]), out)
 }
 
-func flattenItems(_ context.Context, args []lang.Value) (lang.Value, error) {
-	var out []lang.Value
+func flattenItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+	var out []funroute.Value
 	for _, inner := range itemsOf(args[0]) {
 		out = append(out, itemsOf(inner)...)
 	}
 	inner, ok := elementType(args[0]).Elem()
 	if !ok {
-		return lang.Value{}, fmt.Errorf("flatten needs an array of arrays")
+		return funroute.Value{}, fmt.Errorf("flatten needs an array of arrays")
 	}
-	return lang.Array(inner, out)
+	return funroute.Array(inner, out)
 }
 
-func containsValue(values []lang.Value, wanted lang.Value) bool {
+func containsValue(values []funroute.Value, wanted funroute.Value) bool {
 	for _, value := range values {
 		if value.Equal(wanted) {
 			return true
@@ -316,12 +316,12 @@ func containsValue(values []lang.Value, wanted lang.Value) bool {
 
 // itemsOf reads a container's elements. The values are the container's own,
 // handed over read-only like everywhere else at this boundary.
-func itemsOf(value lang.Value) []lang.Value {
+func itemsOf(value funroute.Value) []funroute.Value {
 	items, _ := value.Array()
 	return items
 }
 
-func elementType(value lang.Value) lang.Type {
+func elementType(value funroute.Value) funroute.Type {
 	elem, _ := value.Type().Elem()
 	return elem
 }

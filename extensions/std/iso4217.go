@@ -1,6 +1,6 @@
 package std
 
-import "funroute/lang"
+import "github.com/nethinwei/funroute"
 
 // ISO4217 is the ISO 4217 table of active currencies and their minor-unit
 // places, as a starting point for DeclareMoney. It is a copy the host owns:
@@ -8,10 +8,10 @@ import "funroute/lang"
 // unit and HUF and TWD as whole amounts in places), so a host adjusts the
 // entries it settles differently before declaring them. Funds and precious
 // metals are left out; a host that needs one adds it.
-func ISO4217() []lang.CurrencySpec {
-	out := make([]lang.CurrencySpec, 0, len(iso4217Places))
+func ISO4217() []funroute.CurrencySpec {
+	out := make([]funroute.CurrencySpec, 0, len(iso4217Places))
 	for code, digits := range iso4217Places {
-		out = append(out, lang.CurrencySpec{Code: code, Digits: digits})
+		out = append(out, funroute.CurrencySpec{Code: code, Digits: digits})
 	}
 	return out
 }

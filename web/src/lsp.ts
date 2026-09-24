@@ -1,5 +1,5 @@
 // The page's connection to the language server, which runs in a worker built
-// from lang/lsp. The transport is the one @codemirror/lsp-client takes.
+// from the lsp package. The transport is the one @codemirror/lsp-client takes.
 import { LSPClient, formatKeymap, hoverTooltips, serverCompletionSource, serverDiagnostics, signatureHelp } from "@codemirror/lsp-client";
 import type { Transport } from "@codemirror/lsp-client";
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";

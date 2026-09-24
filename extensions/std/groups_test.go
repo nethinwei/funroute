@@ -3,15 +3,15 @@ package std_test
 import (
 	"testing"
 
-	"funroute/lang"
+	"github.com/nethinwei/funroute"
 )
 
 // Grouping and running totals: the two list operations a single fold cannot do.
 func TestGroupingAndRunningTotals(t *testing.T) {
 	t.Parallel()
-	specs := []lang.ArgSpec{
-		{Name: "amounts", Type: lang.ArrayOf(lang.IntType)},
-		{Name: "channels", Type: lang.ArrayOf(lang.StringType)},
+	specs := []funroute.ArgSpec{
+		{Name: "amounts", Type: funroute.ArrayOf(funroute.IntType)},
+		{Name: "channels", Type: funroute.ArrayOf(funroute.StringType)},
 	}
 	args := map[string]any{"amounts": []any{100, 200, 300}, "channels": []any{"adyen", "stripe", "adyen"}}
 	totals, err := run(t, `{k: sum(v) for k, v in group_by(amounts, channels)}`, args, specs...)

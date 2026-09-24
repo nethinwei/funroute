@@ -14,12 +14,12 @@ import (
 	"fmt"
 	"math"
 
-	"funroute/lang"
+	"github.com/nethinwei/funroute"
 )
 
 var (
 	errNoAbsolute   = fmt.Errorf("the smallest int has no absolute value")
-	errDivideByZero = fmt.Errorf("%w: division by zero", lang.ErrArithmetic)
+	errDivideByZero = fmt.Errorf("%w: division by zero", funroute.ErrArithmetic)
 )
 
 // maxRangeLength caps one range call. The compiler already requires constant
@@ -28,11 +28,11 @@ var (
 const maxRangeLength = 10_000
 
 // Register adds the pack to a registry.
-func Register(registry *lang.Registry) error {
+func Register(registry *funroute.Registry) error {
 	if registry == nil {
 		return fmt.Errorf("registry is required")
 	}
-	for _, register := range []func(*lang.Registry) error{
+	for _, register := range []func(*funroute.Registry) error{
 		registerSum, registerExtremes, registerQuantifiers, registerRange,
 		registerStrings, registerArrays, registerNumbers, registerStatistics, registerSelect, registerGroups, registerDicts,
 		registerMoney,
@@ -44,8 +44,8 @@ func Register(registry *lang.Registry) error {
 	return nil
 }
 
-func registerSum(registry *lang.Registry) error {
-	doc := lang.Doc{Constexpr: true,
+func registerSum(registry *funroute.Registry) error {
+	doc := funroute.Doc{Constexpr: true,
 		Label:       "求和",
 		Description: "把数组里的元素依次加起来；空数组是 0。要加的东西先用推导式算出来，再交给它。",
 		Category:    "聚合",
@@ -56,7 +56,7 @@ func registerSum(registry *lang.Registry) error {
 	return eachType(registry, "sum", doc, sumInts, sumFloats)
 }
 
-func registerExtremes(registry *lang.Registry) error {
+func registerExtremes(registry *funroute.Registry) error {
 	for _, extreme := range []struct {
 		name, label, result string
 		ints                func([]int64) (int64, error)
@@ -66,7 +66,7 @@ func registerExtremes(registry *lang.Registry) error {
 		{"min", "最小值", "最小的元素", minOf[int64], minOf[float64], minOf[string]},
 		{"max", "最大值", "最大的元素", maxOf[int64], maxOf[float64], maxOf[string]},
 	} {
-		doc := lang.Doc{Constexpr: true,
+		doc := funroute.Doc{Constexpr: true,
 			Label:       extreme.label,
 			Description: "取数组里" + extreme.label + "；数值按大小、字符串按 UTF-8 字节序；空数组报错，因为没有可取的元素。",
 			Category:    "聚合",
@@ -83,8 +83,8 @@ func registerExtremes(registry *lang.Registry) error {
 	return nil
 }
 
-func registerQuantifiers(registry *lang.Registry) error {
-	any := lang.Doc{Constexpr: true,
+func registerQuantifiers(registry *funroute.Registry) error {
+	any := funroute.Doc{Constexpr: true,
 		Label:       "任一为真",
 		Description: "数组里只要有一个 true 就是 true；空数组是 false。",
 		Category:    "聚合",
@@ -92,7 +92,7 @@ func registerQuantifiers(registry *lang.Registry) error {
 		Params:      []string{"布尔数组"},
 		Result:      "是否存在",
 	}
-	all := lang.Doc{Constexpr: true,
+	all := funroute.Doc{Constexpr: true,
 		Label:       "全部为真",
 		Description: "数组里每一个都是 true 才是 true；空数组是 true。",
 		Category:    "聚合",
@@ -110,22 +110,22 @@ func registerQuantifiers(registry *lang.Registry) error {
 // host. Its arguments must be constant, so the length of what it produces is
 // known when the rule is compiled and the bounds in docs/termination.md hold
 // unchanged.
-func registerRange(registry *lang.Registry) error {
+func registerRange(registry *funroute.Registry) error {
 	for _, form := range []struct {
 		labels []string
-		bounds func([]lang.Value) (int64, int64, int64)
+		bounds func([]funroute.Value) (int64, int64, int64)
 	}{
-		{[]string{"个数"}, func(args []lang.Value) (int64, int64, int64) { return 0, argInt(args, 0), 1 }},
-		{[]string{"起点", "终点"}, func(args []lang.Value) (int64, int64, int64) {
+		{[]string{"个数"}, func(args []funroute.Value) (int64, int64, int64) { return 0, argInt(args, 0), 1 }},
+		{[]string{"起点", "终点"}, func(args []funroute.Value) (int64, int64, int64) {
 			return argInt(args, 0), argInt(args, 1), 1
 		}},
-		{[]string{"起点", "终点", "步长"}, func(args []lang.Value) (int64, int64, int64) {
+		{[]string{"起点", "终点", "步长"}, func(args []funroute.Value) (int64, int64, int64) {
 			return argInt(args, 0), argInt(args, 1), argInt(args, 2)
 		}},
 	} {
-		params := make([]lang.Type, len(form.labels))
+		params := make([]funroute.Type, len(form.labels))
 		for i := range params {
-			params[i] = lang.IntType
+			params[i] = funroute.IntType
 		}
 		if err := register(registry, rangeSpec(params, form.labels, form.bounds)); err != nil {
 			return err
@@ -134,16 +134,16 @@ func registerRange(registry *lang.Registry) error {
 	return nil
 }
 
-func rangeSpec(params []lang.Type, labels []string, bounds func([]lang.Value) (int64, int64, int64)) lang.FunctionSpec {
-	return lang.FunctionSpec{
+func rangeSpec(params []funroute.Type, labels []string, bounds func([]funroute.Value) (int64, int64, int64)) funroute.FunctionSpec {
+	return funroute.FunctionSpec{
 		Name:   "range",
 		Params: params,
-		Result: lang.ArrayOf(lang.IntType),
-		Eval: func(_ context.Context, args []lang.Value) (lang.Value, error) {
+		Result: funroute.ArrayOf(funroute.IntType),
+		Eval: func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 			start, stop, step := bounds(args)
 			return sequence(start, stop, step)
 		},
-		Doc: lang.Doc{Constexpr: true,
+		Doc: funroute.Doc{Constexpr: true,
 			Label:       "整数序列",
 			Description: "生成一段整数：range(3) 是 [0,1,2]，range(1,4) 是 [1,2,3]，第三个参数是步长。参数的规模必须由输入界定 —— 字面量、len(容器) 或两者的算术组合，所以 range(len(fees)) 可以，range(某个入参) 不行。",
 			BoundedArgs: true,
@@ -155,30 +155,30 @@ func rangeSpec(params []lang.Type, labels []string, bounds func([]lang.Value) (i
 	}
 }
 
-func argInt(args []lang.Value, index int) int64 {
+func argInt(args []funroute.Value, index int) int64 {
 	value, _ := args[index].Int()
 	return value
 }
 
-func sequence(start, stop, step int64) (lang.Value, error) {
+func sequence(start, stop, step int64) (funroute.Value, error) {
 	if step == 0 {
-		return lang.Value{}, fmt.Errorf("range step must not be zero")
+		return funroute.Value{}, fmt.Errorf("range step must not be zero")
 	}
 	items := []int64{}
 	for value := start; step > 0 && value < stop || step < 0 && value > stop; value += step {
 		if len(items) == maxRangeLength {
-			return lang.Value{}, fmt.Errorf("range is longer than %d items", maxRangeLength)
+			return funroute.Value{}, fmt.Errorf("range is longer than %d items", maxRangeLength)
 		}
 		items = append(items, value)
 	}
-	return lang.ToValue(items)
+	return funroute.ToValue(items)
 }
 
 func sumInts(items []int64) (int64, error) {
 	total := int64(0)
 	for _, item := range items {
 		if item > 0 && total > math.MaxInt64-item || item < 0 && total < math.MinInt64-item {
-			return 0, fmt.Errorf("%w: integer overflow in sum", lang.ErrArithmetic)
+			return 0, fmt.Errorf("%w: integer overflow in sum", funroute.ErrArithmetic)
 		}
 		total += item
 	}
@@ -191,7 +191,7 @@ func sumFloats(items []float64) (float64, error) {
 		total += item
 	}
 	if math.IsNaN(total) || math.IsInf(total, 0) {
-		return 0, fmt.Errorf("%w: non-finite float result in sum", lang.ErrArithmetic)
+		return 0, fmt.Errorf("%w: non-finite float result in sum", funroute.ErrArithmetic)
 	}
 	return total, nil
 }
@@ -236,15 +236,15 @@ func allTrue(items []bool) (bool, error) {
 	return true, nil
 }
 
-// logic and register are how the pack registers: lang.Logic and
+// logic and register are how the pack registers: funroute.Logic and
 // Registry.Register with the name's examples (examples.go) in the doc, so
 // every overload of a name shows the same uses.
-func logic(registry *lang.Registry, name string, doc lang.Doc, fn any) error {
+func logic(registry *funroute.Registry, name string, doc funroute.Doc, fn any) error {
 	doc.Examples = examples[name]
-	return lang.Logic(registry, name, doc, fn)
+	return funroute.Logic(registry, name, doc, fn)
 }
 
-func register(registry *lang.Registry, spec lang.FunctionSpec) error {
+func register(registry *funroute.Registry, spec funroute.FunctionSpec) error {
 	spec.Doc.Examples = examples[spec.Name]
 	return registry.Register(spec)
 }
@@ -254,7 +254,7 @@ func register(registry *lang.Registry, spec lang.FunctionSpec) error {
 // three registrations — that is the signature, not repetition. What this takes
 // out is the error check that used to be written once per type, and what it
 // buys back is a single place to read how many types a name covers.
-func eachType(registry *lang.Registry, name string, doc lang.Doc, implementations ...any) error {
+func eachType(registry *funroute.Registry, name string, doc funroute.Doc, implementations ...any) error {
 	for _, implementation := range implementations {
 		if err := logic(registry, name, doc, implementation); err != nil {
 			return err

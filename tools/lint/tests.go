@@ -10,14 +10,16 @@ import (
 
 // A test file is named for the source file it tests: foo_test.go sits next
 // to foo.go, so the tests of a piece of code are found where the code is.
-// Go's own conventions are the only exceptions: example_test.go holds a
-// package's godoc examples, and export_test.go gives external tests the
-// internals they need.
+// Go's own conventions are the exceptions: example_test.go holds a package's
+// godoc examples, and export_test.go gives external tests the internals they
+// need. So is a test suite, a package whose only source file is doc.go — the
+// public surface's, internal/hosttest, tests the one file funroute.go by
+// topic.
 var unpairedTestFiles = map[string]bool{"example_test.go": true, "export_test.go": true}
 
 func checkTestPairing(path string) []violation {
 	name := filepath.Base(path)
-	if unpairedTestFiles[name] {
+	if unpairedTestFiles[name] || isTestSuite(filepath.Dir(path)) {
 		return nil
 	}
 	source := filepath.Join(filepath.Dir(path), strings.TrimSuffix(name, "_test.go")+".go")
@@ -25,6 +27,21 @@ func checkTestPairing(path string) []violation {
 		return nil
 	}
 	return []violation{{path, 1, "test file has no source file " + filepath.Base(source) + " to test"}}
+}
+
+// isTestSuite reports a directory whose only source file is doc.go.
+func isTestSuite(dir string) bool {
+	sources, _ := filepath.Glob(filepath.Join(dir, "*.go"))
+	count := 0
+	for _, source := range sources {
+		if !strings.HasSuffix(source, "_test.go") {
+			count++
+			if filepath.Base(source) != "doc.go" {
+				return false
+			}
+		}
+	}
+	return count == 1
 }
 
 // checkTestFile holds a _test.go file to the testing package's current

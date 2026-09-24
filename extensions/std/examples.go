@@ -1,14 +1,14 @@
 package std
 
-import "funroute/lang"
+import "github.com/nethinwei/funroute"
 
 // examples are the pack's uses, by name: logic and register give each
 // overload of a name the same list. Between them a name's examples choose
-// every one of its overloads (a test in lang/internal/machine runs each and
+// every one of its overloads (a test in internal/machine runs each and
 // asks the compiler what it chose). They are closed expressions over the
 // kernel and this pack, so they run as written in any console that registers
 // both and declares ISO 4217 money rounding half up.
-var examples = map[string][]lang.Example{
+var examples = map[string][]funroute.Example{
 	"sum": {
 		{Source: "sum([1, 2, 3])", Result: "6"},
 		{Source: "sum([0.5, 0.25])", Result: "0.75"},
@@ -68,14 +68,14 @@ var examples = map[string][]lang.Example{
 	"avg": {
 		{Source: "avg([1, 2])", Result: "1.5"},
 		{Source: "avg([1.0, 2.0, 4.5])", Result: "2.5"},
-		{Source: "avg([USD 1, USD 2])", Result: `"USD 1.50"`},
-		{Source: "round(avg([USD 0.01, USD 0.02]), @down)", Result: `"USD 0.01"`},
+		{Source: "avg([USD 1, USD 2], @half_even)", Result: `"USD 1.50"`},
+		{Source: "avg([USD 0.01, USD 0.02], @down)", Result: `"USD 0.01"`},
 	},
 	"median": {
 		{Source: "median([1, 2, 3, 4])", Result: "2.5"},
 		{Source: "median([1.0, 5.0, 2.0])", Result: "2"},
-		{Source: "median([USD 1, USD 3])", Result: `"USD 2.00"`},
-		{Source: "round(median([USD 0.01, USD 0.02]), @down)", Result: `"USD 0.01"`},
+		{Source: "median([USD 1, USD 3], @half_even)", Result: `"USD 2.00"`},
+		{Source: "median([USD 0.01, USD 0.02], @down)", Result: `"USD 0.01"`},
 	},
 	"stddev":       {{Source: "stddev([2, 4, 4, 4, 5, 5, 7, 9])", Result: "2"}, {Source: "stddev([1.0, 3.0])", Result: "1"}},
 	"percentile":   {{Source: "percentile([1, 2, 3, 4], 0.5)", Result: "2.5"}, {Source: "percentile([10.0, 20.0], 0.95)", Result: "19.5"}},
@@ -101,8 +101,8 @@ var examples = map[string][]lang.Example{
 
 // extremes shows min or max over an array of every element type and between
 // two values of each.
-func extremes(name, integer, float, money, text string) []lang.Example {
-	return []lang.Example{
+func extremes(name, integer, float, money, text string) []funroute.Example {
+	return []funroute.Example{
 		{Source: name + "([1, 5, 3])", Result: integer},
 		{Source: name + "([0.5, 1.5])", Result: float},
 		{Source: name + "([USD 1, USD 2])", Result: money},
@@ -114,8 +114,8 @@ func extremes(name, integer, float, money, text string) []lang.Example {
 	}
 }
 
-func numericOrder(name, integers, floats, money, texts string) []lang.Example {
-	return []lang.Example{
+func numericOrder(name, integers, floats, money, texts string) []funroute.Example {
+	return []funroute.Example{
 		{Source: name + "([2, 3, 1])", Result: integers},
 		{Source: name + "([1.5, 2.5, 0.5])", Result: floats},
 		{Source: name + "([USD 2, USD 3, USD 1])", Result: money},
@@ -125,8 +125,8 @@ func numericOrder(name, integers, floats, money, texts string) []lang.Example {
 
 // positions shows arg_min or arg_max over [4, 9, 9, 1] and its likes; ties
 // take the first.
-func positions(name, integer string) []lang.Example {
-	return []lang.Example{
+func positions(name, integer string) []funroute.Example {
+	return []funroute.Example{
 		{Source: name + "([4, 9, 9, 1])", Result: integer},
 		{Source: name + "([4.5, 9.5, 9.5, 1.5])", Result: integer},
 		{Source: name + "([USD 4, USD 9, USD 9, USD 1])", Result: integer},
@@ -136,11 +136,11 @@ func positions(name, integer string) []lang.Example {
 
 // byKey shows a function that orders ["a", "b", "c"] by keys of every type,
 // the keys ranking them b, a, c from the largest down.
-func byKey(name, tail, result string) []lang.Example {
+func byKey(name, tail, result string) []funroute.Example {
 	keys := []string{"[2, 3, 1]", "[0.2, 0.3, 0.1]", "[USD 2, USD 3, USD 1]", `["m", "z", "a"]`}
-	out := make([]lang.Example, 0, len(keys))
+	out := make([]funroute.Example, 0, len(keys))
 	for _, key := range keys {
-		out = append(out, lang.Example{Source: name + `(["a", "b", "c"], ` + key + tail, Result: result})
+		out = append(out, funroute.Example{Source: name + `(["a", "b", "c"], ` + key + tail, Result: result})
 	}
 	return out
 }

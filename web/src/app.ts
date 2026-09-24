@@ -11,7 +11,6 @@ import type { ContractPanel } from "./contract.ts";
 import type { RunPanel } from "./runner.ts";
 import type { Block, Edit, StructureView } from "./canvas.ts";
 import { switchRefusal, type Checked, type View } from "./views.ts";
-import { quotesText, type Quote, type QuoteTables } from "./quotes.ts";
 import "./contract.ts";
 import "./runner.ts";
 import "./canvas.ts";
@@ -131,13 +130,8 @@ async function run() {
   client.sync();
   try {
     const args = argsText(runner.entries());
-    const table = runner.table();
-    if ("error" in table) {
-      throw new Error(table.error);
-    }
-    const { quotes: rates, tables } = table;
     const started = performance.now();
-    const result = await client.request<object, RunResult>("workspace/executeCommand", { command: "funroute.run", arguments: [{ uri: URI, args, rates, tables }] });
+    const result = await client.request<object, RunResult>("workspace/executeCommand", { command: "funroute.run", arguments: [{ uri: URI, args }] });
     runner.done(result, performance.now() - started);
   } catch (error) {
     failed("运行没有完成")(error);
@@ -157,14 +151,13 @@ $("#copy").addEventListener("click", () => {
 
 type Example = {
   label: string; category: string; description: string; source: string; contract: TextContract;
-  args: Record<string, unknown>; rates?: Quote[]; tables?: QuoteTables;
+  args: Record<string, unknown>;
 };
 
 function pick(example: Example) {
   contract.contract = example.contract;
   runner.declared = example.contract.result;
   runner.values = Object.fromEntries(Object.entries(example.args ?? {}).map(([name, value]) => [name, JSON.stringify(value)]));
-  runner.rates = quotesText(example.rates ?? [], example.tables);
   runner.result = null;
   sendContract();
   replaceAll(editor, example.source);
@@ -193,11 +186,11 @@ function showCatalog(catalog: Catalog) {
 }
 
 // moneySection lists the currencies the registry declared, each with its
-// decimal places, and the rounding a product falls back on.
+// decimal places.
 function moneySection(money?: MoneySpec) {
   if (!money) return nothing;
   return html`<h4>币种</h4>
-    <p class="money-note">默认舍入 <code>${money.rounding}</code>，括号里是小数位。金额写作 <code>USD 1.70</code>，币种直接写代码 <code>USD</code>，汇率写作 <code>150 JPY / USD</code>。</p>
+    <p class="money-note">括号里是小数位。金额写作 <code>USD 1.70</code>，币种直接写代码 <code>USD</code>，汇率写作 <code>150 JPY / USD</code>；舍入一律写出来：<code>round(amount * 2.9%, @half_up)</code>。</p>
     <p class="currencies">${money.currencies.map((currency) => html`<code>${currency.code}(${currency.digits})</code> `)}</p>`;
 }
 

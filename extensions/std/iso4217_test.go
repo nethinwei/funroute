@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"funroute/extensions/std"
-	"funroute/lang"
+	"github.com/nethinwei/funroute"
+	"github.com/nethinwei/funroute/extensions/std"
 )
 
 // Every entry is a three-letter ISO code with 0 to 8 places — the range
@@ -48,15 +48,15 @@ func isISOCode(code string) bool {
 func TestISO4217IsAcceptedByDeclareMoney(t *testing.T) {
 	t.Parallel()
 	table := std.ISO4217()
-	registry := lang.CoreRegistry()
-	if err := registry.DeclareMoney(lang.MoneySpec{Rounding: lang.RoundHalfUp, Currencies: table}); err != nil {
+	registry := funroute.CoreRegistry()
+	if err := registry.DeclareMoney(funroute.MoneySpec{Currencies: table}); err != nil {
 		t.Fatalf("DeclareMoney(ISO4217()): %v", err)
 	}
 	spec, declared := registry.Money()
 	if !declared || len(spec.Currencies) != len(table) {
 		t.Fatalf("declared %d currencies (%v), want %d", len(spec.Currencies), declared, len(table))
 	}
-	currencies, err := lang.NewCurrencies(lang.MoneySpec{Rounding: lang.RoundHalfUp, Currencies: table})
+	currencies, err := funroute.NewCurrencies(funroute.MoneySpec{Currencies: table})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestISO4217IsAcceptedByDeclareMoney(t *testing.T) {
 }
 
 // checkOneUnit reads "<code> 1" and expects 10^digits minor units.
-func checkOneUnit(t *testing.T, currencies *lang.Currencies, currency lang.CurrencySpec) {
+func checkOneUnit(t *testing.T, currencies *funroute.Currencies, currency funroute.CurrencySpec) {
 	t.Helper()
 	want := int64(1)
 	for range currency.Digits {
@@ -136,7 +136,7 @@ func TestISO4217ReturnsACopy(t *testing.T) {
 }
 
 // canonical is a table as sorted text, since the order is not part of it.
-func canonical(table []lang.CurrencySpec) []string {
+func canonical(table []funroute.CurrencySpec) []string {
 	out := make([]string, len(table))
 	for i, currency := range table {
 		out[i] = fmt.Sprintf("%s:%d", currency.Code, currency.Digits)

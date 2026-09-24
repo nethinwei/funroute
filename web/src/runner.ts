@@ -4,16 +4,15 @@
 // contract it sends. The arguments are the program's as the server lists them
 // — the contract's, or the ones read from the text when it declares none. The
 // server decodes the values against the contract, so a wrong one comes back as
-// the server's message. The rate table is what amount -> JPY converts through.
+// the server's message.
 import { LitElement, css, html, nothing } from "lit";
 import type { ArgSpec, ResultSpec, RunResult } from "./protocol.ts";
-import { parseQuotes, quotesForRun, type Quote, type QuoteTables } from "./quotes.ts";
 import { define, fieldStyles, labelStyles } from "./ui.ts";
 
 export class RunPanel extends LitElement {
   static properties = {
     args: { attribute: false }, result: { attribute: false }, busy: { type: Boolean },
-    inferred: { type: Boolean }, returns: { state: true }, elapsed: { state: true }, rates: { state: true },
+    inferred: { type: Boolean }, returns: { state: true }, elapsed: { state: true },
   };
   declare result: RunResult | null;
   declare busy: boolean;
@@ -21,8 +20,6 @@ export class RunPanel extends LitElement {
   declare inferred: boolean;
   declare returns: ResultSpec;
   declare elapsed: number;
-  // rates is the rate table as typed, "USD/JPY 150.25" a line.
-  declare rates: string;
   private list: ArgSpec[] = [];
   // values is what was typed for each argument, by name.
   values: Record<string, string> = {};
@@ -34,7 +31,6 @@ export class RunPanel extends LitElement {
     this.inferred = false;
     this.returns = { type: "", doc: "" };
     this.elapsed = 0;
-    this.rates = "";
   }
 
   get args(): ArgSpec[] { return this.list; }
@@ -57,13 +53,6 @@ export class RunPanel extends LitElement {
   set declared(result: ResultSpec | undefined) {
     this.returns = { type: result?.type ?? "", doc: result?.doc ?? "" };
   }
-
-  // quotes is the rate table to run with; bad is the first line that is not
-  // a quote.
-  quotes(): { quotes: Quote[]; bad?: number } { return parseQuotes(this.rates); }
-
-  // table is the rate tables a run takes, or why there are none.
-  table(): { quotes: Quote[]; tables: QuoteTables } | { error: string } { return quotesForRun(this.rates); }
 
   entries() {
     return this.list.map(({ name }) => ({ name, text: this.values[name] ?? "" }));
@@ -109,15 +98,6 @@ export class RunPanel extends LitElement {
       ${this.list.length ? this.list.map((arg) => this.argRow(arg)) : html`<p class="empty">${empty}</p>`}</section>`;
   }
 
-  private ratesSection() {
-    const { bad } = this.quotes();
-    return html`<section class="rates" aria-label="汇率表">
-      <label class="label" for="rates">汇率表<span class="hint">amount -> JPY 按它换汇，每行一条；@名字 一行开始一张具名汇率表</span></label>
-      <textarea id="rates" rows="2" .value=${this.rates} placeholder="USD/JPY 150.25" spellcheck="false"
-        @input=${(event: Event) => { this.rates = (event.target as HTMLTextAreaElement).value; }}></textarea>
-      ${bad ? html`<p class="bad">第 ${bad} 行不是汇率，写成 USD/JPY 150.25</p>` : nothing}</section>`;
-  }
-
   private outcome(result: RunResult) {
     const failed = Boolean(result.error);
     const partial = !failed && result.unavailable.length > 0;
@@ -139,7 +119,6 @@ export class RunPanel extends LitElement {
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.8v10.4L13 8z" fill="currentColor"/></svg>${this.busy ? "运行中" : "运行"}</button></header>
       ${this.returnsSection()}
       ${this.argsSection()}
-      ${this.ratesSection()}
       ${this.result ? this.outcome(this.result) : html`<p class="empty">填好入参后运行，结果显示在这里。</p>`}</div>`;
   }
 
@@ -165,8 +144,6 @@ export class RunPanel extends LitElement {
     .returns .type { color: var(--violet-ink); }
     .returns .doc { font-family: inherit; }
     .args { display: grid; gap: 10px; }
-    .rates { display: grid; gap: 6px; }
-    .rates textarea { width: 100%; resize: vertical; }
     .bad { margin: 0; color: var(--danger-ink); font-size: 11px; }
     .hint { margin-left: 8px; font-weight: 500; letter-spacing: 0; }
     .arg { display: grid; gap: 4px; }
@@ -192,13 +169,14 @@ export class RunPanel extends LitElement {
 // placeholderFor shows the shape a value of type takes as JSON. An alias
 // names its shape elsewhere, so it gets the general hint.
 function placeholderFor(type: string): string {
+  if (type === "array<fxrate>") return "[{\"base\": \"USD\", \"quote\": \"JPY\", \"rate\": \"150.25\"}]";
   if (type.startsWith("array")) return "[ … ]";
   if (type.startsWith("dict") || type.startsWith("record")) return "{ … }";
   if (type === "string" || type.startsWith("enum")) return "\"…\"";
   if (type === "bool") return "true / false";
   if (type === "int" || type === "float") return "0";
   if (type.startsWith("money")) return "\"USD 1.70\"";
-  if (type === "rate") return "\"0.029\"";
+  if (type === "ratio") return "\"0.029\"";
   if (type.startsWith("fxrate")) return "{\"base\": \"USD\", \"quote\": \"JPY\", \"rate\": \"150.25\"}";
   if (type.startsWith("currency")) return "\"USD\"";
   return "JSON 值";

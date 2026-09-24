@@ -5,7 +5,7 @@ import (
 	"math"
 	"slices"
 
-	"funroute/lang"
+	"github.com/nethinwei/funroute"
 )
 
 // The numeric helpers a fee calculation reaches for. round is here and rounds
@@ -13,8 +13,8 @@ import (
 // "四舍五入"; it takes a float to a whole float. Money's rounding is a
 // different question — how to split an amount across the smallest unit
 // without losing a cent — and money will answer it on its own terms.
-func registerNumbers(registry *lang.Registry) error {
-	absolute := lang.Doc{
+func registerNumbers(registry *funroute.Registry) error {
+	absolute := funroute.Doc{
 		Constexpr: true, Label: "绝对值", Category: "数值", Cost: 2,
 		Description: "取绝对值；整数的最小值没有相反数，所以那一个报错而不是绕回去。",
 		Params:      []string{"数值"}, Result: "绝对值",
@@ -32,7 +32,7 @@ func registerNumbers(registry *lang.Registry) error {
 		{"floor", "向下取整", "取不大于它的最大整数。结果是 int。", math.Floor},
 		{"round", "四舍五入", "四舍五入到整数，半数远离零（0.5 进 1，-0.5 进 -1）。结果是 int。要按小数位舍入金额，那是 money 的事。", math.Round},
 	} {
-		doc := lang.Doc{
+		doc := funroute.Doc{
 			Constexpr: true, Label: fn.label, Category: "数值", Cost: 3,
 			Description: fn.description, Params: []string{"数值"}, Result: "整数",
 		}
@@ -43,7 +43,7 @@ func registerNumbers(registry *lang.Registry) error {
 	if err := registerPower(registry); err != nil {
 		return err
 	}
-	return logic(registry, "mod", lang.Doc{
+	return logic(registry, "mod", funroute.Doc{
 		Constexpr: true, Label: "取余", Category: "数值", Cost: 3,
 		Description: "浮点取余，符号跟随被除数；除数不能为零。写作 a % b。",
 		Params:      []string{"被除数", "除数"}, Result: "余数",
@@ -70,8 +70,8 @@ func roundingTo(name string, apply func(float64) float64) func(float64) (int64, 
 	}
 }
 
-func registerStatistics(registry *lang.Registry) error {
-	average := lang.Doc{
+func registerStatistics(registry *funroute.Registry) error {
+	average := funroute.Doc{
 		Constexpr: true, Label: "平均值", Category: "聚合", Cost: 5,
 		Description: "算术平均；空数组报错，因为没有可平均的东西。",
 		Params:      []string{"数组"}, Result: "平均值",
@@ -79,7 +79,7 @@ func registerStatistics(registry *lang.Registry) error {
 	if err := eachType(registry, "avg", average, averageOf[int64], averageOf[float64]); err != nil {
 		return err
 	}
-	middle := lang.Doc{
+	middle := funroute.Doc{
 		Constexpr: true, Label: "中位数", Category: "聚合", Cost: 8,
 		Description: "排序后的中间值；个数为偶时取中间两个的平均。空数组报错。",
 		Params:      []string{"数组"}, Result: "中位数",
@@ -87,7 +87,7 @@ func registerStatistics(registry *lang.Registry) error {
 	if err := eachType(registry, "median", middle, medianOf[int64], medianOf[float64]); err != nil {
 		return err
 	}
-	spread := lang.Doc{
+	spread := funroute.Doc{
 		Constexpr: true, Label: "标准差", Category: "聚合", Cost: 9,
 		Description: "总体标准差（除以个数，不是个数减一）：数据就是全部时用它，衡量成功率或费率的抖动。空数组报错。",
 		Params:      []string{"数组"}, Result: "标准差",
@@ -95,7 +95,7 @@ func registerStatistics(registry *lang.Registry) error {
 	if err := eachType(registry, "stddev", spread, deviationOf[int64], deviationOf[float64]); err != nil {
 		return err
 	}
-	quantile := lang.Doc{
+	quantile := funroute.Doc{
 		Constexpr: true, Label: "分位数", Category: "聚合", Cost: 9,
 		Description: "升序排列后的分位值，比例写 0 到 1（p95 就是 0.95），落在两个样本之间时线性插值。空数组报错。",
 		Params:      []string{"数组", "比例"}, Result: "分位值",
@@ -141,7 +141,7 @@ func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) 
 // registerPairwise is min and max on two values rather than on a list: a fee
 // cap reads min(fee, cap), and making someone build an array for that is the
 // kind of friction a rule writer notices every day.
-func registerPairwise(registry *lang.Registry) error {
+func registerPairwise(registry *funroute.Registry) error {
 	for _, extreme := range []struct {
 		name, label, which string
 		smallest           bool
@@ -149,7 +149,7 @@ func registerPairwise(registry *lang.Registry) error {
 		{"min", "两者取小", "较小", true},
 		{"max", "两者取大", "较大", false},
 	} {
-		doc := lang.Doc{
+		doc := funroute.Doc{
 			Constexpr: true, Label: extreme.label, Category: "数值", Cost: 2,
 			Description: "两个同型数值或字符串里" + extreme.which + "的那个。封顶写 min(fee, cap)。",
 			Params:      []string{"左值", "右值"}, Result: "结果",
@@ -204,10 +204,10 @@ func pairwise[T int64 | float64 | string](smallest bool) func(T, T) (T, error) {
 // registerPower is what an exponential backoff is written with:
 // base * pow(2, attempt). There is no ** operator — one spelling is enough,
 // and the operator table stays the size it is.
-func registerPower(registry *lang.Registry) error {
-	doc := lang.Doc{
+func registerPower(registry *funroute.Registry) error {
+	doc := funroute.Doc{
 		Constexpr: true, Label: "幂", Category: "数值", Cost: 4,
-		Description: "底数的指数次方。整数版的指数不能为负（那不是整数），结果溢出会报错；浮点版按 IEEE 754 计算。退避间隔写 base * pow(2, attempt)。",
+		Description: "底数的指数次方。整数版的指数不能为负（那不是整数），结果溢出会报错，按平方求幂计算，指数再大也只算几十步；浮点版按 IEEE 754 计算。退避间隔写 base * pow(2, attempt)。",
 		Params:      []string{"底数", "指数"}, Result: "幂",
 	}
 	return eachType(registry, "pow", doc, powInt, func(base, exponent float64) (float64, error) {
@@ -219,17 +219,28 @@ func registerPower(registry *lang.Registry) error {
 	})
 }
 
+// powInt squares its way up, so its work is the exponent's bit length — at
+// most 63 steps — never the exponent itself: pow(1, 9223372036854775807) is
+// as quick as pow(2, 10), at run time and when the compiler folds it. A base
+// whose square is needed and overflows would overflow the result as well.
 func powInt(base, exponent int64) (int64, error) {
 	if exponent < 0 {
 		return 0, fmt.Errorf("a negative exponent has no integer result; use floats for that")
 	}
 	result := int64(1)
-	for range exponent {
-		product, err := multiplyInts(result, base)
-		if err != nil {
-			return 0, err
+	for exponent > 0 {
+		var err error
+		if exponent&1 == 1 {
+			if result, err = multiplyInts(result, base); err != nil {
+				return 0, err
+			}
 		}
-		result = product
+		exponent >>= 1
+		if exponent > 0 {
+			if base, err = multiplyInts(base, base); err != nil {
+				return 0, err
+			}
+		}
 	}
 	return result, nil
 }
@@ -240,7 +251,7 @@ func multiplyInts(left, right int64) (int64, error) {
 	}
 	product := left * right
 	if product/right != left {
-		return 0, fmt.Errorf("%w: integer overflow in pow", lang.ErrArithmetic)
+		return 0, fmt.Errorf("%w: integer overflow in pow", funroute.ErrArithmetic)
 	}
 	return product, nil
 }

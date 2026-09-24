@@ -6,21 +6,21 @@ import (
 	"slices"
 	"sort"
 
-	"funroute/lang"
+	"github.com/nethinwei/funroute"
 )
 
 // Grouping, ranking and running totals: the three things a rule does to a list
 // that a single fold cannot express. They keep the same two-lists shape as the
 // selection functions — the values and the key each is filed under.
-func registerGroups(registry *lang.Registry) error {
-	item := lang.TypeVar("T")
-	list := lang.ArrayOf(item)
-	if err := register(registry, lang.FunctionSpec{
+func registerGroups(registry *funroute.Registry) error {
+	item := funroute.TypeVar("T")
+	list := funroute.ArrayOf(item)
+	if err := register(registry, funroute.FunctionSpec{
 		Name:   "group_by",
-		Params: []lang.Type{list, lang.ArrayOf(lang.StringType)},
-		Result: lang.DictOf(list),
+		Params: []funroute.Type{list, funroute.ArrayOf(funroute.StringType)},
+		Result: funroute.DictOf(list),
 		Eval:   groupByKeys,
-		Doc: lang.Doc{
+		Doc: funroute.Doc{
 			Constexpr: true, Label: "分组", Category: "选择", Cost: 10,
 			Description: `按第二个数组的键把第一个数组分组，键相同的排在一组里、保持原顺序；两者长度必须相同。每组再聚合就是一句推导式：{k: sum(v) for k, v in group_by(amounts, channels)}。`,
 			Params:      []string{"值", "键"}, Result: "分组结果",
@@ -34,8 +34,8 @@ func registerGroups(registry *lang.Registry) error {
 	return registerCumulative(registry)
 }
 
-func registerRank(registry *lang.Registry) error {
-	doc := lang.Doc{
+func registerRank(registry *funroute.Registry) error {
+	doc := funroute.Doc{
 		Constexpr: true, Label: "名次", Category: "选择", Cost: 9,
 		Description: "每个元素的升序名次，从 1 开始；并列同名次，其后跳号（1,1,3），和 SQL 的 RANK 一样。要降序就先 reverse。",
 		Params:      []string{"键"}, Result: "名次数组",
@@ -43,8 +43,8 @@ func registerRank(registry *lang.Registry) error {
 	return eachType(registry, "rank", doc, rankOf[int64], rankOf[float64], rankOf[string])
 }
 
-func registerCumulative(registry *lang.Registry) error {
-	doc := lang.Doc{
+func registerCumulative(registry *funroute.Registry) error {
+	doc := funroute.Doc{
 		Constexpr: true, Label: "累计和", Category: "聚合", Cost: 8,
 		Description: "逐项累加出的序列：第 i 项是前 i+1 项之和。配下标就能找出累计超限的那一笔：first([i for i in indices(xs) if cumsum(xs)[i] > limit])。",
 		Params:      []string{"数组"}, Result: "累计序列",
@@ -52,12 +52,12 @@ func registerCumulative(registry *lang.Registry) error {
 	return eachType(registry, "cumsum", doc, cumulativeInts, cumulativeFloats)
 }
 
-func groupByKeys(_ context.Context, args []lang.Value) (lang.Value, error) {
+func groupByKeys(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	items, keys := itemsOf(args[0]), itemsOf(args[1])
 	if len(items) != len(keys) {
-		return lang.Value{}, fmt.Errorf("group_by has %d values and %d keys", len(items), len(keys))
+		return funroute.Value{}, fmt.Errorf("group_by has %d values and %d keys", len(items), len(keys))
 	}
-	grouped := map[string][]lang.Value{}
+	grouped := map[string][]funroute.Value{}
 	var order []string
 	for i, key := range keys {
 		name, _ := key.String()
@@ -67,15 +67,15 @@ func groupByKeys(_ context.Context, args []lang.Value) (lang.Value, error) {
 		grouped[name] = append(grouped[name], items[i])
 	}
 	elem := elementType(args[0])
-	entries := make(map[string]lang.Value, len(grouped))
+	entries := make(map[string]funroute.Value, len(grouped))
 	for _, name := range order {
-		group, err := lang.Array(elem, grouped[name])
+		group, err := funroute.Array(elem, grouped[name])
 		if err != nil {
-			return lang.Value{}, err
+			return funroute.Value{}, err
 		}
 		entries[name] = group
 	}
-	return lang.Dict(lang.ArrayOf(elem), entries)
+	return funroute.Dict(funroute.ArrayOf(elem), entries)
 }
 
 // rankOf gives each element its position in the sorted order, counting from 1,

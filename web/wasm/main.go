@@ -14,12 +14,12 @@ import (
 	"sync"
 	"syscall/js"
 
-	"funroute/examples/payment"
-	"funroute/lang/lsp"
+	"github.com/nethinwei/funroute/internal/demo"
+	"github.com/nethinwei/funroute/lsp"
 )
 
 func main() {
-	registry, err := payment.NewRegistry()
+	registry, err := demo.NewRegistry()
 	if err != nil {
 		panic(err)
 	}

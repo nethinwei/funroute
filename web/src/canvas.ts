@@ -39,7 +39,7 @@ const FIELD_TEXT: Record<string, string> = {
   "switch.value": "待匹配值", "let.value": "值", cases: "分支", match: "匹配", result: "结果", default: "否则", source: "输入",
   variable: "元素名", key_variable: "键名", where: "筛选", yield_key: "键", yield: "产出",
   accumulator: "累加器", init: "初值", body: "主体", bindings: "绑定", name: "名字", args: "实参",
-  table: "汇率表", quotes: "报价",
+  quotes: "报价",
 };
 
 export class StructureView extends LitElement {

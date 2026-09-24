@@ -3,7 +3,7 @@ package std_test
 import (
 	"testing"
 
-	"funroute/lang"
+	"github.com/nethinwei/funroute"
 )
 
 // A dictionary's missing key stays an error, because the language has no null
@@ -11,9 +11,9 @@ import (
 // means, and merge is how two layers of configuration become one.
 func TestDictionaryDefaultsAndLayers(t *testing.T) {
 	t.Parallel()
-	defaults := lang.ArgSpec{Name: "defaults", Type: lang.DictOf(lang.IntType)}
-	overrides := lang.ArgSpec{Name: "overrides", Type: lang.DictOf(lang.IntType)}
-	specs := []lang.ArgSpec{defaults, overrides}
+	defaults := funroute.ArgSpec{Name: "defaults", Type: funroute.DictOf(funroute.IntType)}
+	overrides := funroute.ArgSpec{Name: "overrides", Type: funroute.DictOf(funroute.IntType)}
+	specs := []funroute.ArgSpec{defaults, overrides}
 	args := map[string]any{
 		"defaults":  map[string]any{"SG": 250, "US": 300},
 		"overrides": map[string]any{"SG": 180, "JP": 120},

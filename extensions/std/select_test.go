@@ -3,16 +3,16 @@ package std_test
 import (
 	"testing"
 
-	"funroute/lang"
+	"github.com/nethinwei/funroute"
 )
 
 // Picking one candidate out of several is what a routing rule does, and it
 // takes two lists: the candidates and the key each is judged by.
 func TestSelectingAmongCandidates(t *testing.T) {
 	t.Parallel()
-	channels := lang.ArgSpec{Name: "channels", Type: lang.ArrayOf(lang.StringType)}
-	fees := lang.ArgSpec{Name: "fees", Type: lang.ArrayOf(lang.IntType)}
-	specs := []lang.ArgSpec{channels, fees}
+	channels := funroute.ArgSpec{Name: "channels", Type: funroute.ArrayOf(funroute.StringType)}
+	fees := funroute.ArgSpec{Name: "fees", Type: funroute.ArrayOf(funroute.IntType)}
+	specs := []funroute.ArgSpec{channels, fees}
 	args := map[string]any{"channels": []any{"adyen", "stripe", "pix"}, "fees": []any{30, 10, 20}}
 	for _, test := range []struct {
 		name, source string
@@ -56,9 +56,9 @@ func TestSelectingAmongCandidates(t *testing.T) {
 // until the running total passes the cap" needs no lambda.
 func TestCuttingWhereARunEnds(t *testing.T) {
 	t.Parallel()
-	amounts := lang.ArgSpec{Name: "amounts", Type: lang.ArrayOf(lang.IntType)}
-	cap := lang.ArgSpec{Name: "cap", Type: lang.IntType}
-	specs := []lang.ArgSpec{amounts, cap}
+	amounts := funroute.ArgSpec{Name: "amounts", Type: funroute.ArrayOf(funroute.IntType)}
+	cap := funroute.ArgSpec{Name: "cap", Type: funroute.IntType}
+	specs := []funroute.ArgSpec{amounts, cap}
 	args := map[string]any{"amounts": []any{300, 400, 500, 200}, "cap": 800}
 	running := `[t <= cap for t in cumsum(amounts)]`
 	for _, test := range []struct {

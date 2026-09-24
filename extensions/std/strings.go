@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"funroute/lang"
+	"github.com/nethinwei/funroute"
 )
 
 // The string functions a routing rule actually writes: normalising a channel
@@ -13,7 +13,7 @@ import (
 // and putting reason codes back together. Everything here counts in characters
 // (UTF-8 code points), not bytes, because that is what someone reading a rule
 // means by "the first six".
-func registerStrings(registry *lang.Registry) error {
+func registerStrings(registry *funroute.Registry) error {
 	for _, fn := range []struct {
 		name, label, description, param, result string
 		apply                                   func(string) string
@@ -22,7 +22,7 @@ func registerStrings(registry *lang.Registry) error {
 		{"lower", "转小写", "把字符串转成小写。", "文本", "小写文本", strings.ToLower},
 		{"trim", "去空白", "去掉字符串两端的空白字符。", "文本", "去掉空白的文本", strings.TrimSpace},
 	} {
-		doc := lang.Doc{Constexpr: true,
+		doc := funroute.Doc{Constexpr: true,
 			Label: fn.label, Description: fn.description, Category: "字符串", Cost: 3,
 			Params: []string{fn.param}, Result: fn.result,
 		}
@@ -42,7 +42,7 @@ func registerStrings(registry *lang.Registry) error {
 	return registerPadding(registry)
 }
 
-func registerStringTests(registry *lang.Registry) error {
+func registerStringTests(registry *funroute.Registry) error {
 	for _, fn := range []struct {
 		name, label, description string
 		test                     func(string, string) bool
@@ -51,7 +51,7 @@ func registerStringTests(registry *lang.Registry) error {
 		{"starts_with", "以此开头", "文本是不是以这个前缀开头，卡 BIN 与号段判断用它。", strings.HasPrefix},
 		{"ends_with", "以此结尾", "文本是不是以这个后缀结尾。", strings.HasSuffix},
 	} {
-		doc := lang.Doc{Constexpr: true,
+		doc := funroute.Doc{Constexpr: true,
 			Label: fn.label, Description: fn.description, Category: "字符串", Cost: 3,
 			Params: []string{"文本", "子串"}, Result: "是否命中",
 		}
@@ -65,8 +65,8 @@ func registerStringTests(registry *lang.Registry) error {
 	return nil
 }
 
-func registerStringParts(registry *lang.Registry) error {
-	if err := logic(registry, "slice", lang.Doc{Constexpr: true,
+func registerStringParts(registry *funroute.Registry) error {
+	if err := logic(registry, "slice", funroute.Doc{Constexpr: true,
 		Label:       "取子串",
 		Description: "按字符位置取一段，从 start 到 end（不含 end），下标从 0 开始；越界报错，不静默截断。",
 		Category:    "字符串", Cost: 4,
@@ -74,7 +74,7 @@ func registerStringParts(registry *lang.Registry) error {
 	}, sliceString); err != nil {
 		return err
 	}
-	if err := logic(registry, "split", lang.Doc{Constexpr: true,
+	if err := logic(registry, "split", funroute.Doc{Constexpr: true,
 		Label:       "拆分",
 		Description: "按分隔符把文本拆成数组；分隔符为空是错误。",
 		Category:    "字符串", Cost: 5,
@@ -82,7 +82,7 @@ func registerStringParts(registry *lang.Registry) error {
 	}, splitString); err != nil {
 		return err
 	}
-	if err := logic(registry, "join", lang.Doc{Constexpr: true,
+	if err := logic(registry, "join", funroute.Doc{Constexpr: true,
 		Label:       "拼接",
 		Description: "用分隔符把一组文本连起来，拼原因码用它。",
 		Category:    "字符串", Cost: 5,
@@ -92,7 +92,7 @@ func registerStringParts(registry *lang.Registry) error {
 	}); err != nil {
 		return err
 	}
-	return logic(registry, "replace", lang.Doc{Constexpr: true,
+	return logic(registry, "replace", funroute.Doc{Constexpr: true,
 		Label:       "替换",
 		Description: "把文本里出现的每一处 old 换成 new。",
 		Category:    "字符串", Cost: 5,
@@ -104,7 +104,7 @@ func registerStringParts(registry *lang.Registry) error {
 
 // registerPadding is for the places a payment file or an order number has a
 // fixed width: 00001234, a 20-character reconciliation column.
-func registerPadding(registry *lang.Registry) error {
+func registerPadding(registry *funroute.Registry) error {
 	for _, side := range []struct {
 		name, label, side string
 		left              bool
@@ -112,9 +112,9 @@ func registerPadding(registry *lang.Registry) error {
 		{"pad_left", "左侧补齐", "左侧", true},
 		{"pad_right", "右侧补齐", "右侧", false},
 	} {
-		doc := lang.Doc{
+		doc := funroute.Doc{
 			Constexpr: true, Label: side.label, Category: "字符串", Cost: 4,
-			Description: "把文本补到指定的字符数，在" + side.side + "补；填充串必须是一个字符。已经够长就原样返回 —— 截断会悄悄丢掉数据。",
+			Description: "把文本补到指定的字符数（至多 10000），在" + side.side + "补；填充串必须是一个字符。已经够长就原样返回 —— 截断会悄悄丢掉数据。",
 			Params:      []string{"文本", "宽度", "填充"}, Result: "补齐后的文本",
 		}
 		left := side.left
@@ -127,12 +127,18 @@ func registerPadding(registry *lang.Registry) error {
 	return nil
 }
 
+// maxPadWidth caps the width a padding call builds. A fixed-width field in a
+// payment file is tens of characters; the cap is what keeps a width written
+// as 4000000000 from allocating gigabytes — in a run, and in the compiler,
+// which folds a constant call — since fuel counts calls, not bytes.
+const maxPadWidth = 10_000
+
 func padTo(text string, width int64, fill string, left bool) (string, error) {
 	if utf8.RuneCountInString(fill) != 1 {
 		return "", fmt.Errorf("the padding must be exactly one character, got %q", fill)
 	}
-	if width < 0 {
-		return "", fmt.Errorf("a width cannot be negative, got %d", width)
+	if width < 0 || width > maxPadWidth {
+		return "", fmt.Errorf("a width is 0 to %d characters, got %d", maxPadWidth, width)
 	}
 	missing := int(width) - utf8.RuneCountInString(text)
 	if missing <= 0 {

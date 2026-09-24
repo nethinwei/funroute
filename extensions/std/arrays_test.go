@@ -3,7 +3,7 @@ package std_test
 import (
 	"testing"
 
-	"funroute/lang"
+	"github.com/nethinwei/funroute"
 )
 
 // The shortcuts that exist so a rule writer does not have to compose them:
@@ -11,10 +11,10 @@ import (
 // the previous one".
 func TestConvenienceShortcuts(t *testing.T) {
 	t.Parallel()
-	channels := lang.ArgSpec{Name: "channels", Type: lang.ArrayOf(lang.StringType)}
-	fees := lang.ArgSpec{Name: "fees", Type: lang.ArrayOf(lang.IntType)}
-	allow := lang.ArgSpec{Name: "allow", Type: lang.ArrayOf(lang.StringType)}
-	specs := []lang.ArgSpec{channels, fees, allow}
+	channels := funroute.ArgSpec{Name: "channels", Type: funroute.ArrayOf(funroute.StringType)}
+	fees := funroute.ArgSpec{Name: "fees", Type: funroute.ArrayOf(funroute.IntType)}
+	allow := funroute.ArgSpec{Name: "allow", Type: funroute.ArrayOf(funroute.StringType)}
+	specs := []funroute.ArgSpec{channels, fees, allow}
 	args := map[string]any{
 		"channels": []any{"adyen", "stripe", "pix"},
 		"fees":     []any{30, 10, 20},

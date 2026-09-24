@@ -39,9 +39,9 @@ modernize: $(MODERNIZE)
 
 # Imports come in two groups: the standard library, then this module.
 check-imports: $(GOIMPORTS)
-	@unsorted=$$($(GOIMPORTS) -local funroute -l . | grep -v node_modules); \
+	@unsorted=$$($(GOIMPORTS) -local github.com/nethinwei/funroute -l . | grep -v node_modules); \
 	if [ -n "$$unsorted" ]; then \
-		echo "goimports -local funroute required for:"; echo "$$unsorted"; exit 1; \
+		echo "goimports -local github.com/nethinwei/funroute required for:"; echo "$$unsorted"; exit 1; \
 	fi
 
 # The front end is TypeScript bundled by esbuild into web/dist: one module per
