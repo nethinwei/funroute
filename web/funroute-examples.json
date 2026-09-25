@@ -3894,7 +3894,7 @@
     {
       "label": "链式换汇",
       "category": "跨境汇率",
-      "description": "每个 -> 只用报价里这一对货币的报价（或反方向报价的倒数），从不自己找中转货币；要经过人民币就写两跳。每一跳落到中间币种的最小单位时各舍入一次，中间的 CNY 是一笔真实的金额",
+      "description": "每个 -> 只用报价里这一对货币的报价（或反方向报价的倒数），从不自己找中转货币；要经过人民币就写两跳。和 round 里的其他运算一样，中间的 CNY 保持精确，round 在最后只舍入一次",
       "source": "using(market, round(amount -> CNY -> USD, @half_even))",
       "contract": {
         "args": [

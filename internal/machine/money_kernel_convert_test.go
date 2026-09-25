@@ -119,6 +119,24 @@ func TestAConversionRoundsInARoundOrByItsMode(t *testing.T) {
 	}
 }
 
+// Hops in a round are exact like every other step there: the yen between
+// the dollar cent and the euro stays 1.505, and round rounds the 0.7525 euro
+// once, as the chained rate would. convert with a mode, hop by hop, lands on
+// whole yen first.
+func TestChainedHopsRoundOnceInARound(t *testing.T) {
+	t.Parallel()
+	const quotes = "using(150.5 JPY / USD, 0.5 EUR / JPY, "
+	for source, want := range map[string]string{
+		quotes + "round(USD 0.01 -> JPY -> EUR, @half_even))":                    "{EUR 75}",
+		quotes + "convert(convert(USD 0.01, JPY, @half_even), EUR, @half_even))": "{EUR 100}",
+	} {
+		value, err := evalMoney(t, source, "", nil)
+		if got := fmt.Sprint(value.Any()); err != nil || got != want {
+			t.Errorf("%s = %s, %v, want %s", source, got, err, want)
+		}
+	}
+}
+
 // A using with no quote of the pair, either way, cannot convert: ErrNoFxRate,
 // data not at hand, which fallback takes.
 func TestAConversionWithoutAQuoteIsErrNoFxRate(t *testing.T) {

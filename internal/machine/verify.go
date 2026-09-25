@@ -110,32 +110,74 @@ type edge struct {
 type verifier struct {
 	artifact  *Artifact
 	functions []*RegisteredFunction
-	states    []*vstate
-	work      []int
-	deepest   int
+	// joins marks where paths can meet: the start, and every instruction a
+	// jump lands on. Only there is a state kept; any other instruction has
+	// one way in, from the one before it.
+	joins   []bool
+	states  []*vstate
+	work    []int
+	deepest int
 }
 
 // verify walks the artifact's bytecode, calling functions, and returns how
 // deep its stack gets.
 func verify(artifact *Artifact, functions []*RegisteredFunction) (int, error) {
 	instructions := artifact.parts.Instructions
-	v := &verifier{artifact: artifact, functions: functions, states: make([]*vstate, len(instructions)+1)}
+	v := &verifier{artifact: artifact, functions: functions, joins: joinsOf(instructions), states: make([]*vstate, len(instructions)+1)}
 	v.states[0] = &vstate{locals: make([]*Type, artifact.parts.Locals)}
 	v.work = []int{0}
 	for len(v.work) > 0 {
 		pc := v.work[len(v.work)-1]
 		v.work = v.work[:len(v.work)-1]
-		edges, err := v.step(pc, v.states[pc].clone())
-		if err != nil {
-			return 0, fmt.Errorf("invalid bytecode at %d: %w", pc, err)
-		}
-		for _, next := range edges {
-			if err := v.merge(next); err != nil {
-				return 0, fmt.Errorf("invalid bytecode at %d: %w", next.pc, err)
-			}
+		if err := v.walk(pc, v.states[pc].clone()); err != nil {
+			return 0, err
 		}
 	}
 	return max(v.deepest, 1), nil
+}
+
+// joinsOf marks the start and every instruction a jump lands on.
+func joinsOf(instructions []Instruction) []bool {
+	joins := make([]bool, len(instructions)+1)
+	joins[0] = true
+	for _, in := range instructions {
+		switch in.Op {
+		case OpJump, OpJumpIfFalse, OpLoopInit, OpLoopNext, OpBeginFallback:
+			if in.A >= 0 && in.A <= len(instructions) {
+				joins[in.A] = true
+			}
+		}
+	}
+	return joins
+}
+
+// walk steps from pc in state s, carrying s itself through the instructions
+// that have one way in, and merges it into each join it reaches. A run of
+// straight code costs one state, however deep its stack gets, not one per
+// instruction. An instruction's paths out never share a state, so the one
+// carried on is no other path's.
+func (v *verifier) walk(pc int, s *vstate) error {
+	for {
+		edges, err := v.step(pc, s)
+		if err != nil {
+			return fmt.Errorf("invalid bytecode at %d: %w", pc, err)
+		}
+		onward := -1
+		for i, next := range edges {
+			if !v.joins[next.pc] {
+				onward = i
+				continue
+			}
+			if err := v.merge(next); err != nil {
+				return fmt.Errorf("invalid bytecode at %d: %w", next.pc, err)
+			}
+		}
+		if onward < 0 {
+			return nil
+		}
+		pc, s = edges[onward].pc, edges[onward].state
+		v.deepest = max(v.deepest, len(s.stack))
+	}
 }
 
 // merge brings a path into an instruction. Paths that meet must agree on

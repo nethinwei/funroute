@@ -182,7 +182,7 @@ func TestCatalogJSONShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "038cf37d3d044821efbc553a9dda2abce601721074f792548edc58d044af257f"
+	const want = "b6108d3aedd6aea71fca042d1e49fbfd8186a6f9044d54d9cee710dc791a9f09"
 	if got := fmt.Sprintf("%x", sha256.Sum256(encoded)); got != want {
 		t.Fatalf("sha256(json.Marshal(catalog)) = %s, want %s", got, want)
 	}

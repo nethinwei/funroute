@@ -2,6 +2,7 @@ package machine_test
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -137,4 +138,27 @@ func loaded(t *testing.T, source string) *machine.Runtime {
 		t.Fatal(err)
 	}
 	return runtime
+}
+
+// Straight code keeps one state however deep its stack gets: loading a
+// 4000-item array, 4000 values deep, costs megabytes, not the gigabytes a
+// state per instruction would. It reads the process's allocation counter,
+// so it runs alone.
+func TestLoadingStraightCodeKeepsOneState(t *testing.T) {
+	source := "len([" + strings.TrimSuffix(strings.Repeat("a, ", 4000), ", ") + "])"
+	registry := fxRegistry(t)
+	artifact, err := compileMoney(t, registry, source, "a: int", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	if _, err := machine.Instantiate(artifact, registry); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 64<<20 {
+		t.Fatalf("loading %d instructions 4000 values deep allocated %d MB, want it to grow with the code, not its square", artifact.InstructionCount(), allocated>>20)
+	}
 }
