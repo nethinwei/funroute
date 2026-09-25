@@ -61,14 +61,17 @@ type frame struct {
 	// records and views are, by argument, the frame's record and slot a
 	// Program loads an argument into when the program only reads a
 	// record's fields, or only walks, measures or indexes an array.
-	records  []recordValue
-	views    []arenaSlot
-	borrowed bool
+	records []recordValue
+	views   []arenaSlot
 	// recordViews are, by argument, the arrays of plain records a Program
 	// hands over as the host's slice, and items, by loop, the record each
 	// loop over one loads its item into (host_view.go).
 	recordViews []recordsView
 	items       []recordValue
+	// borrows is the arguments this run loaded into records, views or
+	// recordViews: only those, and the items of loops over a recordViews,
+	// are cleared when the frame goes back.
+	borrows []int
 	// onlyReads says a Program loaded the arguments: only the slots of the
 	// ones the program reads were written.
 	onlyReads bool
@@ -92,6 +95,7 @@ func (r *Runtime) newFrame() *frame {
 		arena: make([]arenaSlot, r.reg.arenas), dest: make([]arenaSlot, r.reg.dests),
 		records: make([]recordValue, len(r.reg.fieldOnly)), views: make([]arenaSlot, len(r.reg.viewOnly)),
 		recordViews: make([]recordsView, len(r.reg.viewOnly)), items: make([]recordValue, len(r.reg.loops)),
+		borrows: make([]int, 0, len(r.reg.viewOnly)),
 	}
 	copy(f.regs, r.constants)
 	f.fxQuotes, f.fxMarks = f.fxQuotesArray[:0], f.fxMarksArray[:0]
@@ -177,16 +181,16 @@ func (f *frame) returnMemory() {
 	for i := range f.arena {
 		f.arena[i].release()
 	}
-	if f.borrowed {
-		for i := range f.records {
-			clear(f.records[i].fields)
-		}
-		clear(f.views)
-		clear(f.recordViews)
-		for i := range f.items {
-			clear(f.items[i].fields)
-		}
-		f.borrowed = false
+	if len(f.borrows) == 0 {
+		return
+	}
+	for _, i := range f.borrows {
+		clear(f.records[i].fields)
+		f.views[i], f.recordViews[i] = arenaSlot{}, recordsView{}
+	}
+	f.borrows = f.borrows[:0]
+	for i := range f.items {
+		clear(f.items[i].fields)
 	}
 }
 

@@ -118,10 +118,11 @@ func TestTheVectorAnswersAsTheBody(t *testing.T) {
 func vectorInputs() []map[string]any {
 	var inputs []map[string]any
 	rng := rand.New(rand.NewPCG(1, 2))
-	for _, n := range []int{0, 1, 5, 255, 256, 257, 600} {
-		// A loop that may stop takes blocks of 16, 32, 64 … items: their
-		// edges are at 16, 48, 112 and 240.
-		for _, at := range []int{-1, 0, n / 2, n - 1, 15, 16, 47, 48, 111, 112, 255, 256} {
+	for _, n := range []int{0, 1, 5, 8, 9, 255, 256, 257, 600} {
+		// A loop that may stop runs its first 8 items in the body, then
+		// takes blocks of 16, 32, 64 … items: their edges are at 8, 24, 56,
+		// 120 and 248. A full block's are at 256.
+		for _, at := range []int{-1, 0, n / 2, n - 1, 7, 8, 23, 24, 55, 56, 119, 120, 247, 248, 255, 256} {
 			for _, special := range []int64{0, 7, math.MaxInt64, math.MinInt64} {
 				inputs = append(inputs, vectorInput(rng, n, at, special))
 			}

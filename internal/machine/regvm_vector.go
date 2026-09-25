@@ -18,6 +18,11 @@ const vecChunk = 256
 // after is twice the last, up to vecChunk.
 const firstStopChunk = 16
 
+// scalarFirst is how many items the body runs of a loop that may stop
+// before the vector takes the rest: starting the vector costs about as much
+// as a hundred ns of items, and an item near the start often decides.
+const scalarFirst = 8
+
 // vecKind is what a column holds.
 type vecKind uint8
 
@@ -101,20 +106,20 @@ func (s *vecScratch) aliveFor(n int) {
 	}
 }
 
-// vectorLoop runs as much of the loop as the vector can settle, and is the
-// item the body goes on from and where; finished when that is every item.
-// The body goes on past the prelude, which only jumps to it. Each block of
-// items counts as that many turns of the loop.
+// vectorLoop runs as much of the rest of the loop, from the item it is at,
+// as the vector can settle, and is the item the body goes on from and where;
+// finished when that is every item. The body goes on past the prelude, which
+// only jumps to it. Each block of items counts as that many turns of the loop.
 func (f *frame) vectorLoop(loop *regLoop, plan *vecPlan, start int) (int, int, bool, error) {
 	run, ok := f.startVector(loop, plan)
 	if !ok {
-		return 0, start, false, nil
+		return loop.index, start, false, nil
 	}
 	chunk := vecChunk
 	if plan.stops {
 		chunk = firstStopChunk
 	}
-	for base := 0; base < loop.length; chunk = min(2*chunk, vecChunk) {
+	for base := loop.index; base < loop.length; chunk = min(2*chunk, vecChunk) {
 		n := min(chunk, loop.length-base)
 		run.load(loop, base, n)
 		limit := run.columns(n)

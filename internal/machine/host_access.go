@@ -102,13 +102,13 @@ func (read argRead) load(p unsafe.Pointer, f *frame) (Value, error) {
 	switch {
 	case f == nil:
 	case read.fieldOnly:
-		f.borrowed = true
+		f.borrows = append(f.borrows, read.index)
 		return read.codec.loadRecordInto(p, &f.records[read.index])
 	case read.view:
-		f.borrowed = true
+		f.borrows = append(f.borrows, read.index)
 		return viewIn(&f.views[read.index], read.codec.native, p)
 	case read.records:
-		f.borrowed = true
+		f.borrows = append(f.borrows, read.index)
 		return viewRecords(&f.recordViews[read.index], read.codec, p)
 	}
 	return read.codec.load(p)
@@ -321,6 +321,9 @@ func (c *codec) loadRecord(p unsafe.Pointer) (Value, error) {
 
 func (c *codec) loadSlice(p unsafe.Pointer) (Value, error) {
 	header := (*sliceHeader)(p)
+	if c.elem.shape == shapeRecord {
+		return c.loadRecords(header)
+	}
 	builder := newArrayBuilder(*c.typ.elem, header.len)
 	for i := range header.len {
 		item, err := c.elem.load(unsafe.Add(header.data, uintptr(i)*c.stride))
@@ -330,6 +333,28 @@ func (c *codec) loadSlice(p unsafe.Pointer) (Value, error) {
 		builder.add(item)
 	}
 	return builder.finish(), nil
+}
+
+// loadRecords loads a slice of records in one allocation for the records
+// and one for their fields, not one a record. Each record is still its own,
+// its fields capped at its share, so nothing written to one reaches the next;
+// one kept alone keeps the others' memory with it.
+func (c *codec) loadRecords(header *sliceHeader) (Value, error) {
+	plan, width := c.elem, len(c.elem.fields)
+	records, fields, items := make([]recordValue, header.len), make([]Value, header.len*width), make([]Value, header.len)
+	for i := range header.len {
+		p, record := unsafe.Add(header.data, uintptr(i)*c.stride), &records[i]
+		record.typ, record.fields = &plan.typ, fields[i*width:(i+1)*width:(i+1)*width]
+		for j, field := range plan.fields {
+			value, err := field.codec.load(unsafe.Add(p, field.offset))
+			if err != nil {
+				return Value{}, fmt.Errorf("item %d: field %q: %w", i, plan.typ.fields[j].name, err)
+			}
+			record.fields[j] = value
+		}
+		items[i] = Value{kind: RecordKind, box: record}
+	}
+	return Value{kind: ArrayKind, box: &nestedArray{elem: *c.typ.elem, items: items}}, nil
 }
 
 func (c *codec) loadBoxed(p unsafe.Pointer) (Value, error) {

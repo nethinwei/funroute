@@ -145,21 +145,46 @@ type wideRequest struct {
 	Name  string           `funroute:"name"`
 	Xs    []int64          `funroute:"xs"`
 	Rates map[string]int64 `funroute:"rates"`
+	Order wideOrder        `funroute:"order"`
+	Items []wideItem       `funroute:"items"`
+}
+
+type wideOrder struct {
+	Fee  int64    `funroute:"fee"`
+	Tags []string `funroute:"tags"`
+}
+
+type wideItem struct {
+	Name string `funroute:"name"`
+	Fee  int64  `funroute:"fee"`
 }
 
 // A frame that goes back after a run points at nothing of it — whether a
 // Program loaded only the scalars the rule reads out of a struct with
-// strings, slices and maps in it, or RunValues copied every argument in.
+// strings, slices and maps in it, borrowed an array, a record or an array of
+// records from the host, or RunValues copied every argument in.
 func TestAnIdleFrameKeepsNothingOfTheRun(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ReduceForm); err != nil {
+		t.Fatal(err)
+	}
 	binding, err := compile.Bind[wideRequest, int64](registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := &wideRequest{A: 7, B: 3, Name: "adyen", Xs: []int64{1, 2}, Rates: map[string]int64{"k": 1}}
-	values := []machine.Value{machine.Int(7), machine.Int(3), machine.String("adyen"), must(machine.ToValue(in.Xs)), must(machine.ToValue(in.Rates))}
-	for _, source := range []string{"a + b", "a + len(xs)", "len(name) + b"} {
+	in := &wideRequest{A: 7, B: 3, Name: "adyen", Xs: []int64{1, 2}, Rates: map[string]int64{"k": 1},
+		Order: wideOrder{Fee: 5, Tags: []string{"vip"}}, Items: []wideItem{{Name: "a", Fee: 1}, {Name: "bc", Fee: 2}}}
+	args := binding.Options().Args
+	itemType, _ := args[6].Type.Elem()
+	values := []machine.Value{machine.Int(7), machine.Int(3), machine.String("adyen"), must(machine.ToValue(in.Xs)), must(machine.ToValue(in.Rates)),
+		must(machine.Record(args[5].Type, []machine.Value{machine.Int(5), must(machine.ToValue(in.Order.Tags))})),
+		must(machine.Array(itemType, []machine.Value{
+			must(machine.Record(itemType, []machine.Value{machine.String("a"), machine.Int(1)})),
+			must(machine.Record(itemType, []machine.Value{machine.String("bc"), machine.Int(2)})),
+		}))}
+	sources := []string{"a + b", "a + len(xs)", "len(name) + b", "order.fee + len(order.tags)", "reduce(i in items, total = 0, total + i.fee + len(i.name))"}
+	for _, source := range sources {
 		program, err := binding.Compile(source)
 		if err != nil {
 			t.Fatal(err)

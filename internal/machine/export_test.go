@@ -143,6 +143,16 @@ func IdleFrameHoldsPointers(r *Runtime) bool {
 			return true
 		}
 	}
+	for i := range f.records {
+		if slices.ContainsFunc(f.records[i].fields, func(v Value) bool { return v.s != "" || v.box != nil }) {
+			return true
+		}
+	}
+	if slices.ContainsFunc(f.views, func(slot arenaSlot) bool {
+		return slot.bools != nil || slot.ints != nil || slot.floats != nil || slot.strings != nil
+	}) {
+		return true
+	}
 	return slices.ContainsFunc(f.recordViews, func(view recordsView) bool { return view.data != nil || view.plan != nil })
 }
 

@@ -14,7 +14,10 @@ type regLoop struct {
 	strings       []string
 	bools         []bool
 	length, index int
-	site          *rloop
+	// vecAt is the item a loop that may stop hands to the vector, after the
+	// body ran the ones before it (scalarFirst); 0 when it does not.
+	vecAt int
+	site  *rloop
 	// view is an array of plain records in the host's memory, and item the
 	// frame's record each of its items is loaded into.
 	view *recordsView
@@ -47,18 +50,31 @@ func (f *frame) regLoopInit(pc int, in *rinstr) (int, error) {
 		loop.item = &f.items[in.c]
 	}
 	f.startOutput(loop, in)
-	if site.vec != nil {
-		next, resume, finished, err := f.vectorLoop(loop, site.vec, pc)
-		if err != nil {
-			return pc, err
-		}
-		if finished {
-			return f.endLoop(int(site.exit))
-		}
-		loop.index, pc = next, resume
+	switch {
+	case site.vec == nil:
+	case site.vec.stops:
+		// A loop of scalarFirst items or fewer never gets there.
+		loop.vecAt = scalarFirst
+	default:
+		return f.vectorFrom(loop, pc)
 	}
 	f.bindRegs(loop, loop.index)
 	return pc, nil
+}
+
+// vectorFrom hands the loop to the vector from the item it is at, and goes
+// on at body with the item the vector left, or past the loop.
+func (f *frame) vectorFrom(loop *regLoop, body int) (int, error) {
+	next, resume, finished, err := f.vectorLoop(loop, loop.site.vec, body)
+	if err != nil {
+		return body, err
+	}
+	if finished {
+		return f.endLoop(int(loop.site.exit))
+	}
+	loop.index = next
+	f.bindRegs(loop, loop.index)
+	return resume, nil
 }
 
 // walk reads the loop's source — its keys, or its native backing — and is
@@ -213,6 +229,9 @@ func (f *frame) regLoopNext(pc int, body int32) (int, error) {
 			if err := f.turn(1); err != nil {
 				return pc, err
 			}
+		}
+		if loop.index == loop.vecAt {
+			return f.vectorFrom(loop, int(body))
 		}
 		f.bindRegs(loop, loop.index)
 		return int(body), nil
