@@ -99,7 +99,10 @@ func (l *lowerer) build(in Instruction) {
 	case OpRecordWith:
 		op, count = rRecordWith, len(in.Keys)+1
 	}
-	made := rmake{typ: in.Type, keys: in.Keys}
+	made := rmake{typ: in.Type, keys: in.Keys, built: built{arena: -1, dest: -1}, answer: in.Op == OpMakeRecord && l.flow.answer == l.pc}
+	if in.Op == OpMakeArray {
+		made.built = l.builtFor(l.pc)
+	}
 	if in.Op == OpRecordWith {
 		made.keys, made.fields = nil, fieldIndexes(in)
 	}
@@ -123,6 +126,10 @@ func fieldIndexes(in Instruction) []int {
 func (l *lowerer) call(in Instruction) {
 	function := l.functions[in.A]
 	if kernel, ok := kernelOps[function.key]; ok && function.builtin {
+		// An array in an arena slot is read there.
+		if l.flow.uses[l.pc] {
+			kernel.op = map[rop]rop{rLen: rLenA, rAt: rAtA}[kernel.op]
+		}
 		if kernel.unary {
 			l.unary(kernel.op, 0)
 		} else {
@@ -136,6 +143,7 @@ func (l *lowerer) call(in Instruction) {
 		fn: function, typ: in.Type, args: first, argc: int32(in.B), dst: first, pc: int32(l.pc),
 		refund: l.blockCost - l.blockSpent,
 		kernel: function.builtin && !function.readsRun && function.Doc.Timeout == 0 && !function.Doc.Detached,
+		direct: !function.builtin && function.EvalBatch == nil && function.Doc.Timeout == 0 && !function.Doc.Detached,
 	})
 	l.emit(rCall, int32(len(l.out.calls)-1), 0, 0)
 	l.push(first)
@@ -183,7 +191,7 @@ func (l *lowerer) loopInit(in Instruction) {
 	}
 	source := l.pop()
 	l.flush(0)
-	loop := rloop{typ: in.Type, item: l.localBase + int32(in.B), key: -1, acc: -1, dst: l.top(), exit: int32(in.A)}
+	loop := rloop{typ: in.Type, item: l.localBase + int32(in.B), key: -1, acc: -1, dst: l.top(), exit: int32(in.A), built: l.builtFor(l.pc)}
 	if in.D != NoKey {
 		loop.key = l.localBase + int32(in.D)
 	}

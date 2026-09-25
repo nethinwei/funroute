@@ -95,7 +95,7 @@ func (g *generator) leaf(typ string) string {
 }
 
 func (g *generator) integer(d int) string {
-	switch g.rand.IntN(11) {
+	switch g.rand.IntN(13) {
 	case 0:
 		return fmt.Sprintf("(%s %s %s)", g.of("int", d), g.pick("+", "-", "*", "/", "%"), g.of("int", d))
 	case 1:
@@ -117,6 +117,10 @@ func (g *generator) integer(d int) string {
 		return fmt.Sprintf("host.flaky_v1(%s)", g.of("int", d))
 	case 9:
 		return g.dictionary(d)
+	case 10:
+		return fmt.Sprintf("host.total_v1(%s)", g.of("array", d))
+	case 11:
+		return fmt.Sprintf("len(%s) + %s[0]", g.of("array", d), g.of("array", d))
 	}
 	return fmt.Sprintf("int(%s)", g.of("float", d))
 }
@@ -205,7 +209,15 @@ func (g *generator) text(d int) string {
 }
 
 func (g *generator) array(d int) string {
-	switch g.rand.IntN(4) {
+	switch g.rand.IntN(5) {
+	case 4:
+		// An array bound, then walked twice: it stays in the run.
+		name := g.name()
+		value := g.of("array", d)
+		g.arrays = append(g.arrays, name)
+		body := g.comprehension(d, "")
+		g.arrays = g.arrays[:len(g.arrays)-1]
+		return fmt.Sprintf("let(%s = %s, %s)", name, value, body)
 	case 0:
 		return fmt.Sprintf("[%s, %s]", g.of("int", d), g.of("int", d))
 	case 1:

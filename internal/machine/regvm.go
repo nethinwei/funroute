@@ -119,7 +119,7 @@ func (f *frame) fault(pc int) error {
 		return f.fuelFault(origin, in)
 	}
 	source := f.runtime.artifact.parts.Instructions[origin]
-	left, right := f.regs[in.a], f.regs[in.b]
+	left, right := unarena(f.regs[in.a]), f.regs[in.b]
 	if source.Op == OpEqual {
 		_, err := compareEqual(left, right)
 		return err

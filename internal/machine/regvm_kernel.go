@@ -122,6 +122,19 @@ func eq(regs []Value, in *rinstr) bool {
 	return true
 }
 
+// intToFloat is float(int): exact within 2^53, refused past it.
+func intToFloat(regs []Value, in *rinstr) bool {
+	value, ok := intFloat(regs[in.a].i)
+	if ok {
+		regs[in.c] = Value{kind: FloatKind, f: value}
+	}
+	return ok
+}
+
+func intFloat(i int64) (float64, bool) {
+	return float64(i), -maxExactFloatInt <= i && i <= maxExactFloatInt
+}
+
 // branchEq is rBranchEq: on when the two are equal, to c when they are not.
 // A comparison eq refuses — of handles, of money in two currencies — is
 // refused here too, and the run stays at the operation.

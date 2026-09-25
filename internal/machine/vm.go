@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,9 @@ type Runtime struct {
 	// parameter, which a value of that kind has without looking further;
 	// InvalidKind for the rest.
 	scalars []Kind
+	// stackLimit is what a block is held to under the default stack limit:
+	// the limit when the program goes deeper, and otherwise nothing.
+	stackLimit int
 	// idle is a frame kept for the next run, taken and given back without
 	// the pool's bookkeeping; frames holds the rest.
 	idle   atomic.Pointer[frame]
@@ -91,7 +95,17 @@ func newRuntime(artifact *Artifact, registry *Registry) (*Runtime, error) {
 	return &Runtime{
 		artifact: artifact, registry: registry, constants: constants, functions: functions, depth: proof.depth, reg: reg,
 		money: newMoneyPlan(artifact, registry), scalars: scalarKinds(artifact.parts.Args),
+		stackLimit: stackLimitFor(proof.depth, defaultMaxStack),
 	}, nil
+}
+
+// stackLimitFor is what blocks are held to under limit, for a program
+// depth deep.
+func stackLimitFor(depth, limit int) int {
+	if depth > limit {
+		return limit
+	}
+	return math.MaxInt
 }
 
 // scalarKinds is what Runtime.scalars says of params.
@@ -144,7 +158,7 @@ func EvaluateClosed(parts ArtifactParts, registry *Registry, fuel uint64, maxSta
 		return Value{}, err
 	}
 	f := runtime.acquireFrame()
-	return runtime.runFrame(context.Background(), f, nil, RunOptions{Fuel: fuel, MaxStack: maxStack})
+	return runtime.runFrame(context.Background(), f, nil, RunOptions{Fuel: fuel, MaxStack: maxStack}, resultSink{})
 }
 
 // snapshotArtifact round-trips the artifact through JSON so the runtime owns an
@@ -363,7 +377,7 @@ func (r *Runtime) Run(ctx context.Context, rawArgs map[string]any, options RunOp
 		r.releaseFrame(f)
 		return Value{}, kit.Classify(ErrContract, "", err)
 	}
-	return r.runFrame(ctx, f, args, options)
+	return r.runFrame(ctx, f, args, options, resultSink{})
 }
 
 // RunValues takes the arguments already typed, in the artifact's ABI order. It
@@ -386,7 +400,7 @@ func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOption
 	f := r.acquireFrame()
 	space := f.argSpace(len(args))
 	copy(space, args)
-	return r.runFrame(ctx, f, space, options)
+	return r.runFrame(ctx, f, space, options, resultSink{})
 }
 
 // admit checks a request's arguments as a run would — their kinds unless a
@@ -442,7 +456,7 @@ func (r *Runtime) runTyped(ctx context.Context, args []Value, options RunOptions
 	f := r.acquireFrame()
 	space := f.argSpace(len(args))
 	copy(space, args)
-	return r.runFrame(ctx, f, space, options)
+	return r.runFrame(ctx, f, space, options, resultSink{})
 }
 
 func (r *Runtime) bindArgs(args []Value, rawArgs map[string]any) error {

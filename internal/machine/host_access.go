@@ -1,12 +1,14 @@
 package machine
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"reflect"
 	"slices"
 	"unsafe"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
 )
 
@@ -38,15 +40,23 @@ type sliceHeader struct {
 // float or string field — no enum to hold it to — has its Go kind here and is
 // loaded in place, without the codec's call.
 type argRead struct {
-	index  int
-	offset uintptr
-	kind   reflect.Kind
-	codec  *codec
+	index     int
+	offset    uintptr
+	kind      reflect.Kind
+	codec     *codec
+	fieldOnly bool
+	view      bool
 }
 
-func newArgRead(index int, plan *argsCodec) argRead {
+func newArgRead(index int, plan *argsCodec, fieldOnly, viewOnly bool) argRead {
 	field := plan.fields[index]
-	read := argRead{index: index, offset: field.offset, codec: field.codec}
+	read := argRead{index: index, offset: field.offset, codec: field.codec, fieldOnly: fieldOnly && field.codec.shape == shapeRecord}
+	if viewOnly && field.codec.shape == shapeNative {
+		switch field.codec.native {
+		case nativeBools, nativeInts, nativeFloats, nativeStrings:
+			read.view = true
+		}
+	}
 	if field.codec.shape == shapeScalar && field.codec.typ.kind != EnumKind {
 		switch kind := field.codec.goKind; kind {
 		case reflect.Bool, reflect.Int, reflect.Int64, reflect.Float64, reflect.String:
@@ -59,20 +69,59 @@ func newArgRead(index int, plan *argsCodec) argRead {
 // encodeArgs fills a program's argument slots from the host's struct. Only
 // the arguments the bytecode reads are loaded; the others stay zero, and the
 // program never looks at them.
-func encodeArgs[In any](plan *argsCodec, reads []argRead, args []Value, in *In) error {
+//
+// With a frame, a record argument the program only reads field by field is
+// loaded into the frame's own record, and an array it only walks, measures
+// or indexes into the frame's own slot — the slice's header, not its items.
+func encodeArgs[In any](plan *argsCodec, reads []argRead, args []Value, in *In, f *frame) error {
 	base := unsafe.Pointer(in)
 	for _, read := range reads {
 		p := unsafe.Add(base, read.offset)
 		if loadPlain(read.kind, p, &args[read.index]) {
 			continue
 		}
-		value, err := read.codec.load(p)
+		value, err := read.load(p, f)
 		if err != nil {
 			return fmt.Errorf("argument %q: %w", plan.params[read.index].name, err)
 		}
 		args[read.index] = value
 	}
 	return nil
+}
+
+// load reads the argument at p: into the frame's record when the program
+// only reads its fields.
+// Nothing in the frame points into the host's struct — it may be on the
+// host's stack — only at what its fields point at.
+func (read argRead) load(p unsafe.Pointer, f *frame) (Value, error) {
+	switch {
+	case f == nil:
+	case read.fieldOnly:
+		f.borrowed = true
+		return read.codec.loadRecordInto(p, &f.records[read.index])
+	case read.view:
+		f.borrowed = true
+		return viewIn(&f.views[read.index], read.codec.native, p)
+	}
+	return read.codec.load(p)
+}
+
+// viewIn copies the host's slice at p into slot and is the array there; a
+// float slice is held to being finite, as loading it is.
+func viewIn(slot *arenaSlot, kind native, p unsafe.Pointer) (Value, error) {
+	switch kind {
+	case nativeBools:
+		slot.bools = *(*[]bool)(p)
+		return Value{kind: ArrayKind, box: &slot.bools}, nil
+	case nativeInts:
+		slot.ints = *(*[]int64)(p)
+		return Value{kind: ArrayKind, box: &slot.ints}, nil
+	case nativeFloats:
+		slot.floats = *(*[]float64)(p)
+		return Value{kind: ArrayKind, box: &slot.floats}, checkFloats(slot.floats)
+	}
+	slot.strings = *(*[]string)(p)
+	return Value{kind: ArrayKind, box: &slot.strings}, nil
 }
 
 // loadPlain loads a plain field of kind at p into slot, and reports whether
@@ -414,6 +463,11 @@ func storeNative(kind native, p unsafe.Pointer, v Value) error {
 }
 
 func storeBacking[T any](p unsafe.Pointer, v Value) error {
+	// An answer built in a frame's slot points at the slot's slice.
+	if slot, ok := v.box.(*T); ok {
+		*(*T)(p) = *slot
+		return nil
+	}
 	backing, ok := v.box.(T)
 	if !ok {
 		return fmt.Errorf("value is %s, want %T", v.Type().Summary(), backing)
@@ -482,4 +536,135 @@ func (c *codec) intoGo(v Value) (reflect.Value, error) {
 func noescape(p unsafe.Pointer) unsafe.Pointer {
 	address := uintptr(p)
 	return *(*unsafe.Pointer)(unsafe.Pointer(&address))
+}
+
+// The answer of a Program is written into the host's Out before the frame
+// goes, which lets the run build it in place: a record answered in the
+// frame's own record, an array in the memory of the slice the host already
+// has there (Program.RunInto), and nothing boxed on the way. It is clang's
+// return-value optimization, with the host's Out as the caller's slot.
+//
+// resultSink is where a run delivers its answer: a codec and the host's Out,
+// and whether the slices already in Out may be built into.
+type resultSink struct {
+	plan  *codec
+	out   unsafe.Pointer
+	reuse bool
+}
+
+// placeOf is where a Program's answer goes.
+func placeOf[Out any](out *Out) unsafe.Pointer { return noescape(unsafe.Pointer(out)) }
+
+// runProgram runs the frame for a Program, delivering the answer by plan
+// to out.
+func (r *Runtime) runProgram(ctx context.Context, f *frame, args []Value, options RunOptions, plan *codec, out unsafe.Pointer, reuse bool) error {
+	_, err := r.runFrame(ctx, f, args, options, resultSink{plan: plan, out: out, reuse: reuse})
+	return err
+}
+
+// deliver writes the answer into the host's Out.
+func (s resultSink) deliver(value Value) error {
+	if err := s.plan.store(s.out, value); err != nil {
+		return kit.Classify(ErrContract, "result: ", err)
+	}
+	return nil
+}
+
+// lend readies the frame's answer slots with the slices the host's Out
+// holds — the answer itself, or the answer record's fields — when the host
+// said they may be built into and none shares memory with an argument: an
+// answer built over its own input would read what it had written.
+func (s resultSink) lend(f *frame, args []Value) {
+	for dest := range f.dest {
+		p, plan := s.out, s.plan
+		if dest > 0 {
+			if plan.shape != shapeRecord || dest > len(plan.fields) {
+				continue
+			}
+			field := plan.fields[dest-1]
+			p, plan = unsafe.Add(p, field.offset), field.codec
+		}
+		if plan.shape == shapeNative {
+			lendSlot(&f.dest[dest], plan.native, p, args)
+		}
+	}
+}
+
+// lendSlot takes the host's slice at p into slot, unless an argument's
+// memory overlaps it.
+func lendSlot(slot *arenaSlot, kind native, p unsafe.Pointer, args []Value) {
+	header := (*sliceHeader)(p)
+	if header.cap == 0 || overlapsAny(header, args) {
+		return
+	}
+	switch kind {
+	case nativeBools:
+		slot.bools = (*(*[]bool)(p))[:0]
+	case nativeInts:
+		slot.ints = (*(*[]int64)(p))[:0]
+	case nativeFloats:
+		slot.floats = (*(*[]float64)(p))[:0]
+	case nativeStrings:
+		slot.strings = (*(*[]string)(p))[:0]
+	}
+}
+
+// overlapsAny reports an argument, or a field of a record argument, whose
+// native slice shares memory with the one header describes.
+func overlapsAny(header *sliceHeader, args []Value) bool {
+	meets := func(v Value) bool { return overlaps(header, v.box) }
+	for _, arg := range args {
+		if record, ok := arg.box.(*recordValue); ok && slices.ContainsFunc(record.fields, meets) || meets(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+// overlaps reports a native slice in box whose memory meets header's.
+func overlaps(header *sliceHeader, box any) bool {
+	var other sliceHeader
+	var size uintptr
+	// An argument handed over in place points at the host's slice.
+	box = unarena(Value{box: box}).box
+	switch items := box.(type) {
+	case []bool:
+		other, size = headerOf(items), unsafe.Sizeof(false)
+	case []int64:
+		other, size = headerOf(items), unsafe.Sizeof(int64(0))
+	case []float64:
+		other, size = headerOf(items), unsafe.Sizeof(float64(0))
+	case []string:
+		other, size = headerOf(items), unsafe.Sizeof("")
+	default:
+		return false
+	}
+	if other.cap == 0 {
+		return false
+	}
+	// Both are measured in the other's items: a slice of a different kind
+	// never shares memory with an array of this one, so sizes only matter
+	// for slices of one kind.
+	lo, hi := uintptr(header.data), uintptr(header.data)+uintptr(header.cap)*size
+	otherLo, otherHi := uintptr(other.data), uintptr(other.data)+uintptr(other.cap)*size
+	return lo < otherHi && otherLo < hi
+}
+
+func headerOf[T any](items []T) sliceHeader {
+	return sliceHeader{data: unsafe.Pointer(unsafe.SliceData(items)), len: len(items), cap: cap(items)}
+}
+
+// loadRecordInto loads a record argument into record, the frame's own: a
+// program that only reads the record's fields keeps nothing of it past the
+// run.
+func (c *codec) loadRecordInto(p unsafe.Pointer, record *recordValue) (Value, error) {
+	record.typ, record.fields = &c.typ, record.fields[:0]
+	for i, field := range c.fields {
+		value, err := field.codec.load(unsafe.Add(p, field.offset))
+		if err != nil {
+			return Value{}, fmt.Errorf("field %q: %w", c.typ.fields[i].name, err)
+		}
+		record.fields = append(record.fields, value)
+	}
+	return Value{kind: RecordKind, box: record}, nil
 }

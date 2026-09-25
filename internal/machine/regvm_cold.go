@@ -43,6 +43,10 @@ func coldKernel(regs []Value, pc int, in *rinstr) (int, bool) {
 		return pc, eq(regs, in)
 	case rAt:
 		return pc, at(regs, in)
+	case rAtA:
+		return pc, arenaAt(regs, in)
+	case rIntToF:
+		return pc, intToFloat(regs, in)
 	}
 	return pc, compare(regs, in)
 }
@@ -68,6 +72,8 @@ func compare(regs []Value, in *rinstr) bool {
 		regs[in.c] = Bool(a.s <= b.s)
 	case rLen:
 		regs[in.c] = Int(int64(a.length()))
+	case rLenA:
+		regs[in.c] = Int(int64(arenaLength(*a)))
 	}
 	return true
 }
@@ -87,7 +93,8 @@ func (f *frame) structure(pc int, in *rinstr) (int, bool, error) {
 		f.regs[in.a] = built
 		return pc, true, err
 	case rLoopInit:
-		return f.regLoopInit(pc, in), true, nil
+		pc, err := f.regLoopInit(pc, in)
+		return pc, true, err
 	case rLoopBreak:
 		return f.loopBreak(in), true, nil
 	case rSpread:
@@ -118,14 +125,26 @@ func (f *frame) build(in *rinstr) (Value, error) {
 	items := f.regs[in.a : in.a+in.b]
 	switch in.op {
 	case rMakeArray:
-		builder := newArrayBuilder(*made.typ.elem, len(items))
+		slot := f.slotFor(made.built)
+		if slot == nil {
+			builder := newArrayBuilder(*made.typ.elem, len(items))
+			for _, item := range items {
+				builder.add(item)
+			}
+			return builder.finish(), nil
+		}
+		builder := builderIn(slot, *made.typ.elem, len(items))
 		for _, item := range items {
 			builder.add(item)
 		}
-		return builder.finish(), nil
+		return finishIn(slot, &builder), nil
 	case rMakeDict:
 		return packDict(*made.typ.elem, zipEntries(made.keys, items)), nil
 	case rMakeRecord:
+		if made.answer && f.lending {
+			f.answer.typ, f.answer.fields = made.typ, append(f.answer.fields[:0], items...)
+			return Value{kind: RecordKind, box: &f.answer}, nil
+		}
 		record := newRecord(made.typ, len(items))
 		copy(record.fields, items)
 		return Value{kind: RecordKind, box: record}, nil

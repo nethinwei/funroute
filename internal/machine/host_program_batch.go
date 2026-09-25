@@ -63,7 +63,7 @@ func (p *Program[In, Out]) encodeBatch(ctx context.Context, n int, arg func(int)
 		window := args[i*width : (i+1)*width : (i+1)*width]
 		err := errNilArguments
 		if in := arg(i); in != nil {
-			err = encodeArgs(p.args, p.reads, window, in)
+			err = encodeArgs(p.args, p.reads, window, in, nil)
 		}
 		if err != nil {
 			requests[i].result.err = kit.Classify(ErrContract, "", err)
@@ -125,7 +125,7 @@ func (b *ProgramBatch[In, Out]) Run(ctx context.Context, in *In) (Out, error) {
 		return zero, fmt.Errorf("%w: arguments are nil", ErrContract)
 	}
 	args := make([]Value, len(b.args.params))
-	if err := encodeArgs(b.args, b.reads, args, in); err != nil {
+	if err := encodeArgs(b.args, b.reads, args, in, nil); err != nil {
 		return zero, kit.Classify(ErrContract, "", err)
 	}
 	value, err := b.batch.submit(ctx, args, true)

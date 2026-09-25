@@ -1,6 +1,9 @@
 package machine
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // A Go function of a signature most hosts write — scalars and float or int
 // vectors in, a scalar out, an error or not — is called as itself: a type
@@ -122,3 +125,53 @@ func boolResult(r bool) (Value, error)     { return Bool(r), nil }
 
 // floatResult refuses a result that is not finite, as reflection's does.
 func floatResult(r float64) (Value, error) { return CheckedFloat(r) }
+
+// directBatch is the EvalBatch of a GoBatch of one parameter, of the shapes
+// directEval calls a single call of.
+func directBatch(fn any) (BatchEvalFunc, bool) {
+	switch fn := fn.(type) {
+	case func([]float64) ([]float64, error):
+		return batchOf(withoutContext(fn), floatArg, floatResult), true
+	case func([]float64) []float64:
+		return batchOf(withoutContext(infallible(fn)), floatArg, floatResult), true
+	case func(context.Context, []float64) ([]float64, error):
+		return batchOf(fn, floatArg, floatResult), true
+	case func([][]float64) ([]float64, error):
+		return batchOf(withoutContext(fn), floatsArg, floatResult), true
+	case func(context.Context, [][]float64) ([]float64, error):
+		return batchOf(fn, floatsArg, floatResult), true
+	case func([]int64) ([]int64, error):
+		return batchOf(withoutContext(fn), intArg, intResult), true
+	case func([]string) ([]float64, error):
+		return batchOf(withoutContext(fn), stringArg, floatResult), true
+	}
+	return nil, false
+}
+
+func withoutContext[A, R any](fn func(A) (R, error)) func(context.Context, A) (R, error) {
+	return func(_ context.Context, a A) (R, error) { return fn(a) }
+}
+
+// batchOf calls fn with every request's argument in one slice, and reads
+// one result per answer, as reflection's batch call does.
+func batchOf[A, R any](fn func(context.Context, []A) ([]R, error), arg func(*Value) A, result func(R) (Value, error)) BatchEvalFunc {
+	return func(ctx context.Context, calls [][]Value) ([]Value, error) {
+		column := make([]A, len(calls))
+		for i := range calls {
+			column[i] = arg(&calls[i][0])
+		}
+		answers, err := fn(ctx, column)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]Value, len(answers))
+		for i, answer := range answers {
+			value, err := result(answer)
+			if err != nil {
+				return nil, fmt.Errorf("result %d: %w", i, err)
+			}
+			out[i] = value
+		}
+		return out, nil
+	}
+}

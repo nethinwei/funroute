@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"math"
 )
 
 // NoAccumulator marks a loop instruction as a mapping rather than a fold, and
@@ -56,13 +55,40 @@ type frame struct {
 	// most rules go, so a fresh frame converts without allocating either.
 	fxQuotesArray [4]Value
 	fxMarksArray  [4]int
+	// arena is the memory of the arrays that never leave a run, kept from
+	// run to run. dest is the answer's slots, which the host lends and
+	// lending says it did; the answer's record is then answer, the frame's
+	// own, read before the frame goes.
+	arena   []arenaSlot
+	dest    []arenaSlot
+	lending bool
+	answer  recordValue
+	// records and views are, by argument, the frame's record and slot a
+	// Program loads an argument into when the program only reads a
+	// record's fields, or only walks, measures or indexes an array.
+	records  []recordValue
+	views    []arenaSlot
+	borrowed bool
+	// vector is the vector's columns and run, kept from run to run
+	// (regvm_vector.go); made the first time a loop is run by it.
+	vector *vectorState
+}
+
+// vectorState is a frame's vector: its columns, and its run.
+type vectorState struct {
+	columns vecScratch
+	run     vecRun
 }
 
 // newFrame is a frame for the runtime, its constants already in place: they
 // are copied once, not once a run, and so is everything else a run does not
 // change.
 func (r *Runtime) newFrame() *frame {
-	f := &frame{runtime: r, regs: make([]Value, r.reg.size), argBase: int(r.reg.args), loops: make([]regLoop, 0, r.reg.nesting)}
+	f := &frame{
+		runtime: r, regs: make([]Value, r.reg.size), argBase: int(r.reg.args), loops: make([]regLoop, 0, r.reg.nesting),
+		arena: make([]arenaSlot, r.reg.arenas), dest: make([]arenaSlot, r.reg.dests),
+		records: make([]recordValue, len(r.reg.fieldOnly)), views: make([]arenaSlot, len(r.reg.viewOnly)),
+	}
 	copy(f.regs, r.constants)
 	f.fxQuotes, f.fxMarks = f.fxQuotesArray[:0], f.fxMarksArray[:0]
 	f.fxCtx.frame = f
@@ -72,23 +98,29 @@ func (r *Runtime) newFrame() *frame {
 // argSpace is the registers the n arguments go in.
 func (f *frame) argSpace(n int) []Value { return f.regs[f.argBase : f.argBase+n] }
 
+// defaultMaxStack is a run's stack limit when its options set none.
+const defaultMaxStack = 1_024
+
 // runFrame runs the program in the frame, its arguments in place, with the
-// budget in options, and gives the frame back.
-func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, options RunOptions) (value Value, err error) {
+// budget in options, and gives the frame back. A Program's run delivers the
+// answer into the host's Out first (sink), and may lend the answer's slots.
+func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, options RunOptions, sink resultSink) (value Value, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	f.fuelLeft = cmp.Or(options.Fuel, DefaultFuel)
-	f.maxStack = cmp.Or(options.MaxStack, 1_024)
-	f.stackLimit = math.MaxInt
-	if r.depth > f.maxStack {
-		f.stackLimit = f.maxStack
+	f.maxStack, f.stackLimit = defaultMaxStack, r.stackLimit
+	if options.MaxStack != 0 {
+		f.maxStack, f.stackLimit = options.MaxStack, stackLimitFor(r.depth, options.MaxStack)
 	}
 	f.ctx = ctx
 	// Only a host's call looks at the deadline.
 	f.deadline = r.reg.hosts && ctx.Done() != nil
 	f.prefetched = options.prefetched
-	defer r.finish(f, &err)
+	defer r.finish(f, &value, &err, sink)
+	if f.lending = sink.plan != nil; f.lending && sink.reuse {
+		sink.lend(f, args)
+	}
 	if r.money.any {
 		if err = r.checkUnits(args); err != nil {
 			return Value{}, err
@@ -100,9 +132,13 @@ func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, options 
 // finish ends a run: an extension that panicked is its failure — the recover
 // is here, once a run, not around each call — and the frame goes back for
 // the next run.
-func (r *Runtime) finish(f *frame, err *error) {
+func (r *Runtime) finish(f *frame, value *Value, err *error, sink resultSink) {
 	if recovered := recover(); recovered != nil {
 		*err = fmt.Errorf("%w: extension panicked: %v", ErrExtension, recovered)
+	}
+	if sink.plan != nil && *err == nil {
+		*err = sink.deliver(*value)
+		*value = Value{}
 	}
 	r.releaseFrame(f)
 }
@@ -126,4 +162,33 @@ func (f *frame) release() {
 	if f.fxCtx.Context != nil {
 		f.fxCtx.Context = nil
 	}
+	for i := range f.arena {
+		f.arena[i].release()
+	}
+	if f.borrowed {
+		for i := range f.records {
+			clear(f.records[i].fields)
+		}
+		clear(f.views)
+		f.borrowed = false
+	}
+	if f.lending {
+		// The answer is the host's now: nothing of it stays.
+		clear(f.dest)
+		clear(f.answer.fields)
+		f.answer.fields = f.answer.fields[:0]
+		f.lending = false
+	}
+}
+
+// slotFor is the slot an array is built in, or nil for memory of its own:
+// an answer's slot only when the host lent one.
+func (f *frame) slotFor(where built) *arenaSlot {
+	switch {
+	case where.arena >= 0:
+		return &f.arena[where.arena]
+	case where.dest >= 0 && f.lending:
+		return &f.dest[where.dest]
+	}
+	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -100,4 +101,39 @@ func argumentsFor(params []Type) [][]Value {
 		calls = next
 	}
 	return calls
+}
+
+// Each batch shape called as itself answers as the reflected batch does.
+func TestDirectBatchesAnswerAsReflection(t *testing.T) {
+	t.Parallel()
+	errEmpty := errors.New("empty batch")
+	for _, pair := range []struct{ single, batch any }{
+		{func(x float64) float64 { return x }, func(xs []float64) ([]float64, error) { return xs, failIf(len(xs) == 0, errEmpty) }},
+		{func(x float64) float64 { return x }, func(xs []float64) []float64 { return append(xs, math.Inf(1))[:len(xs)] }},
+		{func(x float64) float64 { return x }, func(_ context.Context, xs []float64) ([]float64, error) { return []float64{math.NaN()}, nil }},
+		{func(x []float64) float64 { return 0 }, func(xs [][]float64) ([]float64, error) { return make([]float64, len(xs)), nil }},
+		{func(_ context.Context, x []float64) (float64, error) { return 0, nil }, func(_ context.Context, xs [][]float64) ([]float64, error) { return make([]float64, len(xs)), nil }},
+		{func(x int64) (int64, error) { return x, nil }, func(xs []int64) ([]int64, error) { return xs, nil }},
+		{func(s string) float64 { return 0 }, func(xs []string) ([]float64, error) { return make([]float64, len(xs)), nil }},
+	} {
+		direct, ok := directBatch(pair.batch)
+		if !ok {
+			t.Fatalf("%T is not called directly", pair.batch)
+		}
+		single, err := reflectSignature(NewRegistry(), pair.single)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reflected, err := reflectBatch(pair.batch, single)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, calls := range [][][]Value{{}, argumentsFor(single.params)} {
+			want, wantErr := reflected.callBatch(t.Context(), calls)
+			got, gotErr := direct(t.Context(), calls)
+			if (gotErr == nil) != (wantErr == nil) || gotErr != nil && gotErr.Error() != wantErr.Error() || !slices.EqualFunc(got, want, Value.Equal) {
+				t.Errorf("%T on %d calls: directly %v, %v; by reflection %v, %v", pair.batch, len(calls), got, gotErr, want, wantErr)
+			}
+		}
+	}
 }

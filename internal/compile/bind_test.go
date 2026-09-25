@@ -270,3 +270,77 @@ func failures() (map[int]error, func(int, error)) {
 	failed := map[int]error{}
 	return failed, func(i int, err error) { failed[i] = err }
 }
+
+type orderIn struct {
+	Order struct {
+		Amount int64   `funroute:"amount"`
+		Risk   float64 `funroute:"risk"`
+		Note   string  `funroute:"note"`
+	} `funroute:"order"`
+	Fees []int64 `funroute:"fees"`
+}
+
+type decisionOut struct {
+	Channel string  `funroute:"channel"`
+	Net     int64   `funroute:"net"`
+	Fees    []int64 `funroute:"fees"`
+}
+
+func forRegistry(t *testing.T) *machine.Registry {
+	t.Helper()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	return registry
+}
+
+// A record argument read field by field, and a record answered, cross
+// without an allocation; so does an array answered into the slice the host
+// lent it, once the slice has room.
+func TestProgramRecordsAndLentArraysDoNotAllocate(t *testing.T) {
+	program := bindProgram[orderIn, decisionOut](t, forRegistry(t),
+		`{channel: if(order.risk < 0.5, "adyen", "manual"), net: order.amount - 30, fees: [fee * 2 for fee in fees if fee > 1]}`)
+	ctx := t.Context()
+	var in orderIn
+	in.Order.Amount, in.Order.Risk, in.Fees = 1000, 0.2, []int64{1, 2, 3}
+	var out decisionOut
+	run := func() {
+		if err := program.RunInto(ctx, &in, &out, machine.RunOptions{}); err != nil || out.Net != 970 || out.Channel != "adyen" || len(out.Fees) != 2 || out.Fees[1] != 6 {
+			t.Fatalf("RunInto(%+v) = %+v, %v", in, out, err)
+		}
+	}
+	run()
+	first := &out.Fees[0]
+	if allocs := testing.AllocsPerRun(100, run); allocs != 0 {
+		t.Errorf("RunInto allocated %v times, want 0", allocs)
+	}
+	if &out.Fees[0] != first {
+		t.Error("RunInto did not build the fees in the slice it was lent")
+	}
+	if allocs := testing.AllocsPerRun(100, func() { _, _ = program.Run(ctx, &in, machine.RunOptions{}) }); allocs != 1 {
+		t.Errorf("Run allocated %v times, want 1: the fees' memory", allocs)
+	}
+}
+
+type feesIn struct {
+	Fees []int64 `funroute:"fees"`
+}
+
+// A slice lent that is the argument's memory is not built into: the answer
+// is what it would be anywhere else, and the argument is left as it was.
+func TestRunIntoDoesNotBuildOverItsArguments(t *testing.T) {
+	t.Parallel()
+	program := bindProgram[feesIn, []int64](t, forRegistry(t), `[fee + 1 for fee in fees]`)
+	fees := []int64{1, 2, 3}
+	in, out := feesIn{Fees: fees}, fees[:1]
+	if err := program.RunInto(t.Context(), &in, &out, machine.RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 3 || out[0] != 2 || out[2] != 4 || fees[0] != 1 || fees[2] != 3 {
+		t.Fatalf("RunInto over its own argument = %v, argument now %v; want [2 3 4] and [1 2 3]", out, fees)
+	}
+	if err := program.RunInto(t.Context(), &in, nil, machine.RunOptions{}); !errors.Is(err, machine.ErrContract) {
+		t.Fatalf("RunInto into nil = %v, want ErrContract", err)
+	}
+}

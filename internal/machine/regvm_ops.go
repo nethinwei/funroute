@@ -48,8 +48,11 @@ const (
 	rBranchLeS
 	rBranchEq
 	rEq
-	rLen // c = the length of the array or dictionary in a
-	rAt  // c = item b of the array in a
+	rLen    // c = the length of the array or dictionary in a
+	rAt     // c = item b of the array in a
+	rIntToF // c = float(a), refusing an int past 2^53
+	rLenA   // rLen of an array in an arena slot
+	rAtA    // rAt of an array in an arena slot
 	// rCall is a call: calls[a] says of what, from which registers, into
 	// which.
 	rCall
@@ -90,7 +93,7 @@ var ropNames = [ropCount]string{
 	rLtI: "lt_i", rLeI: "le_i", rLtF: "lt_f", rLeF: "le_f", rLtS: "lt_s", rLeS: "le_s",
 	rBranchLtI: "branch_lt_i", rBranchLeI: "branch_le_i", rBranchLtF: "branch_lt_f",
 	rBranchLeF: "branch_le_f", rBranchLtS: "branch_lt_s", rBranchLeS: "branch_le_s", rBranchEq: "branch_eq",
-	rEq: "eq", rLen: "len", rAt: "at", rCall: "call", rField: "field",
+	rEq: "eq", rLen: "len", rAt: "at", rLenA: "len_a", rIntToF: "int_to_f", rAtA: "at_a", rCall: "call", rField: "field",
 	rMakeArray: "make_array", rMakeDict: "make_dict", rMakeRecord: "make_record", rRecordWith: "record_with",
 	rLoopInit: "loop_init", rCollect: "collect", rSpread: "spread", rLoopNext: "loop_next", rLoopBreak: "loop_break", rCollectNext: "collect_next",
 	rBeginFallback: "begin_fallback", rEndFallback: "end_fallback", rFxPush: "fx_push", rFxPop: "fx_pop",
@@ -131,8 +134,13 @@ type regProgram struct {
 	// scalar is set when no register ever holds a pointer, and hosts when
 	// the program calls a host's function.
 	scalar, hosts bool
-	// nesting is how many loops deep the program goes.
-	nesting int
+	// nesting is how many loops deep the program goes; arenas and dests
+	// how many arena and answer slots it builds in.
+	nesting       int
+	arenas, dests int
+	// fieldOnly is, by argument, a record the program only reads field by
+	// field, and viewOnly an array it only walks, measures or indexes.
+	fieldOnly, viewOnly []bool
 }
 
 // rcall is one call: the function, the call's type, its arguments' first
@@ -149,7 +157,10 @@ type rcall struct {
 	refund uint64
 	// kernel marks a kernel function that reads nothing of the run: it is
 	// called straight away, with none of what a host's call is held to.
-	kernel bool
+	// direct marks a host's function no Batch hoists — it has no batch
+	// form — with no Timeout and not Detached: called with nothing to ask
+	// but the deadline.
+	kernel, direct bool
 }
 
 // rloop is one loop: its type, the registers of its names — -1 for none —
@@ -162,6 +173,15 @@ type rloop struct {
 	dst            int32
 	exit           int32
 	spread         bool
+	built
+	// vec is the plan a vector runs the loop's body by, when it can.
+	vec *vecPlan
+}
+
+// built is where an array is built: in an arena slot, in the answer's slot
+// the host lends, or — both -1 — in memory of its own.
+type built struct {
+	arena, dest int32
 }
 
 // rmake is what a builder needs besides its registers: the type, and a
@@ -170,4 +190,8 @@ type rmake struct {
 	typ    *Type
 	keys   []string
 	fields []int
+	built
+	// answer marks the record the program answers, built in the frame's
+	// own record when the host reads it before the frame goes.
+	answer bool
 }

@@ -27,10 +27,11 @@ type Batch struct {
 	sites   []batchSite
 	options BatchOptions
 
-	mu      sync.Mutex
-	pending []*batchRequest
-	timer   *time.Timer
-	closed  bool
+	mu       sync.Mutex
+	pending  []*batchRequest
+	requests sync.Pool
+	timer    *time.Timer
+	closed   bool
 }
 
 // BatchOptions bounds a batch: it is flushed when MaxSize requests are waiting
@@ -116,14 +117,14 @@ func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, er
 	if err := ctx.Err(); err != nil {
 		return Value{}, kit.Classify(ErrDeadline, "", err)
 	}
-	request := newRequest(ctx, args, typed)
+	request := b.newRequest(ctx, args, typed)
 	if err := b.enqueue(request); err != nil {
 		return Value{}, err
 	}
 	select {
 	case result := <-request.done:
 		// Answered, the request is nobody's any more.
-		releaseRequest(request)
+		b.releaseRequest(request)
 		return result.value, result.err
 	case <-ctx.Done():
 		// The batch still holds the request and will answer it: it is not
@@ -132,21 +133,23 @@ func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, er
 	}
 }
 
-// requests keeps answered requests for the requests to come. Not their
-// channels: a channel belongs to where it was made — a synctest bubble
-// refuses one from outside — so each request makes its own.
-var requests = sync.Pool{New: func() any { return new(batchRequest) }}
-
-func newRequest(ctx context.Context, args []Value, typed bool) *batchRequest {
-	request, _ := requests.Get().(*batchRequest)
+// newRequest is a request from the batch's own pool of answered ones, its
+// channel with it. The pool is the batch's: a channel belongs to where it
+// was made — a synctest bubble refuses one from outside — and a batch is
+// used where it was made.
+func (b *Batch) newRequest(ctx context.Context, args []Value, typed bool) *batchRequest {
+	request, ok := b.requests.Get().(*batchRequest)
+	if !ok {
+		request = &batchRequest{done: make(chan batchResult, 1)}
+	}
 	request.ctx, request.args, request.typed = ctx, args, typed
-	request.done = make(chan batchResult, 1)
 	return request
 }
 
-func releaseRequest(request *batchRequest) {
-	*request = batchRequest{}
-	requests.Put(request)
+// releaseRequest gives an answered request back: its channel is empty.
+func (b *Batch) releaseRequest(request *batchRequest) {
+	request.ctx, request.args, request.result = nil, nil, batchResult{}
+	b.requests.Put(request)
 }
 
 func (b *Batch) enqueue(request *batchRequest) error {

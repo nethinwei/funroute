@@ -5,11 +5,14 @@ import "github.com/nethinwei/funroute/internal/kit"
 // regLoop is one active loop of the register machine.
 type regLoop struct {
 	source Value
-	// keys is a dictionary walk's keys, sorted; ints and floats an array
-	// walk's source when it is one of those, bound without asking the Value.
+	// keys is a dictionary walk's keys, sorted; ints, floats, strings and
+	// bools an array walk's source when it is one of those — its own, or in
+	// an arena slot — bound without asking the Value.
 	keys          []string
 	ints          []int64
 	floats        []float64
+	strings       []string
+	bools         []bool
 	length, index int
 	site          *rloop
 	// out is where the comprehension's items go: its own output, or, for
@@ -23,37 +26,99 @@ type regLoop struct {
 
 // regLoopInit starts a loop. An empty source goes straight to the exit with
 // the loop's result — the seed, or an empty container — which is only built
-// then.
-func (f *frame) regLoopInit(pc int, in *rinstr) int {
+// then. A body the vector runs is run by it as far as it settles items, and
+// the body goes on from there.
+func (f *frame) regLoopInit(pc int, in *rinstr) (int, error) {
 	site := &f.runtime.reg.loops[in.c]
-	source := f.regs[in.a]
-	length := source.length()
-	if length == 0 {
+	f.loops = append(f.loops, regLoop{source: f.regs[in.a], site: site})
+	last := len(f.loops) - 1
+	loop := &f.loops[last]
+	if loop.walk(site.key >= 0) == 0 {
+		f.loops[last] = regLoop{}
+		f.loops = f.loops[:last]
 		f.regs[site.dst] = f.emptyResult(site, in)
-		return int(site.exit)
+		return int(site.exit), nil
 	}
-	f.loops = append(f.loops, regLoop{source: source, length: length, site: site})
-	loop := &f.loops[len(f.loops)-1]
-	if site.key >= 0 {
-		loop.keys = source.keys()
-	} else {
-		loop.ints, _ = source.box.([]int64)
-		loop.floats, _ = source.box.([]float64)
+	f.startOutput(loop, in)
+	if site.vec != nil {
+		next, resume, finished := f.vectorLoop(loop, site.vec, pc)
+		if finished {
+			return f.endLoop(int(site.exit))
+		}
+		loop.index, pc = next, resume
 	}
+	f.bindRegs(loop, loop.index)
+	return pc, nil
+}
+
+// walk reads the loop's source — its keys, or its native backing — and is
+// how many items it has.
+func (l *regLoop) walk(keyed bool) int {
+	if keyed {
+		l.keys = l.source.keys()
+		l.length = len(l.keys)
+		return l.length
+	}
+	switch box := l.source.box.(type) {
+	case []int64:
+		l.ints, l.length = box, len(box)
+	case *[]int64:
+		l.ints, l.length = *box, len(*box)
+	case []float64:
+		l.floats, l.length = box, len(box)
+	case *[]float64:
+		l.floats, l.length = *box, len(*box)
+	case []string:
+		l.strings, l.length = box, len(box)
+	case *[]string:
+		l.strings, l.length = *box, len(*box)
+	case []bool:
+		l.bools, l.length = box, len(box)
+	case *[]bool:
+		l.bools, l.length = *box, len(*box)
+	default:
+		l.length = l.source.length()
+	}
+	return l.length
+}
+
+// startOutput readies what the loop builds: a fold's answer, the outer
+// clause's array — with room for every item still to come — a dictionary,
+// or its own array, in its slot when it has one.
+func (f *frame) startOutput(loop *regLoop, in *rinstr) {
+	site := loop.site
 	switch {
 	case site.acc >= 0:
 		f.regs[site.acc] = f.regs[in.b]
 	case site.spread:
-		loop.out = f.loops[len(f.loops)-2].out
+		outer := &f.loops[len(f.loops)-2]
+		loop.out = outer.out
+		loop.out.grow(f.expected(outer.length-outer.index, loop.length))
 	case site.typ.kind == DictKind:
-		loop.dict = newDictBuilder(*site.typ.elem, length)
+		loop.dict = newDictBuilder(*site.typ.elem, loop.length)
 	default:
-		loop.output = newArrayBuilder(*site.typ.elem, length)
+		if slot := f.slotFor(site.built); slot != nil {
+			loop.output = builderIn(slot, *site.typ.elem, loop.length)
+		} else {
+			loop.output = newArrayBuilder(*site.typ.elem, loop.length)
+		}
 		loop.out = &loop.output
 	}
-	f.bindRegs(loop, 0)
-	return pc
 }
+
+// expected is how many items to make room for when outer items are left,
+// each with inner items: no more than the fuel left can pay for — an item
+// costs at least one — and no more than maxGrow at once.
+func (f *frame) expected(outer, inner int) int {
+	if inner > 0 && outer > maxGrow/inner {
+		return min(maxGrow, int(min(f.fuelLeft, maxGrow)))
+	}
+	return min(outer*inner, int(min(f.fuelLeft, maxGrow)))
+}
+
+// maxGrow is the most items one estimate makes room for; past it the array
+// grows as it fills.
+const maxGrow = 1 << 20
 
 // emptyResult is what a loop over nothing gives: the seed of a fold, and
 // otherwise an empty array or dictionary — nothing for a clause whose items
@@ -64,6 +129,10 @@ func (f *frame) emptyResult(site *rloop, in *rinstr) Value {
 		return f.regs[in.b]
 	case site.spread:
 		return Value{}
+	}
+	if slot := f.slotFor(site.built); slot != nil {
+		empty := builderIn(slot, *site.typ.elem, 0)
+		return finishIn(slot, &empty)
 	}
 	// Neither can fail: loading proved the element type concrete.
 	if site.typ.kind == DictKind {
@@ -81,6 +150,10 @@ func (f *frame) bindRegs(loop *regLoop, index int) {
 		f.regs[loop.site.item] = Value{kind: IntKind, i: loop.ints[index]}
 	case loop.floats != nil:
 		f.regs[loop.site.item] = Value{kind: FloatKind, f: loop.floats[index]}
+	case loop.strings != nil:
+		f.regs[loop.site.item] = Value{kind: StringKind, s: loop.strings[index]}
+	case loop.bools != nil:
+		f.regs[loop.site.item] = Value{kind: BoolKind, b: loop.bools[index]}
 	case loop.keys != nil:
 		value, _ := loop.source.lookup(loop.keys[index])
 		f.regs[loop.site.item] = value
@@ -130,11 +203,18 @@ func (f *frame) regLoopNext(pc int, body int32) (int, error) {
 		}
 		return int(body), nil
 	}
-	result, err := f.loopValue(loop)
+	return f.endLoop(pc)
+}
+
+// endLoop ends the innermost loop, its result in its register, and goes on
+// at pc.
+func (f *frame) endLoop(pc int) (int, error) {
+	last := len(f.loops) - 1
+	result, err := f.loopValue(&f.loops[last])
 	if err != nil {
 		return pc, err
 	}
-	f.regs[loop.site.dst] = result
+	f.regs[f.loops[last].site.dst] = result
 	f.loops[last] = regLoop{}
 	f.loops = f.loops[:last]
 	return pc, nil
@@ -161,6 +241,9 @@ func (f *frame) loopValue(loop *regLoop) (Value, error) {
 		return Value{}, nil
 	case loop.site.typ.kind == DictKind:
 		return loop.dict.finish()
+	}
+	if slot := f.slotFor(loop.site.built); slot != nil {
+		return finishIn(slot, &loop.output), nil
 	}
 	return loop.output.finish(), nil
 }

@@ -38,8 +38,13 @@ func TestRandomProgramsAnswerAsTheirFoldedSelves(t *testing.T) {
 			if err != nil {
 				continue // a part that fails when folded fails to compile
 			}
+			// Two programs out of fuel ran out in two places: nothing to hold.
+			got := outcome(t, folded, nil, 1<<24)
+			if strings.Contains(want, "fuel exhausted") && strings.Contains(got, "fuel exhausted") {
+				continue
+			}
 			compared++
-			if got := outcome(t, folded, nil, 1<<24); got != want {
+			if got != want {
 				t.Fatalf("%s with %v gives %s; with the arguments written in, %s", source, args, want, got)
 			}
 		}
@@ -109,6 +114,9 @@ func assertFuelKeepsTheAnswer(t *testing.T, runtime *machine.Runtime, source str
 	if strings.Contains(plenty, "internal error") {
 		t.Fatalf("%s with %v: %s", source, args, plenty)
 	}
+	if value, err := runtime.Run(t.Context(), args, machine.RunOptions{Fuel: 1 << 24}); err == nil && !machine.NativeBacked(value) {
+		t.Fatalf("%s with %v answers an array in the frame's slot", source, args)
+	}
 	if needed := fuelNeeded(t, runtime, args); needed > 0 {
 		if exact := outcome(t, runtime, args, needed); exact != plenty {
 			t.Fatalf("%s with %v gives %s with plenty of fuel, %s with the %d it needs", source, args, plenty, exact, needed)
@@ -168,6 +176,18 @@ func randomRegistry(t *testing.T) *machine.Registry {
 		return x * 2, nil
 	}
 	if err := registry.Register(machine.FunctionSpec{Name: "host.flaky_v1", Doc: machine.Doc{Cost: 5}, Go: flaky}); err != nil {
+		t.Fatal(err)
+	}
+	// total sums what it is handed: an array in a frame's slot, handed over
+	// by mistake, would read as empty.
+	total := func(xs []int64) int64 {
+		sum := int64(0)
+		for _, x := range xs {
+			sum += x
+		}
+		return sum
+	}
+	if err := registry.Register(machine.FunctionSpec{Name: "host.total_v1", Doc: machine.Doc{Cost: 5}, Go: total}); err != nil {
 		t.Fatal(err)
 	}
 	return registry

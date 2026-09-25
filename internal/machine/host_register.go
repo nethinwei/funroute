@@ -98,6 +98,9 @@ func (r *Registry) reflectSpec(spec *FunctionSpec) error {
 		return fmt.Errorf("function %s batch: %w", spec.Name, err)
 	}
 	spec.EvalBatch = batched.callBatch
+	if direct, ok := directBatch(spec.GoBatch); ok {
+		spec.EvalBatch = direct
+	}
 	return nil
 }
 

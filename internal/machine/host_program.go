@@ -74,7 +74,7 @@ func (c *Codec[In, Out]) Instantiate(artifact *Artifact) (*Program[In, Out], err
 		return nil, kit.Classify(ErrContract, "result: ", err)
 	}
 	return &Program[In, Out]{
-		args: args, result: result, runtime: runtime, reads: argumentReads(declared, args),
+		args: args, result: result, runtime: runtime, reads: argumentReads(declared, args, runtime.reg.fieldOnly, runtime.reg.viewOnly),
 		hoisted: NewBatch(runtime, BatchOptions{}),
 	}, nil
 }
@@ -82,7 +82,7 @@ func (c *Codec[In, Out]) Instantiate(artifact *Artifact) (*Program[In, Out], err
 // argumentReads lists the arguments the bytecode loads. An argument the
 // program never reads is never converted either, so one host struct can serve
 // many rules and each pays only for the fields it uses.
-func argumentReads(artifact *Artifact, plan *argsCodec) []argRead {
+func argumentReads(artifact *Artifact, plan *argsCodec, fieldOnly, viewOnly []bool) []argRead {
 	read := make([]bool, len(artifact.parts.Args))
 	for _, instruction := range artifact.parts.Instructions {
 		if instruction.Op == OpLoadArg {
@@ -92,7 +92,7 @@ func argumentReads(artifact *Artifact, plan *argsCodec) []argRead {
 	var reads []argRead
 	for i, ok := range read {
 		if ok {
-			reads = append(reads, newArgRead(i, plan))
+			reads = append(reads, newArgRead(i, plan, fieldOnly[i], viewOnly[i]))
 		}
 	}
 	return reads
@@ -126,28 +126,45 @@ func (p *Program[In, Out]) Artifact() *Artifact {
 
 // Run reads the arguments out of in, runs the program and writes the result
 // into an Out. Scalars and strings cost no allocation; a slice or map field is
-// wrapped, not copied; a record argument costs its fields. A container in the
-// result is the program's backing and is read-only. in is only read, and only
-// during the call.
+// wrapped, not copied; a record argument the program only reads is read in
+// place. A container in the result is the program's backing and is
+// read-only. in is only read, and only during the call.
 func (p *Program[In, Out]) Run(ctx context.Context, in *In, options RunOptions) (Out, error) {
-	var zero Out
+	var out Out
+	if err := p.run(ctx, in, &out, options, false); err != nil {
+		var zero Out
+		return zero, err
+	}
+	return out, nil
+}
+
+// RunInto is Run writing the result into *out, and building it in what out
+// already holds: an array answered — the whole result, or a field of the
+// record answered — goes into the memory of the slice out has there, so a
+// host that runs a program again with the same out allocates nothing for
+// it. The slices in out must not be the arguments' memory; one that is, is
+// not built into. On a failure *out is left in no particular state.
+func (p *Program[In, Out]) RunInto(ctx context.Context, in *In, out *Out, options RunOptions) error {
+	if out == nil {
+		return fmt.Errorf("%w: the result's place is nil", ErrContract)
+	}
+	return p.run(ctx, in, out, options, true)
+}
+
+func (p *Program[In, Out]) run(ctx context.Context, in *In, out *Out, options RunOptions, reuse bool) error {
 	if in == nil {
-		return zero, fmt.Errorf("%w: arguments are nil", ErrContract)
+		return fmt.Errorf("%w: arguments are nil", ErrContract)
 	}
 	r := p.runtime
 	f := r.acquireFrame()
 	args := f.argSpace(len(p.args.params))
-	if err := encodeArgs(p.args, p.reads, args, in); err != nil {
+	if err := encodeArgs(p.args, p.reads, args, in, f); err != nil {
 		// Nothing ran, so the frame would not clear what was written.
 		clear(args)
 		r.releaseFrame(f)
-		return zero, kit.Classify(ErrContract, "", err)
+		return kit.Classify(ErrContract, "", err)
 	}
-	value, err := r.runFrame(ctx, f, args, options)
-	if err != nil {
-		return zero, err
-	}
-	return decodeInto[Out](p.result, value)
+	return r.runProgram(ctx, f, args, options, p.result, placeOf(out), reuse)
 }
 
 // decodeInto is the result as an Out, or the zero Out with the error — never

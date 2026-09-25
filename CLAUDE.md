@@ -83,6 +83,9 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 - 寄存器操作 `rinstr` 保持 16 字节、按指针读：操作数放进 a/b/c，放不下的进 `regProgram` 的旁表（`calls`/`loops`/`makes`），需要换算的在翻译时算好。
 - `frame.exec` 只放最常用的操作（50 行的上限也是它的上限），其余进 `cold`。专用内核指令只写快路径，答不出就返回 false，由 `fault` 问函数本身要错误，文案一字不差。
 - 改了翻译器、`rinstr` 或 `frame.exec`，与改动前交替跑 `BenchmarkDispatch`/`BenchmarkCall`/`BenchmarkRunPaths` 对照，再 `make perf`。
+- 值流分析（`lower_escape.go`）决定数组建在哪：不逃出运行的建在帧的 arena 槽里，box 是指向槽的指针（`*[]T`），只有翻译器为它选的指令（循环、`len_a`、`at_a`）见得到；答案建在宿主借出的槽里（`RunInto`）。**指针形式的 box 绝不能流到宿主函数、结果或容器里**——新增会读或放出数组的指令，先在值流分析里给它规则。帧里不存指向宿主 struct 的指针（它可能在宿主的栈上），只拷切片头。
+- 帧的 `release` 只清这次运行写过的部分：清含指针的内存要走写屏障，还会拖住随后交还帧的原子交换——多清三个空槽就让固定开销从 30 ns 变成 60 ns。
+- 向量（`lower_vector.go`、`regvm_vector*.go`）只跑逐列运算与折叠、收集、停止；遇到失败、fuel 不够或停止，就把循环交回标量循环体，由它重跑那一项。所以向量只写快路径，`intOp`/`floatOp` 与内核指令必须逐项同义（`TestVectorOpsAnswerAsTheKernel`、`TestTheVectorAnswersAsTheBody` 守着）。
 - 类型在装载时由 `machine/verify.go` 证明一次，执行路径不再检查内核运算的结果、容器的元素、循环收集的值与局部槽是否绑定；只检查宿主函数的回答。新增会产生值的执行路径，先让验证器能证明它的类型。
 
 **Go 只做语言**
@@ -97,6 +100,8 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 | 改了什么 | 还要动哪里 |
 |---|---|
 | 新增 opcode | `machine/opcode.go` 表一行 + `verify.go` 的类型规则 + `lower_instr.go` 的翻译规则（`TestEveryOpcodeIsExecutableAndNamed` 兜底）；要新的寄存器操作就在 `regvm_ops.go` 加一行、在 `exec` 或 `cold` 里执行；会跳转的在 `leadersOf` 里另起一块 |
+| 新增会产生、读或放出数组的栈指令 | `lower_escape.go` 的规则：它让数组留在运行里还是逃出（`TestValueFlowFindsWhereEachArrayGoes` 加一行） |
+| 向量要跑新的运算 | `lower_vector.go` 的 `elementwise`、`regvm_vector_run.go` 的 `resultKind`、`regvm_vector_ops.go` 的列运算；失败条件与内核指令一字不差 |
 | 内核函数要专用指令 | `lower_kernel.go` 的 `kernelOps` 一行 + `regvm_ops.go` 的操作 + `regvm_kernel.go` 的快路径（`TestKernelOpsAnswerAsTheirFunctions` 在边界值上对照函数） |
 | 新增形式 | `machine/catalog.go` 的 `languageForms` 一行（可开关的写 `optional`，能包进表达式的写 `wrap` 模板）；节点的 kind tag 写 `,form`（可开关的再写 `,optional`，`TestTheOptionalFormsAreTheMachines` 对照）；termination.md |
 | 新增 ExprJSON 节点 | `syntax/ast.go`（嵌入 `Node` 并写 `kind` tag，字段带 tag，加进 `nodeTypes`）；语义在 `compile/infer_expr.go`、`compiler.go`；打印在 `syntax/print.go`、`format.go`；按节点分派的还有 `compile/enum.go`、`fold.go`；示例要用到它（`lsp/funroute_test.go` 检查） |

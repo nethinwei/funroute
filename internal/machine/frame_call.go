@@ -38,9 +38,35 @@ func (f *frame) callSite(call int32) error {
 		f.refund = addFuel(f.refund, function.Doc.Cost)
 		return fmt.Errorf("%s: %w", function.Name, kit.Classify(ErrDeadline, "", f.ctx.Err()))
 	}
+	if site.direct {
+		return f.callHost(site, args)
+	}
 	value, err := f.invoke(int(call), function, args, site.typ)
 	if err != nil {
 		return err
+	}
+	f.regs[site.dst] = value
+	return nil
+}
+
+// callHost calls a host's function no Batch hoists, with no Timeout and not
+// Detached: invoke's plain call, and nothing it would ask first.
+func (f *frame) callHost(site *rcall, args []Value) error {
+	function := site.fn
+	var value Value
+	var err error
+	if len(f.fallbacks) > 0 {
+		value, err = callSafely(f.ctx, function, args)
+	} else {
+		value, err = function.Eval(f.ctx, args)
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", function.Name, f.classify(err))
+	}
+	if !function.madeResult {
+		if err := f.hostResult(function, value, site.typ); err != nil {
+			return err
+		}
 	}
 	f.regs[site.dst] = value
 	return nil

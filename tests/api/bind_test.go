@@ -346,3 +346,40 @@ func TestBindingCarriesADictionaryOfRates(t *testing.T) {
 		t.Fatalf("rates round trip gave card %v (%v), want %v", got["card"], err, rate)
 	}
 }
+
+// FeesIn and FeesOut are a host's request and result for a rule that
+// answers an array.
+type FeesIn struct {
+	Fees []int64 `funroute:"fees"`
+}
+
+type FeesOut struct {
+	Doubled []int64 `funroute:"doubled"`
+}
+
+// A host that keeps its result between requests hands it to RunInto, which
+// builds the next answer in the memory the result already has.
+func TestProgramRunsIntoTheHostsResult(t *testing.T) {
+	t.Parallel()
+	registry := funroute.CoreRegistry()
+	if err := registry.EnableForm(funroute.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := funroute.Bind[FeesIn, FeesOut](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(`{doubled: [fee * 2 for fee in fees]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := FeesOut{Doubled: make([]int64, 0, 8)}
+	for _, fees := range [][]int64{{1, 2}, {3, 4, 5}} {
+		if err := program.RunInto(t.Context(), &FeesIn{Fees: fees}, &out, funroute.RunOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if len(out.Doubled) != len(fees) || out.Doubled[0] != fees[0]*2 || cap(out.Doubled) != 8 {
+			t.Fatalf("RunInto(%v) = %v with room for %d, want the doubles in the same 8", fees, out.Doubled, cap(out.Doubled))
+		}
+	}
+}

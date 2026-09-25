@@ -39,4 +39,5 @@ var kernelOps = map[string]kernelOp{
 	"len(array<T>)->int":         {op: rLen, unary: true},
 	"len(dict<T>)->int":          {op: rLen, unary: true},
 	"at(array<T>,int)->T":        {op: rAt},
+	"float(int)->float":          {op: rIntToF, unary: true},
 }

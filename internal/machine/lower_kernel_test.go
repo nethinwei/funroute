@@ -88,6 +88,12 @@ func assertKernelOp(t *testing.T, function *RegisteredFunction, kernel kernelOp,
 	case ok && !regs[2].Equal(want):
 		t.Errorf("%s%v = %v, the function says %v", function.key, args, regs[2].Any(), want.Any())
 	}
+	// In place, a refusal leaves the operand as it was, for the function
+	// to be asked about it.
+	inPlace := []Value{pair[0], pair[1]}
+	if !runKernelOp(&frame{regs: inPlace}, &rinstr{op: kernel.op, a: 0, b: 1, c: 0}) && !inPlace[0].Equal(pair[0]) {
+		t.Errorf("%s%v refused in place, and changed its operand to %v", function.key, args, inPlace[0].Any())
+	}
 }
 
 // runKernelOp runs one kernel operation as the hot loop or cold would.
@@ -104,6 +110,9 @@ func runKernelOp(f *frame, in *rinstr) bool {
 		return divI(regs, in)
 	case rAddF:
 		return addF(regs, in)
+	}
+	if in.op == rIntToF {
+		return intToFloat(regs, in)
 	}
 	_, ok := coldKernel(regs, 0, in)
 	return ok

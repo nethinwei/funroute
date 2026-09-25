@@ -50,6 +50,10 @@ type lowerer struct {
 	blockCost, blockSpent uint64
 	pc                    int
 	err                   error
+	// flow is where the program's arrays go, and slots the arena slot each
+	// producer builds in.
+	flow  flow
+	slots map[int]int32
 }
 
 // fixup is an operand of an operation that names the stack instruction
@@ -80,6 +84,8 @@ func lower(artifact *Artifact, constants []Value, functions []*RegisteredFunctio
 	l.locals = int32(parts.Locals)
 	l.out.args, l.out.size = nconst, l.localBase+int32(parts.Locals)
 	l.out.scalar = scalarProgram(parts)
+	l.flow, l.slots = flowOf(parts, functions), map[int]int32{}
+	l.out.fieldOnly, l.out.viewOnly = l.flow.fieldOnly, l.flow.viewOnly
 	for pc := range l.code {
 		l.at[pc] = -1
 	}
@@ -103,7 +109,11 @@ func lower(artifact *Artifact, constants []Value, functions []*RegisteredFunctio
 	if l.err != nil {
 		return regProgram{}, l.err
 	}
-	return l.out, l.patch()
+	if err := l.patch(); err != nil {
+		return regProgram{}, err
+	}
+	l.vectorize()
+	return l.out, nil
 }
 
 // scalarProgram reports a program whose every value is a bool, an int or a
@@ -128,6 +138,26 @@ func scalarProgram(parts *ArtifactParts) bool {
 		}
 	}
 	return true
+}
+
+// builtFor is where the producer at pc builds its array: its arena slot,
+// the answer's slot, or neither.
+func (l *lowerer) builtFor(pc int) built {
+	where := built{arena: -1, dest: -1}
+	if l.flow.arena[pc] {
+		slot, ok := l.slots[pc]
+		if !ok {
+			slot = int32(len(l.slots))
+			l.slots[pc] = slot
+			l.out.arenas = len(l.slots)
+		}
+		where.arena = slot
+	}
+	if dest, ok := l.flow.dest[pc]; ok {
+		where.dest = int32(dest)
+		l.out.dests = max(l.out.dests, dest+1)
+	}
+	return where
 }
 
 // leadersOf marks where a basic block starts: the start, every instruction a
