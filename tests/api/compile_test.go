@@ -92,7 +92,7 @@ func TestHostCanCompileAndShipAnArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(t.Context(), map[string]any{"health": "UP", "doubled": 500}, funroute.RunOptions{Fuel: 1000})
+	result, err := runtime.Run(t.Context(), map[string]any{"health": "UP", "doubled": 500})
 	if err != nil {
 		t.Fatal(err)
 	}

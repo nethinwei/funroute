@@ -66,13 +66,12 @@ func (s *Server) rangedFields(doc *document, fields []syntax.TreeField) []ranged
 }
 
 // runCommand runs a document against the contract with the arguments given:
-// {"uri": ..., "args": {...}, "fuel": n}.
+// {"uri": ..., "args": {...}}.
 const runCommand = "funroute.run"
 
 type runRequest struct {
 	URI  string          `json:"uri"`
 	Args json.RawMessage `json:"args"`
-	Fuel uint64          `json:"fuel"`
 }
 
 // runResult says what a run returned, or why it did not, and which functions
@@ -99,7 +98,7 @@ type renderRequest struct {
 }
 
 // commands are the server's commands, each reading its one argument into
-// the shape it takes: a run its document, arguments and fuel, a render only
+// the shape it takes: a run its document and arguments, a render only
 // its document.
 var commands = map[string]requestHandler{
 	runCommand:    withParams((*Server).run),
@@ -171,7 +170,7 @@ func (s *Server) run(request runRequest) (any, error) {
 	result.Type = &resultType
 	args, err := decodeArgs(request.Args)
 	if err == nil {
-		err = s.execute(artifact, args, request, &result)
+		err = s.execute(artifact, args, &result)
 	}
 	if err != nil {
 		result.Error = describeError(err)
@@ -186,25 +185,18 @@ func (s *Server) compile(doc *document) (*machine.Artifact, error) {
 	return compile.CompileExpr(doc.text, s.registry, s.contract)
 }
 
-func (s *Server) execute(artifact *machine.Artifact, args map[string]any, request runRequest, result *runResult) error {
+func (s *Server) execute(artifact *machine.Artifact, args map[string]any, result *runResult) error {
 	runtime, err := machine.Instantiate(artifact, s.registry)
 	if err != nil {
 		return err
 	}
-	options := machine.RunOptions{Fuel: request.Fuel}
-	if options.Fuel == 0 {
-		options.Fuel = machine.DefaultFuel
-	}
-	if options.Fuel > maxRunFuel {
-		return fmt.Errorf("%w: a run asks for at most %d fuel, not %d", machine.ErrFuel, maxRunFuel, options.Fuel)
-	}
 	// The language service answers one message at a time, so a run that
-	// hangs holds every document: a host function waiting on something is
-	// cut off at the deadline, and fuel bounds the rest.
+	// hangs holds every document: a host function waiting on something, and
+	// a long loop, are cut off at the deadline.
 	timed, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
 	ctx, calls := machine.TrackUnavailable(timed)
-	value, err := runtime.Run(ctx, args, options)
+	value, err := runtime.Run(ctx, args)
 	result.Unavailable = calls()
 	if err != nil {
 		return err
@@ -214,13 +206,8 @@ func (s *Server) execute(artifact *machine.Artifact, args map[string]any, reques
 	return err
 }
 
-// maxRunFuel and runTimeout bound one run the service executes: a hundred
-// times the default budget, and a wall-clock second for the host functions
-// fuel cannot see into.
-const (
-	maxRunFuel = 100 * machine.DefaultFuel
-	runTimeout = time.Second
-)
+// runTimeout bounds one run the service executes: a wall-clock second.
+const runTimeout = time.Second
 
 // decodeArgs reads the arguments as an object, or as the text of one: a
 // page that passes along what was typed keeps every digit of a large integer,

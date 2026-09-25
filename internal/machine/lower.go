@@ -2,7 +2,6 @@ package machine
 
 import (
 	"errors"
-	"math"
 	"slices"
 )
 
@@ -17,11 +16,6 @@ import (
 // an operation reads it there. It is written to its stack register only where
 // paths meet or leave, where a builder or a call takes a run of registers, or
 // before the local it lives in is written.
-//
-// Fuel is charged a basic block at a time, on entering it: one for each stack
-// instruction in the block, and each call's cost. A run that finishes pays
-// what the stack machine paid, to the unit; one without the fuel for a block
-// stops on entering it.
 
 // lowerer is the state of one lowering.
 type lowerer struct {
@@ -43,13 +37,11 @@ type lowerer struct {
 	spread               bool
 	locals               int32
 	stackBase, localBase int32
-	// blockStart is the operation the current block starts at, blockCost
-	// its fuel and blockSpent how much of that the instructions lowered so
-	// far in it charge.
-	blockStart            int32
-	blockCost, blockSpent uint64
-	pc                    int
-	err                   error
+	// blockStart is the operation the current block starts at: a fusion
+	// takes only operations from it on.
+	blockStart int32
+	pc         int
+	err        error
 	// flow is where the program's arrays go, and slots the arena slot each
 	// producer builds in.
 	flow  flow
@@ -82,8 +74,9 @@ func lower(artifact *Artifact, constants []Value, functions []*RegisteredFunctio
 	}
 	l.localBase = l.stackBase + int32(proof.depth)
 	l.locals = int32(parts.Locals)
-	l.out.args, l.out.size = nconst, l.localBase+int32(parts.Locals)
-	l.out.scalar = scalarProgram(parts)
+	l.out.promotions = promotionsOf(parts, l.leaders, l.localBase+l.locals)
+	l.out.args, l.out.size = nconst, l.localBase+l.locals+int32(len(l.out.promotions))
+	l.out.scalar, l.out.scalarReads = scalarProgram(parts, nil, false), scalarProgram(parts, l.out.promotions, true)
 	l.flow, l.slots = flowOf(parts, functions), map[int]int32{}
 	l.out.fieldOnly, l.out.viewOnly = l.flow.fieldOnly, l.flow.viewOnly
 	for pc := range l.code {
@@ -117,18 +110,31 @@ func lower(artifact *Artifact, constants []Value, functions []*RegisteredFunctio
 }
 
 // scalarProgram reports a program whose every value is a bool, an int or a
-// float: its constants, its arguments and what each instruction makes. Such
-// a program's registers never hold a pointer, and a frame need not clear
-// them for the collector.
-func scalarProgram(parts *ArtifactParts) bool {
+// float: its constants, its arguments — only those it reads, with readsOnly,
+// a promoted argument by its promoted fields — and what each instruction
+// makes. Such a program's registers never hold a pointer, and a frame need
+// not clear them for the collector.
+func scalarProgram(parts *ArtifactParts, promotions []promotion, readsOnly bool) bool {
 	scalar := func(typ Type) bool { return typ.kind == BoolKind || typ.kind == IntKind || typ.kind == FloatKind }
 	for _, constant := range parts.Constants {
 		if !scalar(constant.Type) {
 			return false
 		}
 	}
-	for _, param := range parts.Args {
-		if !scalar(param.typ) {
+	read := make([]bool, len(parts.Args))
+	for _, in := range parts.Instructions {
+		if in.Op == OpLoadArg {
+			read[in.A] = true
+		}
+	}
+	for _, p := range promotions {
+		read[p.arg] = false
+		if !scalar(parts.Args[p.arg].typ.fields[p.field].typ) {
+			return false
+		}
+	}
+	for i, param := range parts.Args {
+		if (read[i] || !readsOnly) && !scalar(param.typ) {
 			return false
 		}
 	}
@@ -204,61 +210,25 @@ func (l *lowerer) patch() error {
 	return nil
 }
 
-// startBlock begins the block at pc: every value is in its stack register,
-// and the block's fuel is charged.
+// startBlock begins the block at pc: every value is in its stack register.
+// Where it starts in the register form is marked, for the vector, which
+// reads a loop body a block at a time.
 func (l *lowerer) startBlock(pc int) {
 	l.at[pc] = int32(len(l.out.code))
 	l.blockStart = l.at[pc]
+	l.markStart(len(l.out.code))
 	l.stack = l.stack[:0]
 	for k := range l.depths[pc] {
 		l.stack = append(l.stack, l.stackBase+k)
 	}
-	cost, deepest := l.blockOf(pc)
-	l.blockCost, l.blockSpent = cost, 0
-	if cost > 0 {
-		l.emit(rFuel, deepest, int32(uint32(cost>>32)), int32(uint32(cost)))
-	}
 }
 
-// blockOf is the fuel of the block at pc and the deepest its stack gets.
-func (l *lowerer) blockOf(pc int) (uint64, int32) {
-	var cost uint64
-	deepest := l.depths[pc]
-	for end := pc; end < len(l.code) && (end == pc || !l.leaders[end]); end++ {
-		cost = addFuel(cost, l.costOf(end))
-		deepest = max(deepest, l.depths[end]+stackGrowth(l.code[end]))
+// markStart marks the operation at at as one a block starts at.
+func (l *lowerer) markStart(at int) {
+	for len(l.out.starts) <= at {
+		l.out.starts = append(l.out.starts, false)
 	}
-	return cost, deepest
-}
-
-// costOf is what the stack machine charged for the instruction at pc.
-func (l *lowerer) costOf(pc int) uint64 {
-	if in := l.code[pc]; in.Op == OpCall {
-		return addFuel(1, l.functions[in.A].Doc.Cost)
-	}
-	return 1
-}
-
-// addFuel adds costs, saturating: a block no budget covers stays one.
-func addFuel(a, b uint64) uint64 {
-	if a > math.MaxUint64-b {
-		return math.MaxUint64
-	}
-	return a + b
-}
-
-// stackGrowth is how much deeper than on entering an instruction the stack is
-// once it is done: a push is one, and a loop's end pushes its result.
-func stackGrowth(in Instruction) int32 {
-	switch in.Op {
-	case OpConstant, OpLoadArg, OpLoadLocal, OpLoopNext:
-		return 1
-	case OpCall:
-		return int32(1 - in.B)
-	case OpMakeArray, OpMakeDict, OpMakeRecord:
-		return int32(1 - in.A)
-	}
-	return 0
+	l.out.starts[at] = true
 }
 
 func (l *lowerer) emit(op rop, a, b, c int32) {
@@ -331,7 +301,7 @@ func (l *lowerer) store(reg int32) {
 // in, when no value on the stack is read from reg.
 func (l *lowerer) retarget(value, reg int32) bool {
 	last := int32(len(l.out.code) - 1)
-	if last <= l.blockStart || value != l.top() || slices.Contains(l.stack, reg) {
+	if last < l.blockStart || value != l.top() || slices.Contains(l.stack, reg) {
 		return false
 	}
 	in := &l.out.code[last]

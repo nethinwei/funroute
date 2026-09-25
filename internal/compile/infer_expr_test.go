@@ -29,8 +29,7 @@ func TestRecordFieldsAreReadAndBuilt(t *testing.T) {
 		t.Fatal(err)
 	}
 	value, err := runtime.Run(t.Context(),
-		map[string]any{"order": map[string]any{"amount": 1200, "currency": "SGD"}, "fee": 30},
-		machine.RunOptions{Fuel: 10_000})
+		map[string]any{"order": map[string]any{"amount": 1200, "currency": "SGD"}, "fee": 30})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +70,7 @@ func TestRecordRejectsWhatIsNotThatRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Run(t.Context(), map[string]any{"order": map[string]any{}}, machine.RunOptions{Fuel: 1000})
+	_, err = runtime.Run(t.Context(), map[string]any{"order": map[string]any{}})
 	if err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("a record without its field must be refused: %v", err)
 	}
@@ -103,8 +102,7 @@ func TestRecordComposesWithTheRestOfTheLanguage(t *testing.T) {
 				t.Fatal(err)
 			}
 			value, err := runtime.Run(t.Context(),
-				map[string]any{"orders": []any{map[string]any{"amount": 10}, map[string]any{"amount": 20}}},
-				machine.RunOptions{Fuel: 10_000})
+				map[string]any{"orders": []any{map[string]any{"amount": 10}, map[string]any{"amount": 20}}})
 			if err != nil {
 				t.Fatalf("run %s: %v", test.source, err)
 			}
@@ -172,7 +170,7 @@ func assertRunsTo(t *testing.T, registry *machine.Registry, source string, contr
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), args, machine.RunOptions{Fuel: 10_000})
+	value, err := runtime.Run(t.Context(), args)
 	if err != nil {
 		t.Fatalf("%s: %v", source, err)
 	}

@@ -32,7 +32,7 @@ func header(out *strings.Builder) {
 	if command("git", "status", "--porcelain") != "" {
 		commit += "（工作区有未提交的改动）"
 	}
-	fmt.Fprintf(out, "# 性能报告\n\n由 `go run ./tests/perf` 生成（`make perf`），不要手改。数字随机器变化，取的是多次运行里最快的一次；能力的边界见 [limits.md](limits.md)。\n\n")
+	fmt.Fprintf(out, "# 性能报告\n\n由 `make perf` 生成（`go run ./tests/perf`，与 expr 的对照来自 `tests/perf/expr`），不要手改。数字随机器变化，取的是多次运行里最快的一次；能力的边界见 [limits.md](limits.md)。\n\n")
 	fmt.Fprintf(out, "- 日期：%s\n- 机器：%s，%s/%s\n- Go：%s\n- 提交：`%s`\n", time.Now().Format("2006-01-02"), cpuName(), runtime.GOOS, runtime.GOARCH, runtime.Version(), commit)
 }
 

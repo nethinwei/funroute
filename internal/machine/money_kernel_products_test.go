@@ -85,9 +85,8 @@ func expectRoundedBy(t *testing.T, step roundedStep, source string, outcomes [3]
 		source = "using(0.025 JPY / USD, " + source + ")"
 	}
 	runtime := moneyRuntime(t, source, step.contract, "")
-	options := machine.RunOptions{}
 	for i, args := range step.halves {
-		value, err := runtime.RunValues(t.Context(), args, options)
+		value, err := runtime.RunValues(t.Context(), args)
 		money, _ := value.Money()
 		if want := (machine.NewMoney(step.currency, outcomes[i])); err != nil || money != want {
 			t.Fatalf("%s on %v = %v, %v, want %v", source, args, money, err, want)
@@ -215,7 +214,7 @@ func TestAmountsDivideIntoAnExchangeRate(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			value, err := moneyRuntime(t, "implied(p, q)", "p: money; q: money", "fxrate").RunValues(t.Context(), []machine.Value{test.p, test.q}, machine.RunOptions{})
+			value, err := moneyRuntime(t, "implied(p, q)", "p: money; q: money", "fxrate").RunValues(t.Context(), []machine.Value{test.p, test.q})
 			got := fmt.Sprint(value.Any())
 			if (test.err != nil && !errors.Is(err, test.err)) || (test.err == nil && (err != nil || got != test.want)) {
 				t.Fatalf("implied(p, q) on %v, %v = %s, %v, want %s, %v", test.p.Any(), test.q.Any(), got, err, test.want, test.err)

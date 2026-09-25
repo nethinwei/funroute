@@ -93,14 +93,14 @@ func modelFunctions() []funroute.FunctionSpec {
 	return []funroute.FunctionSpec{{
 		Name: "model.embed_v1",
 		Doc: funroute.Doc{
-			Label: "特征向量化", Description: "演示模型：把特征数组交给引擎，得到一个不透明的向量句柄。", Category: "模型", Cost: 20, Params: []string{"特征"}, Result: "向量句柄",
+			Label: "特征向量化", Description: "演示模型：把特征数组交给引擎，得到一个不透明的向量句柄。", Category: "模型", Params: []string{"特征"}, Result: "向量句柄",
 		},
 		Go:      embed,
 		GoBatch: batchOf(embed),
 	}, {
 		Name: "model.fraud_v1",
 		Doc: funroute.Doc{
-			Label: "欺诈评分", Description: "演示模型：对向量句柄打分，返回 0 到 1 的欺诈概率（这里取特征均值）。", Category: "模型", Cost: 20, Params: []string{"向量句柄"}, Result: "欺诈概率",
+			Label: "欺诈评分", Description: "演示模型：对向量句柄打分，返回 0 到 1 的欺诈概率（这里取特征均值）。", Category: "模型", Params: []string{"向量句柄"}, Result: "欺诈概率",
 		},
 		Go:      fraudScore,
 		GoBatch: batchOf(fraudScore),
@@ -131,7 +131,6 @@ func routeFunctions() []funroute.FunctionSpec {
 			Label:       "渠道是否健康",
 			Description: "把渠道健康快照中的 UP 映射为 true。示例函数只做纯计算，真实健康度应作为参数传入。",
 			Category:    "支付路由",
-			Cost:        3,
 			Params:      []string{"健康状态"},
 			Result:      "是否可用",
 		},
@@ -144,7 +143,6 @@ func routeFunctions() []funroute.FunctionSpec {
 			Label:       "渠道评分",
 			Description: "演示评分：成功率 × 100 − 成本。生产公式应由业务扩展包自行实现和版本化。",
 			Category:    "支付路由",
-			Cost:        5,
 			Params:      []string{"成功率", "成本"},
 			Result:      "评分",
 		},
@@ -157,7 +155,6 @@ func routeFunctions() []funroute.FunctionSpec {
 			Label:       "获取渠道费率",
 			Description: "演示一个可能失败的渠道调用：健康状态不是 UP 时返回扩展错误，可由 fallback 切到备用报价。",
 			Category:    "支付路由",
-			Cost:        5,
 			Params:      []string{"健康状态", "渠道报价"},
 			Result:      "有效费率",
 		},

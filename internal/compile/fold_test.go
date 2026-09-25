@@ -22,7 +22,7 @@ func foldRegistry(t *testing.T) *machine.Registry {
 	err := registry.Register(machine.FunctionSpec{
 		Name: "fold.boom_v1",
 		Doc: machine.Doc{
-			Label: "总是失败", Category: "演示", Cost: 1, Params: []string{"值"}, Result: "值",
+			Label: "总是失败", Category: "演示", Params: []string{"值"}, Result: "值",
 		},
 		Go: func(value int64) (int64, error) { return 0, errors.New("boom") },
 	})
@@ -67,8 +67,7 @@ func TestClosedExpressionsAreFoldedAway(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Fuel of 1 proves the work is gone: the calls would have cost more.
-			result, err := runtime.Run(t.Context(), map[string]any{}, machine.RunOptions{Fuel: 1})
+			result, err := runtime.Run(t.Context(), map[string]any{})
 			if err != nil {
 				t.Fatalf("%s: %v", test.source, err)
 			}
@@ -102,7 +101,7 @@ func TestConstantBindingsUseNoLocalSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(t.Context(), map[string]any{"amount": 100000}, machine.RunOptions{Fuel: 100})
+	result, err := runtime.Run(t.Context(), map[string]any{"amount": 100000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +133,7 @@ func TestFoldingRespectsLaziness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(t.Context(), map[string]any{"use_bad": false, "zero": 0}, machine.RunOptions{Fuel: 100})
+	result, err := runtime.Run(t.Context(), map[string]any{"use_bad": false, "zero": 0})
 	if err != nil {
 		t.Fatalf("a failing branch that is not taken broke the program: %v", err)
 	}
@@ -142,7 +141,7 @@ func TestFoldingRespectsLaziness(t *testing.T) {
 		t.Fatalf("Run(use_bad=false) = %d, want 42", value)
 	}
 	// Taking the branch is still a run-time error, exactly as before folding.
-	if _, err := runtime.Run(t.Context(), map[string]any{"use_bad": true}, machine.RunOptions{Fuel: 100}); err == nil {
+	if _, err := runtime.Run(t.Context(), map[string]any{"use_bad": true}); err == nil {
 		t.Fatal("division by zero was silently folded away")
 	}
 }
@@ -165,7 +164,7 @@ func TestClosedContainersAreInterned(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := runtime.Run(t.Context(), map[string]any{}, machine.RunOptions{Fuel: 100}); err != nil {
+			if _, err := runtime.Run(t.Context(), map[string]any{}); err != nil {
 				t.Fatalf("run %s: %v", source, err)
 			}
 		})
@@ -207,7 +206,7 @@ func TestFoldingPreservesResults(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := runtime.Run(t.Context(), test.args, machine.RunOptions{Fuel: 1000})
+			result, err := runtime.Run(t.Context(), test.args)
 			if err != nil {
 				t.Fatalf("%s: %v", test.source, err)
 			}
@@ -313,7 +312,7 @@ func TestAFoldedBindingIsHiddenByAnInnerOne(t *testing.T) {
 	} {
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
-			value, _ := compileAndRun(t, test.source, registry, test.args, machine.RunOptions{Fuel: 10_000})
+			value, _ := compileAndRun(t, test.source, registry, test.args)
 			if got := fmt.Sprint(value.Any()); got != test.want {
 				t.Fatalf("%s = %s, want %s", test.source, got, test.want)
 			}

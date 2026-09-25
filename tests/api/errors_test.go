@@ -51,7 +51,7 @@ func TestHostTellsArithmeticApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Run(t.Context(), map[string]any{"n": 1, "d": 0}, funroute.RunOptions{})
+	_, err = runtime.Run(t.Context(), map[string]any{"n": 1, "d": 0})
 	if !errors.Is(err, funroute.ErrArithmetic) || errors.Is(err, funroute.ErrExtension) {
 		t.Fatalf("fallback(1 / 0, 0) error = %v, want ErrArithmetic, not caught", err)
 	}
@@ -80,7 +80,7 @@ func TestHostTellsDataWithNoAnswerApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Run(t.Context(), map[string]any{"fees": []int64{30}, "i": 5}, funroute.RunOptions{})
+	_, err = runtime.Run(t.Context(), map[string]any{"fees": []int64{30}, "i": 5})
 	if !errors.Is(err, funroute.ErrDomain) || errors.Is(err, funroute.ErrExtension) {
 		t.Fatalf("fallback(fees[5], 0) error = %v, want ErrDomain, not caught", err)
 	}
@@ -101,7 +101,7 @@ func TestHostTellsAMissingRateApart(t *testing.T) {
 			t.Fatal(err)
 		}
 		runtime, _ := funroute.Instantiate(artifact, registry)
-		_, err = runtime.Run(t.Context(), map[string]any{"amount": "USD 1.00", "market": []any{}}, funroute.RunOptions{})
+		_, err = runtime.Run(t.Context(), map[string]any{"amount": "USD 1.00", "market": []any{}})
 		if (err == nil) != caught || (!caught && !errors.Is(err, funroute.ErrNoFxRate)) {
 			t.Errorf("Run(%q) with no rates error = %v, want caught: %v, else => ErrNoFxRate", source, err, caught)
 		}
@@ -146,7 +146,7 @@ func TestHostFindsItsOwnErrorBehindTheClass(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = runtime.Run(t.Context(), nil, funroute.RunOptions{})
+			_, err = runtime.Run(t.Context(), nil)
 			if !errors.Is(err, funroute.ErrExtension) || !test.find(err) || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("pricing.quote_v1 returning %v: error = %v, want ErrExtension with the host's error behind it, reading %q", test.returned, err, test.want)
 			}

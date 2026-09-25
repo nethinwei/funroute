@@ -20,16 +20,16 @@ func groupSpecs() []funroute.FunctionSpec {
 		Result: funroute.DictOf(list),
 		Eval:   groupByKeys,
 		Doc: funroute.Doc{
-			Label: "分组", Category: "选择", Cost: 10,
+			Label: "分组", Category: "选择",
 			Description: `按第二个数组的键把第一个数组分组，键相同的排在一组里、保持原顺序；两者长度必须相同。每组再聚合就是一句推导式：{k: sum(v) for k, v in group_by(amounts, channels)}。`,
 			Params:      []string{"值", "键"}, Result: "分组结果",
 		},
 	}}, eachType("rank", funroute.Doc{
-		Label: "名次", Category: "选择", Cost: 9,
+		Label: "名次", Category: "选择",
 		Description: "每个元素的升序名次，从 1 开始；并列同名次，其后跳号（1,1,3），和 SQL 的 RANK 一样。要降序就先 reverse。",
 		Params:      []string{"键"}, Result: "名次数组",
 	}, rankOf[int64], rankOf[float64], rankOf[string]), eachType("cumsum", funroute.Doc{
-		Label: "累计和", Category: "聚合", Cost: 8,
+		Label: "累计和", Category: "聚合",
 		Description: "逐项累加出的序列：第 i 项是前 i+1 项之和。配下标就能找出累计超限的那一笔：first([i for i in indices(xs) if cumsum(xs)[i] > limit])。",
 		Params:      []string{"数组"}, Result: "累计序列",
 	}, cumulativeInts, cumulativeFloats))

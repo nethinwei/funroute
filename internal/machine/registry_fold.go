@@ -14,9 +14,7 @@ import "fmt"
 // items, and a failure where the function fails, of the same class. Step's
 // failure is its own — sum's overflow is add's — and a stop ends the pass at
 // the item that decides it, so the items after it are not computed and do
-// not fail: any and all stop as && and || do. A fused call never needs more
-// fuel than the call on the array did: folding an item costs what collecting
-// it did.
+// not fail: any and all stop as && and || do.
 type Fold struct {
 	// Step is the kernel function that takes the answer so far and the next
 	// item and gives the answer with it: "add" for a sum, called as
@@ -30,6 +28,11 @@ type Fold struct {
 	// Counts makes the fold count the items: len. A count computes an item
 	// only when it is more than a name or a literal, and then does not fuse.
 	Counts bool
+	// First makes the first item the answer, and ends the fold there: first.
+	// With no item the function itself is called on an empty array, and
+	// fails as it does. The function answers its array's element type; the
+	// fold fuses where that is a bool, an int, a float or a string.
+	First bool
 }
 
 // validateFold holds a declared fold to the function it folds for: one
@@ -49,9 +52,13 @@ func (r *Registry) validateFold(spec *FunctionSpec) error {
 	if len(spec.Params) != 1 || spec.Params[0].kind != ArrayKind || spec.Params[0].elem == nil {
 		return fail("the function must take one array")
 	}
-	if fold.Counts {
-		if spec.Result.kind != IntKind || fold.Step != "" || fold.Stops || fold.Stop || fold.Init.kind != InvalidKind {
+	if fold.Counts || fold.First {
+		plain := fold.Step == "" && !fold.Stops && !fold.Stop && fold.Init.kind == InvalidKind && !(fold.Counts && fold.First)
+		switch {
+		case fold.Counts && (spec.Result.kind != IntKind || !plain):
 			return fail("a count answers an int, and has no step, stop or init")
+		case fold.First && (!spec.Result.Equal(*spec.Params[0].elem) || !plain):
+			return fail("a first answers the array's element type, and has no step, stop, init or count")
 		}
 		return nil
 	}

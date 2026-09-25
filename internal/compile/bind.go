@@ -38,19 +38,23 @@ func (b *Binding[In, Out]) Options() CompileOptions {
 }
 
 func (b *Binding[In, Out]) Compile(source string) (*machine.Program[In, Out], error) {
-	artifact, err := CompileExpr(source, b.registry, b.Options())
+	options := b.Options()
+	options.unsealed = true
+	artifact, err := CompileExpr(source, b.registry, options)
 	if err != nil {
 		return nil, err
 	}
-	return b.Load(artifact)
+	return b.codec.InstantiateCompiled(artifact)
 }
 
 func (b *Binding[In, Out]) CompileJSON(exprJSON []byte) (*machine.Program[In, Out], error) {
-	artifact, err := CompileJSON(exprJSON, b.registry, b.Options())
+	options := b.Options()
+	options.unsealed = true
+	artifact, err := CompileJSON(exprJSON, b.registry, options)
 	if err != nil {
 		return nil, err
 	}
-	return b.Load(artifact)
+	return b.codec.InstantiateCompiled(artifact)
 }
 
 // Load binds an artifact compiled elsewhere. Each argument it declares must be

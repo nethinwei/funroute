@@ -9,10 +9,8 @@ import (
 
 // callSite runs one call. There are three ways to get the value, cheapest
 // first: a Batch already computed it; the plain call every kernel function
-// takes; or the bounded call of a function with a Timeout or Detached. The
-// call's block paid its fuel, so a program's budget does not depend on how
-// it ran; a call past its deadline did not run, and gets its cost back with
-// the rest of the block if a fallback takes the failure.
+// takes; or the bounded call of a function with a Timeout or Detached. A
+// call past its deadline does not run.
 //
 // A host's result is then held to the call's type. Currencies first: money
 // the registry cannot hold, or in the wrong currency, is an ErrCurrency like
@@ -23,7 +21,12 @@ import (
 // function's result is of its signature's type, which loading proved.
 func (f *frame) callSite(call int32) error {
 	site := &f.runtime.reg.calls[call]
-	f.refund = site.refund
+	if site.pure != nil && len(f.fallbacks) == 0 {
+		if err := site.pure(f.regs, site.args, site.dst); err != nil {
+			return fmt.Errorf("%s: %w", site.fn.Name, f.classify(err))
+		}
+		return nil
+	}
 	function := site.fn
 	args := f.regs[site.args : site.args+site.argc : site.args+site.argc]
 	if site.kernel && len(f.fallbacks) == 0 {
@@ -34,9 +37,10 @@ func (f *frame) callSite(call int32) error {
 		f.regs[site.dst] = value
 		return nil
 	}
-	if !function.IsBuiltin() && f.deadline && f.ctx.Err() != nil {
-		f.refund = addFuel(f.refund, function.Doc.Cost)
-		return fmt.Errorf("%s: %w", function.Name, kit.Classify(ErrDeadline, "", f.ctx.Err()))
+	if !function.IsBuiltin() && f.deadline {
+		if err := f.expired(); err != nil {
+			return fmt.Errorf("%s: %w", function.Name, err)
+		}
 	}
 	if site.direct {
 		return f.callHost(site, args)
@@ -146,8 +150,10 @@ func (f *frame) prefetchedAt(call int) (Prefetched, bool) {
 // function, stops waiting when it passes. The deadline check before the call
 // is what makes a program stop promptly once its time is up.
 func (f *frame) invokeBounded(function *RegisteredFunction, args []Value) (Value, error) {
-	if f.deadline && f.ctx.Err() != nil {
-		return Value{}, kit.Classify(ErrDeadline, "", f.ctx.Err())
+	if f.deadline {
+		if err := f.expired(); err != nil {
+			return Value{}, err
+		}
 	}
 	ctx, cancel := withTimeout(f.ctx, function)
 	defer cancel()

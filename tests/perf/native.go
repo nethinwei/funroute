@@ -8,7 +8,7 @@ import (
 )
 
 // The same work written in Go the way a host would, for a reference: no
-// overflow check, no fuel, no boundary to cross. Each is kept out of line,
+// overflow check, no boundary to cross. Each is kept out of line,
 // its inputs are variables and its answer goes to keep, so the
 // compiler can neither fold the inputs in nor drop the work.
 

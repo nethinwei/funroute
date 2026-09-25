@@ -33,7 +33,7 @@ func TestHandlesPassBetweenModelsUntouched(t *testing.T) {
 	}
 	features := []float64{0.75, 0.1}
 	value, _ := machine.ToValue(features)
-	result, err := runtime.RunValues(t.Context(), []machine.Value{value}, machine.RunOptions{Fuel: 100})
+	result, err := runtime.RunValues(t.Context(), []machine.Value{value})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func assertHandlesAreOpaque(t *testing.T, registry *machine.Registry) {
 		t.Fatal(err)
 	}
 	h := machine.NewHandle("demo.embedding", &embedding{})
-	if _, err := rt.RunValues(t.Context(), []machine.Value{h, h}, machine.RunOptions{}); err == nil || !strings.Contains(err.Error(), "cannot be compared") {
+	if _, err := rt.RunValues(t.Context(), []machine.Value{h, h}); err == nil || !strings.Contains(err.Error(), "cannot be compared") {
 		t.Fatalf("handle equality error = %v, want cannot be compared", err)
 	}
 	_, err = compile.CompileExpr(`model.fraud_v1(x)`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "x", Type: machine.HandleOf("other.thing")}}})
@@ -90,7 +90,7 @@ func gridTotal(ctx context.Context, rows [][]int32, weights map[string][]float64
 func TestGoReflectsArbitrarySignatures(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
-	if err := registry.Register(machine.FunctionSpec{Name: "grid.total_v1", Doc: machine.Doc{Cost: 5}, Go: gridTotal}); err != nil {
+	if err := registry.Register(machine.FunctionSpec{Name: "grid.total_v1", Go: gridTotal}); err != nil {
 		t.Fatal(err)
 	}
 	function := registry.Overloads("grid.total_v1")[0]
@@ -111,7 +111,7 @@ func TestGoReflectsArbitrarySignatures(t *testing.T) {
 	result, err := runtime.Run(t.Context(), map[string]any{
 		"rows":    []any{[]any{1.0, 2.0}, []any{3.0}},
 		"weights": map[string]any{"a": []any{1.0, 10.0}},
-	}, machine.RunOptions{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,6 @@ func BenchmarkGoCall(b *testing.B) {
 	registry := benchRegistry(b)
 	if err := registry.Register(machine.FunctionSpec{
 		Name: "host.add_v1",
-		Doc:  machine.Doc{Cost: 2},
 		Go:   func(a, c int64) (int64, error) { return a + c, nil },
 	}); err != nil {
 		b.Fatal(err)
@@ -144,7 +143,7 @@ func BenchmarkGoCall(b *testing.B) {
 	args := []machine.Value{machine.Int(7), machine.Int(3)}
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := runtime.RunValues(ctx, args, machine.RunOptions{}); err != nil {
+		if _, err := runtime.RunValues(ctx, args); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -166,7 +165,7 @@ func TestGoTakesAndGivesMoney(t *testing.T) {
 		converted, err := m.MulRatio(r, money.RoundDown)
 		return machine.NewMoney(c.Code(), converted.Minor()+int64(len(xs))), err
 	}
-	if err := registry.Register(machine.FunctionSpec{Name: "fees.quote_v1", Doc: machine.Doc{Cost: 5}, Go: quote}); err != nil {
+	if err := registry.Register(machine.FunctionSpec{Name: "fees.quote_v1", Go: quote}); err != nil {
 		t.Fatal(err)
 	}
 	function := registry.Overloads("fees.quote_v1")[0]
@@ -186,7 +185,7 @@ func TestGoTakesAndGivesMoney(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.RunValues(t.Context(), args, machine.RunOptions{})
+	value, err := runtime.RunValues(t.Context(), args)
 	if got, _ := value.Money(); err != nil || got != (machine.NewMoney("USD", 502)) {
 		t.Fatalf("fees.quote_v1 = %v, %v, want USD 5.02", got, err)
 	}
@@ -221,7 +220,7 @@ func TestGoReturnsAResultWithOrWithoutAnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := runtime.RunValues(t.Context(), nil, machine.RunOptions{}); err != nil || got.Any() != int64(10) {
+	if got, err := runtime.RunValues(t.Context(), nil); err != nil || got.Any() != int64(10) {
 		t.Fatalf("g.double_v1(g.halve_v1(10)) = %v, %v, want 10", got.Any(), err)
 	}
 	// What the boundary cannot express is refused at registration, not at

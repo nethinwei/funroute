@@ -4,13 +4,19 @@ package machine
 // time. For each block of up to vecChunk items it runs each operation of the
 // body over every item that reaches it, a column at a time, and finds the
 // first item any would fail on; then it settles the items in order, up to
-// that one — each item's fuel, its fold into the answer, the item it adds —
-// and hands the loop back to the ordinary body at the first item it cannot
-// settle: one that fails, one the fuel left does not pay for, one that stops
-// the loop. The body runs that item as it always does.
+// that one — each item's fold into the answer, the item it adds — and hands
+// the loop back to the ordinary body at the first item it cannot settle: one
+// that fails, one that stops the loop. The body runs that item as it always
+// does.
 
 // vecChunk is how many items a column holds.
 const vecChunk = 256
+
+// firstStopChunk is how many items the first block of a loop that may stop
+// takes: an any, an all, a first stops where an item decides it, often near
+// the start, and the items past it are computed for nothing. Each block
+// after is twice the last, up to vecChunk.
+const firstStopChunk = 16
 
 // vecKind is what a column holds.
 type vecKind uint8
@@ -63,7 +69,6 @@ type vecScratch struct {
 	bools  [][]bool
 	alive  [][]bool
 	kinds  []vecKind
-	costs  []uint64
 }
 
 // column readies column c to hold kind.
@@ -89,35 +94,42 @@ func (s *vecScratch) column(c int, kind vecKind) {
 	}
 }
 
-// aliveFor readies the masks of n blocks, and the items' costs.
+// aliveFor readies the masks of n blocks.
 func (s *vecScratch) aliveFor(n int) {
 	for len(s.alive) < n {
 		s.alive = append(s.alive, make([]bool, vecChunk))
-	}
-	if s.costs == nil {
-		s.costs = make([]uint64, vecChunk)
 	}
 }
 
 // vectorLoop runs as much of the loop as the vector can settle, and is the
 // item the body goes on from and where; finished when that is every item.
-// The prelude is paid first, and the body then goes on past it; without the
-// fuel for it, the body goes on from the start, and runs it.
-func (f *frame) vectorLoop(loop *regLoop, plan *vecPlan, start int) (int, int, bool) {
+// The body goes on past the prelude, which only jumps to it. Each block of
+// items counts as that many turns of the loop.
+func (f *frame) vectorLoop(loop *regLoop, plan *vecPlan, start int) (int, int, bool, error) {
 	run, ok := f.startVector(loop, plan)
-	if !ok || f.fuelLeft < plan.prelude {
-		return 0, start, false
+	if !ok {
+		return 0, start, false, nil
 	}
-	f.fuelLeft -= plan.prelude
-	for base := 0; base < loop.length; base += vecChunk {
-		n := min(vecChunk, loop.length-base)
+	chunk := vecChunk
+	if plan.stops {
+		chunk = firstStopChunk
+	}
+	for base := 0; base < loop.length; chunk = min(2*chunk, vecChunk) {
+		n := min(chunk, loop.length-base)
 		run.load(loop, base, n)
 		limit := run.columns(n)
 		if settled := run.settle(limit); settled < n {
 			run.finish()
-			return base + settled, int(plan.body), false
+			return base + settled, int(plan.body), false, nil
 		}
+		if f.watching() {
+			if err := f.turn(n); err != nil {
+				run.finish()
+				return 0, start, false, err
+			}
+		}
+		base += n
 	}
 	run.finish()
-	return loop.length, int(plan.body), true
+	return loop.length, int(plan.body), true, nil
 }

@@ -127,7 +127,7 @@ func runJSON(t *testing.T, artifact *funroute.Artifact, registry *funroute.Regis
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), decoded, funroute.RunOptions{})
+	value, err := runtime.Run(t.Context(), decoded)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

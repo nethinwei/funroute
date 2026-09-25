@@ -102,7 +102,7 @@ func errorName(err error) string {
 	}{
 		{"ErrUnavailable", funroute.ErrUnavailable}, {"ErrNoFxRate", funroute.ErrNoFxRate}, {"ErrCurrency", funroute.ErrCurrency},
 		{"ErrArithmetic", funroute.ErrArithmetic}, {"ErrDomain", funroute.ErrDomain}, {"ErrContract", funroute.ErrContract},
-		{"ErrCompile", funroute.ErrCompile}, {"ErrFuel", funroute.ErrFuel}, {"ErrDeadline", funroute.ErrDeadline},
+		{"ErrCompile", funroute.ErrCompile}, {"ErrDeadline", funroute.ErrDeadline},
 		{"ErrExtension", funroute.ErrExtension},
 	} {
 		if errors.Is(err, class.err) {

@@ -7,7 +7,7 @@ import (
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
-func compileAndRun(t *testing.T, source string, registry *machine.Registry, args map[string]any, options machine.RunOptions) (machine.Value, *machine.Runtime) {
+func compileAndRun(t *testing.T, source string, registry *machine.Registry, args map[string]any) (machine.Value, *machine.Runtime) {
 	t.Helper()
 	artifact, err := compile.CompileExpr(source, registry, compile.CompileOptions{})
 	if err != nil {
@@ -17,7 +17,7 @@ func compileAndRun(t *testing.T, source string, registry *machine.Registry, args
 	if err != nil {
 		t.Fatalf("instantiate %s: %v", source, err)
 	}
-	value, err := runtime.Run(t.Context(), args, options)
+	value, err := runtime.Run(t.Context(), args)
 	if err != nil {
 		t.Fatalf("run %s: %v", source, err)
 	}
@@ -45,7 +45,7 @@ func TestStringIsAContainerLikeTheOthers(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			value, _ := compileAndRun(t, test.source, registry,
-				map[string]any{test.arg: test.input}, machine.RunOptions{Fuel: 1000})
+				map[string]any{test.arg: test.input})
 			if value.Any() != test.want {
 				t.Fatalf("%s = %#v, want %#v", test.source, value.Any(), test.want)
 			}
@@ -62,7 +62,7 @@ func TestStringIsAContainerLikeTheOthers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.Run(t.Context(), map[string]any{"card": "411"}, machine.RunOptions{Fuel: 100}); err == nil {
+	if _, err := runtime.Run(t.Context(), map[string]any{"card": "411"}); err == nil {
 		t.Fatal("an index past the end of a string was accepted")
 	}
 }

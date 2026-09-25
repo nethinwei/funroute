@@ -580,10 +580,10 @@ artifact, _ := funroute.CompileExpr(`if(a, b, add(1, 1))`, registry, funroute.Co
 runtime, _ := funroute.Instantiate(artifact, registry)
 
 // 按名字传参（适合表单）
-result, _ := runtime.Run(ctx, map[string]any{"a": false, "b": 9}, funroute.RunOptions{Fuel: 10_000})
+result, _ := runtime.Run(ctx, map[string]any{"a": false, "b": 9})
 
 // 按顺序传参（热路径，省掉名字查找）
-result, _ = runtime.RunValues(ctx, []funroute.Value{funroute.Bool(false), funroute.Int(9)}, funroute.RunOptions{Fuel: 10_000})
+result, _ = runtime.RunValues(ctx, []funroute.Value{funroute.Bool(false), funroute.Int(9)})
 ```
 
 整条管线：
@@ -608,7 +608,7 @@ result, _ = runtime.RunValues(ctx, []funroute.Value{funroute.Bool(false), funrou
 | `Artifact` | 不可变的字节码 + digest，可存储、可传输（JSON）；字段私有，经 `Args()`、`Result()`、`Digest()` 等读取 |
 | `Runtime` | 绑定到注册表后可运行的 Artifact |
 
-`funroute` 是唯一的公开包，实现都在 `internal/` 下，改动不会波及宿主。AST 类型刻意不公开，程序一律用 ExprJSON 交换。公开包里的数据类型（`Type`、`Artifact`、`Money`、`FxRate`、`Manifest`、目录……）都没有宿主可写的字段，只能经构造函数、`Parse` 或注册表得到，经访问方法读取，所以宿主拿不到一个不合规则的值；要宿主填写的只有选项结构体（`CompileOptions`、`FunctionSpec`、`Doc`、`MoneySpec`、`RunOptions`、`BatchOptions` 等），它们在使用处校验。
+`funroute` 是唯一的公开包，实现都在 `internal/` 下，改动不会波及宿主。AST 类型刻意不公开，程序一律用 ExprJSON 交换。公开包里的数据类型（`Type`、`Artifact`、`Money`、`FxRate`、`Manifest`、目录……）都没有宿主可写的字段，只能经构造函数、`Parse` 或注册表得到，经访问方法读取，所以宿主拿不到一个不合规则的值；要宿主填写的只有选项结构体（`CompileOptions`、`FunctionSpec`、`Doc`、`MoneySpec`、`BatchOptions` 等），它们在使用处校验。
 
 ### 类型化绑定：契约就是两个 Go 类型
 
@@ -625,12 +625,12 @@ type RouteIn struct {
 binding, _ := funroute.Bind[RouteIn, Decision](registry)
 program, _ := binding.Compile(source)          // 返回类型参与推导，不是 Decision 就编译失败
 program, _ = binding.Load(storedArtifact)       // 库里存的 artifact：按名字匹配，见下文
-decision, _ := program.Run(ctx, &request, funroute.RunOptions{})
+decision, _ := program.Run(ctx, &request)
 ```
 
 `binding.Options()` 给出推出的 `CompileOptions`，控制台展示契约、语言服务检查程序都用它；`program.Artifact()` 交出编译好的 artifact，用来存库和发布。
 
-**为什么快**：`Program.Run` 不查名字、不反射、不拼 map 或 `[]Value`，参数按绑定时算好的偏移直接从 struct 读出，结果按下标写回 `Out`。程序**没读的参数不做任何转换**，所以一个宿主 struct 可以服务多条规则。代价是没读的参数也不检查（enum 成员资格、NaN 只对读到的参数检查）；规则看不到没读的值，结果不受影响。
+**为什么快**：`Program.Run` 不查名字、不反射、不拼 map 或 `[]Value`，参数按绑定时算好的偏移直接从 struct 读出，结果按下标写回 `Out`。程序**没读的参数不做任何转换**，所以一个宿主 struct 可以服务多条规则。代价是没读的参数也不检查（enum 成员资格、NaN 只对读到的参数检查）；只读几个 bool、int、float、string 字段的 record 参数也一样，只读那几个字段，其余字段不检查。规则看不到没读的值，结果不受影响。
 
 剩下的分配都有名目。装载时的值流分析知道每个参数、每个数组去了哪里：只在程序里被读的，就地读、不分配；会交给宿主函数或放进结果的，才要自己的内存。
 
@@ -638,8 +638,9 @@ decision, _ := program.Run(ctx, &request, funroute.RunOptions{})
 |---|---|
 | 标量、字符串 | 0 次 |
 | 程序只遍历、取长度或下标的原生切片（`[]int64`、`[]float64`、`[]string`、`[]bool`） | 0 次（切片头拷进帧，元素不复制；`[]float64` 仍做一遍 NaN 检查） |
+| 只被遍历或取长度、循环里只读元素字段的 struct 切片（字段都是 bool、int、float、string） | 0 次（切片头拷进帧，每一轮把元素读进循环自带的 record） |
 | 其他切片或映射 | 1 次（装箱它的头，元素不复制） |
-| 程序只读字段的 record | 0 次（读进帧自带的 record） |
+| 程序只读字段的 record | 0 次（读进帧自带的 record；每次读都是一个 bool、int、float、string 字段时不建 record，只把读到的字段读进寄存器） |
 | 其他 record | 1 次 |
 
 | 结果 | `Run` | `RunInto` |
@@ -654,6 +655,8 @@ decision, _ := program.Run(ctx, &request, funroute.RunOptions{})
 结果里的容器是程序的 backing，只读。
 
 **三条运行路径怎么选**：表单与 JSON 用 `Run(map)`；向量预先检查好、要反复复用的用 `RunValues`；服务的热路径用 `Program`。
+
+`Program` 每次运行都把读到的 `[]float64` 与 `map[string]float64` 检查一遍，拒绝 NaN 与 Infinity：值在进入语言时确立不变量，而宿主 struct 里的切片每次运行都是新进来的。这一遍只读、不复制，受内存带宽限制（65536 个元素约 16 µs）。同一个大向量要跨很多次运行复用，就用 `funroute.ToValue` 构造一次（在这里检查），再经 `RunValues` 传入，此后不再检查。没有"宿主担保、跳过检查"的开关：担保错了，`score > 0.8` 遇到 NaN 得 false，规则静默地走错分支。
 
 **载入别处编译的 artifact**：`Load` 按名字匹配，规则与 `Run(map)` 的边界相同。
 
@@ -704,7 +707,7 @@ market := []funroute.FxRate{usdJPY, usdEUR}   // 契约：market: array<fxrate>
 // 规则：using(market, round(amount -> JPY, @half_even))
 amount, _ := funroute.ToValue(dollars)
 quotes, _ := funroute.ToValue(market)
-value, err := runtime.RunValues(ctx, []funroute.Value{amount, quotes}, funroute.RunOptions{})
+value, err := runtime.RunValues(ctx, []funroute.Value{amount, quotes})
 ```
 
 报价从哪来、何时过期、用哪一套，全由宿主决定：规则只看得见传给它的那几个汇率。类型化绑定里它就是 struct 的一个字段（`` Market []funroute.FxRate `funroute:"market"` ``）。
@@ -733,7 +736,6 @@ registry.Register(funroute.FunctionSpec{
     Doc: funroute.Doc{
         Label:       "风险评分",
         Description: "根据国家和金额计算风险分。",
-        Cost:        25,
         Params:      []string{"国家", "金额"},
     },
     Go: func(country string, amount int64) float64 { return 0.9 },
@@ -742,7 +744,7 @@ registry.Register(funroute.FunctionSpec{
 
 - 参数可以是 Go 标量、任意嵌套的切片和 `map[string]…`、struct（见[记录](#记录)）或句柄；首参数可选 `context.Context`；返回 `R`，会失败的返回 `(R, error)`。
 - 常见签名——标量与 `[]float64`/`[]int64` 进、标量出，可带 `error`——直接调用，每次约 25 ns、0 次分配；其余签名经 `reflect.Call`，约 300 ns。也可以不填 `Go`，手写 `Params`、`Result`、`Eval`；两种写法二选一。
-- 以一个数组为参数的聚合可以声明 `Fold`，套推导式调用时就边算边折叠，不建数组、也不调用它：`Fold: &funroute.Fold{Step: "add", Init: funroute.Int(0)}` 是一个求和，`Step` 是把"到目前的答案"和下一个元素并起来的内核函数；`Stops`/`Stop` 让一个 bool 的折叠遇到 `Stop` 就停（`any` 停在 true）；`Counts` 是计数。折叠必须与函数本身给出同样的答案。
+- 以一个数组为参数的聚合可以声明 `Fold`，套推导式调用时就边算边折叠，不建数组、也不调用它：`Fold: &funroute.Fold{Step: "add", Init: funroute.Int(0)}` 是一个求和，`Step` 是把"到目前的答案"和下一个元素并起来的内核函数；`Stops`/`Stop` 让一个 bool 的折叠遇到 `Stop` 就停（`any` 停在 true）；`Counts` 是计数；`First` 取第一个元素并就此停下（`first`），一个都没有时对空数组调用函数本身、照样报错。折叠必须与函数本身给出同样的答案。
 - 金额直接写 Go 类型：`funroute.Money`、`funroute.Ratio`、`funroute.FxRate`、`funroute.Currency` 及它们的切片与映射（零拷贝），`Go` 的签名反射就能读出；手写 `Params` 时用 `funroute.MoneyType` 等。币种是值的属性，签名不约束它：收到几笔金额的函数自己检查它们同币种（错了返回 `ErrCurrency`），返回的金额币种必须已声明，否则是 `ErrCurrency`。
 - 名字里的 `_v1` 只是约定。函数的身份是完整签名，签名或成本变了，旧 artifact 会拒绝装载。
 - `Doc` 只写机器算不出来的东西：标签、说明、成本、参数标签，以及可选的案例 `Examples: []funroute.Example{{Source: "risk.score_v1(\"SG\", 100)", Result: "0.9"}}`（源码与它的 JSON 结果）。签名来自 Go 类型，分类默认取命名空间（`risk.score_v1` → `risk`）。
@@ -780,7 +782,7 @@ let(emb = model.embed_v2(features),
 ```go
 registry.Register(funroute.FunctionSpec{
     Name:    "model.fraud_v3",
-    Doc:     funroute.Doc{Cost: 20, Timeout: 8 * time.Millisecond},
+    Doc:     funroute.Doc{Timeout: 8 * time.Millisecond},
     Go:      func(ctx context.Context, emb *ort.Tensor) (float64, error) { … },       // 单条
     GoBatch: func(ctx context.Context, embs []*ort.Tensor) ([]float64, error) { … }, // 批量
 })
@@ -799,7 +801,7 @@ outs := make([]RouteOut, len(requests))                             // requests 
 program.RunBatch(ctx, len(requests),
     func(i int) *RouteIn { return &requests[i] },                   // 第 i 条请求在哪
     func(i int) *RouteOut { return &outs[i] },                      // 第 i 个结果写到哪
-    funroute.RunOptions{}, func(i int, err error) { log.Printf("request %d: %v", i, err) })
+    func(i int, err error) { log.Printf("request %d: %v", i, err) })
 
 batch := program.Batch(funroute.BatchOptions{MaxSize: 256, MaxWait: 2 * time.Millisecond})
 defer batch.Close()
@@ -817,7 +819,7 @@ decision, err := batch.Run(ctx, &request)
 
 ### 超时、兜底与错误
 
-- 请求的时间预算通过 `ctx` 传入，VM 在每次调用扩展函数前检查。
+- 请求的时间预算通过 `ctx` 传入，VM 在每次调用扩展函数前检查（标了 `Constexpr` 的纯函数除外：它们快、不等待任何东西）；循环每 32768 轮也检查一次（最慢的常见循环体约 1 ms 一次），所以规则在截止时间后约 1 ms 内停下，报 `ErrDeadline`。`ctx` 既没有截止时间也不能取消时一次也不查。语言必然终止，但遍历很长的输入、嵌套遍历字面量仍可能跑很久：给 `ctx` 设截止时间就是给规则设上限。
 - `Doc.Timeout` 是单个函数的上限，实际 deadline 取 `min(请求剩余时间, Timeout)`。合批时取批内最早的 deadline，所以 `MaxWait` 要远小于请求预算。
 - 无法取消的引擎绑定注册时标 `Doc.Detached: true`，VM 在独立 goroutine 中等它，到点就放弃。
 
@@ -827,7 +829,7 @@ decision, err := batch.Run(ctx, &request)
 fallback(primary.quote_v1(order), secondary.quote_v1(order), 0.0)
 ```
 
-`fallback` 只接住**数据暂时不可得**：扩展函数失败、超时、换汇找不到汇率。**规则或数据自身的错误**（fuel 耗尽、算术失败、数据上没有答案、币种不一致）不会被吞掉，即使发生在扩展函数里：扩展函数返回的错误已经带上面任何一个类别（如 `ErrCurrency`、`ErrArithmetic`、`ErrNoFxRate`）时原样保留，不会被包成 `ErrExtension`。前一个候选在 `using` 里失败时，下一个候选从 `fallback` 所在处的汇率重新开始。
+`fallback` 只接住**数据暂时不可得**：扩展函数失败、超时、换汇找不到汇率。**规则或数据自身的错误**（算术失败、数据上没有答案、币种不一致）不会被吞掉，即使发生在扩展函数里：扩展函数返回的错误已经带上面任何一个类别（如 `ErrCurrency`、`ErrArithmetic`、`ErrNoFxRate`）时原样保留，不会被包成 `ErrExtension`。前一个候选在 `using` 里失败时，下一个候选从 `fallback` 所在处的汇率重新开始。
 
 所有错误都可以用 `errors.Is` 区分。扩展函数自己的错误被归类后仍在错误链上：`errors.Is(err, funroute.ErrExtension)` 与 `errors.Is(err, 你的哨兵错误)` 都成立，`errors.As` 也取得到你的错误类型，超时同样认得出 `context.DeadlineExceeded`。
 
@@ -839,7 +841,6 @@ fallback(primary.quote_v1(order), secondary.quote_v1(order), 0.0)
 | `ErrExtension` | 扩展函数报错 | 接 |
 | `ErrUnavailable` | 调用了只登记签名、没有实现的函数；同时是 `ErrExtension` | 接 |
 | `ErrNoFxRate` | 换汇时 `using` 里没有这一对货币的汇率 | 接 |
-| `ErrFuel` | 超出成本上限：fuel 或栈深 | 不接 |
 | `ErrCurrency` | 币种不一致或未声明 | 不接 |
 | `ErrArithmetic` | 算术没有答案，见下 | 不接 |
 | `ErrDomain` | 数据上没有答案，见下 | 不接 |
@@ -1011,11 +1012,11 @@ make run        # 构建前端与 wasm，组装 site/，然后启动静态服务
 
 ## 性能
 
-字节码装载时翻译成带类型的寄存器形式再执行：参数、常量和局部变量原地读，内核的算术与比较是一条条专用指令，比较与其后的跳转、推导式的收集与下一轮都合成一条；fuel 按基本块在入口一次扣完。循环体只是 int/float/bool 的运算、筛选、折叠或收集时，按 256 个元素一块按列执行，遇到会失败、fuel 不够或停下的元素就交回逐个执行，结果、错误与 fuel 都不变。Artifact 的格式与 digest 不受影响。
+字节码装载时翻译成带类型的寄存器形式再执行：参数、常量和局部变量原地读，内核的算术与比较是一条条专用指令，比较与其后的跳转、推导式的收集与下一轮都合成一条。循环体只是 int/float/bool 的运算、筛选、折叠或收集时，按 256 个元素一块按列执行（可能停下的循环从 16 个一块起逐块翻倍），遇到会失败或停下的元素就交回逐个执行，结果与错误都不变。Artifact 的格式与 digest 不受影响。
 
 **执行本身不分配内存**。装载时的值流分析知道每个数组去了哪里：只在程序里被遍历、取长度或下标的数组建在帧自己的内存里，帧跨运行复用，稳定之后 0 次分配；只有交给宿主的结果才要自己的内存，而 `Program.RunInto` 可以把它建在宿主给的切片里。金额也一样：边界上的币种扫描、金额运算、换汇与 `using` 都是 0 次分配。
 
-编译器另做两处不改变结果的改写：声明了 `Fold` 的函数（`sum`、`any`、`all`、`len`）套推导式时编译成单遍折叠，不建中间数组；嵌套推导的内层源不依赖外层元素时只算一次。`any`/`all` 因此在决定答案的元素处停下，后面的元素不再计算，也不会报错，和 `||`、`&&` 一样。
+编译器另做两处不改变结果的改写：声明了 `Fold` 的函数（`sum`、`any`、`all`、`first`、`len`）套推导式时编译成单遍折叠，不建中间数组；嵌套推导的内层源不依赖外层元素时只算一次。`any`/`all` 因此在决定答案的元素处停下，后面的元素不再计算，也不会报错，和 `||`、`&&` 一样。
 
 Apple M5 上的几个数（完整的对照表见 [`docs/perf.md`](docs/perf.md)，由 `make perf` 生成，每项旁边是同一件事直接用 Go 写的耗时）：
 
@@ -1073,6 +1074,7 @@ tests/api/             公开面的测试与 godoc 示例，按主题组织（�
 tests/conformance/     把 web/funroute-examples.json 的每个示例经公开 API 跑完整条流水线
 tests/limits/          生成并守着 docs/limits.md 的表格（make limits）
 tests/perf/            性能报告，写进 docs/perf.md（make perf）
+tests/perf/expr/       与 expr 的对照（单独的 module，只有它依赖 expr）
 web/src/               工作台前端（TypeScript），每个组件一个入口，打包到 web/dist/
 web/wasm/              浏览器用的语言服务入口（js/wasm）
 cmd/funroute  cmd/mvp  CLI（含 fmt、lsp）与工作台静态服务
@@ -1165,7 +1167,7 @@ quote          = expression                         // 一个 fxrate 或 array<f
 | `int` | −9,223,372,036,854,775,808 ~ 9,223,372,036,854,775,807（约 ±9.22×10¹⁸） | 精确 | 溢出、除零是 `ErrArithmetic`；整数除法向零截断 |
 | `float` | IEEE 754 float64，约 ±1.8×10³⁰⁸，15–17 位有效数字 | 不精确：`0.1 + 0.2` 是 `0.30000000000000004` | NaN / Infinity 进不来，算出来也报错 |
 | `string` | 任意长度的合法 UTF-8 | 精确 | 下标与 `len` 按码点数 |
-| `array<T>` / `dict<T>` | 长度只受内存与 fuel 限制；字典的键是字符串 | — | 越界、缺键报错 |
+| `array<T>` / `dict<T>` | 长度只受内存限制；字典的键是字符串 | — | 越界、缺键报错 |
 | `record{…}` | 字段固定，按声明顺序存放 | — | 缺字段是另一个类型 |
 | `enum` | 契约声明的成员 | — | 不是成员就不是这个类型 |
 | `money` | int64 个最小单位；能表示多少主单位取决于币种的小数位，见[表达能力与精度](#表达能力与精度) | 精确 | 溢出报错；位数超过币种小数位报错 |

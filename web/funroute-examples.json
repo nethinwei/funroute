@@ -1353,7 +1353,7 @@
     {
       "label": "失败降级",
       "category": "基础语法",
-      "description": "fallback 只在扩展调用失败或超时时才尝试下一项，不吞类型和 fuel 错误",
+      "description": "fallback 只在扩展调用失败或超时时才尝试下一项，不吞类型和内核运算错误",
       "source": "fallback(route.fee_quote_v1(status, quoted_fee), backup_fee)",
       "contract": {
         "args": [

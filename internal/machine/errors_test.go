@@ -17,7 +17,7 @@ func TestTheReadmeTableIsTheErrorClasses(t *testing.T) {
 	}
 	sentinels := map[string]error{
 		"ErrCompile": ErrCompile, "ErrContract": ErrContract, "ErrDeadline": ErrDeadline, "ErrExtension": ErrExtension,
-		"ErrNoFxRate": ErrNoFxRate, "ErrFuel": ErrFuel, "ErrCurrency": ErrCurrency, "ErrArithmetic": ErrArithmetic,
+		"ErrNoFxRate": ErrNoFxRate, "ErrCurrency": ErrCurrency, "ErrArithmetic": ErrArithmetic,
 		"ErrUnavailable": ErrUnavailable, "ErrDomain": ErrDomain,
 	}
 	rows := regexp.MustCompile("(?m)^\\| `(Err[A-Za-z]+)` \\| [^|]+ \\| ([^|]+) \\|$").FindAllStringSubmatch(string(readme), -1)

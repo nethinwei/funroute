@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/machine"
@@ -34,9 +35,9 @@ func aggregateRegistry(t *testing.T) *machine.Registry {
 		return func(items []bool) bool { return slices.Contains(items, stop) == stop }
 	}
 	for _, spec := range []machine.FunctionSpec{
-		{Name: "t.sum_v1", Go: sum, Fold: &machine.Fold{Step: "add", Init: machine.Int(0)}, Doc: machine.Doc{Cost: 4, Constexpr: true}},
-		{Name: "t.any_v1", Go: quantifier(true), Fold: &machine.Fold{Init: machine.Bool(false), Stops: true, Stop: true}, Doc: machine.Doc{Cost: 3}},
-		{Name: "t.all_v1", Go: quantifier(false), Fold: &machine.Fold{Init: machine.Bool(true), Stops: true, Stop: false}, Doc: machine.Doc{Cost: 3}},
+		{Name: "t.sum_v1", Go: sum, Fold: &machine.Fold{Step: "add", Init: machine.Int(0)}, Doc: machine.Doc{Constexpr: true}},
+		{Name: "t.any_v1", Go: quantifier(true), Fold: &machine.Fold{Init: machine.Bool(false), Stops: true, Stop: true}},
+		{Name: "t.all_v1", Go: quantifier(false), Fold: &machine.Fold{Init: machine.Bool(true), Stops: true, Stop: false}},
 	} {
 		if err := registry.Register(spec); err != nil {
 			t.Fatal(err)
@@ -46,8 +47,7 @@ func aggregateRegistry(t *testing.T) *machine.Registry {
 }
 
 // A call of a fold on a comprehension folds as the loop runs, and answers
-// as the call on the built array does, with no more fuel to finish. The one
-// difference is the stop: an any or an all no longer computes, or fails on,
+// as the call on the built array does. The one difference is the stop: an any or an all no longer computes, or fails on,
 // the items after the one that decides it.
 func TestAFoldOfAComprehensionAnswersAsTheCall(t *testing.T) {
 	t.Parallel()
@@ -111,8 +111,8 @@ func compileBoth(t *testing.T, source string, registry *machine.Registry, option
 
 func assertFusedAnswersAsPlain(t *testing.T, source string, fused, plain *machine.Runtime, args map[string]any) {
 	t.Helper()
-	got, gotErr := fused.Run(t.Context(), args, machine.RunOptions{})
-	want, wantErr := plain.Run(t.Context(), args, machine.RunOptions{})
+	got, gotErr := fused.Run(t.Context(), args)
+	want, wantErr := plain.Run(t.Context(), args)
 	stops := strings.Contains(source, "any") || strings.Contains(source, "all")
 	switch {
 	case wantErr == nil && (gotErr != nil || !got.Equal(want)):
@@ -122,26 +122,49 @@ func assertFusedAnswersAsPlain(t *testing.T, source string, fused, plain *machin
 	case wantErr != nil && gotErr != nil && !errors.Is(gotErr, machine.ErrArithmetic) && !errors.Is(gotErr, machine.ErrDomain):
 		t.Errorf("%s with %v: fused fails with %v; as written %v", source, args, gotErr, wantErr)
 	}
-	// A run that finishes needs no more fuel fused; one that fails may need
-	// the one instruction more that seeds the fold before it fails.
-	if gotFuel, wantFuel := fuelToAnswer(t, fused, args), fuelToAnswer(t, plain, args); wantErr == nil && gotFuel > wantFuel {
-		t.Errorf("%s with %v: fused needs %d fuel, as written %d", source, args, gotFuel, wantFuel)
-	}
 }
 
-// fuelToAnswer is the least fuel a run needs to end other than out of fuel.
-func fuelToAnswer(t *testing.T, runtime *machine.Runtime, args map[string]any) uint64 {
-	t.Helper()
-	low, high := uint64(1), uint64(1<<20)
-	for low < high {
-		middle := low + (high-low)/2
-		if _, err := runtime.Run(t.Context(), args, machine.RunOptions{Fuel: middle}); errors.Is(err, machine.ErrFuel) {
-			low = middle + 1
-		} else {
-			high = middle
+// A first of a comprehension stops at the first item the comprehension
+// yields, which is the answer; with none it fails as the call on the empty
+// array does, in the same words. The items after the answer are not
+// computed, so do not fail.
+func TestAFirstOfAComprehensionStopsAtItsItem(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	first := func(items []int64) (int64, error) {
+		if len(items) == 0 {
+			return 0, errors.New("first of an empty array")
+		}
+		return items[0], nil
+	}
+	if err := registry.Register(machine.FunctionSpec{Name: "t.first_v1", Go: first, Fold: &machine.Fold{First: true}}); err != nil {
+		t.Fatal(err)
+	}
+	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}}
+	for _, source := range []string{
+		`t.first_v1([x * 2 for x in xs if x > 1])`,
+		`t.first_v1([x for x in xs])`,
+		`t.first_v1([10 / x for x in xs])`,
+		`t.first_v1([t.first_v1([y for y in xs if y > x]) for x in xs if x < 3])`,
+	} {
+		fused, plain := compileHoisted(t, source, registry, options)
+		for _, xs := range [][]any{{}, {1, 2, 3}, {3, 0, -1}, {0}, {2, 0}, {1, 1}} {
+			args := map[string]any{"xs": xs}
+			got, gotErr := fused.Run(t.Context(), args)
+			want, wantErr := plain.Run(t.Context(), args)
+			switch {
+			case wantErr == nil && (gotErr != nil || !got.Equal(want)):
+				t.Errorf("%s with %v: fused %v, %v; as written %v", source, xs, got.Any(), gotErr, want.Any())
+			case wantErr != nil && gotErr != nil && gotErr.Error() != wantErr.Error():
+				t.Errorf("%s with %v: fused fails with %v; as written %v", source, xs, gotErr, wantErr)
+			case wantErr != nil && gotErr == nil && !strings.Contains(source, "10 / x"):
+				t.Errorf("%s with %v: fused %v; as written it fails: %v", source, xs, got.Any(), wantErr)
+			}
 		}
 	}
-	return low
 }
 
 // A fold must fold for the function it is declared on: one array in, a step
@@ -155,6 +178,9 @@ func TestAFoldIsHeldToItsFunction(t *testing.T) {
 		{Name: "t.stop_v1", Go: func(a []int64) int64 { return 0 }, Fold: &machine.Fold{Init: machine.Int(0), Stops: true}},
 		{Name: "t.count_v1", Go: func(a []int64) bool { return false }, Fold: &machine.Fold{Counts: true}},
 		{Name: "t.none_v1", Go: func(a []int64) int64 { return 0 }, Fold: &machine.Fold{Init: machine.Int(0)}},
+		{Name: "t.first_v1", Go: func(a []int64) bool { return false }, Fold: &machine.Fold{First: true}},
+		{Name: "t.firsts_v1", Go: func(a []int64) int64 { return 0 }, Fold: &machine.Fold{First: true, Init: machine.Int(0)}},
+		{Name: "t.both_v1", Go: func(a []int64) int64 { return 0 }, Fold: &machine.Fold{First: true, Counts: true}},
 	} {
 		if err := machine.CoreRegistry().Register(spec); err == nil {
 			t.Errorf("%s registers with its fold %+v", spec.Name, *spec.Fold)
@@ -163,37 +189,44 @@ func TestAFoldIsHeldToItsFunction(t *testing.T) {
 }
 
 // The inner source of a nested comprehension that reads nothing of the
-// outer item is computed once: the same arrays, in less fuel from the
-// second item on — the first pays two instructions to keep it; one that
-// reads the outer item, or sits under a filter, is computed for each item.
+// outer item is computed once: the same arrays, the source computed by the
+// first item and read by the rest; one that reads the outer item, or sits
+// under a filter, is computed for each item.
 func TestAnInvariantInnerSourceIsComputedOnce(t *testing.T) {
 	t.Parallel()
 	registry := aggregateRegistry(t)
+	var calls atomic.Int64
+	inner := func(items []int64) []int64 { calls.Add(1); return items }
+	if err := registry.Register(machine.FunctionSpec{Name: "t.inner_v1", Go: inner, Doc: machine.Doc{Constexpr: true}}); err != nil {
+		t.Fatal(err)
+	}
 	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}}
 	for _, test := range []struct {
 		source  string
 		hoisted bool
 	}{
-		{`[x * y for x in xs for y in [len(xs), 2]]`, true},
-		{`[x - y for x in xs for y in [z * 2 for z in xs]]`, true},
-		{`[x * y for x in xs for y in [x, 2]]`, false},
-		{`[x * y for x in xs if x > 1 for y in [len(xs), 2]]`, false},
+		{`[x * y for x in xs for y in t.inner_v1([len(xs), 2])]`, true},
+		{`[x - y for x in xs for y in t.inner_v1([z * 2 for z in xs])]`, true},
+		{`[x * y for x in xs for y in t.inner_v1([x, 2])]`, false},
+		{`[x * y for x in xs if x > 1 for y in t.inner_v1([len(xs), 2])]`, false},
 	} {
 		hoisted, plain := compileHoisted(t, test.source, registry, options)
 		for _, xs := range [][]any{{}, {1, 2, 3}, {4}} {
 			args := map[string]any{"xs": xs}
-			got, gotErr := hoisted.Run(t.Context(), args, machine.RunOptions{})
-			want, wantErr := plain.Run(t.Context(), args, machine.RunOptions{})
+			calls.Store(0)
+			got, gotErr := hoisted.Run(t.Context(), args)
+			hoistedCalls := calls.Swap(0)
+			want, wantErr := plain.Run(t.Context(), args)
+			plainCalls := calls.Load()
 			if gotErr != nil || wantErr != nil || !got.Equal(want) {
 				t.Errorf("%s with %v: hoisted %v, %v; as written %v, %v", test.source, xs, got.Any(), gotErr, want.Any(), wantErr)
 			}
-			gotFuel, wantFuel := fuelToAnswer(t, hoisted, args), fuelToAnswer(t, plain, args)
-			keep := uint64(0)
-			if test.hoisted && len(xs) == 1 {
-				keep = 2
+			wantCalls := plainCalls
+			if test.hoisted {
+				wantCalls = min(plainCalls, 1)
 			}
-			if cheaper := gotFuel < wantFuel; gotFuel > wantFuel+keep || cheaper != (test.hoisted && len(xs) > 1) {
-				t.Errorf("%s with %v: hoisted needs %d fuel, as written %d", test.source, xs, gotFuel, wantFuel)
+			if hoistedCalls != wantCalls {
+				t.Errorf("%s with %v: the inner source computed %d times, as written %d; want %d", test.source, xs, hoistedCalls, plainCalls, wantCalls)
 			}
 		}
 	}

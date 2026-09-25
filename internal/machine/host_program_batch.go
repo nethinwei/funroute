@@ -33,7 +33,7 @@ import (
 // succeeds allocates nothing for errors. failed is the host's code, so a panic
 // in it is not recovered; it happens after every program has run and every
 // frame is back in the pool, and leaves the Program as usable as before.
-func (p *Program[In, Out]) RunBatch(ctx context.Context, n int, in func(i int) *In, out func(i int) *Out, options RunOptions, failed func(i int, err error)) {
+func (p *Program[In, Out]) RunBatch(ctx context.Context, n int, in func(i int) *In, out func(i int) *Out, failed func(i int, err error)) {
 	if failed == nil {
 		panic("RunBatch: failed must not be nil")
 	}
@@ -42,7 +42,7 @@ func (p *Program[In, Out]) RunBatch(ctx context.Context, n int, in func(i int) *
 	}
 	requests, active := p.encodeBatch(ctx, n, in)
 	if len(active) > 0 {
-		p.hoisted.executeShared(ctx, active, options)
+		p.hoisted.executeShared(ctx, active)
 	}
 	for i := range requests {
 		if err := p.decodeInPlace(requests[i].result, out(i)); err != nil {

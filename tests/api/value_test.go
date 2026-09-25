@@ -142,7 +142,6 @@ func TestHostVectorsReachExtensionsWithoutCopying(t *testing.T) {
 	var received []float64
 	err := registry.Register(funroute.FunctionSpec{
 		Name: "model.score_v1",
-		Doc:  funroute.Doc{Cost: 10},
 		Go: func(xs []float64) (float64, error) {
 			received = xs
 			return xs[0], nil
@@ -166,7 +165,7 @@ func TestHostVectorsReachExtensionsWithoutCopying(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.RunValues(t.Context(), []funroute.Value{value}, funroute.RunOptions{Fuel: 100})
+	result, err := runtime.RunValues(t.Context(), []funroute.Value{value})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +176,7 @@ func TestHostVectorsReachExtensionsWithoutCopying(t *testing.T) {
 		t.Fatal("the extension received a copy of the host's vector")
 	}
 	// Run's by-name path takes the same shortcut for a Go slice.
-	if _, err := runtime.Run(t.Context(), map[string]any{"features": features}, funroute.RunOptions{Fuel: 100}); err != nil {
+	if _, err := runtime.Run(t.Context(), map[string]any{"features": features}); err != nil {
 		t.Fatal(err)
 	}
 	if &received[0] != &features[0] {
@@ -202,7 +201,7 @@ func TestNumbersWidenButNeverNarrow(t *testing.T) {
 	for _, input := range []any{1, int64(1), int32(1), uint16(1), float32(1), 1.0} {
 		t.Run(fmt.Sprintf("%T", input), func(t *testing.T) {
 			t.Parallel()
-			if _, err := runtime.Run(t.Context(), map[string]any{"rate": input}, funroute.RunOptions{Fuel: 1000}); err != nil {
+			if _, err := runtime.Run(t.Context(), map[string]any{"rate": input}); err != nil {
 				t.Fatalf("%T should widen to float: %v", input, err)
 			}
 		})
@@ -217,7 +216,7 @@ func TestNumbersWidenButNeverNarrow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := intRuntime.Run(t.Context(), map[string]any{"amount": 1.7}, funroute.RunOptions{Fuel: 1000}); err == nil {
+	if _, err := intRuntime.Run(t.Context(), map[string]any{"amount": 1.7}); err == nil {
 		t.Fatal("1.7 is not an int and must not be rounded into one")
 	}
 }
@@ -243,7 +242,7 @@ func decisionRegistry(t *testing.T) *funroute.Registry {
 	err := registry.Register(funroute.FunctionSpec{
 		Name: "route.decide_v1",
 		Doc: funroute.Doc{
-			Label: "决策", Category: "路由", Cost: 10, Params: []string{"订单"}, Result: "决策",
+			Label: "决策", Category: "路由", Params: []string{"订单"}, Result: "决策",
 		},
 		Go: func(order Order) (Decision, error) {
 			return Decision{Channel: "adyen_" + order.CurrencyCode, Net: order.Amount - 30}, nil
@@ -284,8 +283,7 @@ func TestHostPassesItsStructsThrough(t *testing.T) {
 		t.Fatalf("result type = %s, want %s", runtime.ResultType(), want)
 	}
 	value, err := runtime.Run(t.Context(),
-		map[string]any{"order": Order{Amount: 5000, CurrencyCode: "USD", Tags: []string{"vip"}}},
-		funroute.RunOptions{Fuel: 10_000})
+		map[string]any{"order": Order{Amount: 5000, CurrencyCode: "USD", Tags: []string{"vip"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +310,7 @@ func TestRecordJSONKeepsTheFieldOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	value, err := runtime.Run(t.Context(),
-		map[string]any{"order": Order{Amount: 1200, CurrencyCode: "SGD"}}, funroute.RunOptions{Fuel: 10_000})
+		map[string]any{"order": Order{Amount: 1200, CurrencyCode: "SGD"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +338,7 @@ func TestOnlyTaggedFieldsAreInTheRecord(t *testing.T) {
 	}
 	err = funroute.CoreRegistry().Register(funroute.FunctionSpec{
 		Name: "demo.untagged_v1",
-		Doc:  funroute.Doc{Label: "无标签", Category: "演示", Cost: 1, Params: []string{"值"}, Result: "值"},
+		Doc:  funroute.Doc{Label: "无标签", Category: "演示", Params: []string{"值"}, Result: "值"},
 		Go:   func(u Untagged) (int64, error) { return u.Amount, nil },
 	})
 	if err == nil || !strings.Contains(err.Error(), "no record fields") {
@@ -390,7 +388,7 @@ func TestRecordsNest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), map[string]any{"basket": basket}, funroute.RunOptions{Fuel: 10_000})
+	value, err := runtime.Run(t.Context(), map[string]any{"basket": basket})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +408,7 @@ func TestRecordsNest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listed, err := linesRuntime.Run(t.Context(), map[string]any{"basket": basket}, funroute.RunOptions{Fuel: 10_000})
+	listed, err := linesRuntime.Run(t.Context(), map[string]any{"basket": basket})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +437,7 @@ func TestRecordsMatchByNameNotByCount(t *testing.T) {
 	}
 	// The payload carries more than the contract asks for.
 	value, err := runtime.Run(t.Context(),
-		map[string]any{"order": map[string]any{"amount": 7, "extra": 9, "note": "x"}}, funroute.RunOptions{Fuel: 1000})
+		map[string]any{"order": map[string]any{"amount": 7, "extra": 9, "note": "x"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +451,7 @@ func TestRecordsMatchByNameNotByCount(t *testing.T) {
 		t.Fatalf("FromValue[Wide] = %+v, %v; want {Amount:7 Channel:}", wide, err)
 	}
 	// A field the contract does ask for is still required.
-	_, err = runtime.Run(t.Context(), map[string]any{"order": map[string]any{"extra": 9}}, funroute.RunOptions{Fuel: 1000})
+	_, err = runtime.Run(t.Context(), map[string]any{"order": map[string]any{"extra": 9}})
 	if err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("Run(order without amount) error = %v, want \"missing\"", err)
 	}
@@ -561,7 +559,6 @@ func TestMoneyArraysReachExtensionsWithoutCopying(t *testing.T) {
 	var received []funroute.Money
 	err := registry.Register(funroute.FunctionSpec{
 		Name: "ledger.count_v1",
-		Doc:  funroute.Doc{Cost: 1},
 		Go: func(lines []funroute.Money) (int64, error) {
 			received = lines
 			return int64(len(lines)), nil
@@ -585,7 +582,7 @@ func TestMoneyArraysReachExtensionsWithoutCopying(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := runtime.RunValues(t.Context(), []funroute.Value{value}, funroute.RunOptions{}); err != nil || result.Any() != int64(2) {
+	if result, err := runtime.RunValues(t.Context(), []funroute.Value{value}); err != nil || result.Any() != int64(2) {
 		t.Fatalf("RunValues(ledger.count_v1) = %v, %v, want 2", result.Any(), err)
 	}
 	if &received[0] != &lines[0] {
@@ -607,7 +604,7 @@ func TestRunValuesChecksTheCurrencies(t *testing.T) {
 			valueOf(amount("USD", 1000)), valueOf(ratioText("0.029")), valueOf(currency("EUR")),
 		}
 	}
-	value, err := runtime.RunValues(t.Context(), valid(), funroute.RunOptions{})
+	value, err := runtime.RunValues(t.Context(), valid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,13 +617,13 @@ func TestRunValuesChecksTheCurrencies(t *testing.T) {
 	} {
 		args := valid()
 		edit(args)
-		if _, err := runtime.RunValues(t.Context(), args, funroute.RunOptions{}); !errors.Is(err, funroute.ErrCurrency) || !errors.Is(err, funroute.ErrContract) {
+		if _, err := runtime.RunValues(t.Context(), args); !errors.Is(err, funroute.ErrCurrency) || !errors.Is(err, funroute.ErrContract) {
 			t.Errorf("RunValues with %s error = %v, want ErrCurrency and ErrContract", name, err)
 		}
 	}
 	args := valid()
 	args[1] = funroute.Int(1)
-	if _, err := runtime.RunValues(t.Context(), args, funroute.RunOptions{}); !errors.Is(err, funroute.ErrContract) || errors.Is(err, funroute.ErrCurrency) {
+	if _, err := runtime.RunValues(t.Context(), args); !errors.Is(err, funroute.ErrContract) || errors.Is(err, funroute.ErrCurrency) {
 		t.Errorf("RunValues with an int for a rate error = %v, want ErrContract alone", err)
 	}
 }
@@ -646,7 +643,7 @@ func TestEncodeJSONWritesAmountsAsText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), nil, funroute.RunOptions{})
+	value, err := runtime.Run(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,7 +693,7 @@ func TestMoneyIsStampedOnlyWhereItIsUsed(t *testing.T) {
 // every one is made by a constructor, a table or a registry, and read
 // through methods, so what a host holds already keeps the rules. The option
 // structs a host fills in — CompileOptions, FunctionSpec, Doc, MoneySpec,
-// CurrencySpec, BatchOptions, RunOptions, TextContract — are input, checked
+// CurrencySpec, BatchOptions, TextContract — are input, checked
 // where they are used, and are not in this list.
 func TestDataTypesHaveNoWritableFields(t *testing.T) {
 	t.Parallel()

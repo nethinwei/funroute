@@ -58,7 +58,7 @@ func bench(run func(ctx context.Context) error) measured {
 // runValues measures runtime on args.
 func runValues(runtime *funroute.Runtime, args ...funroute.Value) measured {
 	return bench(func(ctx context.Context) error {
-		_, err := runtime.RunValues(ctx, args, funroute.RunOptions{Fuel: 1 << 30})
+		_, err := runtime.RunValues(ctx, args)
 		return err
 	})
 }
@@ -72,7 +72,7 @@ func singleRuns(out *strings.Builder) error {
 	if err != nil {
 		return err
 	}
-	out.WriteString("\n## 单次执行\n\n\"原生 Go\"是同一件事直接用 Go 写：宿主惯常的写法，不查溢出、不计 fuel、不过边界；换汇调用的就是规则里用的 `Currencies.Convert`。倍数是 FunRoute 的耗时除以它。\n\n" +
+	out.WriteString("\n## 单次执行\n\n\"原生 Go\"是同一件事直接用 Go 写：宿主惯常的写法，不查溢出、不过边界；换汇调用的就是规则里用的 `Currencies.Convert`。倍数是 FunRoute 的耗时除以它。\n\n" +
 		"| 场景 | FunRoute | 分配 | 原生 Go | 分配 | 倍数 |\n|---|---|---|---|---|---|\n")
 	for _, row := range rows {
 		if row.err != nil {

@@ -13,7 +13,6 @@ import (
 func (k moneyKernel) registerConvert(registry *Registry) {
 	doc := moneyDoc("convert", "按所在 using 的报价换汇：amount -> JPY。只用这一对货币的报价或反向报价的倒数，不经中转货币；"+
 		"要经过别的货币就连写，amount -> CNY -> USD：在 round 里整段精确，只在最后舍入一次。using 里没有这一对的报价是 ErrNoFxRate，fallback 可以兜底。", "金额", "目标币种")
-	doc.Cost = 5
 	registerRounded(registry, FunctionSpec{Name: "convert", Params: []Type{MoneyType, CurrencyType}, Result: MoneyType, Doc: doc, readsRun: true},
 		k.convertExactIn, k.convertIn)
 }
@@ -24,7 +23,6 @@ func (k moneyKernel) registerConvert(registry *Registry) {
 func (k moneyKernel) registerRateReading(registry *Registry) {
 	doc := moneyDoc("fx", "所在 using 里从 base 到 quote 的汇率，与 -> 换汇用的是同一个汇率：可以加点、比较或交给内层的 using。"+
 		"只看这一对货币的报价或反向报价的倒数；没有这一对是 ErrNoFxRate。", "基准币种", "报价币种")
-	doc.Cost = 5
 	mustRegister(registry, FunctionSpec{Name: "fx", Params: []Type{CurrencyType, CurrencyType}, Result: FxRateType, Doc: doc, readsRun: true,
 		Eval: k.ratioIn})
 }

@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -29,16 +30,16 @@ func NewRatio(num, den int64) money.Ratio {
 // NewCurrency is a currency value's Go form without a table.
 func NewCurrency(code string) money.Currency { return money.CurrencyOf(code) }
 
-// WithPrefetched is options carrying a Batch's answers for the runtime's
-// calls, by the call instructions' program counters, for a test that plays
-// the Batch.
-func WithPrefetched(r *Runtime, options RunOptions, byPC map[int]Prefetched) RunOptions {
-	options.prefetched = make([]Prefetched, len(r.reg.calls))
+// RunPrefetched is RunValues with a Batch's answers for the runtime's calls,
+// by the call instructions' program counters, for a test that plays the
+// Batch.
+func RunPrefetched(ctx context.Context, r *Runtime, args []Value, byPC map[int]Prefetched) (Value, error) {
+	prefetched := make([]Prefetched, len(r.reg.calls))
 	for pc, answer := range byPC {
 		answer.ready = true
-		options.prefetched[r.callAt(pc)] = answer
+		prefetched[r.callAt(pc)] = answer
 	}
-	return options
+	return r.runValues(ctx, args, prefetched)
 }
 
 // ArtifactWith is an unsealed artifact over parts, for the table tests of
@@ -82,13 +83,14 @@ type FlowFacts struct {
 	Dest      map[string]int
 	Answer    string
 	FieldOnly []bool
+	ViewOnly  []bool
 }
 
 // Flow is the value-flow analysis of the runtime's program.
 func Flow(r *Runtime) FlowFacts {
 	found := flowOf(&r.artifact.parts, r.functions)
 	name := func(pc int) string { return fmt.Sprintf("%s@%d", r.artifact.parts.Instructions[pc].Op, pc) }
-	facts := FlowFacts{Dest: map[string]int{}, FieldOnly: found.fieldOnly}
+	facts := FlowFacts{Dest: map[string]int{}, FieldOnly: found.fieldOnly, ViewOnly: found.viewOnly}
 	for _, pc := range slices.Sorted(maps.Keys(found.arena)) {
 		facts.Arena = append(facts.Arena, name(pc))
 	}
@@ -120,3 +122,33 @@ func Vectors(r *Runtime) int {
 	}
 	return n
 }
+
+// IdleFrameHoldsPointers reports whether the frame r keeps between runs
+// still points at anything from the last run. The pool gives back the frame
+// the goroutine's last run put there — unless a collection emptied it, and
+// then there is nothing left to point at anything.
+func IdleFrameHoldsPointers(r *Runtime) bool {
+	f, ok := r.frames.Get().(*frame)
+	if !ok {
+		return false
+	}
+	defer r.frames.Put(f)
+	for _, v := range f.regs[f.argBase:] {
+		if v.s != "" || v.box != nil {
+			return true
+		}
+	}
+	for i := range f.items {
+		if slices.ContainsFunc(f.items[i].fields, func(v Value) bool { return v.s != "" || v.box != nil }) {
+			return true
+		}
+	}
+	return slices.ContainsFunc(f.recordViews, func(view recordsView) bool { return view.data != nil || view.plan != nil })
+}
+
+// Promotions is how many fields of record arguments r's program reads out of
+// registers of their own (lower_promote.go).
+func Promotions(r *Runtime) int { return len(r.reg.promotions) }
+
+// Straight reports whether p runs the shorter way (host_straight.go).
+func Straight[In, Out any](p *Program[In, Out]) bool { return p.straight }

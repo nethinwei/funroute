@@ -65,7 +65,7 @@ func TestBindingRunsOnHostTypes(t *testing.T) {
 		Scores: []float64{0.1, 0.7},
 		Lines:  []Line{{SKU: "a", Amount: 1}, {SKU: "b", Amount: 2}},
 	}
-	out, err := program.Run(t.Context(), &in, funroute.RunOptions{})
+	out, err := program.Run(t.Context(), &in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestBindingLoadsWhatAnArtifactDeclares(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := RouteIn{Amount: 30, Order: Order{Amount: 1000, CurrencyCode: "SGD"}}
-	out, err := program.Run(t.Context(), &in, funroute.RunOptions{})
+	out, err := program.Run(t.Context(), &in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,10 +162,10 @@ func TestBindingCarriesEnumsAsStrings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out, err := program.Run(t.Context(), &ChannelIn{Channel: "adyen"}, funroute.RunOptions{}); err != nil || out != "stripe" {
+	if out, err := program.Run(t.Context(), &ChannelIn{Channel: "adyen"}); err != nil || out != "stripe" {
 		t.Fatalf("Run(channel=adyen) = %q, %v; want \"stripe\"", out, err)
 	}
-	if out, err := program.Run(t.Context(), &ChannelIn{Channel: "paypal"}, funroute.RunOptions{}); !errors.Is(err, funroute.ErrContract) || out != "" {
+	if out, err := program.Run(t.Context(), &ChannelIn{Channel: "paypal"}); !errors.Is(err, funroute.ErrContract) || out != "" {
 		t.Fatalf("Run(channel=paypal) = %q, %v; want \"\" and ErrContract: a non-member entered", out, err)
 	}
 }
@@ -190,7 +190,7 @@ func TestBindingCarriesNestedRecords(t *testing.T) {
 		Customer: Order{Amount: 1200, CurrencyCode: "SGD", Tags: []string{"vip"}},
 		Lines:    []Line{{SKU: "a", Amount: 10}, {SKU: "b", Amount: 20}},
 	}}
-	out, err := program.Run(t.Context(), &in, funroute.RunOptions{})
+	out, err := program.Run(t.Context(), &in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestBindingUpdatesARecordItWasGiven(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := OrderIn{Order: Order{Amount: 1200, CurrencyCode: "SGD", Tags: []string{"vip"}}}
-	out, err := program.Run(t.Context(), &in, funroute.RunOptions{})
+	out, err := program.Run(t.Context(), &in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestBindingRunsBatches(t *testing.T) {
 	requests := []RouteIn{{Country: "SG", Amount: 1}, {Country: "HK", Amount: 2}}
 	decisions := []*RouteOut{{}, {}}
 	program.RunBatch(t.Context(), len(requests), func(i int) *RouteIn { return &requests[i] },
-		func(i int) *RouteOut { return decisions[i] }, funroute.RunOptions{}, func(i int, err error) {
+		func(i int) *RouteOut { return decisions[i] }, func(i int, err error) {
 			t.Errorf("request %d failed: %v", i, err)
 		})
 	if decisions[0].Channel != "SG" || decisions[1].Channel != "HK" || decisions[0].Net != 1 || decisions[1].Net != 2 {
@@ -264,7 +264,7 @@ func TestBindingCompilesADocument(t *testing.T) {
 		t.Fatalf("CompileJSON(%s) error = %v", document, err)
 	}
 	in := RouteIn{Country: "SG", Amount: 30, Order: Order{Amount: 1000, CurrencyCode: "SGD"}, Scores: []float64{0.1, 0.7}}
-	out, err := program.Run(t.Context(), &in, funroute.RunOptions{})
+	out, err := program.Run(t.Context(), &in)
 	if err != nil || out.Channel != "adyen" || out.Net != 970 || out.Score != 0.7 || len(out.SKUs) != 0 {
 		t.Fatalf("Run = %+v, %v, want channel adyen, net 970, score 0.7, no skus", out, err)
 	}
@@ -304,7 +304,7 @@ func TestProgramHandsOutItsRuntime(t *testing.T) {
 	if got, want := runtime.ResultType().String(), binding.Options().Result.String(); got != want {
 		t.Fatalf("Runtime().ResultType() = %s, want %s", got, want)
 	}
-	value, err := runtime.Run(t.Context(), map[string]any{"order": Order{Amount: 1200, CurrencyCode: "SGD", Tags: []string{"vip"}}}, funroute.RunOptions{})
+	value, err := runtime.Run(t.Context(), map[string]any{"order": Order{Amount: 1200, CurrencyCode: "SGD", Tags: []string{"vip"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestBindingCarriesADictionaryOfRates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := program.Run(t.Context(), &in{Rates: map[string]funroute.FxRate{"card": rate}}, funroute.RunOptions{})
+	got, err := program.Run(t.Context(), &in{Rates: map[string]funroute.FxRate{"card": rate}})
 	if err != nil || len(got) != 1 {
 		t.Fatalf("rates round trip = %v, %v, want one rate", got, err)
 	}
@@ -375,7 +375,7 @@ func TestProgramRunsIntoTheHostsResult(t *testing.T) {
 	}
 	out := FeesOut{Doubled: make([]int64, 0, 8)}
 	for _, fees := range [][]int64{{1, 2}, {3, 4, 5}} {
-		if err := program.RunInto(t.Context(), &FeesIn{Fees: fees}, &out, funroute.RunOptions{}); err != nil {
+		if err := program.RunInto(t.Context(), &FeesIn{Fees: fees}, &out); err != nil {
 			t.Fatal(err)
 		}
 		if len(out.Doubled) != len(fees) || out.Doubled[0] != fees[0]*2 || cap(out.Doubled) != 8 {

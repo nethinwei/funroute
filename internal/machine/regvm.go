@@ -2,8 +2,6 @@ package machine
 
 import (
 	"fmt"
-
-	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // The register machine runs a program's register form. Its hot loop holds
@@ -20,8 +18,6 @@ func (f *frame) exec() (Value, error) {
 		pc++
 		ok, err := true, error(nil)
 		switch in.op {
-		case rFuel:
-			ok = f.charge(in)
 		case rMove:
 			regs[in.c] = regs[in.a]
 		case rJump:
@@ -81,20 +77,8 @@ func branchUnless(cond bool, pc int, target int32) int {
 	return int(target)
 }
 
-// charge pays for the block the operation opens, and holds its stack to the
-// run's limit.
-func (f *frame) charge(in *rinstr) bool {
-	cost := uint64(uint32(in.b))<<32 | uint64(uint32(in.c))
-	if f.fuelLeft < cost || int(in.a) > f.stackLimit {
-		return false
-	}
-	f.fuelLeft -= cost
-	return true
-}
-
 // caught hands a failure to the innermost fallback that takes it: the
-// loops and usings its candidate opened are closed, and the fuel its block
-// paid for what did not run is given back.
+// loops and usings its candidate opened are closed.
 func (f *frame) caught(err error) (int, error) {
 	if class, _ := classOf(err); len(f.fallbacks) == 0 || !class.fallback {
 		return 0, err
@@ -105,19 +89,14 @@ func (f *frame) caught(err error) (int, error) {
 	clear(f.loops[handler.loops:])
 	f.loops = f.loops[:handler.loops]
 	f.dropScopes(handler.scopes)
-	f.fuelLeft += f.refund
-	f.refund = 0
 	return handler.target, nil
 }
 
-// fault is why the operation at pc could not answer: the block's fuel or
-// stack, or the kernel function's own failure, which asking it gives.
+// fault is why the operation at pc could not answer: the kernel function's
+// own failure, which asking it gives.
 func (f *frame) fault(pc int) error {
 	in := &f.runtime.reg.code[pc]
 	origin := int(f.runtime.reg.origins[pc])
-	if in.op == rFuel {
-		return f.fuelFault(origin, in)
-	}
 	source := f.runtime.artifact.parts.Instructions[origin]
 	left, right := unarena(f.regs[in.a]), f.regs[in.b]
 	if source.Op == OpEqual {
@@ -130,31 +109,4 @@ func (f *frame) fault(pc int) error {
 		return fmt.Errorf("%s: %w", function.Name, err)
 	}
 	return fmt.Errorf("internal error: %s refused what %s accepts", in.op, function.key)
-}
-
-// fuelFault is a block the run cannot pay for. The stack machine charged an
-// instruction at a time, so the failure names the instruction it would
-// have stopped at: the one with no fuel left, or the call it could not pay.
-func (f *frame) fuelFault(start int, in *rinstr) error {
-	if int(in.a) > f.stackLimit {
-		return kit.Errorf(ErrFuel, "stack limit %d exceeded", f.maxStack)
-	}
-	left := f.fuelLeft
-	f.fuelLeft = 0
-	code := f.runtime.artifact.parts.Instructions
-	for pc := start; pc < len(code); pc++ {
-		if left == 0 {
-			return fmt.Errorf("%w at instruction %d", ErrFuel, pc)
-		}
-		left--
-		if code[pc].Op != OpCall {
-			continue
-		}
-		function := f.runtime.functions[code[pc].A]
-		if left < function.Doc.Cost {
-			return fmt.Errorf("%w before %s", ErrFuel, function.Name)
-		}
-		left -= function.Doc.Cost
-	}
-	return fmt.Errorf("%w at instruction %d", ErrFuel, start)
 }

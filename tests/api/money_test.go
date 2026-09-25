@@ -112,7 +112,7 @@ func TestHostRunsAFeeRuleInAnyCurrency(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := []funroute.Value{valueOf(amount("EUR", 10_000)), valueOf(amount("EUR", 500))}
-	value, err := runtime.RunValues(t.Context(), args, funroute.RunOptions{})
+	value, err := runtime.RunValues(t.Context(), args)
 	if money, _ := value.Money(); err != nil || money != (amount("EUR", 320)) {
 		t.Fatalf("fee on EUR 100.00 = %v, %v, want EUR 3.20", value.Any(), err)
 	}
@@ -121,7 +121,7 @@ func TestHostRunsAFeeRuleInAnyCurrency(t *testing.T) {
 		t.Fatalf("EncodeJSON = %s, %v, want \"EUR 3.20\"", encoded, err)
 	}
 	args[1] = valueOf(amount("USD", 500))
-	if _, err := runtime.RunValues(t.Context(), args, funroute.RunOptions{}); !errors.Is(err, funroute.ErrCurrency) {
+	if _, err := runtime.RunValues(t.Context(), args); !errors.Is(err, funroute.ErrCurrency) {
 		t.Fatalf("a dollar cap on a euro payment: error = %v, want ErrCurrency", err)
 	}
 }
@@ -138,7 +138,7 @@ func TestBindingCarriesMoney(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := FeeIn{Amount: amount("JPY", 10_000), Cap: amount("JPY", 1_000)}
-	out, err := program.Run(t.Context(), &in, funroute.RunOptions{})
+	out, err := program.Run(t.Context(), &in)
 	if err != nil || out.Fee != (amount("JPY", 290)) {
 		t.Fatalf("fee on JPY 10000 = %v, %v, want JPY 290", out.Fee, err)
 	}
@@ -157,7 +157,7 @@ func TestABindingTakesAFixedAmountInItsRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := FeeIn{Amount: amount("EUR", 900), Cap: amount("EUR", 500)}
-	out, err := program.Run(t.Context(), &in, funroute.RunOptions{})
+	out, err := program.Run(t.Context(), &in)
 	if err != nil || out.Fee != (amount("USD", 30)) {
 		t.Fatalf("fee over the cap = %v, %v, want USD 0.30", out.Fee, err)
 	}
@@ -367,7 +367,7 @@ func TestBindingCarriesEveryMoneyType(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := ledger()
-	out, err := program.Run(t.Context(), &in, funroute.RunOptions{})
+	out, err := program.Run(t.Context(), &in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +431,7 @@ func TestBindingRefusesCurrenciesThatDoNotFit(t *testing.T) {
 			t.Parallel()
 			in := ledger()
 			test.edit(&in)
-			out, err := program.Run(t.Context(), &in, funroute.RunOptions{})
+			out, err := program.Run(t.Context(), &in)
 			if !errors.Is(err, funroute.ErrCurrency) || errors.Is(err, funroute.ErrContract) != test.contract {
 				t.Errorf("Run(%s) error = %v, want ErrCurrency, ErrContract: %v", name, err, test.contract)
 			}
@@ -479,7 +479,7 @@ func TestRunReadsEveryMoneyShape(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value, err := runtime.Run(t.Context(), args, funroute.RunOptions{})
+			value, err := runtime.Run(t.Context(), args)
 			if err != nil {
 				t.Fatalf("Run(%s) error = %v", test.args, err)
 			}
@@ -544,7 +544,7 @@ func runWith(t *testing.T, runtime *funroute.Runtime, valid map[string]string, k
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Run(t.Context(), args, funroute.RunOptions{})
+	_, err = runtime.Run(t.Context(), args)
 	return err
 }
 
@@ -585,7 +585,7 @@ func TestCurrencyErrorsAreTyped(t *testing.T) {
 				t.Fatal(err)
 			}
 			args := []funroute.Value{valueOf(amount("USD", 1)), valueOf(amount("EUR", 1))}
-			_, err = runtime.RunValues(t.Context(), args, funroute.RunOptions{})
+			_, err = runtime.RunValues(t.Context(), args)
 			if !errors.Is(err, funroute.ErrCurrency) || errors.Is(err, funroute.ErrContract) != test.contract || errors.Is(err, funroute.ErrExtension) {
 				t.Errorf("USD + EUR (%s) error = %v, want ErrCurrency, ErrContract: %v, not ErrExtension", name, err, test.contract)
 			}
@@ -608,7 +608,7 @@ func TestFallbackDoesNotCatchACurrencyError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), map[string]any{"a": "USD 1", "b": "EUR 1"}, funroute.RunOptions{})
+	value, err := runtime.Run(t.Context(), map[string]any{"a": "USD 1", "b": "EUR 1"})
 	if !errors.Is(err, funroute.ErrCurrency) {
 		t.Errorf("fallback(USD 1 + EUR 1, USD 1) = %v, %v, want ErrCurrency", value.Any(), err)
 	}
@@ -621,7 +621,7 @@ func TestManifestCarriesTheMoneyFeature(t *testing.T) {
 	t.Parallel()
 	host := fullConsole(t)
 	fee := func(amount funroute.Money) funroute.Money { return amount }
-	if err := host.Register(funroute.FunctionSpec{Name: "ledger.fee_v1", Doc: funroute.Doc{Cost: 5}, Go: fee}); err != nil {
+	if err := host.Register(funroute.FunctionSpec{Name: "ledger.fee_v1", Go: fee}); err != nil {
 		t.Fatal(err)
 	}
 	encoded, err := json.Marshal(host.Manifest())
@@ -742,7 +742,7 @@ func TestHostAndRuleTradeExchangeRates(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime, _ := funroute.Instantiate(artifact, registry)
-	value, err := runtime.Run(t.Context(), map[string]any{"fx": agreed, "amount": amount("USD", 200)}, funroute.RunOptions{})
+	value, err := runtime.Run(t.Context(), map[string]any{"fx": agreed, "amount": amount("USD", 200)})
 	if yen, _ := value.Money(); err != nil || yen != amount("JPY", 301) {
 		t.Fatalf("using(fx, USD 2.00 -> JPY) at %s = %v, %v, want JPY 301 (300.5, half up)", agreed, value.Any(), err)
 	}
@@ -753,7 +753,7 @@ func TestHostAndRuleTradeExchangeRates(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime, _ = funroute.Instantiate(implied, registry)
-	value, err = runtime.Run(t.Context(), map[string]any{"settled": "JPY 30050", "paid": "USD 200.00"}, funroute.RunOptions{})
+	value, err = runtime.Run(t.Context(), map[string]any{"settled": "JPY 30050", "paid": "USD 200.00"})
 	back, converted := funroute.FromValue[funroute.FxRate](value)
 	if order, _ := back.Cmp(agreed); err != nil || converted != nil || order != 0 {
 		t.Fatalf("implied(JPY 30050, USD 200.00) = %v (%v, %v), want %s", back, err, converted, agreed)

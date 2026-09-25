@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"sync"
-	"sync/atomic"
 
 	"github.com/nethinwei/funroute/internal/kit"
 )
@@ -29,27 +27,16 @@ type Runtime struct {
 	// parameter, which a value of that kind has without looking further;
 	// InvalidKind for the rest.
 	scalars []Kind
-	// stackLimit is what a block is held to under the default stack limit:
-	// the limit when the program goes deeper, and otherwise nothing.
-	stackLimit int
-	// idle is a frame kept for the next run, taken and given back without
-	// the pool's bookkeeping; frames holds the rest.
-	idle   atomic.Pointer[frame]
+	// frames holds the frames between runs. The pool keeps them by processor,
+	// so runs on many goroutines at once never contend for one: a single
+	// shared frame, taken and given back by atomic swaps, made ten cores
+	// slower than one.
 	frames sync.Pool
 }
 
-type RunOptions struct {
-	Fuel     uint64
-	MaxStack int
-	// prefetched holds results a Batch computed ahead of the program, one
-	// for each call of the register form (regProgram.calls), ready or not.
-	// The program takes them instead of calling. Only a Batch sets it: a host
-	// that could would skip the real call.
-	prefetched []Prefetched
-}
-
 // Instantiate validates the artifact digest and binds its exact function
-// signatures to the supplied registry.
+// signatures to the supplied registry. It loads a copy of the artifact, so
+// what the caller does with its own afterwards changes nothing here.
 func Instantiate(artifact *Artifact, registry *Registry) (*Runtime, error) {
 	if artifact == nil || registry == nil {
 		return nil, errors.New("artifact and registry are required")
@@ -58,14 +45,33 @@ func Instantiate(artifact *Artifact, registry *Registry) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validateArtifact(snapshot); err != nil {
+	if err := checkDigest(snapshot); err != nil {
 		return nil, err
 	}
-	runtime, err := newRuntime(snapshot, registry)
+	return load(snapshot, registry)
+}
+
+// InstantiateCompiled is Instantiate for an artifact the caller has just
+// sealed and hands over, keeping nothing of it: there is no one to copy it
+// from, and its digest, computed as it was sealed, is not computed again.
+// Everything else is checked as Instantiate checks it.
+func InstantiateCompiled(artifact *Artifact, registry *Registry) (*Runtime, error) {
+	if artifact == nil || registry == nil {
+		return nil, errors.New("artifact and registry are required")
+	}
+	return load(artifact, registry)
+}
+
+// load validates the artifact and binds it to the registry.
+func load(artifact *Artifact, registry *Registry) (*Runtime, error) {
+	if err := validateArtifact(artifact); err != nil {
+		return nil, err
+	}
+	runtime, err := newRuntime(artifact, registry)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkMoneyStamp(snapshot, registry); err != nil {
+	if err := checkMoneyStamp(artifact, registry); err != nil {
 		return nil, err
 	}
 	if err := declaredConstants(runtime.constants, registry); err != nil {
@@ -95,17 +101,7 @@ func newRuntime(artifact *Artifact, registry *Registry) (*Runtime, error) {
 	return &Runtime{
 		artifact: artifact, registry: registry, constants: constants, functions: functions, depth: proof.depth, reg: reg,
 		money: newMoneyPlan(artifact, registry), scalars: scalarKinds(artifact.parts.Args),
-		stackLimit: stackLimitFor(proof.depth, defaultMaxStack),
 	}, nil
-}
-
-// stackLimitFor is what blocks are held to under limit, for a program
-// depth deep.
-func stackLimitFor(depth, limit int) int {
-	if depth > limit {
-		return limit
-	}
-	return math.MaxInt
 }
 
 // scalarKinds is what Runtime.scalars says of params.
@@ -143,9 +139,10 @@ func declaredConstants(constants []Value, registry *Registry) error {
 //
 // It skips what Instantiate checks — the digest, and the JSON snapshot — because
 // this artifact was built moments ago in this process and never left it. Its
-// bytecode is still validated. fuel and maxStack are the limits themselves:
-// the compiler always passes both, so zero is not the default a run's is.
-func EvaluateClosed(parts ArtifactParts, registry *Registry, fuel uint64, maxStack int) (Value, error) {
+// bytecode is still validated. budget bounds how many turns its loops take in
+// all: past it the evaluation ends with ErrFoldBudget, and the compiler
+// leaves the expression for run time, whatever machine it compiles on.
+func EvaluateClosed(parts ArtifactParts, registry *Registry, budget int) (Value, error) {
 	if registry == nil {
 		return Value{}, errors.New("a registry is required")
 	}
@@ -158,7 +155,8 @@ func EvaluateClosed(parts ArtifactParts, registry *Registry, fuel uint64, maxSta
 		return Value{}, err
 	}
 	f := runtime.acquireFrame()
-	return runtime.runFrame(context.Background(), f, nil, RunOptions{Fuel: fuel, MaxStack: maxStack}, resultSink{})
+	f.budget = budget
+	return runtime.runFrame(context.Background(), f, nil, nil, resultSink{})
 }
 
 // snapshotArtifact round-trips the artifact through JSON so the runtime owns an
@@ -175,7 +173,10 @@ func snapshotArtifact(artifact *Artifact) (*Artifact, error) {
 	return &snapshot, nil
 }
 
-func validateArtifact(artifact *Artifact) error {
+// checkDigest holds the artifact to the digest it carries. Its version is
+// checked first, as it always was: an artifact of another shape reports
+// that, not a digest that cannot match.
+func checkDigest(artifact *Artifact) error {
 	if artifact.parts.Version != ArtifactVersion {
 		return fmt.Errorf("unsupported artifact version %d", artifact.parts.Version)
 	}
@@ -185,6 +186,13 @@ func validateArtifact(artifact *Artifact) error {
 	}
 	if artifact.parts.Digest != expectedDigest {
 		return fmt.Errorf("artifact digest mismatch: got %s, want %s", artifact.parts.Digest, expectedDigest)
+	}
+	return nil
+}
+
+func validateArtifact(artifact *Artifact) error {
+	if artifact.parts.Version != ArtifactVersion {
+		return fmt.Errorf("unsupported artifact version %d", artifact.parts.Version)
 	}
 	if !artifact.parts.Result.IsConcrete() {
 		return fmt.Errorf("artifact result type is not concrete: %s", artifact.parts.Result)
@@ -247,16 +255,13 @@ func loadConstants(artifact *Artifact) ([]Value, error) {
 }
 
 // bindFunctions refuses to load an artifact whose registry drifted: the exact
-// signature must still exist and keep its fuel cost.
+// signature must still exist.
 func bindFunctions(artifact *Artifact, registry *Registry) ([]*RegisteredFunction, error) {
 	functions := make([]*RegisteredFunction, len(artifact.parts.Calls))
 	for i, call := range artifact.parts.Calls {
 		function, ok := registry.Resolve(call.Signature)
 		if !ok {
 			return nil, fmt.Errorf("required function is not registered: %s", call.Signature)
-		}
-		if function.Doc.Cost != call.Cost {
-			return nil, fmt.Errorf("function cost changed for %s: artifact=%d registry=%d", call.Signature, call.Cost, function.Doc.Cost)
 		}
 		functions[i] = function
 	}
@@ -366,9 +371,9 @@ func (r *Runtime) ResultType() Type { return r.artifact.parts.Result }
 // and the host owns the contract, so it knows the order.
 //
 // ctx is the request's budget: every extension call sees its deadline, and a
-// program stops at the next call once it has passed (ErrDeadline). The pure
-// part of a program is not interrupted; it is nanoseconds.
-func (r *Runtime) Run(ctx context.Context, rawArgs map[string]any, options RunOptions) (Value, error) {
+// program stops at the next call, or within about a millisecond of a loop,
+// once it has passed (ErrDeadline).
+func (r *Runtime) Run(ctx context.Context, rawArgs map[string]any) (Value, error) {
 	f := r.acquireFrame()
 	args := f.argSpace(len(r.artifact.parts.Args))
 	if err := r.bindArgs(args, rawArgs); err != nil {
@@ -377,13 +382,18 @@ func (r *Runtime) Run(ctx context.Context, rawArgs map[string]any, options RunOp
 		r.releaseFrame(f)
 		return Value{}, kit.Classify(ErrContract, "", err)
 	}
-	return r.runFrame(ctx, f, args, options, resultSink{})
+	return r.runFrame(ctx, f, args, nil, resultSink{})
 }
 
 // RunValues takes the arguments already typed, in the artifact's ABI order. It
 // checks each against its declared type — a wrong type is a host bug, not
 // something to trust — but does no name lookup and no conversion.
-func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOptions) (Value, error) {
+func (r *Runtime) RunValues(ctx context.Context, args []Value) (Value, error) {
+	return r.runValues(ctx, args, nil)
+}
+
+// runValues is RunValues with a Batch's answers for the program's calls.
+func (r *Runtime) runValues(ctx context.Context, args []Value, prefetched []Prefetched) (Value, error) {
 	// No invariant re-check here. A Value cannot hold a NaN in the first
 	// place: every public constructor rejects one where it enters —
 	// funroute.Float is CheckedFloat, ToValue goes through checkFloats, and
@@ -400,7 +410,7 @@ func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOption
 	f := r.acquireFrame()
 	space := f.argSpace(len(args))
 	copy(space, args)
-	return r.runFrame(ctx, f, space, options, resultSink{})
+	return r.runFrame(ctx, f, space, prefetched, resultSink{})
 }
 
 // admit checks a request's arguments as a run would — their kinds unless a
@@ -452,11 +462,11 @@ func argumentError(param Parameter, value Value) error {
 // runTyped runs arguments a Codec produced. They are typed by construction,
 // and the ones the program never reads are left empty — which RunValues would
 // rightly refuse from a host, so the check is not repeated here.
-func (r *Runtime) runTyped(ctx context.Context, args []Value, options RunOptions) (Value, error) {
+func (r *Runtime) runTyped(ctx context.Context, args []Value, prefetched []Prefetched) (Value, error) {
 	f := r.acquireFrame()
 	space := f.argSpace(len(args))
 	copy(space, args)
-	return r.runFrame(ctx, f, space, options, resultSink{})
+	return r.runFrame(ctx, f, space, prefetched, resultSink{})
 }
 
 func (r *Runtime) bindArgs(args []Value, rawArgs map[string]any) error {
@@ -505,9 +515,6 @@ func plainScalar(raw any, kind Kind) (Value, bool) {
 }
 
 func (r *Runtime) acquireFrame() *frame {
-	if f := r.idle.Swap(nil); f != nil {
-		return f
-	}
 	if f, ok := r.frames.Get().(*frame); ok {
 		return f
 	}
@@ -516,7 +523,5 @@ func (r *Runtime) acquireFrame() *frame {
 
 func (r *Runtime) releaseFrame(f *frame) {
 	f.release()
-	if !r.idle.CompareAndSwap(nil, f) {
-		r.frames.Put(f)
-	}
+	r.frames.Put(f)
 }

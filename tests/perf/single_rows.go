@@ -52,11 +52,11 @@ func feeRows(registry *funroute.Registry) ([]row, error) {
 	return []row{
 		{"`" + feeRule + "`：`RunValues`", runValues(runtime, funroute.Int(100000), funroute.Int(250), funroute.Int(30)), native},
 		{"同上：`Run(map)`", bench(func(ctx context.Context) error {
-			_, err := runtime.Run(ctx, byName, funroute.RunOptions{})
+			_, err := runtime.Run(ctx, byName)
 			return err
 		}), native},
 		{"同上：`Program.Run`（从宿主 struct 读参数）", bench(func(ctx context.Context) error {
-			_, err := program.Run(ctx, &request, funroute.RunOptions{})
+			_, err := program.Run(ctx, &request)
 			return err
 		}), native},
 	}, nil
@@ -64,7 +64,7 @@ func feeRows(registry *funroute.Registry) ([]row, error) {
 
 func callRows(registry *funroute.Registry) ([]row, error) {
 	hostAdd := func(a, b int64) int64 { return a + b }
-	if err := registry.Register(funroute.FunctionSpec{Name: "host.add_v1", Doc: funroute.Doc{Cost: 2}, Go: hostAdd}); err != nil {
+	if err := registry.Register(funroute.FunctionSpec{Name: "host.add_v1", Go: hostAdd}); err != nil {
 		return nil, err
 	}
 	ints := []funroute.ArgSpec{{Name: "a", Type: funroute.IntType}, {Name: "b", Type: funroute.IntType}}
@@ -136,7 +136,7 @@ func loopRows(registry *funroute.Registry) ([]row, error) {
 
 func vectorRows(registry *funroute.Registry) ([]row, error) {
 	score := func(xs []float64) float64 { return xs[0] + xs[len(xs)-1] }
-	if err := registry.Register(funroute.FunctionSpec{Name: "model.edges_v1", Doc: funroute.Doc{Cost: 10}, Go: score}); err != nil {
+	if err := registry.Register(funroute.FunctionSpec{Name: "model.edges_v1", Go: score}); err != nil {
 		return nil, err
 	}
 	runtime, err := loaded(registry, "model.edges_v1(features)", funroute.ArgSpec{Name: "features", Type: funroute.ArrayOf(funroute.FloatType)})
@@ -162,7 +162,7 @@ func batchRows(registry *funroute.Registry) ([]row, error) {
 	const overhead = 20 * time.Microsecond
 	single := func(x float64) float64 { time.Sleep(overhead); return x }
 	many := func(xs []float64) []float64 { time.Sleep(overhead); return xs }
-	err := registry.Register(funroute.FunctionSpec{Name: "model.score_v1", Doc: funroute.Doc{Cost: 10}, Go: single, GoBatch: many})
+	err := registry.Register(funroute.FunctionSpec{Name: "model.score_v1", Go: single, GoBatch: many})
 	if err != nil {
 		return nil, err
 	}

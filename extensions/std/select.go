@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/nethinwei/funroute"
@@ -24,7 +25,7 @@ func selectSpecs() []funroute.FunctionSpec {
 		{
 			Name: "indices", Params: []funroute.Type{list}, Result: funroute.ArrayOf(funroute.IntType), Eval: indicesOf,
 			Doc: funroute.Doc{
-				Label: "下标序列", Category: "选择", Cost: 4,
+				Label: "下标序列", Category: "选择",
 				Description: "这个数组的下标，0 到长度减一。配推导式就能按位置把两个数组对起来：[names[i] for i in indices(fees) if fees[i] < cap]。",
 				Params:      []string{"数组"}, Result: "下标数组",
 			},
@@ -32,7 +33,7 @@ func selectSpecs() []funroute.FunctionSpec {
 		{
 			Name: "index_of", Params: []funroute.Type{list, item}, Result: funroute.IntType, Eval: indexOfItem,
 			Doc: funroute.Doc{
-				Label: "元素位置", Category: "选择", Cost: 5,
+				Label: "元素位置", Category: "选择",
 				Description: "元素第一次出现的下标；不在里面是错误，先用 x in xs 判断。",
 				Params:      []string{"数组", "元素"}, Result: "下标",
 			},
@@ -83,7 +84,7 @@ func (k keyedFunction) spec(key funroute.Type, money bool) funroute.FunctionSpec
 			return sortedBy(args, ascending)
 		},
 		Doc: funroute.Doc{
-			Label: k.label, Category: "选择", Cost: 9, Description: k.description,
+			Label: k.label, Category: "选择", Description: k.description,
 			Params: []string{"候选", "键"}, Result: "排序后的候选",
 		},
 	}
@@ -120,7 +121,7 @@ func whileSpecs() []funroute.FunctionSpec {
 				return cutWhile(name, args, prefix)
 			},
 			Doc: funroute.Doc{
-				Label: side.label, Category: "选择", Cost: 6,
+				Label: side.label, Category: "选择",
 				Description: side.description,
 				Params:      []string{"候选", "逐项判断"}, Result: "截取后的候选",
 			},
@@ -168,7 +169,7 @@ func positionSpecs() []funroute.FunctionSpec {
 		{"arg_max", "最大值的位置", "最大元素的下标；并列取第一个，空数组报错。", false},
 	} {
 		doc := funroute.Doc{
-			Label: extreme.label, Category: "选择", Cost: 5,
+			Label: extreme.label, Category: "选择",
 			Description: extreme.description, Params: []string{"键"}, Result: "下标",
 		}
 		smallest := extreme.smallest
@@ -191,6 +192,16 @@ func indicesOf(_ context.Context, args []funroute.Value) (funroute.Value, error)
 }
 
 func indexOfItem(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+	switch items := backing(args[0]).(type) {
+	case []int64:
+		return indexNative(items, args[1])
+	case []float64:
+		return indexNative(items, args[1])
+	case []string:
+		return indexNative(items, args[1])
+	case []bool:
+		return indexNative(items, args[1])
+	}
 	for i, item := range itemsOf(args[0]) {
 		if item.Equal(args[1]) {
 			return funroute.Int(int64(i)), nil
@@ -199,11 +210,24 @@ func indexOfItem(_ context.Context, args []funroute.Value) (funroute.Value, erro
 	return funroute.Value{}, fmt.Errorf("%w: the array does not contain that item", funroute.ErrDomain)
 }
 
-func sortedBy(args []funroute.Value, ascending bool) (funroute.Value, error) {
-	items, keys := itemsOf(args[0]), itemsOf(args[1])
-	if len(items) != len(keys) {
-		return funroute.Value{}, fmt.Errorf("%w: sort_by has %d candidates and %d keys", funroute.ErrDomain, len(items), len(keys))
+func indexNative[T comparable](items []T, wanted funroute.Value) (funroute.Value, error) {
+	item, _ := wanted.Any().(T)
+	if i := slices.Index(items, item); i >= 0 {
+		return funroute.Int(int64(i)), nil
 	}
+	return funroute.Value{}, fmt.Errorf("%w: the array does not contain that item", funroute.ErrDomain)
+}
+
+func sortedBy(args []funroute.Value, ascending bool) (funroute.Value, error) {
+	itemCount, _ := args[0].Length()
+	keyCount, _ := args[1].Length()
+	if itemCount != keyCount {
+		return funroute.Value{}, fmt.Errorf("%w: sort_by has %d candidates and %d keys", funroute.ErrDomain, itemCount, keyCount)
+	}
+	if order, ok := nativeOrder(args[1], ascending); ok {
+		return arranged(args[0], order)
+	}
+	items, keys := itemsOf(args[0]), itemsOf(args[1])
 	order := make([]int, len(items))
 	for i := range order {
 		order[i] = i
@@ -223,6 +247,57 @@ func sortedBy(args []funroute.Value, ascending bool) (funroute.Value, error) {
 }
 
 // valueLess orders the key types the same way the comparison operators do.
+// nativeOrder is the candidates' order by native keys, ties in place.
+func nativeOrder(keys funroute.Value, ascending bool) ([]int, bool) {
+	switch keys := backing(keys).(type) {
+	case []int64:
+		return orderBy(keys, ascending), true
+	case []float64:
+		return orderBy(keys, ascending), true
+	case []string:
+		return orderBy(keys, ascending), true
+	}
+	return nil, false
+}
+
+func orderBy[T cmp.Ordered](keys []T, ascending bool) []int {
+	order := make([]int, len(keys))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int {
+		if ascending {
+			return cmp.Compare(keys[a], keys[b])
+		}
+		return cmp.Compare(keys[b], keys[a])
+	})
+	return order
+}
+
+// arranged is the candidates in order: a native array's as its own slice.
+func arranged(items funroute.Value, order []int) (funroute.Value, error) {
+	switch items := backing(items).(type) {
+	case []int64:
+		return funroute.ToValue(picked(items, order))
+	case []float64:
+		return funroute.ToValue(picked(items, order))
+	case []string:
+		return funroute.ToValue(picked(items, order))
+	case []bool:
+		return funroute.ToValue(picked(items, order))
+	}
+	values := itemsOf(items)
+	return funroute.Array(elementType(items), picked(values, order))
+}
+
+func picked[T any](items []T, order []int) []T {
+	out := make([]T, len(order))
+	for i, at := range order {
+		out[i] = items[at]
+	}
+	return out
+}
+
 func valueLess(left, right funroute.Value) bool {
 	if a, ok := left.Int(); ok {
 		b, _ := right.Int()

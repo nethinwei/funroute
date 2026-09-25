@@ -74,3 +74,43 @@ func destOps(dest map[string]int) string {
 	}
 	return strings.Join(out, " ")
 }
+
+// An array of plain records is handed over in place when the program only
+// walks or measures it and reads each item's fields: through let, in nested
+// loops, under a filter — or never reads an item, as a count does. An item that goes anywhere else — collected,
+// compared, answered, handed to a function — or an index into the array,
+// which would make a record of an item, lets the array out.
+func TestAnArrayOfRecordsIsViewedWhileItsItemsStayPut(t *testing.T) {
+	t.Parallel()
+	registry := randomRegistry(t)
+	channel := machine.RecordOf(machine.FieldOf("name", machine.StringType), machine.FieldOf("fee", machine.IntType), machine.FieldOf("ok", machine.BoolType))
+	options := compile.CompileOptions{Args: []compile.ArgSpec{{Name: "cs", Type: machine.ArrayOf(channel)}}}
+	for _, test := range []struct {
+		source string
+		viewed bool
+	}{
+		{`len([c.name for c in cs if c.ok])`, true},
+		{`len(cs)`, true},
+		{`let(d = cs, len([x.fee for x in d]))`, true},
+		{`len([c.fee for c in cs for d in cs if d.fee > c.fee])`, true},
+		{`len([let(n = c, n.fee) for c in cs])`, true},
+		{`len([c for c in cs])`, true},
+		{`len([[c] for c in cs])`, false},
+		{`cs[0].fee`, false},
+		{`len([c == c for c in cs])`, false},
+		{`cs`, false},
+		{`len([{name: c.name, fee: c.fee, ok: c.ok} == c for c in cs])`, false},
+	} {
+		artifact, err := compile.CompileExpr(test.source, registry, options)
+		if err != nil {
+			t.Fatalf("%s: %v", test.source, err)
+		}
+		runtime, err := machine.Instantiate(artifact, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := machine.Flow(runtime).ViewOnly[0]; got != test.viewed {
+			t.Errorf("%s: viewed %v, want %v", test.source, got, test.viewed)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package machine_test
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -37,6 +38,8 @@ var vectorShapes = []string{
 	`sum([float(x) for x in xs])`,
 	`[f * 1.5 for f in fs if f < 2.5]`,
 	`reduce(f in fs, t = 0.0, t + f / 3.0)`,
+	`first([x * 2 for x in xs if x > 3])`,
+	`any([x > 15 for x in xs if x % 2 == 0])`,
 }
 
 // aggregates is the random registry with the standard aggregates' folds.
@@ -60,12 +63,19 @@ func aggregates(t *testing.T) *machine.Registry {
 	quantifier := func(stop bool) func([]bool) bool {
 		return func(items []bool) bool { return slices.Contains(items, stop) == stop }
 	}
+	first := func(xs []int64) (int64, error) {
+		if len(xs) == 0 {
+			return 0, errors.New("first of an empty array")
+		}
+		return xs[0], nil
+	}
 	zero := machine.Float(0)
 	for _, spec := range []machine.FunctionSpec{
 		{Name: "sum", Go: sum, Fold: &machine.Fold{Step: "add", Init: machine.Int(0)}},
 		{Name: "sum", Go: sumFloats, Fold: &machine.Fold{Step: "add", Init: zero}},
 		{Name: "any", Go: quantifier(true), Fold: &machine.Fold{Init: machine.Bool(false), Stops: true, Stop: true}},
 		{Name: "all", Go: quantifier(false), Fold: &machine.Fold{Init: machine.Bool(true), Stops: true, Stop: false}},
+		{Name: "first", Go: first, Fold: &machine.Fold{First: true}},
 	} {
 		if err := registry.Register(spec); err != nil {
 			t.Fatal(err)
@@ -87,10 +97,9 @@ func loadVector(t *testing.T, source string, registry *machine.Registry) *machin
 	return runtime
 }
 
-// The vector answers as the body does: the value, the failure, and the
-// fuel to the unit — for items that overflow, divide by zero or stop the
-// loop anywhere in a block of columns, and for fuel that runs out at any
-// item.
+// The vector answers as the body does: the value and the failure, word for
+// word — for items that overflow, divide by zero or stop the loop anywhere in
+// a block of columns.
 func TestTheVectorAnswersAsTheBody(t *testing.T) {
 	t.Parallel()
 	registry := aggregates(t)
@@ -105,12 +114,14 @@ func TestTheVectorAnswersAsTheBody(t *testing.T) {
 
 // vectorInputs are arrays around the column's length, with the values that
 // fail — zero, the extremes of int — and the one that stops all, at the
-// edges of a block.
+// edges of a block, a full one's and those of a loop that may stop.
 func vectorInputs() []map[string]any {
 	var inputs []map[string]any
 	rng := rand.New(rand.NewPCG(1, 2))
 	for _, n := range []int{0, 1, 5, 255, 256, 257, 600} {
-		for _, at := range []int{-1, 0, n / 2, n - 1, 255, 256} {
+		// A loop that may stop takes blocks of 16, 32, 64 … items: their
+		// edges are at 16, 48, 112 and 240.
+		for _, at := range []int{-1, 0, n / 2, n - 1, 15, 16, 47, 48, 111, 112, 255, 256} {
 			for _, special := range []int64{0, 7, math.MaxInt64, math.MinInt64} {
 				inputs = append(inputs, vectorInput(rng, n, at, special))
 			}
@@ -133,18 +144,8 @@ func vectorInput(rng *rand.Rand, n, at int, special int64) map[string]any {
 
 func assertVectorAsBody(t *testing.T, source string, vector, body *machine.Runtime, args map[string]any) {
 	t.Helper()
-	got, want := outcome(t, vector, args, 1<<24), outcome(t, body, args, 1<<24)
-	if got != want {
+	if got, want := outcome(t, vector, args), outcome(t, body, args); got != want {
 		t.Fatalf("%s with %s: the vector gives %s, the body %s", source, describe(args), got, want)
-	}
-	if got, want := fuelNeeded(t, vector, args), fuelNeeded(t, body, args); got != want {
-		t.Fatalf("%s with %s: the vector needs %d fuel, the body %d", source, describe(args), got, want)
-	}
-	// Every budget below what it needs fails as the body does.
-	for _, fuel := range []uint64{1, 7, 100, 1000, 1001} {
-		if got, want := outcome(t, vector, args, fuel), outcome(t, body, args, fuel); got != want {
-			t.Fatalf("%s with %s and %d fuel: the vector gives %s, the body %s", source, describe(args), fuel, got, want)
-		}
 	}
 }
 
@@ -156,12 +157,12 @@ func describe(args map[string]any) string {
 	return strings.ReplaceAll(xs, "\n", " ")
 }
 
-// Random programs answer as they do without the vector, to the fuel.
+// Random programs answer as they do without the vector.
 func TestTheVectorAnswersRandomProgramsAsTheBody(t *testing.T) {
 	t.Parallel()
 	registry := aggregates(t)
 	vectorized := 0
-	for seed := range uint64(60) {
+	for seed := range uint64(240) {
 		g := &generator{rand: rand.New(rand.NewPCG(seed, 11)), ints: []string{"a", "b"}, arrays: []string{"xs"}}
 		source := g.of("int", 4)
 		vector, err := load(source, registry, randomContract)
@@ -173,14 +174,23 @@ func TestTheVectorAnswersRandomProgramsAsTheBody(t *testing.T) {
 		machine.WithoutVectors(body)
 		for range 2 {
 			args := g.args()
-			xs, _ := args["xs"].([]any)
-			args["xs"] = longer(g.rand, xs)
+			// Past a column's length for a single loop; a nest of loops
+			// over three hundred items each would take minutes for what a
+			// short array tests as well.
+			if xs, _ := args["xs"].([]any); loops(source) == 1 {
+				args["xs"] = longer(g.rand, xs)
+			}
 			assertVectorAsBody(t, source, vector, body, args)
 		}
 	}
 	if vectorized < 8 {
 		t.Fatalf("only %d random programs have a loop the vector runs", vectorized)
 	}
+}
+
+// loops is how many loops source writes.
+func loops(source string) int {
+	return strings.Count(source, " for ") + strings.Count(source, "reduce(")
 }
 
 // longer repeats items past a column's length.

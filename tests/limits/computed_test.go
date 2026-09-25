@@ -16,7 +16,6 @@ var computedTables = map[string]func(*testing.T, *funroute.Registry) string{
 	"one-step": oneStepTable,
 	"round":    roundTable,
 	"program":  programTable,
-	"fuel":     fuelTable,
 	"catalog":  catalogTable,
 }
 

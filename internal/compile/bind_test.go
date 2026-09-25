@@ -16,7 +16,7 @@ func TestProgramScalarsDoNotAllocate(t *testing.T) {
 	ctx := t.Context()
 	allocs := testing.AllocsPerRun(1000, func() {
 		in := scalarIn{Country: "SG", Amount: 1000}
-		out, err := program.Run(ctx, &in, machine.RunOptions{})
+		out, err := program.Run(ctx, &in)
 		if err != nil || out != 2000 {
 			t.Fatalf("Run(%+v) = %d, %v, want 2000", in, out, err)
 		}
@@ -40,7 +40,7 @@ func TestProgramMoneyDoesNotAllocate(t *testing.T) {
 	ctx := t.Context()
 	allocs := testing.AllocsPerRun(1000, func() {
 		in := moneyIn{Amount: amount}
-		out, err := program.Run(ctx, &in, machine.RunOptions{})
+		out, err := program.Run(ctx, &in)
 		if err != nil || out != fee {
 			t.Fatalf("Run(%+v) = %v, %v, want USD 2.90", in, out, err)
 		}
@@ -61,7 +61,6 @@ func TestProgramPassesVectorsThrough(t *testing.T) {
 	var received []float64
 	err := registry.Register(machine.FunctionSpec{
 		Name: "model.score_v1",
-		Doc:  machine.Doc{Cost: 10},
 		Go: func(xs []float64) (float64, error) {
 			received = xs
 			return xs[0], nil
@@ -72,7 +71,7 @@ func TestProgramPassesVectorsThrough(t *testing.T) {
 	}
 	program := bindProgram[vectorIn, float64](t, registry, `model.score_v1(features)`)
 	in := vectorIn{Features: []float64{0.25, 0.5}}
-	if out, err := program.Run(t.Context(), &in, machine.RunOptions{}); err != nil || out != 0.25 {
+	if out, err := program.Run(t.Context(), &in); err != nil || out != 0.25 {
 		t.Fatalf("Run(%+v) = %v, %v, want 0.25", in, out, err)
 	}
 	if &received[0] != &in.Features[0] {
@@ -91,11 +90,11 @@ func TestProgramConvertsOnlyWhatItReads(t *testing.T) {
 	t.Parallel()
 	in := mixedIn{Amount: 1, Scores: []float64{math.NaN()}}
 	ignores := bindProgram[mixedIn, int64](t, machine.CoreRegistry(), `amount + 1`)
-	if out, err := ignores.Run(t.Context(), &in, machine.RunOptions{}); err != nil || out != 2 {
+	if out, err := ignores.Run(t.Context(), &in); err != nil || out != 2 {
 		t.Fatalf("amount + 1 on %+v = %d, %v, want 2", in, out, err)
 	}
 	reads := bindProgram[mixedIn, float64](t, machine.CoreRegistry(), `scores[0]`)
-	if _, err := reads.Run(t.Context(), &in, machine.RunOptions{}); !errors.Is(err, machine.ErrContract) {
+	if _, err := reads.Run(t.Context(), &in); !errors.Is(err, machine.ErrContract) {
 		t.Fatalf("a NaN entered the program: %v, want ErrContract", err)
 	}
 }
@@ -105,11 +104,11 @@ func TestProgramChecksNarrowResults(t *testing.T) {
 	t.Parallel()
 	program := bindProgram[scalarIn, int8](t, machine.CoreRegistry(), `amount`)
 	in := scalarIn{Amount: 300}
-	if _, err := program.Run(t.Context(), &in, machine.RunOptions{}); !errors.Is(err, machine.ErrContract) {
+	if _, err := program.Run(t.Context(), &in); !errors.Is(err, machine.ErrContract) {
 		t.Fatalf("300 fit an int8: %v, want ErrContract", err)
 	}
 	in.Amount = -5
-	if out, err := program.Run(t.Context(), &in, machine.RunOptions{}); err != nil || out != -5 {
+	if out, err := program.Run(t.Context(), &in); err != nil || out != -5 {
 		t.Fatalf("Run(%+v) = %d, %v, want -5", in, out, err)
 	}
 }
@@ -136,7 +135,6 @@ func TestProgramCarriesHandlesAndMaps(t *testing.T) {
 	}
 	err := registry.Register(machine.FunctionSpec{
 		Name: "model.norm_v1",
-		Doc:  machine.Doc{Cost: 10},
 		Go: func(x *tensor) (float64, error) {
 			return x.norm, nil
 		},
@@ -147,7 +145,7 @@ func TestProgramCarriesHandlesAndMaps(t *testing.T) {
 	program := bindProgram[handleIn, handleOut](t, registry,
 		`{embedding: embedding, weights: weights, norm: model.norm_v1(embedding)}`)
 	in := handleIn{Embedding: &tensor{norm: 2.5}, Weights: map[string][]int64{"a": {1, 2}}}
-	out, err := program.Run(t.Context(), &in, machine.RunOptions{})
+	out, err := program.Run(t.Context(), &in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +183,6 @@ func TestNamedMapKeysCross(t *testing.T) {
 	registry := machine.CoreRegistry()
 	err := registry.Register(machine.FunctionSpec{
 		Name: "limit.of_v1",
-		Doc:  machine.Doc{Cost: 1},
 		Go: func(limits map[code]int64) (int64, error) {
 			return limits["a"], nil
 		},
@@ -195,11 +192,11 @@ func TestNamedMapKeysCross(t *testing.T) {
 	}
 	in := codeIn{Limits: map[code]int64{"a": 7}}
 	through := bindProgram[codeIn, int64](t, registry, `limit.of_v1(limits)`)
-	if out, err := through.Run(t.Context(), &in, machine.RunOptions{}); err != nil || out != 7 {
+	if out, err := through.Run(t.Context(), &in); err != nil || out != 7 {
 		t.Fatalf("limit.of_v1(limits) on %v = %d, %v, want 7", in.Limits, out, err)
 	}
 	back := bindProgram[codeIn, map[code]int64](t, registry, `limits`)
-	if out, err := back.Run(t.Context(), &in, machine.RunOptions{}); err != nil || out["a"] != 7 {
+	if out, err := back.Run(t.Context(), &in); err != nil || out["a"] != 7 {
 		t.Fatalf("limits on %v = %v, %v, want a: 7", in.Limits, out, err)
 	}
 }
@@ -214,13 +211,13 @@ func TestFailedResultIsZero(t *testing.T) {
 	t.Parallel()
 	program := bindProgram[scalarIn, narrowOut](t, machine.CoreRegistry(), `{amount: amount, small: amount}`)
 	in := scalarIn{Amount: 300}
-	out, err := program.Run(t.Context(), &in, machine.RunOptions{})
+	out, err := program.Run(t.Context(), &in)
 	if !errors.Is(err, machine.ErrContract) || out != (narrowOut{}) {
 		t.Fatalf("Run(%+v) = %+v, %v, want the zero value and ErrContract", in, out, err)
 	}
 	errs, failed := failures()
 	requests, outs := []scalarIn{{Amount: 1}, in}, make([]narrowOut, 2)
-	program.RunBatch(t.Context(), 2, func(i int) *scalarIn { return &requests[i] }, func(i int) *narrowOut { return &outs[i] }, machine.RunOptions{}, failed)
+	program.RunBatch(t.Context(), 2, func(i int) *scalarIn { return &requests[i] }, func(i int) *narrowOut { return &outs[i] }, failed)
 	if len(errs) != 1 || outs[0] != (narrowOut{Amount: 1, Small: 1}) || errs[1] == nil || outs[1] != (narrowOut{}) {
 		t.Fatalf("outs = %+v, errs = %v, want [{1 1} {}] and one error at 1", outs, errs)
 	}
@@ -239,7 +236,7 @@ func TestBindTakesARuleWithoutArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out, err := program.Run(t.Context(), &struct{ Untagged int64 }{}, machine.RunOptions{}); err != nil || out != 3 {
+	if out, err := program.Run(t.Context(), &struct{ Untagged int64 }{}); err != nil || out != 3 {
 		t.Fatalf("1 + 2 = %d, %v, want 3", out, err)
 	}
 	if _, err := binding.Compile(`amount`); !errors.Is(err, machine.ErrContract) {
@@ -306,7 +303,7 @@ func TestProgramRecordsAndLentArraysDoNotAllocate(t *testing.T) {
 	in.Order.Amount, in.Order.Risk, in.Fees = 1000, 0.2, []int64{1, 2, 3}
 	var out decisionOut
 	run := func() {
-		if err := program.RunInto(ctx, &in, &out, machine.RunOptions{}); err != nil || out.Net != 970 || out.Channel != "adyen" || len(out.Fees) != 2 || out.Fees[1] != 6 {
+		if err := program.RunInto(ctx, &in, &out); err != nil || out.Net != 970 || out.Channel != "adyen" || len(out.Fees) != 2 || out.Fees[1] != 6 {
 			t.Fatalf("RunInto(%+v) = %+v, %v", in, out, err)
 		}
 	}
@@ -318,7 +315,7 @@ func TestProgramRecordsAndLentArraysDoNotAllocate(t *testing.T) {
 	if &out.Fees[0] != first {
 		t.Error("RunInto did not build the fees in the slice it was lent")
 	}
-	if allocs := testing.AllocsPerRun(100, func() { _, _ = program.Run(ctx, &in, machine.RunOptions{}) }); allocs != 1 {
+	if allocs := testing.AllocsPerRun(100, func() { _, _ = program.Run(ctx, &in) }); allocs != 1 {
 		t.Errorf("Run allocated %v times, want 1: the fees' memory", allocs)
 	}
 }
@@ -334,13 +331,45 @@ func TestRunIntoDoesNotBuildOverItsArguments(t *testing.T) {
 	program := bindProgram[feesIn, []int64](t, forRegistry(t), `[fee + 1 for fee in fees]`)
 	fees := []int64{1, 2, 3}
 	in, out := feesIn{Fees: fees}, fees[:1]
-	if err := program.RunInto(t.Context(), &in, &out, machine.RunOptions{}); err != nil {
+	if err := program.RunInto(t.Context(), &in, &out); err != nil {
 		t.Fatal(err)
 	}
 	if len(out) != 3 || out[0] != 2 || out[2] != 4 || fees[0] != 1 || fees[2] != 3 {
 		t.Fatalf("RunInto over its own argument = %v, argument now %v; want [2 3 4] and [1 2 3]", out, fees)
 	}
-	if err := program.RunInto(t.Context(), &in, nil, machine.RunOptions{}); !errors.Is(err, machine.ErrContract) {
+	if err := program.RunInto(t.Context(), &in, nil); !errors.Is(err, machine.ErrContract) {
 		t.Fatalf("RunInto into nil = %v, want ErrContract", err)
+	}
+}
+
+// A binding loads what it compiles without copying it or checking its
+// digest again, and loses nothing by it: the program's artifact is the one
+// CompileExpr makes, byte for byte, and loads anywhere with its digest.
+func TestABindingLoadsWhatItCompilesAsItIs(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	const source = `if(country == "SG", amount * 2, amount)`
+	program := bindProgram[scalarIn, int64](t, registry, source)
+	binding, err := Bind[scalarIn, int64](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := CompileExpr(source, registry, binding.Options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := program.Artifact().MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := compiled.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("the program's artifact:\n%s\nCompileExpr's:\n%s", got, want)
+	}
+	if _, err := machine.Instantiate(program.Artifact(), registry); err != nil {
+		t.Errorf("the program's artifact does not load: %v", err)
 	}
 }

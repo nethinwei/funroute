@@ -71,7 +71,6 @@ func sumSpecs() []funroute.FunctionSpec {
 		Label:       "求和",
 		Description: "把数组里的元素依次加起来；空数组是 0。要加的东西先用推导式算出来，再交给它。",
 		Category:    "聚合",
-		Cost:        4,
 		Params:      []string{"数组"},
 		Result:      "总和",
 	}, sumInts, sumFloats)
@@ -94,7 +93,6 @@ func extremeSpecs() []funroute.FunctionSpec {
 			Label:       extreme.label,
 			Description: "取数组里" + extreme.label + "；数值按大小、字符串按 UTF-8 字节序；空数组报错，因为没有可取的元素。",
 			Category:    "聚合",
-			Cost:        4,
 			Params:      []string{"数组"},
 			Result:      extreme.result,
 		}
@@ -115,7 +113,6 @@ func quantifierSpecs() []funroute.FunctionSpec {
 			Label:       "任一为真",
 			Description: "数组里只要有一个 true 就是 true；空数组是 false。对推导式求值时遇到第一个 true 就停，后面的元素不再计算，和 || 一样。",
 			Category:    "聚合",
-			Cost:        3,
 			Params:      []string{"布尔数组"},
 			Result:      "是否存在",
 		}, anyTrue),
@@ -123,7 +120,6 @@ func quantifierSpecs() []funroute.FunctionSpec {
 			Label:       "全部为真",
 			Description: "数组里每一个都是 true 才是 true；空数组是 true。对推导式求值时遇到第一个 false 就停，后面的元素不再计算，和 && 一样。",
 			Category:    "聚合",
-			Cost:        3,
 			Params:      []string{"布尔数组"},
 			Result:      "是否全部满足",
 		}, allTrue),
@@ -150,7 +146,6 @@ func rangeSpecs() []funroute.FunctionSpec {
 				Description: "生成一段整数：range(3) 是 [0,1,2]，range(1,4) 是 [1,2,3]，第三个参数是步长。参数的规模必须由输入界定 —— 字面量、len(容器) 或两者的算术组合，所以 range(len(fees)) 可以，range(某个入参) 不行。",
 				BoundedArgs: true,
 				Category:    "聚合",
-				Cost:        8,
 				Params:      labels,
 				Result:      "整数数组",
 			},
@@ -181,7 +176,7 @@ func sequence(start, stop, step int64) (funroute.Value, error) {
 	if step == 0 {
 		return funroute.Value{}, fmt.Errorf("%w: range step must not be zero", funroute.ErrArithmetic)
 	}
-	items := []int64{}
+	items := make([]int64, 0, rangeLength(start, stop, step))
 	for value := start; step > 0 && value < stop || step < 0 && value > stop; value += step {
 		if len(items) == maxRangeLength {
 			return funroute.Value{}, fmt.Errorf("%w: range is longer than %d items", funroute.ErrArithmetic, maxRangeLength)
@@ -193,6 +188,21 @@ func sequence(start, stop, step int64) (funroute.Value, error) {
 		}
 	}
 	return funroute.ToValue(items)
+}
+
+// rangeLength is how many items sequence makes, at most one past its limit:
+// the capacity to make them in at once.
+func rangeLength(start, stop, step int64) int {
+	var span, stride uint64
+	switch {
+	case step > 0 && start < stop:
+		span, stride = uint64(stop)-uint64(start), uint64(step)
+	case step < 0 && start > stop:
+		span, stride = uint64(start)-uint64(stop), -uint64(step)
+	default:
+		return 0
+	}
+	return int(min((span-1)/stride+1, maxRangeLength+1))
 }
 
 func sumInts(items []int64) (int64, error) {

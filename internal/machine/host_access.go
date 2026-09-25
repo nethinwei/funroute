@@ -36,9 +36,8 @@ type sliceHeader struct {
 }
 
 // argRead is one argument a program reads from the host's struct: its
-// slot, where it is in the struct and how to load it. A plain bool, int,
-// float or string field — no enum to hold it to — has its Go kind here and is
-// loaded in place, without the codec's call.
+// slot, where it is in the struct and how to load it. A plain field has its
+// Go kind here (fieldCodec.plain) and is loaded in place.
 type argRead struct {
 	index     int
 	offset    uintptr
@@ -46,23 +45,23 @@ type argRead struct {
 	codec     *codec
 	fieldOnly bool
 	view      bool
+	// records is an array of plain records handed over as a recordsView.
+	records bool
+	// promoted is the record's promoted fields, which a run with a frame
+	// loads into their registers in place of the record.
+	promoted []promotion
 }
 
 func newArgRead(index int, plan *argsCodec, fieldOnly, viewOnly bool) argRead {
 	field := plan.fields[index]
-	read := argRead{index: index, offset: field.offset, codec: field.codec, fieldOnly: fieldOnly && field.codec.shape == shapeRecord}
+	read := argRead{index: index, offset: field.offset, kind: field.plain, codec: field.codec, fieldOnly: fieldOnly && field.codec.shape == shapeRecord}
 	if viewOnly && field.codec.shape == shapeNative {
 		switch field.codec.native {
 		case nativeBools, nativeInts, nativeFloats, nativeStrings:
 			read.view = true
 		}
 	}
-	if field.codec.shape == shapeScalar && field.codec.typ.kind != EnumKind {
-		switch kind := field.codec.goKind; kind {
-		case reflect.Bool, reflect.Int, reflect.Int64, reflect.Float64, reflect.String:
-			read.kind = kind
-		}
-	}
+	read.records = viewOnly && viewable(field.codec)
 	return read
 }
 
@@ -78,6 +77,12 @@ func encodeArgs[In any](plan *argsCodec, reads []argRead, args []Value, in *In, 
 	for _, read := range reads {
 		p := unsafe.Add(base, read.offset)
 		if loadPlain(read.kind, p, &args[read.index]) {
+			continue
+		}
+		if f != nil && read.promoted != nil {
+			if err := read.codec.loadPromoted(p, read.promoted, f.regs); err != nil {
+				return fmt.Errorf("argument %q: %w", plan.params[read.index].name, err)
+			}
 			continue
 		}
 		value, err := read.load(p, f)
@@ -102,6 +107,9 @@ func (read argRead) load(p unsafe.Pointer, f *frame) (Value, error) {
 	case read.view:
 		f.borrowed = true
 		return viewIn(&f.views[read.index], read.codec.native, p)
+	case read.records:
+		f.borrowed = true
+		return viewRecords(&f.recordViews[read.index], read.codec, p)
 	}
 	return read.codec.load(p)
 }
@@ -557,8 +565,8 @@ func placeOf[Out any](out *Out) unsafe.Pointer { return noescape(unsafe.Pointer(
 
 // runProgram runs the frame for a Program, delivering the answer by plan
 // to out.
-func (r *Runtime) runProgram(ctx context.Context, f *frame, args []Value, options RunOptions, plan *codec, out unsafe.Pointer, reuse bool) error {
-	_, err := r.runFrame(ctx, f, args, options, resultSink{plan: plan, out: out, reuse: reuse})
+func (r *Runtime) runProgram(ctx context.Context, f *frame, args []Value, plan *codec, out unsafe.Pointer, reuse bool) error {
+	_, err := r.runFrame(ctx, f, args, nil, resultSink{plan: plan, out: out, reuse: reuse})
 	return err
 }
 
@@ -658,13 +666,38 @@ func headerOf[T any](items []T) sliceHeader {
 // program that only reads the record's fields keeps nothing of it past the
 // run.
 func (c *codec) loadRecordInto(p unsafe.Pointer, record *recordValue) (Value, error) {
-	record.typ, record.fields = &c.typ, record.fields[:0]
-	for i, field := range c.fields {
-		value, err := field.codec.load(unsafe.Add(p, field.offset))
-		if err != nil {
-			return Value{}, fmt.Errorf("field %q: %w", c.typ.fields[i].name, err)
+	record.typ = &c.typ
+	record.fields = slices.Grow(record.fields[:0], len(c.fields))[:len(c.fields)]
+	for i := range c.fields {
+		if err := c.loadField(p, i, &record.fields[i]); err != nil {
+			return Value{}, err
 		}
-		record.fields = append(record.fields, value)
 	}
 	return Value{kind: RecordKind, box: record}, nil
+}
+
+// loadPromoted loads the promoted fields of the record at p into their
+// registers.
+func (c *codec) loadPromoted(p unsafe.Pointer, promoted []promotion, regs []Value) error {
+	for _, field := range promoted {
+		if err := c.loadField(p, int(field.field), &regs[field.reg]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loadField loads the record's field i, of the struct at p, into slot.
+func (c *codec) loadField(p unsafe.Pointer, i int, slot *Value) error {
+	field := c.fields[i]
+	at := unsafe.Add(p, field.offset)
+	if loadPlain(field.plain, at, slot) {
+		return nil
+	}
+	value, err := field.codec.load(at)
+	if err != nil {
+		return fmt.Errorf("field %q: %w", c.typ.fields[i].name, err)
+	}
+	*slot = value
+	return nil
 }

@@ -23,24 +23,19 @@ func TestFallbackCatchesOnlyExtensionAndDeadline(t *testing.T) {
 		t.Run(source, func(t *testing.T) { assertFallsBackTo(t, registry, source, 7) })
 	}
 
-	_, err := compileAndRunInt(t, `fallback(x / 0, 7)`, registry, 100)
+	_, err := compileAndRunInt(t, `fallback(x / 0, 7)`, registry)
 	if err == nil || errors.Is(err, machine.ErrExtension) || errors.Is(err, machine.ErrDeadline) {
 		t.Fatalf("kernel error was made catchable: %v", err)
 	}
-	_, err = compileAndRunInt(t, `fallback(fail_v1(x), x / 0, 7)`, registry, 100)
+	_, err = compileAndRunInt(t, `fallback(fail_v1(x), x / 0, 7)`, registry)
 	if err == nil || errors.Is(err, machine.ErrExtension) || errors.Is(err, machine.ErrDeadline) {
 		t.Fatalf("middle kernel error was made catchable: %v", err)
-	}
-	_, err = compileAndRunInt(t, `fallback(fail_v1(x), 7)`, registry, 1)
-	if !errors.Is(err, machine.ErrFuel) {
-		t.Fatalf("fuel error was caught: %v, want ErrFuel", err)
 	}
 }
 
 // Every error a run meets has a class, and data the program has no answer
 // for is the program's own, which fallback does not take: an index past the
-// end, a missing key, a key a comprehension makes twice. A stack past
-// MaxStack is a budget run out, as fuel is.
+// end, a missing key, a key a comprehension makes twice.
 func TestARunsOwnErrorsHaveAClassFallbackDoesNotTake(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
@@ -54,14 +49,12 @@ func TestARunsOwnErrorsHaveAClassFallbackDoesNotTake(t *testing.T) {
 	input := map[string]any{"xs": []int64{1, 2}, "d": map[string]int64{"a": 1}, "s": "ab"}
 	for _, test := range []struct {
 		source string
-		stack  int
 		want   error
 	}{
-		{`fallback(xs[9], 7)`, 0, machine.ErrDomain},
-		{`fallback(d["z"], 7)`, 0, machine.ErrDomain},
-		{`fallback(len(s[9]), 7)`, 0, machine.ErrDomain},
-		{`fallback(len({"k": x for x in xs}), 7)`, 0, machine.ErrDomain},
-		{`len([xs[0], xs[0], xs[0], xs[0]])`, 2, machine.ErrFuel},
+		{`fallback(xs[9], 7)`, machine.ErrDomain},
+		{`fallback(d["z"], 7)`, machine.ErrDomain},
+		{`fallback(len(s[9]), 7)`, machine.ErrDomain},
+		{`fallback(len({"k": x for x in xs}), 7)`, machine.ErrDomain},
 	} {
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
@@ -73,7 +66,7 @@ func TestARunsOwnErrorsHaveAClassFallbackDoesNotTake(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value, err := runtime.Run(t.Context(), input, machine.RunOptions{Fuel: 1000, MaxStack: test.stack})
+			value, err := runtime.Run(t.Context(), input)
 			if !errors.Is(err, test.want) || machine.ClassName(err) == "" {
 				t.Fatalf("%s = %v, %v, want %v", test.source, value.Any(), err, test.want)
 			}
@@ -86,7 +79,7 @@ func TestARunsOwnErrorsHaveAClassFallbackDoesNotTake(t *testing.T) {
 func assertFallsBackTo(t *testing.T, registry *machine.Registry, source string, want int64) {
 	t.Helper()
 	synctest.Test(t, func(t *testing.T) {
-		if value, err := compileAndRunInt(t, source, registry, 100); err != nil || value != want {
+		if value, err := compileAndRunInt(t, source, registry); err != nil || value != want {
 			t.Fatalf("%s = %d, %v, want %d", source, value, err, want)
 		}
 	})
@@ -126,7 +119,7 @@ func failingRegistry(t *testing.T) *machine.Registry {
 	return registry
 }
 
-func compileAndRunInt(t *testing.T, source string, registry *machine.Registry, fuel uint64) (int64, error) {
+func compileAndRunInt(t *testing.T, source string, registry *machine.Registry) (int64, error) {
 	t.Helper()
 	artifact, err := compile.CompileExpr(source, registry, compile.CompileOptions{
 		Args: []compile.ArgSpec{{Name: "x", Type: machine.IntType}},
@@ -138,10 +131,87 @@ func compileAndRunInt(t *testing.T, source string, registry *machine.Registry, f
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), map[string]any{"x": int64(3)}, machine.RunOptions{Fuel: fuel})
+	value, err := runtime.Run(t.Context(), map[string]any{"x": int64(3)})
 	if err != nil {
 		return 0, err
 	}
 	result, _ := value.Int()
 	return result, nil
+}
+
+type wideRequest struct {
+	A     int64            `funroute:"a"`
+	B     int64            `funroute:"b"`
+	Name  string           `funroute:"name"`
+	Xs    []int64          `funroute:"xs"`
+	Rates map[string]int64 `funroute:"rates"`
+}
+
+// A frame that goes back after a run points at nothing of it — whether a
+// Program loaded only the scalars the rule reads out of a struct with
+// strings, slices and maps in it, or RunValues copied every argument in.
+func TestAnIdleFrameKeepsNothingOfTheRun(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	binding, err := compile.Bind[wideRequest, int64](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := &wideRequest{A: 7, B: 3, Name: "adyen", Xs: []int64{1, 2}, Rates: map[string]int64{"k": 1}}
+	values := []machine.Value{machine.Int(7), machine.Int(3), machine.String("adyen"), must(machine.ToValue(in.Xs)), must(machine.ToValue(in.Rates))}
+	for _, source := range []string{"a + b", "a + len(xs)", "len(name) + b"} {
+		program, err := binding.Compile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runs := map[string]func() error{
+			"Program": func() error { _, err := program.Run(t.Context(), in); return err },
+			"RunValues": func() error {
+				_, err := program.Runtime().RunValues(t.Context(), values)
+				return err
+			},
+		}
+		for _, order := range [][]string{{"Program", "RunValues"}, {"RunValues", "Program"}} {
+			assertIdleAfterEach(t, source, program.Runtime(), runs, order)
+		}
+	}
+}
+
+// assertIdleAfterEach runs runs in order, and after each finds the idle
+// frame pointing at nothing of it.
+func assertIdleAfterEach(t *testing.T, source string, runtime *machine.Runtime, runs map[string]func() error, order []string) {
+	t.Helper()
+	for _, run := range order {
+		if err := runs[run](); err != nil {
+			t.Fatalf("%s by %s: %v", source, run, err)
+		}
+		if machine.IdleFrameHoldsPointers(runtime) {
+			t.Errorf("%s: after %s in %v, the idle frame still points at the run; want nothing", source, run, order)
+		}
+	}
+}
+
+func must(value machine.Value, err error) machine.Value {
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
+// A pure function is called straight from the registers, but inside a
+// fallback's candidate the ordinary way: a panic there is the candidate's
+// failure, which fallback takes; anywhere else it is the run's.
+func TestAPurePanicIsTheCandidatesFailure(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	boom := func(x int64) (int64, error) { panic("boom") }
+	if err := registry.Register(machine.FunctionSpec{Name: "p.boom_v1", Go: boom, Doc: machine.Doc{Constexpr: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := compileAndRunInt(t, `fallback(p.boom_v1(x), 7)`, registry); err != nil || value != 7 {
+		t.Errorf("fallback(p.boom_v1(x), 7) = %d, %v; want 7", value, err)
+	}
+	if _, err := compileAndRunInt(t, `p.boom_v1(x) + 1`, registry); !errors.Is(err, machine.ErrExtension) {
+		t.Errorf("p.boom_v1(x) + 1: %v; want ErrExtension", err)
+	}
 }

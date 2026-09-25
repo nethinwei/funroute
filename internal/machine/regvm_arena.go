@@ -77,6 +77,8 @@ func arenaLength(v Value) int {
 		return len(*box)
 	case *[]string:
 		return len(*box)
+	case *recordsView:
+		return box.length
 	}
 	return v.length()
 }

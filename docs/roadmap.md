@@ -11,7 +11,7 @@
 - 规则是带 digest、冻结了 ABI 的 Artifact；
 - 能力边界由注册表定义，默认关闭；
 - 契约归宿主，并参与类型推导；
-- 成本有界，程序必然终止；
+- 程序必然终止，运行多久由宿主的截止时间约束；
 - 文本与结构视图无损互转；
 - 模型接入是一等公民。
 
@@ -33,8 +33,8 @@
 - 零拷贝值层：原生 Go 切片与映射作 backing，边界不转换。
 - 类型化绑定 `funroute.Bind[In, Out]`：契约就是两个 Go 类型，`Program.Run` 从 struct 直接读参数。
 - 注册：只有 `Registry.Register(FunctionSpec)`；`Go`/`GoBatch` 按 Go 签名反射注册单条与批量实现，或手写 `Params`/`Result`/`Eval`。
-- 预算：`ctx` 贯通、函数级 `Doc.Timeout`、无法取消的引擎用 `Doc.Detached`、fuel 成本上限。
-- 类型化错误：`ErrCompile`、`ErrContract`、`ErrFuel`、`ErrDeadline`、`ErrExtension`、`ErrCurrency`、`ErrArithmetic`、`ErrDomain`、`ErrNoFxRate`，一律 `errors.Is`。
+- 预算：`ctx` 贯通（宿主调用前与循环里都查截止时间）、函数级 `Doc.Timeout`、无法取消的引擎用 `Doc.Detached`。
+- 类型化错误：`ErrCompile`、`ErrContract`、`ErrDeadline`、`ErrExtension`、`ErrCurrency`、`ErrArithmetic`、`ErrDomain`、`ErrNoFxRate`，一律 `errors.Is`。
 - 批处理第一级：字节码证明可以提前算的模型调用按批合并，惰性 `if` 不受影响。
 - 标准库 `extensions/std`：聚合、序列、选择与分组、字典、字符串、数值，全部可在编译期折叠；每个函数带可运行的案例。
 
@@ -95,7 +95,7 @@
 
 | 决定 | 为什么 | 否决了什么 |
 |---|---|---|
-| 汇率就是参数：宿主把报价作为 `fxrate` 或 `array<fxrate>` 参数传入（Go 传 `[]FxRate`，零拷贝） | 报价从哪来、何时过期是宿主的事；规则只看得见传给它的汇率 | 运行时统一汇率表 `RunOptions.Rates`、按名字传入的具名汇率表、报价元数据 |
+| 汇率就是参数：宿主把报价作为 `fxrate` 或 `array<fxrate>` 参数传入（Go 传 `[]FxRate`，零拷贝） | 报价从哪来、何时过期是宿主的事；规则只看得见传给它的汇率 | 运行选项里的统一汇率表、按名字传入的具名汇率表、报价元数据 |
 | `->` 只能写在 `using(报价…, 主体)` 里，写在外面是编译错误 | 规则用哪条汇率，看 `using` 就知道 | `->` 写在哪里都能换汇 |
 | `using` 永远隔离：外层的报价不参与；要沿用外层就写 `fx(base, quote)` 读出来 | 没有"补充"与"覆盖"两种组合要记 | `using` 里用 `...` 引入外层 |
 | 换汇单跳：只用这一对货币的报价或反向报价的倒数；要经过别的货币就连写 `amount -> USD -> EUR`。在 `round` 里整段精确，只在最后舍入一次；要让中间币种落到最小单位，就逐跳写 `convert(…, @mode)` | 用哪条汇率不取决于报价里还有什么；比例与汇率是有理数，多跳换汇与多步乘比例一样只在最后舍入，与 `FxRate.Chain` 的交叉汇率换一次得同一个数 | 自动搜索最短路径；连写的 `->` 每一跳隐式各舍入一次（舍入点从源码看不出来） |
@@ -113,14 +113,14 @@
 | 注册只有 `Registry.Register(FunctionSpec)` 一个入口；`Go`/`GoBatch` 字段按 Go 签名读出参数与结果（返回 `R` 或 `(R, error)`）：常见签名（标量与 int/float 向量进、标量出，可带 `error`，向量也可带 `context.Context`）直接调用，约 25 ns、0 次分配，与反射调用逐项对照（`TestDirectCallsAnswerAsReflection`）；其余签名走 `reflect.Call`，约 300 ns。要零开销也可手写 `Params`/`Result`/`Eval`，两者二选一 | 任意元数与嵌套，签名从 Go 类型读出；一个入口，不必在三个函数间选 | 按元数展开的 `Fn1/Fn2/…` 泛型；`Logic`/`Model` 两个以 registry 为首参、`fn, batch any` 的包级函数 |
 | 一个错误 = 类别 + 原因：分类层自己就是 `ErrExtension`/`ErrDeadline`/`ErrContract`，`Unwrap` 通向原因（`money.Classify`）；已带任何类别的错误原样传递 | `errors.Is` 答类别，宿主仍认得出自己的错误与 `context.DeadlineExceeded`，文案不变 | `%w: %v`（原因只剩文字，身份丢失）；`%w: %w`（一个错误并列两个错误） |
 | 超时默认信任 `ctx`；无法取消的引擎注册时标 `Detached`，VM 在独立 goroutine 里等，到点放弃 | 大多数引擎能响应取消；`Detached` 每次约 1 µs，只给不能取消的用 | 所有调用都起 goroutine |
-| `fallback` 只接扩展函数失败、超时与 `ErrNoFxRate`；不接 fuel 耗尽、类型错误、`ErrArithmetic`、`ErrDomain`、`ErrCurrency` | 规则不能吞掉自身或数据的错误 | 什么都接 |
+| `fallback` 只接扩展函数失败、超时与 `ErrNoFxRate`；不接类型错误、`ErrArithmetic`、`ErrDomain`、`ErrCurrency` | 规则不能吞掉自身或数据的错误 | 什么都接 |
 | 装载时对字节码做一遍带类型的抽象解释（`machine/verify.go`）：每条路径上栈与局部槽的类型、每条指令的输入输出、调用按签名实例化、合流处栈一致；同时得出栈的深度与每条指令入口的栈深，寄存器形式按它布局。执行时只检查宿主函数的回答 | 编译器证明过的，对来自任何地方的 Artifact 再证明一次，执行循环因此快约 15%；栈深只有一个来源 | 执行时逐元素检查类型（旧做法）；Artifact 自带 `max_stack` |
 | 常量是"静态类型 + 值的 JSON"，读回走与宿主入参相同的 `coerce` | 常量没有自己的编码；`@member` 以枚举类型存入，读回时校验成员 | 按值的种类手写的常量结构体 |
 | 错误类别只有一张表（`machine/errors.go` 的 `errorClasses`），一个错误由它最具体的类别命名，并决定 `fallback` 接不接 | 机器、`fallback` 与语言服务读同一张表，README 的表由测试对照 | 各处各写一份类别清单 |
 | 测试分两处：`foo_test.go` 跟着 `foo.go` 测一个文件的代码；不属于任何一个文件的放在 `tests/`（公开面按主题的 `api`、示例流水线 `conformance`、文档里的边界 `limits`、性能报告 `perf`），只用公开包。根目录仍只有 `funroute.go` 一个 Go 文件 | 公开面是一个转发文件，它的测试没有源文件可对；按文件组织会把"整个系统的性质"拆散 | 根目录放 `funroute_test` 包（与根目录只有一个 Go 文件的规则冲突）；测试套件放在 `internal/` 下 |
 | 文档里的边界由测试生成：`docs/limits.md` 的说明手写，表格在 `<!-- limits:名字 -->` 区块里，由 `tests/limits` 经公开包实际运行填入，`go test` 逐字比对；性能数字由 `tests/perf` 生成进 `docs/perf.md`，按需提交，不做断言 | 手写的数字会与实现悄悄脱节（连写换汇的舍入就是这样被发现的）；耗时随机器变化，不能断言 | 整篇文档生成（说明写不进去）；把耗时写成断言（换台机器就失败） |
 | `examples/` 只放 Go 宿主程序；规则示例只有 `web/funroute-examples.json` 一份，工作台、语言服务测试与 `tests/conformance` 都读它 | 一份示例三处使用，不会漂移 | 另存一份一致性用例文件 |
-| 数据上没有答案（越界、缺键、空数组、长度对不上、重复键）是 `ErrDomain`；数值参数超出取值范围仍是 `ErrArithmetic`；栈深超出 `MaxStack` 是 `ErrFuel`。运行时错误都有类别 | 内核的这类错误原本没有类别（`fallback` 不接），std 的同类错误却被包成 `ErrExtension` 而被接住，同一件事两种结果 | 并入 `ErrArithmetic`（类别的含义变宽）；维持无类别（std 无法表达"不接"） |
+| 数据上没有答案（越界、缺键、空数组、长度对不上、重复键）是 `ErrDomain`；数值参数超出取值范围仍是 `ErrArithmetic`。运行时错误都有类别 | 内核的这类错误原本没有类别（`fallback` 不接），std 的同类错误却被包成 `ErrExtension` 而被接住，同一件事两种结果 | 并入 `ErrArithmetic`（类别的含义变宽）；维持无类别（std 无法表达"不接"） |
 | 两座 Go 桥各有其位：规划好的 codec 走参数与结果的热路径（unsafe、零分配），反射桥走 `FunctionSpec.Go` 的 `reflect.Call`、handle 与非原生 map；记录与结构体只按一条规则匹配（`structFieldFor`：记录的每个字段都要在结构体里有位置，结构体多出的字段保持零值） | 反射调用本来就要 `reflect.Value`，热路径不能反射；规则不同曾让反射桥悄悄丢字段 | 合成一座桥 |
 | Manifest 与 Catalog 分开：Manifest 是能装回注册表的签名数据（`Apply`），Catalog 是给前端的只读说明（语言形式的语法与包裹模板、签名文本） | 方向相反，一种形状只会让两种用途都变差 | 合成一份 |
 | 语言形式只有一张表（`languageForms`），节点的 kind tag 说哪些节点是形式、哪些可开关，由测试对照；前端从语法树的 `form` 与目录的 `wrap` 得知一切 | 前端不写语法 | 前端的 `FORM_NODES`/`BLOCKS` |
@@ -134,19 +134,35 @@
 | 装载时把验证过的栈字节码翻译成寄存器形式再执行（`machine/lower*.go`、`regvm*.go`）：栈位置 k 在整个程序里是同一个寄存器，只读的常量、参数、局部原地读，只在合流、跳转、调用窗口与写局部之前落到栈寄存器；Artifact 格式与 digest 不变 | 栈 VM 每条指令都在搬值；翻译后费率算式从 143 ns 到 30 ns，循环每个元素从 55 ns 到 5–7 ns，不动 Artifact、验证器与编译器 | 改 Artifact 存寄存器字节码（digest 全变，编译器要重写）；JIT（运行时生成机器码，不跨平台，wasm 做不了） |
 | 内核运算按签名换成专用指令（`kernelOps`，只认 `builtin`）：快路径内联；答不出（溢出、除零、越界）时停下来问函数本身，错误逐字相同，`TestKernelOpsAnswerAsTheirFunctions` 在边界值上逐项对照 | 专用指令只写快路径，错误只有一份实现 | 为每个专用指令手写一份错误文案 |
 | 窥孔只在翻译器里：比较 + 条件跳转、`==` + 条件跳转、推导式的收集 + 下一轮、内层推导直接写外层的数组、结果直接写进局部 | 编译器与字节码保持朴素，指令集不为性能膨胀 | 在编译器里发融合指令 |
-| fuel 按基本块在入口一次扣完：块的成本是块内每条指令 1 加调用的 `Doc.Cost`，跑完的程序总量与逐条扣分毫不差；不够时在块入口报 `ErrFuel`，报的位置用逐条扣的规则在块内重算；`fallback` 候选区里宿主调用之后另起一块，接住失败时退回块里没跑到的部分 | 每条指令一次比较与减法是循环里最大的固定开销 | 逐条扣 |
-| 函数可声明 `FunctionSpec.Fold`（`Step` 内核函数、`Init`、bool 的 `Stops`/`Stop`、`Counts`）；编译器只认这个声明，把它套单子句推导式的调用编成单遍折叠：`loop_fold` 用 `Step` 把元素并进答案，与 `loop_collect` 同价；`loop_break` 在停止元素处结束循环。std 的 `sum`、`any`、`all` 与内核的 `len` 声明它 | 不建中间数组、不把数组交给函数；每个元素的 fuel 与收集时相同，跑完的程序只会更省 | 按函数名识别聚合；把 `sum` 等并进内核 |
+| 没有 fuel（2026-09-25 删除，连同 `Doc.Cost`、`RunOptions` 与其中的 `MaxStack`、`ErrFuel`）：运行多久由宿主的 `ctx` 决定，宿主调用前与循环每 32768 轮查一次截止时间与取消，截止时间按墙钟比对（js/wasm 单线程里 `ctx` 的定时器跑不起来）；栈深装载时已知，不再有运行时上限；编译期折叠改为循环合计至多 10000 轮，按轮数而不按时间，编译结果与机器快慢无关 | 语言必然终止，fuel 只是第二道保险，却要求寄存器 VM、向量、融合与 `fallback` 和栈机器逐条对齐成本，挡住了优化，实测在带分支的循环里占约 20%；expr、CEL、Starlark 也都靠取消或截止时间打断长运行 | 精确 fuel（原状）；进入循环时按长度乘最大成本一次扣完的上界计费；运行前按输入长度的静态准入 |
+| 循环每 32768 轮查一次 `ctx`（`checkEvery`） | 实测常见循环体每轮 1.6–21 ns：最慢的约 0.7 ms 查一次，最快的约 0.05 ms；一次检查约 1 ns | 每轮都查；按时钟采样（读钟比数数贵） |
+| 帧池只用 `sync.Pool` | 用原子操作取还的共享空闲帧，10 核并行时缓存行来回争抢，每次运行从 38 ns 变成约 100 ns，比单核还慢；按 P 分片的池 10 核约 7 ns，单核多约 3 ns | 共享空闲帧（单核快 3 ns，多核反而变慢） |
+| 函数可声明 `FunctionSpec.Fold`（`Step` 内核函数、`Init`、bool 的 `Stops`/`Stop`、`Counts`）；编译器只认这个声明，把它套单子句推导式的调用编成单遍折叠：`loop_fold` 用 `Step` 把元素并进答案，与 `loop_collect` 同价；`loop_break` 在停止元素处结束循环。std 的 `sum`、`any`、`all` 与内核的 `len` 声明它 | 不建中间数组、不把数组交给函数；每个元素做的只有收集时的那点事 | 按函数名识别聚合；把 `sum` 等并进内核 |
 | `any`/`all` 套推导式时在决定答案的元素处停止（语义变化） | 与 `||`、`&&` 一致：`any([10 / x > 2 for x in xs])` 不会在第一个真之后再除零 | 为保持旧语义先算完全部元素（融合就只能省掉数组） |
 | 融合后 `sum` 的溢出报 `add` 的错误（类别同为 `ErrArithmetic`） | 折叠的一步就是 `add` | 为折叠另注册一份带 `sum` 文案的步骤函数 |
 | `min`/`max` 暂不融合 | 需要"首个元素作种子、空数组报 `ErrDomain`"，现有的 `Fold` 与指令表达不了，且报错位置会变 | 用 `MaxInt64`/`+Inf` 作种子（字符串没有，空数组的错误也丢了） |
-| 循环不变量只外提一种：嵌套推导式（外层没有筛选）的内层源不读外层的名字、只调用可折叠的函数时，放到外层 `loop_init` 之后、循环体之前算一次 | 它本来就是每一轮最先求值的东西，外层非空时才算，顺序与失败都不变；外层只有一个元素时多付 2 点 fuel | 一般的循环不变量外提：会让本不求值的表达式被求值（筛选掉的元素、`if` 的另一支），改变失败行为 |
+| 循环不变量只外提一种：嵌套推导式（外层没有筛选）的内层源不读外层的名字、只调用可折叠的函数时，放到外层 `loop_init` 之后、循环体之前算一次 | 它本来就是每一轮最先求值的东西，外层非空时才算，顺序与失败都不变；外层只有一个元素时多一次存取 | 一般的循环不变量外提：会让本不求值的表达式被求值（筛选掉的元素、`if` 的另一支），改变失败行为 |
 | std 的 `sort` 在没有"相等却可区分"的元素时用 `slices.Sort`，有（float 的 0 与 -0）才用稳定排序 | 相等的 int、string 不可区分，稳定性不可观测；与 Go 同速 | 一律稳定排序（慢 3 倍） |
 | 批处理里共用同一个 `ctx` 的请求只注册一次 `context.AfterFunc`；请求连同完成通道池化在每个 `Batch` 自己的池里 | 语义不变；通道属于创建它的 synctest bubble，一个 `Batch` 只在一处用 | 不再监听请求的取消（改变语义）；包级的通道池（跨 bubble 复用会让 synctest 崩溃） |
 | 装载时做一遍值流分析（Go 的逃逸分析）：不逃出运行的原生数组建在帧的 arena 槽里，`Value` 里放指向槽的指针，接口放指针不分配；只有翻译器为它选的指令（循环、`len_a`、`at_a`）见得到它 | 中间数组稳定后 0 次分配；逃逸的判定是保守的——交给宿主或 std 函数、放进容器与结果都算逃逸 | 按类型的"未装箱寄存器"单独一套（每条指令都要多一个分区判断） |
 | 新增 `Program.RunInto(ctx, in, out, opts)`：结果数组、结果 record 的数组字段建在 `out` 已有的切片里（clang 的 RVO）；`Run`/`RunInto` 的结果 record 建在帧自带的 record 里、在帧交还前解码；程序只读字段的 record 参数、只遍历/取长度/下标的原生切片参数就地读（LLVM 的 SROA） | `Program` 的 record 进出与反复运行的数组结果 0 次分配；`out` 与参数共用内存时不在上面建 | 帧里存指向宿主 struct 的指针（宿主 struct 可能在栈上，栈会搬家）——只拷切片头 |
-| 循环体是 int/float/bool 的逐列运算、至多一次折叠、一次收集、筛选分支或停止时，交给向量按 256 个一块执行（列式向量化解释器）；失败、fuel 不够、停止的那一项交回标量循环体，由它重跑 | 值、错误文案与 fuel 都与标量执行逐字一致，由开/关向量的差分测试守着；推导式与 `reduce` 每个元素约 1–2 ns | 在向量里重写错误与 fuel 的精确语义（两份实现会漂移）；JIT |
+| 循环体是 int/float/bool 的逐列运算、至多一次折叠、一次收集、筛选分支或停止时，交给向量按 256 个一块执行（列式向量化解释器）；失败、停止的那一项交回标量循环体，由它重跑 | 值与错误文案都与标量执行逐字一致，由开/关向量的差分测试守着；推导式与 `reduce` 每个元素约 1–2 ns | 在向量里重写错误的精确语义（两份实现会漂移）；JIT |
 | 不去掉 `defer`/`recover`，即使程序没有宿主调用 | 那时的 panic 只可能是 VM 自己的 bug，没有 `recover` 就是整个支付进程崩溃；省下的只有约 2 ns | 无宿主调用时省掉 |
 | `take`、`slice` 这类返回切片视图的 std 函数仍按 `Value` 实现，结果每次装箱一次 | 编译器不认函数名；要消掉这次分配需要一种声明（函数返回参数的视图），留待将来 | 翻译器按函数名特判 |
+| 字段提升（`lower_promote.go`）：record 参数的每次读取都紧跟一个纯标量字段（bool、int、float、string）的 `field` 时，每个读到的字段一个寄存器，`field` 改读它；`Program` 从宿主 struct 直接读字段进去，其他运行从给出的 record 里取。金额、枚举与容器字段不提升 | 只读几个字段的 record 不再整个建出来：`order.amount` 从 122 ns 到 41 ns，与读顶层参数同价；Artifact 与 digest 不变 | 在编译器里把字段拆成参数（改 Artifact 与契约）；只装读到的字段、record 照建（实测没有收益） |
+| 被提升的 record 里没读的字段不再转换、不再检查（语义变化）：`order.risk` 是 NaN 而规则只读 `order.amount`，不再报 `ErrContract` | 与"没读的参数不转换"同一条原则，只是细到字段；每条规则只为它用到的字段付钱 | 照旧检查全部字段（每次运行多扫一遍 struct） |
+| 帧交还时只在写过带指针的槽时清寄存器：`Program` 只写读到的参数，读到的参数与指令都是纯标量（`scalarReads`）就不清；`RunValues` 拷入全部参数，照旧按全部参数判断 | 宽 struct 上 `a + b` 从 66 ns 回到与窄 struct 一样的 42 ns；空闲帧不留指针由 `TestAnIdleFrameKeepsNothingOfTheRun` 守着 | 一律按声明的参数判断（宽 struct 每次多清十几个槽） |
+| `Fold.First`：答案是第一个元素，找到就 `loop_break`；一个都没有时丢掉种子、对空数组调用函数本身，错误逐字相同。只在元素是 bool、int、float、string（有零值作种子）时融合 | `first([… if …])` 不再建完整个数组；不需要"找到没有"的标记 | 给循环加一个标志位；按函数名识别 `first` |
+| `loop_break` 按指令的 `A` 跳转，不再一律跳到循环出口 | 验证器本来就按 `A` 推导跳转后的状态，翻译器却只跳出口，外来的 artifact 可以让两者不一致；`first` 也要跳过报错的那段 | 在验证器里要求 `A` 必须是出口（`first` 就得另想办法） |
+| `Binding.Compile` 装载自己刚编译的 artifact 用 `InstantiateCompiled`：不做 JSON 往返的快照、不重算 digest，其余校验照做；公开的 `Instantiate` 照旧 | 宿主拿不到这份 artifact，快照防的事不会发生；编译 `a + b` 从 34.5 µs 到 14.7 µs，导出的 artifact 逐字节相同（`TestABindingLoadsWhatItCompilesAsItIs`） | 去掉公开 `Instantiate` 的快照（宿主改自己手里的 artifact 会改到运行中的程序） |
+| 纯标量元素的 record 数组参数，只被遍历或取长度、循环项只被读字段时，`Program` 交出宿主的切片（`host_view.go`）：帧存切片头，每个循环在帧里有自己的 record，每一轮从元素内存填一次；值流分析让循环变量沿用参数的 origin，循环项的任何其他用法、对数组的下标取值都算参数逃逸，退回整体装载。float 字段在装载时预扫，失败的文案与整体装载相同 | 50 个元素 52 次分配降到 0 次，GC 压力消失；不改循环的字节码与翻译，`field` 照旧执行；`RunValues` 仍走给出的 record | 把循环项的字段提升到寄存器（依赖"读取后紧跟 `field`"的形态，遇到合流就失效）；每一轮新建 record |
+| 直线程序（无循环、`fallback`、`using`、金额，结果是纯标量；参数不限）走短路径（`host_straight.go`）：参数照旧经 `encodeArgs`，ctx 与截止时间、`recover` 不变，收尾按 release 的同一规则清寄存器、归还借用的内容与 arena，结果按 bool、int64、float64、string 直接写回；调用宿主函数的程序也走（`Program.Run` 从不带批处理的预取） | 通用路径的借出检查、金额检查、结果写回的四层调用与 release 的十几个分支，直线程序都用不上；`a + b` 从 44 ns 到 34 ns，一次宿主调用的规则快 10–20 ns | 去掉 `recover`（违反"执行"里保留它的决定） |
+| 纯宿主函数（`Constexpr`、无 `Timeout`、非 `Detached`、无批处理）按常见签名直接读写寄存器调用（`host_pure.go`），调用前不查截止时间；在 `fallback` 候选区里仍走原路径 | 这类函数快、不等待任何东西，查截止时间与经 `Value` 切片的几层间接调用是它们大半的成本；候选区里要把 panic 变成可被接住的失败 | 按函数名给 std 专用指令（编译器与翻译器不认函数名） |
+| `Binding.Compile` 不算 digest（`PrepareArtifact`），`Program.Artifact()` 导出时才算；公开的 `CompileExpr` 照旧当场封存 | 装进 `Program` 的 artifact 不离开进程，digest 只有导出时才用得上；编译热路径省掉一次 JSON 编码与 sha256 | 去掉 digest（导出的 artifact 必须带） |
+| 计划里有停止的循环，向量块从 16 个元素起逐块翻倍到 256 | `any`/`all`/`first` 常在开头就定下答案，整块先算完是白算；扫完全部元素的循环多几次块切换，实测不变 | 固定的小块（整块扫描变慢）；在向量里逐项判断停止（失去列式执行的意义） |
+| 不提供"宿主担保向量有限、跳过检查"的开关：`Program` 每次运行照旧检查读到的 float 容器；要复用的大向量经 `ToValue` 构造一次、走 `RunValues` | 担保错了是静默的错误决策（NaN 的比较得 false，`sort`、`median` 结果不确定，`sum` 晚报成 `ErrArithmetic`），违反"正确性不让位于任何东西"；检查受内存带宽限制，换位运算与展开只快约 10% | 担保开关；新增"验证一次"的向量类型（只对跨运行复用的向量有收益，而 `RunValues` 已经能做到，有真实需要时再加） |
+| 按 Go 签名直调的形状补到 std 用到的全部：带 `error` 的、切片进出的、三参数的 | std 的字符串与取整函数从约 300 ns · 6 次分配到约 60 ns · 0 次 | 代码生成全部组合（上千个 case，绝大多数用不到） |
+| std 在原生数组上走快路径：第一个元素是 bool、int、float、string 时经 `Any()` 拿到 backing，直接在 `[]int64` 等上算，结果经 `ToValue` 包回；判重用 map | 只用公开 API；`unique` 从平方级的 3.3 ms 到 31 µs，`reverse` 从 11.6 µs 到 0.65 µs | 对任意数组调 `Any()` 判断（record 数组会把每个 record 转成 map，`sort_by` 反而变慢） |
 
 ### 语言服务与工作台
 
@@ -176,7 +192,7 @@
 | 中间数组 `len([y * 2 for y in [x + 1 for x in xs]])` | — | 4 次分配 | 0 次 | — |
 | `Program` 的 record 进出 | 4 次分配 | 2 次 | 0 次 | — |
 
-- 与 expr v1.17.8 的旧对照（2026-09-22，栈式 VM）：费率算式 expr 48 ns · 3 次分配，我们 168 ns；现在的 30 ns 未与 expr 同机重测。复现方法：另建一个 module，`replace funroute => ../funroute` 并 require expr，对同一组表达式各写一份（对照基准依赖 expr，不进这个零依赖仓库）。
+- 与 expr v1.17.8 同机对照（2026-09-25，`make perf` 末节，103 行，覆盖两边都有的全部能力；两边从同一个宿主 struct 读参数，expr 用复用的 `vm.VM`）：FunRoute 更快的 51 行，集中在遍历、聚合与数组函数（多数快 4–50 倍，0–5 次分配，expr 每个元素 1–2 次）；expr 更快的 52 行，集中在单次小运算与函数调用（多在 ±30% 内，最简单的 `a + b` 34 对 29 ns）、struct 切片与编译。并行时（10 核同时跑同一条规则）FunRoute 每次运行 7.4 ns，expr 能并发的三种用法 23–47 ns。比 expr 慢一倍以上的见「近期优先级」之后的清单。对照程序在 `tests/perf/expr`：单独的 module，只有它依赖 expr，根 go.mod 保持为空。
 - 剩下的差距：一次运行固定约 25 ns 的进出帧（原子交换、`defer`、参数拷贝）；逐条执行的循环体；`take`、`slice` 等返回切片视图的 std 函数每次装箱一次。
 
 ### 金额
@@ -186,6 +202,24 @@
 - `BenchmarkMoneyFee`（费率加固定费再封顶）因多一次 `round` 调用，比每步舍入的旧实现慢约 5%。
 
 ## 后续阶段
+
+### 近期优先级（2026-09-25，与 `expr` 逐项对照后排定）
+
+按顺序做。对照里 `expr` 有而我们没有的，多数已在「明确不做」里（null、`$env`、lambda、正则、pipe 等）；下面四项是剩下的真实缺口。
+
+1. **日期与时间**：真实支付必需，也是与 `expr` 最显眼的差距（它有 `now`/`date`/`duration`、时间的运算与比较、`Timezone` 选项）。`date` / `timestamp` 类型与时间窗标准库；时区与 `now` 作运行参数，保持纯函数、digest 不随时间变。表示方式与时区数据怎么带先定，再动手。
+2. **决策 trace**：对应 `expr` 的 debugger，治理层本来就要（阶段 3 的一项，提前做）。
+3. **补齐字符串小函数**：`repeat`（像 `pad_left` 一样限长）、`trim_prefix`、`trim_suffix`、`last_index_of`、字符串的 `index_of`（现在只查数组）。成本低，进 `extensions/std`，每个带案例。
+4. **与 `expr` 同机重测性能**（已完成，2026-09-25）：对照进了 `make perf`（`tests/perf/expr`），结果见「性能基线」；对照暴露出的慢点当天处理了一轮。
+
+对照暴露出的慢点，2026-09-25 已处理：非直调签名走反射、宽 struct 与嵌套字段的读取、`first` 不停下、std 数组函数的算法、编译的 JSON 往返（做法见「关键设计决策 · 执行」）。仍比 expr 慢一倍以上的（数字取自 `docs/perf.md`）：
+
+- **struct 切片交给函数**：遍历已经不装箱（见阶段 6），但交给 std 函数、下标取值时仍整体装载（`sort_by(channels, …)` 12.6 对 3.4 µs，`channels[arg_min(…)]` 5.2 对 1.8 µs）。
+- **struct 里的 `[]float64`**：每次运行逐个检查是否有限（65536 个元素 16 µs，expr 30 ns）。已决定保持（见「关键设计决策 · 执行」）：这是值进入语言时的检查，复用的大向量走 `RunValues`。
+- **`first` 的首块**：块从 16 个起后是 224 对 98 ns，首块仍多算了十几项。
+- **读切片、字典参数的小规则**：`len(xs)` 89 对 44 ns、`d["k"]` 97 对 64 ns，还走通用路径（阶段 6 第 7 项）。
+- **单次调用的固定开销**：直线程序已走短路径（`a + b` 34 对 29 ns）；`ceil`、`ends_with`、`contains` 这类宿主函数调用是 48–54 对 28–35 ns，剩下的是调用点本身（`callSite`、按函数值读参数与写结果）。
+- **编译**：仍比 expr 慢 3–5 倍（`a + b` 14.7 对 5.4 µs），主要在类型推导与 digest。编译不在热路径上。
 
 ### 阶段 1：结构与语言补齐（收尾中）
 
@@ -203,7 +237,7 @@
 - 确定性的 `split(key, weights)`。
 - 渠道快照的筛选与排序（`sort_by`、`top_k` 已有）。
 - 级联重试的输入约定与拒付码分类。
-- 时间窗标准库（`now` 与时区作参数）。
+- 时间窗标准库（`now` 与时区作参数；随近期优先级第 1 项一起做）。
 - 规则集的组合放在宿主的 `RuleSet`，不进语言。
 
 ### 阶段 3：治理工具
@@ -218,7 +252,7 @@
 
 | 项 | 做法 | 结果 |
 |---|---|---|
-| 寄存器 VM | 装载时翻译，专用内核指令、窥孔融合、按基本块扣 fuel；旧的栈解释器删除 | 见上面的前后对照；翻译器与执行器由 `TestRandomProgramsAnswerAsTheirFoldedSelves`（随机程序对照其常量折叠）、`TestKernelOpsAnswerAsTheirFunctions`、`TestLoweringFusesTheCommonShapes` 守着 |
+| 寄存器 VM | 装载时翻译，专用内核指令、窥孔融合；旧的栈解释器删除 | 见上面的前后对照；翻译器与执行器由 `TestRandomProgramsAnswerAsTheirFoldedSelves`（随机程序对照其常量折叠）、`TestKernelOpsAnswerAsTheirFunctions`、`TestLoweringFusesTheCommonShapes` 守着 |
 | 入口与边界 | 参数种类快查、空闲帧免 `sync.Pool`、纯标量程序不清寄存器、`Program` 参数按"种类 + 偏移"直读、`Run(map)` 的标量快路径、record 一次分配、原生容器的相等与 `in` 快路径 | 固定开销约 25 ns |
 | 宿主调用、std、批处理 | 常见 Go 签名直接调用；`sort` 用 `slices.Sort`；批处理的预取与操作数每批一次分配 | 宿主调用 0 次分配；`sort` 与 Go 同速 |
 | 编译器侧 | `Fold` 声明与 `loop_fold`/`loop_break`；嵌套推导内层源外提 | `sum`/`any`/`all`/`len` 套推导式不建数组；`any`/`all` 短路 |
@@ -227,6 +261,24 @@
 
 还可以做的：返回切片视图的函数的声明式入口（`take`、`slice` 不再装箱）；`!=` 当值用时的循环体也能向量化（现在编成分支加常量）；`min`/`max` 的融合（先定首元素种子与空数组的报错）；artifact 的类型表与类型共享、Type 的 JSON 编码（很深的类型编译按三次方增长，见 limits.md）——后两项另行审批。
 
+### 阶段 6：执行层第二轮（2026-09-25 起）
+
+与 expr 对照、逐项 profile 之后的结论：剩下的差距不在语言设计，在运行时的边界——每次运行约 30 ns 的进出帧（expr 复用一个 `VM`，没有 ctx、并发安全与带类型的写回）、`[]struct` 逐项装箱带来的 GC、编译时带重载的推导与经反射的 digest。静态类型、已知的 struct 布局与必然终止允许的全程序分析，是理论上比 expr 快的来源，遍历上已经快 4–50 倍。
+
+按收益排：
+
+1. **`[]struct` 视图**（已完成）：只被遍历、按字段读的 struct 切片不装成 record，每个循环在帧里有一个自己的 record，每一轮从元素内存填一次。`sum([c.fee for c in channels])` 从 5.0 µs · 52 次分配到 0.88 µs · 0 次（expr 1.9 µs）。
+2. **直线程序的精简入口**（已完成）：没有循环、宿主调用、`fallback`、`using`、金额与提升字段，读到的参数与结果都是纯标量的程序，`Program` 走一条短路径：同样的 ctx 与 `recover`，收尾只清写过的寄存器，结果直接写回。`a + b` 从 44 ns 到 34 ns（expr 29 ns）；再往下是 `recover` 与取还帧的两次原子操作，都是定下要保留的。
+3. **带停止的循环先用小块**（已完成）：计划里有停止的循环，向量第一块 16 个元素、此后逐块翻倍到 256。`first([… if …])` 从 496 ns 到 224 ns，扫完全部元素的 `any`/`all` 不变。
+4. **宿主函数调用**（已完成，两轮）：第二轮给纯函数（`Constexpr`、无 `Timeout`、非 `Detached`、无批处理）按常见签名生成直接读写寄存器的调用，不经 `Value` 切片与闭包层、调用前不查截止时间，`ends_with` 再从 47 ns 到 38 ns、`ceil` 从 44 ns 到 35 ns；只调用纯函数的程序也不再为调用准备截止时间。第一轮：直线路径接纳调用宿主函数的程序（照样设好 ctx 与截止时间），不返回 error 的形状不再穿过 `infallible` 包装，std 的 `contains`/`starts_with`/`ends_with` 直接注册 `strings` 的函数。`ends_with` 从 71 ns 到 52 ns，`ceil` 从 58 ns 到 48 ns。
+7. **直线路径接纳任何参数**（已完成）：切片、字典、提升的字段都走直线路径，收尾归还借用的内容与 arena。`order.amount` 从 44 ns 到 32 ns；`len(xs)`、`d["k"]` 约 50–65 ns，剩下的是视图装载与冷路径上的 `len_a`。
+8. **帧池的并发**（已完成）：共享的空闲帧用原子操作取还，10 核并行时每次运行约 100 ns，比单核还慢；改为只用 `sync.Pool` 后 10 核约 7 ns（expr 每个 goroutine 一个 `VM` 约 8.5 ns），单核多约 3 ns。
+9. **删除 fuel**（已完成）：连同 `Doc.Cost`、`RunOptions`、`MaxStack`、`ErrFuel`；运行时长交给 `ctx`，循环每 32768 轮查一次（见「执行」）。
+5. **编译**（进行中）：`Binding.Compile` 不再当场算 digest，`Program.Artifact()` 导出时才算（编译 `a + b` 从 10.9 µs 到 8.2 µs，导出的 artifact 逐字节不变）。剩下约四成是带重载的类型推导，再往下是手写的规范编码器、类型驻留与推导用 arena。
+6. **闭包编译的探索**：Go 没有 computed goto、不保证尾调用，直线代码上闭包树可能快过 switch 分派；先做实验再定。
+
+不学的：`any` 装箱与动态类型（expr 在遍历上慢一个数量级的原因）、JIT、跳过检查的宿主担保。
+
 ## 拆出去单独做
 
 - **汇率的买入价与卖出价、按时点取汇率**：现在一对货币只有一个报价，时效由宿主在传参前决定。若要由语言判定，需要确定性的"当前时刻"作为运行参数。
@@ -234,7 +286,6 @@
 - **复利与利息**：比例的幂会迅速超出 int64 分子/分母，要先定舍入点与精度。
 - **字典推导的多个 `for`**：要先定重复键的含义。
 - **float 相等警告**：要先有警告通道（编译结果带 warnings，LSP 用 Warning 级别）。
-- **`date` / `timestamp`**：时区与 `now` 作参数，保持纯函数；表示方式与时区数据怎么带另议。
 
 ## 明确不做
 

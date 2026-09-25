@@ -14,17 +14,16 @@ import (
 // The fold runs the subexpression on the real VM instead of a second
 // evaluator, so there is exactly one set of semantics in the codebase. If it
 // cannot be folded — it reads an argument, it produces a container the
-// constant pool cannot hold, it runs out of fold fuel, or it fails — the
+// constant pool cannot hold, its loops turn past the fold budget, or it fails — the
 // compiler falls back to emitting the work, and the program behaves exactly as
 // it did before. That fallback is what keeps folding safe inside a lazy `if`:
 // a branch that would fail is simply not folded.
 
-// foldFuel bounds compile-time evaluation. A closed loop over a large literal
-// array is legal but not worth stalling a compile for.
-const foldFuel = 10_000
-
-// foldStack bounds the compile-time stack. Closed subexpressions are shallow.
-const foldStack = 256
+// foldTurns bounds compile-time evaluation: how many turns its loops may take
+// in all. A closed loop over a large literal array is legal but not worth
+// stalling a compile for, and a count, unlike a clock, stops at the same place
+// on every machine — so the same source always compiles to the same artifact.
+const foldTurns = 10_000
 
 // tryFold evaluates expr at compile time and emits its value as a constant.
 // It reports whether it did.
@@ -159,11 +158,11 @@ func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (machine.Value, bool, erro
 	if !ok {
 		return machine.Value{}, false, nil
 	}
-	value, err := machine.EvaluateClosed(sub.artifact(result), c.registry, foldFuel, foldStack)
+	value, err := machine.EvaluateClosed(sub.artifact(result), c.registry, foldTurns)
 	if err != nil {
 		// Running out of the fold budget says nothing about the program: it is
 		// this pass that stopped, not the expression that failed.
-		if errors.Is(err, machine.ErrFuel) {
+		if errors.Is(err, machine.ErrFoldBudget) {
 			return machine.Value{}, false, nil
 		}
 		return machine.Value{}, false, syntax.AroundError(expr, err)

@@ -42,7 +42,7 @@ func moneyDoc(name, description string, params ...string) Doc {
 	if label == "" {
 		label = name
 	}
-	return Doc{Cost: 2, Label: label, Description: description, Category: "金额", Params: params, Result: "结果"}
+	return Doc{Label: label, Description: description, Category: "金额", Params: params, Result: "结果"}
 }
 
 func registerMoneyOp(registry *Registry, name string, params []Type, result Type, doc Doc, eval EvalFunc) {

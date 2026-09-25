@@ -37,7 +37,7 @@ func TestSyntaxTreeIsInClientPositions(t *testing.T) {
 func TestRunReportsWhatCouldNotRun(t *testing.T) {
 	t.Parallel()
 	host := standard(t)
-	doc := machine.Doc{Label: "风险分", Cost: 25, Params: []string{"国家"}}
+	doc := machine.Doc{Label: "风险分", Params: []string{"国家"}}
 	if err := host.Register(machine.FunctionSpec{
 		Name: "risk.score_v1",
 		Doc:  doc,
@@ -433,18 +433,18 @@ func checkRun(t *testing.T, source string, result map[string]any, value, kind st
 	}
 }
 
-// A run is bounded twice over: it asks for at most maxRunFuel, and a host
-// function still waiting at runTimeout is cut off as a deadline, so one rule
-// cannot hold the service every document shares.
+// A run is bounded by runTimeout: a loop that would turn a trillion times,
+// and a host function still waiting, are cut off as a deadline, so one rule
+// cannot hold the service every document shares. The loop runs on the real
+// clock — it never waits, so synctest's would never move — and takes the
+// second the timeout gives it.
 func TestARunIsBounded(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, standard(t), `{}`)
-	s.open("file:///a.fr", "1 + 1")
-	result := as[map[string]any](t, s.request("workspace/executeCommand", map[string]any{"command": runCommand, "arguments": []map[string]any{
-		{"uri": "file:///a.fr", "args": map[string]any{}, "fuel": maxRunFuel + 1},
-	}}))
-	if failure, _ := result["error"].(map[string]any); failure["kind"] != "fuel" {
-		t.Fatalf("a run asking for %d fuel = %v, want a fuel error", maxRunFuel+1, result)
+	s.notify("funroute/setContract", contract("xs:array<int>"))
+	s.open("file:///a.fr", `reduce(x in xs, t = 0, t + reduce(y in xs, u = 0, u + reduce(z in xs, v = 0, v + 1)))`)
+	if failure, _ := s.run(map[string]any{"xs": make([]int, 10000)})["error"].(map[string]any); failure["kind"] != "deadline" {
+		t.Fatalf("a run of a trillion turns = %v, want a deadline", failure)
 	}
 	synctest.Test(t, func(t *testing.T) {
 		registry := standard(t)
@@ -452,7 +452,7 @@ func TestARunIsBounded(t *testing.T) {
 			<-ctx.Done()
 			return n, ctx.Err()
 		}
-		if err := registry.Register(machine.FunctionSpec{Name: "slow.wait_v1", Doc: machine.Doc{Cost: 1}, Go: wait}); err != nil {
+		if err := registry.Register(machine.FunctionSpec{Name: "slow.wait_v1", Go: wait}); err != nil {
 			t.Fatal(err)
 		}
 		s := newSession(t, registry, `{}`)

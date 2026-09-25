@@ -36,7 +36,7 @@ func TestArraysThatStayInTheRunDoNotAllocate(t *testing.T) {
 			t.Fatal(err)
 		}
 		run := func() {
-			if _, err := runtime.RunValues(t.Context(), []machine.Value{xs}, machine.RunOptions{Fuel: 1 << 30}); err != nil {
+			if _, err := runtime.RunValues(t.Context(), []machine.Value{xs}); err != nil {
 				t.Fatalf("%s: %v", source, err)
 			}
 		}

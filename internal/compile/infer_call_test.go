@@ -42,7 +42,7 @@ func TestArrayDictionaryAndGenericFunctions(t *testing.T) {
 		"weights":  map[string]any{"primary": 0.9},
 		"key":      "missing",
 		"fallback": 1,
-	}, machine.RunOptions{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestExtensionSignatureDrivesInference(t *testing.T) {
 			amount, _ := args[1].Int()
 			return machine.Bool(country == "US" && amount > 100), nil
 		},
-		Doc: machine.Doc{Label: "风险通过", Description: "演示扩展函数", Category: "风控", Cost: 25},
+		Doc: machine.Doc{Label: "风险通过", Description: "演示扩展函数", Category: "风控"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestExtensionSignatureDrivesInference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(t.Context(), map[string]any{"country": "US", "amount": 200}, machine.RunOptions{})
+	result, err := runtime.Run(t.Context(), map[string]any{"country": "US", "amount": 200})
 	if err != nil {
 		t.Fatal(err)
 	}

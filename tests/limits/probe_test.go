@@ -72,7 +72,7 @@ func run(t *testing.T, registry *funroute.Registry, artifact *funroute.Artifact,
 	if err != nil {
 		return funroute.Value{}, err
 	}
-	return runtime.Run(t.Context(), decoded, funroute.RunOptions{})
+	return runtime.Run(t.Context(), decoded)
 }
 
 // options reads a contract written "a: int; b: float".

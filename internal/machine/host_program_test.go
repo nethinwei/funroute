@@ -47,7 +47,7 @@ func BenchmarkRecordBoundary(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			value, err := program.Runtime().RunValues(ctx, []machine.Value{order}, machine.RunOptions{})
+			value, err := program.Runtime().RunValues(ctx, []machine.Value{order})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -60,7 +60,7 @@ func BenchmarkRecordBoundary(b *testing.B) {
 		ctx := b.Context()
 		b.ReportAllocs()
 		for b.Loop() {
-			if _, err := program.Run(ctx, &in, machine.RunOptions{}); err != nil {
+			if _, err := program.Run(ctx, &in); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -93,7 +93,6 @@ func TestProgramCarriesEveryMoneyType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := machine.RunOptions{}
 	program, err := binding.Compile(`let(fee = round(amount * fee, @half_even), cap = caps[currency(amount)], {
 		fee: if(fee > cap, cap, fee),
 		settled: using(rates, round(amount -> settle, @half_even)),
@@ -115,7 +114,7 @@ func TestProgramCarriesEveryMoneyType(t *testing.T) {
 		Caps:    map[string]money.Money{"EUR": machine.NewMoney("EUR", 250)},
 		Rates:   []money.FxRate{eurJPY},
 	}
-	out, err := program.Run(t.Context(), &in, options)
+	out, err := program.Run(t.Context(), &in)
 	want := feeOut{
 		Fee: machine.NewMoney("EUR", 250), Settled: machine.NewMoney("JPY", 16_000),
 		Shares: []money.Money{machine.NewMoney("EUR", 3334), machine.NewMoney("EUR", 3333), machine.NewMoney("EUR", 3333)},
@@ -125,11 +124,11 @@ func TestProgramCarriesEveryMoneyType(t *testing.T) {
 		t.Fatalf("Run(%+v) = %+v, %v, want %+v", in, out, err, want)
 	}
 	in.History[1] = machine.NewMoney("USD", in.History[1].Minor())
-	if _, err := program.Run(t.Context(), &in, options); err != nil {
+	if _, err := program.Run(t.Context(), &in); err != nil {
 		t.Fatalf("history is only counted, so its currencies are not the program's: %v", err)
 	}
 	in.Caps["EUR"] = machine.NewMoney("USD", 250)
-	if _, err := program.Run(t.Context(), &in, options); !errors.Is(err, machine.ErrCurrency) {
+	if _, err := program.Run(t.Context(), &in); !errors.Is(err, machine.ErrCurrency) {
 		t.Fatalf("a cap in dollars against euros: error = %v, want ErrCurrency", err)
 	}
 }
@@ -152,7 +151,7 @@ func TestProgramRatiosAndCurrenciesDoNotAllocate(t *testing.T) {
 	ctx := t.Context()
 	allocs := testing.AllocsPerRun(1000, func() {
 		in := ratioIn{Fee: machine.NewRatio(1, 5), Settle: machine.NewCurrency("JPY")}
-		out, err := program.Run(ctx, &in, machine.RunOptions{})
+		out, err := program.Run(ctx, &in)
 		if err != nil || out != machine.NewRatio(1, 25) {
 			t.Fatalf("Run(%+v) = %v, %v, want 0.04", in, out, err)
 		}
@@ -181,7 +180,7 @@ func TestProgramLeavesUnreadCurrenciesAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := unreadIn{N: 1, Settle: machine.NewCurrency("USD"), Amount: machine.NewMoney("USD", 1)}
-	out, err := program.Run(t.Context(), &in, machine.RunOptions{})
+	out, err := program.Run(t.Context(), &in)
 	if err != nil || out != 2 {
 		t.Fatalf("n + 1 on %+v = %d, %v, want 2", in, out, err)
 	}

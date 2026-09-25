@@ -65,7 +65,7 @@ type BatchEvalFunc func(ctx context.Context, calls [][]Value) ([]Value, error)
 //
 //	registry.Register(funroute.FunctionSpec{
 //	    Name: "risk.score_v1",
-//	    Doc:  funroute.Doc{Label: "风险评分", Cost: 25},
+//	    Doc:  funroute.Doc{Label: "风险评分"},
 //	    Go:   func(country string, amount int64) float64 { … },
 //	})
 type FunctionSpec struct {
@@ -107,6 +107,9 @@ type FunctionSpec struct {
 	// right type, invariants kept — a Go function called as itself, of a
 	// scalar result — so a call does not look at it again.
 	madeResult bool
+	// pure is how a pure host function of a common shape is called straight
+	// from the registers (host_pure.go); nil for any other.
+	pure pureCall
 }
 
 func (s FunctionSpec) Signature() string {
@@ -160,10 +163,6 @@ func (f *RegisteredFunction) IsExactStep() bool { return f.exactStep }
 // TakesExact reports a function exact money may be handed to: an exact step,
 // round, or a kernel operation that computes with it.
 func (f *RegisteredFunction) TakesExact() bool { return f.takesExact || f.exactStep || f.roundingScope }
-
-// Cost is what one call charges the fuel budget. It lives in Doc because a
-// host states it once, beside what the function is for.
-func (f *RegisteredFunction) Cost() uint64 { return f.Doc.Cost }
 
 // IsBuiltin distinguishes trusted kernel functions from host extensions.
 // Their ordinary domain errors (division by zero, head of an empty array)
@@ -342,9 +341,6 @@ func (r *Registry) Register(spec FunctionSpec) error {
 	}
 	if err := r.reflectSpec(&spec); err != nil {
 		return err
-	}
-	if spec.Doc.Cost == 0 {
-		spec.Doc.Cost = 1
 	}
 	spec.Params = cloneTypes(spec.Params)
 	spec.Doc.Params = append([]string(nil), spec.Doc.Params...)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/machine"
@@ -53,7 +54,7 @@ func TestExprJSONCanonicalRoundTrip(t *testing.T) {
 	}
 }
 
-func TestIfIsLazyAndFuelIsEnforced(t *testing.T) {
+func TestIfIsLazy(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
 	artifact, err := CompileExpr(`if(flag,7,div(1,zero))`, registry, CompileOptions{})
@@ -64,16 +65,12 @@ func TestIfIsLazyAndFuelIsEnforced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(t.Context(), map[string]any{"flag": true, "zero": 0}, machine.RunOptions{})
+	result, err := runtime.Run(t.Context(), map[string]any{"flag": true, "zero": 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if value, ok := result.Int(); !ok || value != 7 {
 		t.Fatalf("Run(flag=true, zero=0) = %#v, want 7", result.Any())
-	}
-	_, err = runtime.Run(t.Context(), map[string]any{"flag": true, "zero": 0}, machine.RunOptions{Fuel: 1})
-	if err == nil || !strings.Contains(err.Error(), "fuel") {
-		t.Fatalf("Run with Fuel 1 error = %v, want a fuel error", err)
 	}
 }
 
@@ -103,7 +100,7 @@ func TestFunctionalForBindsLocalFiltersAndMaps(t *testing.T) {
 	}
 	result, err := runtime.Run(t.Context(), map[string]any{
 		"channels": []any{"UP", "DOWN", "UP"},
-	}, machine.RunOptions{Fuel: 10_000})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +129,7 @@ func TestFunctionalSwitchIsLazyAndTyped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(t.Context(), map[string]any{"country": "MY", "zero": 0}, machine.RunOptions{})
+	result, err := runtime.Run(t.Context(), map[string]any{"country": "MY", "zero": 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,14 +163,14 @@ func TestArtifactJSONRoundTripAndTamperDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 	machine.PartsOf(artifact).Instructions[0].A = 999
-	result, err := runtime.Run(t.Context(), map[string]any{"n": 1}, machine.RunOptions{})
+	result, err := runtime.Run(t.Context(), map[string]any{"n": 1})
 	if err != nil {
 		t.Fatalf("runtime retained mutable artifact: %v", err)
 	}
 	if value, ok := result.Int(); !ok || value != 3 {
 		t.Fatalf("snapshotted runtime Run(n=1) = %#v, want 3", result.Any())
 	}
-	machine.PartsOf(artifact).Calls[0].Cost++
+	machine.PartsOf(artifact).Calls[0].Name += "x"
 	if _, err := machine.Instantiate(artifact, registry); err == nil {
 		t.Fatal("mutated artifact was accepted")
 	}
@@ -183,7 +180,7 @@ func TestReduceFoldsArrayWithLocalAccumulator(t *testing.T) {
 	t.Parallel()
 	value, runtime := compileAndRun(t,
 		`reduce(price in prices, total = 0, add(total,price))`,
-		consoleRegistry(t), map[string]any{"prices": []any{10, 20, 30}}, machine.RunOptions{})
+		consoleRegistry(t), map[string]any{"prices": []any{10, 20, 30}})
 	params := runtime.Args()
 	if len(params) != 1 || params[0].Name() != "prices" || !params[0].Type().Equal(machine.ArrayOf(machine.IntType)) {
 		t.Fatalf("args = %#v, want prices: array<int>", params)
@@ -198,7 +195,7 @@ func TestReduceFoldsArrayWithLocalAccumulator(t *testing.T) {
 	// An empty source yields the initial accumulator without running the body.
 	empty, _ := compileAndRun(t,
 		`reduce(price in prices, total = 7, add(total,price))`,
-		consoleRegistry(t), map[string]any{"prices": []any{}}, machine.RunOptions{})
+		consoleRegistry(t), map[string]any{"prices": []any{}})
 	if got, _ := empty.Int(); got != 7 {
 		t.Fatalf("empty reduce = %v, want 7", empty.Any())
 	}
@@ -211,8 +208,7 @@ func TestReduceSkipsFilteredItems(t *testing.T) {
 	t.Parallel()
 	value, _ := compileAndRun(t,
 		`reduce(price in prices if price >= 1000, total = 0, total + price)`,
-		consoleRegistry(t), map[string]any{"prices": []any{100, 2500, 900, 4000}},
-		machine.RunOptions{})
+		consoleRegistry(t), map[string]any{"prices": []any{100, 2500, 900, 4000}})
 	if got, _ := value.Int(); got != 6500 {
 		t.Fatalf("filtered fold = %v, want 6500", value.Any())
 	}
@@ -228,8 +224,7 @@ func TestReduceSkipsFilteredItems(t *testing.T) {
 	// A dictionary walk filters on either loop variable.
 	dictValue, _ := compileAndRun(t,
 		`reduce(name, weight in weights if weight > 0.1, total = 0.0, total + weight)`,
-		consoleRegistry(t), map[string]any{"weights": map[string]any{"a": 0.5, "b": 0.05, "c": 0.2}},
-		machine.RunOptions{})
+		consoleRegistry(t), map[string]any{"weights": map[string]any{"a": 0.5, "b": 0.05, "c": 0.2}})
 	if got, _ := dictValue.Float(); got < 0.69 || got > 0.71 {
 		t.Fatalf("filtered dictionary fold = %v, want 0.7", dictValue.Any())
 	}
@@ -297,7 +292,6 @@ func TestSwitchEvaluatesItsSubjectOnce(t *testing.T) {
 	var calls int
 	if err := registry.Register(machine.FunctionSpec{
 		Name: "probe_v1",
-		Doc:  machine.Doc{Cost: 1},
 		Go: func(value int64) (int64, error) {
 			calls++
 			return value, nil
@@ -313,7 +307,7 @@ func TestSwitchEvaluatesItsSubjectOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(t.Context(), map[string]any{"n": 2}, machine.RunOptions{Fuel: 100})
+	result, err := runtime.Run(t.Context(), map[string]any{"n": 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +365,7 @@ func assertCallDoesNotAllocate(t *testing.T, registry *machine.Registry, source 
 	args := []machine.Value{value}
 	var failure error
 	allocs := testing.AllocsPerRun(100, func() {
-		if _, err := runtime.RunValues(ctx, args, machine.RunOptions{Fuel: 1000}); err != nil {
+		if _, err := runtime.RunValues(ctx, args); err != nil {
 			failure = err
 		}
 	})
@@ -404,7 +398,7 @@ func benchRegistry(b *testing.B) *machine.Registry {
 	return registry
 }
 
-func compileAndRun(t *testing.T, source string, registry *machine.Registry, args map[string]any, options machine.RunOptions) (machine.Value, *machine.Runtime) {
+func compileAndRun(t *testing.T, source string, registry *machine.Registry, args map[string]any) (machine.Value, *machine.Runtime) {
 	t.Helper()
 	artifact, err := CompileExpr(source, registry, CompileOptions{})
 	if err != nil {
@@ -414,7 +408,7 @@ func compileAndRun(t *testing.T, source string, registry *machine.Registry, args
 	if err != nil {
 		t.Fatalf("instantiate %s: %v", source, err)
 	}
-	value, err := runtime.Run(t.Context(), args, options)
+	value, err := runtime.Run(t.Context(), args)
 	if err != nil {
 		t.Fatalf("run %s: %v", source, err)
 	}
@@ -496,7 +490,7 @@ func TestFallbackTriesAnyNumberOfCandidatesInOrder(t *testing.T) {
 	}
 }
 
-// compileAndRunInt compiles source over x = 3 and runs it with a fuel of 100.
+// compileAndRunInt compiles source over x = 3 and runs it.
 func compileAndRunInt(t *testing.T, source string, registry *machine.Registry) (int64, error) {
 	t.Helper()
 	artifact, err := CompileExpr(source, registry, CompileOptions{
@@ -509,7 +503,7 @@ func compileAndRunInt(t *testing.T, source string, registry *machine.Registry) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), map[string]any{"x": int64(3)}, machine.RunOptions{Fuel: 100})
+	value, err := runtime.Run(t.Context(), map[string]any{"x": int64(3)})
 	if err != nil {
 		return 0, err
 	}
@@ -550,7 +544,7 @@ func TestSugarSemantics(t *testing.T) {
 	} {
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
-			value, _ := compileAndRun(t, test.source, registry, test.args, machine.RunOptions{Fuel: 100_000})
+			value, _ := compileAndRun(t, test.source, registry, test.args)
 			if fmt.Sprint(value.Any()) != fmt.Sprint(test.want) {
 				t.Fatalf("%s = %v, want %v", test.source, value.Any(), test.want)
 			}
@@ -608,7 +602,7 @@ func TestSwitchBranchesAndConditions(t *testing.T) {
 	for _, test := range switchCases {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			value, _ := compileAndRun(t, test.source, registry, test.args, machine.RunOptions{Fuel: 100_000})
+			value, _ := compileAndRun(t, test.source, registry, test.args)
 			if fmt.Sprint(value.Any()) != fmt.Sprint(test.want) {
 				t.Fatalf("%s: %s = %v, want %v", test.name, test.source, value.Any(), test.want)
 			}
@@ -626,7 +620,7 @@ func TestSwitchIsStillLazyAndTypeChecked(t *testing.T) {
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
-			value, _ := compileAndRun(t, source, registry, map[string]any{"country": "SG", "zero": 0}, machine.RunOptions{Fuel: 1000})
+			value, _ := compileAndRun(t, source, registry, map[string]any{"country": "SG", "zero": 0})
 			if got, _ := value.Int(); got != 1 {
 				t.Fatalf("%s = %v, want 1", source, value.Any())
 			}
@@ -674,7 +668,7 @@ func TestLetBindsMultipleLocalsInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), map[string]any{"amount": 100}, machine.RunOptions{Fuel: 1_000})
+	value, err := runtime.Run(t.Context(), map[string]any{"amount": 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,32 +691,29 @@ func TestLetBindsMultipleLocalsInOrder(t *testing.T) {
 
 func TestLetEvaluatesABindingOnce(t *testing.T) {
 	t.Parallel()
-	registry := consoleRegistry(t)
-	// Both spell the same computation, but the repeated one calls mul twice, so
-	// it costs more fuel. This is what let buys beyond readability — and with an
-	// expensive extension (a model at Cost 500) the gap is that cost, not 2.
-	repeated := runWithFuel(t, registry, `add(mul(amount,2), div(mul(amount,2), 10))`, 16)
-	bound := runWithFuel(t, registry, `let(base = amount * 2, base + base / 10)`, 16)
-	if repeated == nil {
-		t.Fatal("expected the repeated form to exhaust 16 fuel")
+	// Both spell the same computation, but the repeated one calls the model
+	// twice: this is what let buys beyond readability, and with an expensive
+	// extension the gap is that call.
+	for _, test := range []struct {
+		source string
+		calls  int64
+	}{
+		{`add(t.model_v1(amount), div(t.model_v1(amount), 10))`, 2},
+		{`let(base = t.model_v1(amount), base + base / 10)`, 1},
+	} {
+		registry := machine.CoreRegistry()
+		var calls atomic.Int64
+		model := func(amount int64) int64 { calls.Add(1); return amount * 2 }
+		if err := registry.Register(machine.FunctionSpec{Name: "t.model_v1", Go: model}); err != nil {
+			t.Fatal(err)
+		}
+		if value, _ := compileAndRun(t, test.source, registry, map[string]any{"amount": 100}); value.Any() != int64(220) {
+			t.Fatalf("%s = %v, want 220", test.source, value.Any())
+		}
+		if got := calls.Load(); got != test.calls {
+			t.Errorf("%s called the model %d times, want %d", test.source, got, test.calls)
+		}
 	}
-	if bound != nil {
-		t.Fatalf("the let form should fit in 16 fuel: %v, want no error", bound)
-	}
-}
-
-func runWithFuel(t *testing.T, registry *machine.Registry, source string, fuel uint64) error {
-	t.Helper()
-	artifact, err := CompileExpr(source, registry, CompileOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime, err := machine.Instantiate(artifact, registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = runtime.Run(t.Context(), map[string]any{"amount": 100}, machine.RunOptions{Fuel: fuel})
-	return err
 }
 
 // Several for clauses in one comprehension are the cartesian product: each
@@ -735,8 +726,7 @@ func TestNestedComprehensionIsACartesianProduct(t *testing.T) {
 	result, _ := compileAndRun(t,
 		`[a * 10 + b for a in xs if a > 1 for b in ys if b < 9]`,
 		registry,
-		map[string]any{"xs": []any{1, 2, 3}, "ys": []any{7, 8, 9}},
-		machine.RunOptions{Fuel: 10_000})
+		map[string]any{"xs": []any{1, 2, 3}, "ys": []any{7, 8, 9}})
 	items, ok := result.Array()
 	if !ok {
 		t.Fatalf("result = %#v, want an array", result.Any())

@@ -35,11 +35,11 @@ func TestEnumContractAndExhaustiveSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), map[string]any{"channel": "adyen"}, machine.RunOptions{Fuel: 100})
+	value, err := runtime.Run(t.Context(), map[string]any{"channel": "adyen"})
 	if text, _ := value.String(); err != nil || text != "stripe" {
 		t.Fatalf("Run(channel=adyen) = %q, %v, want \"stripe\"", text, err)
 	}
-	if _, err := runtime.Run(t.Context(), map[string]any{"channel": "other"}, machine.RunOptions{Fuel: 100}); err == nil {
+	if _, err := runtime.Run(t.Context(), map[string]any{"channel": "other"}); err == nil {
 		t.Fatal("runtime accepted a string outside the enum")
 	} else if !errors.Is(err, machine.ErrContract) {
 		t.Fatalf("runtime enum error is not a contract error: %v", err)
@@ -122,7 +122,7 @@ func TestEnumMembersResolveThroughTheContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), map[string]any{"channel": "adyen"}, machine.RunOptions{Fuel: 100})
+	value, err := runtime.Run(t.Context(), map[string]any{"channel": "adyen"})
 	if got, _ := value.String(); err != nil || got != "switched" {
 		t.Fatalf("Run(channel=adyen) = %q, %v, want \"switched\"", got, err)
 	}
@@ -175,7 +175,7 @@ func TestEnumConvertsToStringOnlyExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), map[string]any{"channel": "adyen"}, machine.RunOptions{Fuel: 100})
+	value, err := runtime.Run(t.Context(), map[string]any{"channel": "adyen"})
 	if got, _ := value.String(); err != nil || got != "adyen:settled" {
 		t.Fatalf("Run(channel=adyen) = %q, %v, want \"adyen:settled\"", got, err)
 	}
@@ -241,7 +241,7 @@ func TestEnumMembersInsideContainersAreChecked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), nil, machine.RunOptions{Fuel: 100})
+	value, err := runtime.Run(t.Context(), nil)
 	items, ok := value.Array()
 	if err != nil || !ok || len(items) != 2 {
 		t.Fatalf("enum array = %#v, %v, want two members", value.Any(), err)
@@ -262,7 +262,7 @@ func TestEnumMembersInsideContainersAreChecked(t *testing.T) {
 	}
 	if _, err := runtime.Run(t.Context(), map[string]any{
 		"channels": []string{"adyen", "stripe"},
-	}, machine.RunOptions{Fuel: 100}); err != nil {
+	}); err != nil {
 		t.Fatalf("native enum array input = %v", err)
 	}
 }

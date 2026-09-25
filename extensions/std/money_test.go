@@ -45,7 +45,7 @@ func runMoneyOn(t *testing.T, registry *funroute.Registry, source string, args m
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), args, funroute.RunOptions{Fuel: 100_000})
+	value, err := runtime.Run(t.Context(), args)
 	if err != nil {
 		return "", err
 	}

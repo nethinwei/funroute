@@ -1,7 +1,5 @@
 package machine
 
-import "math"
-
 // vecOp is one operation of a run: its operands and the column it writes.
 type vecOp struct {
 	op      rop
@@ -37,7 +35,7 @@ type vecRun struct {
 // kinds are not what the vector computes with, and a run held to a stack
 // limit, whose blocks check it.
 func (f *frame) startVector(loop *regLoop, plan *vecPlan) (*vecRun, bool) {
-	if f.stackLimit != math.MaxInt || loop.ints == nil && loop.floats == nil {
+	if loop.ints == nil && loop.floats == nil {
 		return nil, false
 	}
 	if f.vector == nil {

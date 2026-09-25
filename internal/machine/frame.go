@@ -1,7 +1,6 @@
 package machine
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 )
@@ -37,20 +36,16 @@ type frame struct {
 	fallbacks []fallbackFrame
 	// fxQuotes are the quotes of every using the run is inside, and
 	// fxMarks where each using's begin, the innermost last.
-	fxQuotes []Value
-	fxMarks  []int
-	fxCtx    fxContext // handed to a kernel function that reads rates
-	fuelLeft uint64
-	// refund is the fuel a failure fallback takes gives back: its block paid
-	// for what did not run.
-	refund uint64
-	// maxStack is the run's stack limit, and stackLimit what a block is held
-	// to: the limit, when it is below how deep the program goes.
-	maxStack   int
-	stackLimit int
+	fxQuotes   []Value
+	fxMarks    []int
+	fxCtx      fxContext       // handed to a kernel function that reads rates
 	ctx        context.Context // the request's budget; extension calls see it
-	deadline   bool            // whether ctx can expire, and a host's call looks
+	deadline   bool            // whether ctx can end, and a host's call or a loop looks
 	prefetched []Prefetched    // a Batch's answers for hoisted calls, by call
+	// turns is how many turns of a loop are left before the run looks at
+	// its context again, and budget, for an evaluation at compile time, how
+	// many it has left in all (limit.go).
+	turns, budget int
 	// fxQuotesArray and fxMarksArray hold the usings of a run as deep as
 	// most rules go, so a fresh frame converts without allocating either.
 	fxQuotesArray [4]Value
@@ -69,6 +64,14 @@ type frame struct {
 	records  []recordValue
 	views    []arenaSlot
 	borrowed bool
+	// recordViews are, by argument, the arrays of plain records a Program
+	// hands over as the host's slice, and items, by loop, the record each
+	// loop over one loads its item into (host_view.go).
+	recordViews []recordsView
+	items       []recordValue
+	// onlyReads says a Program loaded the arguments: only the slots of the
+	// ones the program reads were written.
+	onlyReads bool
 	// vector is the vector's columns and run, kept from run to run
 	// (regvm_vector.go); made the first time a loop is run by it.
 	vector *vectorState
@@ -88,6 +91,7 @@ func (r *Runtime) newFrame() *frame {
 		runtime: r, regs: make([]Value, r.reg.size), argBase: int(r.reg.args), loops: make([]regLoop, 0, r.reg.nesting),
 		arena: make([]arenaSlot, r.reg.arenas), dest: make([]arenaSlot, r.reg.dests),
 		records: make([]recordValue, len(r.reg.fieldOnly)), views: make([]arenaSlot, len(r.reg.viewOnly)),
+		recordViews: make([]recordsView, len(r.reg.viewOnly)), items: make([]recordValue, len(r.reg.loops)),
 	}
 	copy(f.regs, r.constants)
 	f.fxQuotes, f.fxMarks = f.fxQuotesArray[:0], f.fxMarksArray[:0]
@@ -98,25 +102,13 @@ func (r *Runtime) newFrame() *frame {
 // argSpace is the registers the n arguments go in.
 func (f *frame) argSpace(n int) []Value { return f.regs[f.argBase : f.argBase+n] }
 
-// defaultMaxStack is a run's stack limit when its options set none.
-const defaultMaxStack = 1_024
-
-// runFrame runs the program in the frame, its arguments in place, with the
-// budget in options, and gives the frame back. A Program's run delivers the
-// answer into the host's Out first (sink), and may lend the answer's slots.
-func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, options RunOptions, sink resultSink) (value Value, err error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	f.fuelLeft = cmp.Or(options.Fuel, DefaultFuel)
-	f.maxStack, f.stackLimit = defaultMaxStack, r.stackLimit
-	if options.MaxStack != 0 {
-		f.maxStack, f.stackLimit = options.MaxStack, stackLimitFor(r.depth, options.MaxStack)
-	}
-	f.ctx = ctx
-	// Only a host's call looks at the deadline.
-	f.deadline = r.reg.hosts && ctx.Done() != nil
-	f.prefetched = options.prefetched
+// runFrame runs the program in the frame, its arguments in place, under ctx,
+// and gives the frame back. A Batch hands the answers it has for the
+// program's calls (prefetched). A Program's run delivers the answer into the
+// host's Out first (sink), and may lend the answer's slots.
+func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, prefetched []Prefetched, sink resultSink) (value Value, err error) {
+	f.watch(r, ctx)
+	f.prefetched = prefetched
 	defer r.finish(f, &value, &err, sink)
 	if f.lending = sink.plan != nil; f.lending && sink.reuse {
 		sink.lend(f, args)
@@ -125,6 +117,10 @@ func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, options 
 		if err = r.checkUnits(args); err != nil {
 			return Value{}, err
 		}
+	}
+	// A Program loaded the promoted fields out of the host's struct.
+	if len(r.reg.promotions) > 0 && !f.onlyReads {
+		f.promote(args)
 	}
 	return f.exec()
 }
@@ -146,11 +142,13 @@ func (r *Runtime) finish(f *frame, value *Value, err *error, sink resultSink) {
 // release drops what a run left, so a kept frame holds nothing alive: a
 // program of scalars leaves nothing in its registers.
 func (f *frame) release() {
-	if !f.runtime.reg.scalar {
+	if !f.runtime.reg.scalar && !(f.onlyReads && f.runtime.reg.scalarReads) {
 		clear(f.regs[f.argBase:])
 	}
+	f.onlyReads = false
 	f.ctx = nil
 	f.prefetched = nil
+	f.budget = 0
 	if len(f.loops) > 0 {
 		clear(f.loops)
 		f.loops = f.loops[:0]
@@ -162,6 +160,20 @@ func (f *frame) release() {
 	if f.fxCtx.Context != nil {
 		f.fxCtx.Context = nil
 	}
+	f.returnMemory()
+	if f.lending {
+		// The answer is the host's now: nothing of it stays.
+		clear(f.dest)
+		clear(f.answer.fields)
+		f.answer.fields = f.answer.fields[:0]
+		f.lending = false
+	}
+}
+
+// returnMemory lets go of what the run built in the frame's arena and what
+// it borrowed from the host: the records, slices and arrays of records a
+// Program loaded in place.
+func (f *frame) returnMemory() {
 	for i := range f.arena {
 		f.arena[i].release()
 	}
@@ -170,14 +182,11 @@ func (f *frame) release() {
 			clear(f.records[i].fields)
 		}
 		clear(f.views)
+		clear(f.recordViews)
+		for i := range f.items {
+			clear(f.items[i].fields)
+		}
 		f.borrowed = false
-	}
-	if f.lending {
-		// The answer is the host's now: nothing of it stays.
-		clear(f.dest)
-		clear(f.answer.fields)
-		f.answer.fields = f.answer.fields[:0]
-		f.lending = false
 	}
 }
 

@@ -19,12 +19,12 @@ func TestLoweringFusesTheCommonShapes(t *testing.T) {
 	t.Parallel()
 	registry := randomRegistry(t)
 	for _, test := range []struct{ source, ops string }{
-		{`a * b / 10000 + a`, "fuel mul_i div_i add_i halt"},
-		{`if(a < b, a, b)`, "fuel branch_lt_i fuel move jump fuel move halt"},
-		{`let(c = a * b, c + a)`, "fuel mul_i add_i halt"},
-		{`reduce(x in xs, t = 0, t + x)`, "fuel loop_init fuel add_i loop_next halt"},
-		{`[x + 1 for x in xs]`, "fuel loop_init fuel add_i collect_next halt"},
-		{`[x * y for x in xs for y in xs]`, "fuel loop_init fuel loop_init fuel mul_i collect_next fuel loop_next halt"},
+		{`a * b / 10000 + a`, "mul_i div_i add_i halt"},
+		{`if(a < b, a, b)`, "branch_lt_i move jump move halt"},
+		{`let(c = a * b, c + a)`, "mul_i add_i halt"},
+		{`reduce(x in xs, t = 0, t + x)`, "loop_init add_i loop_next halt"},
+		{`[x + 1 for x in xs]`, "loop_init add_i collect_next halt"},
+		{`[x * y for x in xs for y in xs]`, "loop_init loop_init mul_i collect_next loop_next halt"},
 	} {
 		artifact, err := compile.CompileExpr(test.source, registry, randomContract)
 		if err != nil {

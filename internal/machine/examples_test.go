@@ -110,7 +110,7 @@ func runExample(t *testing.T, registry *machine.Registry, example machine.Exampl
 	if err != nil {
 		t.Fatalf("example %q: Instantiate error = %v", example.Source, err)
 	}
-	value, err := runtime.RunValues(t.Context(), nil, machine.RunOptions{})
+	value, err := runtime.RunValues(t.Context(), nil)
 	if err != nil {
 		t.Errorf("example %q: run error = %v", example.Source, err)
 		return nil

@@ -62,8 +62,24 @@ func (c *Codec[In, Out]) Instantiate(artifact *Artifact) (*Program[In, Out], err
 	if err != nil {
 		return nil, err
 	}
-	// Planned against the runtime's own snapshot, so the types the codecs
-	// share belong to it and no caller can change them.
+	return c.bind(runtime)
+}
+
+// InstantiateCompiled is Instantiate for an artifact the caller has just
+// compiled and keeps nothing of (InstantiateCompiled).
+func (c *Codec[In, Out]) InstantiateCompiled(artifact *Artifact) (*Program[In, Out], error) {
+	runtime, err := InstantiateCompiled(artifact, c.registry)
+	if err != nil {
+		return nil, err
+	}
+	return c.bind(runtime)
+}
+
+// bind plans the Go types' crossing for a loaded runtime.
+func (c *Codec[In, Out]) bind(runtime *Runtime) (*Program[In, Out], error) {
+	// Planned against the runtime's own artifact — a snapshot, or one its
+	// compiler handed over — so the types the codecs share belong to it and
+	// no caller can change them.
 	declared := runtime.artifact
 	args, err := newArgsCodec(c.registry, c.in, declared.parts.Args)
 	if err != nil {
@@ -73,16 +89,18 @@ func (c *Codec[In, Out]) Instantiate(artifact *Artifact) (*Program[In, Out], err
 	if err != nil {
 		return nil, kit.Classify(ErrContract, "result: ", err)
 	}
+	reads := argumentReads(declared, args, &runtime.reg)
 	return &Program[In, Out]{
-		args: args, result: result, runtime: runtime, reads: argumentReads(declared, args, runtime.reg.fieldOnly, runtime.reg.viewOnly),
+		args: args, result: result, runtime: runtime, reads: reads, straight: straightProgram(runtime, result),
 		hoisted: NewBatch(runtime, BatchOptions{}),
 	}, nil
 }
 
 // argumentReads lists the arguments the bytecode loads. An argument the
-// program never reads is never converted either, so one host struct can serve
+// program never reads is never converted either, and of a record whose
+// fields are promoted only those fields are, so one host struct can serve
 // many rules and each pays only for the fields it uses.
-func argumentReads(artifact *Artifact, plan *argsCodec, fieldOnly, viewOnly []bool) []argRead {
+func argumentReads(artifact *Artifact, plan *argsCodec, reg *regProgram) []argRead {
 	read := make([]bool, len(artifact.parts.Args))
 	for _, instruction := range artifact.parts.Instructions {
 		if instruction.Op == OpLoadArg {
@@ -91,9 +109,16 @@ func argumentReads(artifact *Artifact, plan *argsCodec, fieldOnly, viewOnly []bo
 	}
 	var reads []argRead
 	for i, ok := range read {
-		if ok {
-			reads = append(reads, newArgRead(i, plan, fieldOnly[i], viewOnly[i]))
+		if !ok {
+			continue
 		}
+		arg := newArgRead(i, plan, reg.fieldOnly[i], reg.viewOnly[i])
+		for _, p := range reg.promotions {
+			if int(p.arg) == i {
+				arg.promoted = append(arg.promoted, p)
+			}
+		}
+		reads = append(reads, arg)
 	}
 	return reads
 }
@@ -105,6 +130,9 @@ type Program[In, Out any] struct {
 	result  *codec
 	runtime *Runtime
 	reads   []argRead
+	// straight is set for a program that runs the shorter way
+	// (host_straight.go).
+	straight bool
 	// hoisted is the program's batchable calls, found once. RunBatch executes
 	// through it directly; it never queues and never starts a timer.
 	hoisted *Batch
@@ -121,6 +149,13 @@ func (p *Program[In, Out]) Artifact() *Artifact {
 	if err != nil {
 		panic(err) // it was decoded from this very encoding when it was loaded
 	}
+	// A Binding compiles without the digest, which only what leaves the
+	// process needs: it is computed here, as SealArtifact would have.
+	if artifact.parts.Digest == "" {
+		if artifact.parts.Digest, err = ArtifactDigest(artifact); err != nil {
+			panic(err) // it was just encoded to be copied
+		}
+	}
 	return artifact
 }
 
@@ -129,9 +164,9 @@ func (p *Program[In, Out]) Artifact() *Artifact {
 // wrapped, not copied; a record argument the program only reads is read in
 // place. A container in the result is the program's backing and is
 // read-only. in is only read, and only during the call.
-func (p *Program[In, Out]) Run(ctx context.Context, in *In, options RunOptions) (Out, error) {
+func (p *Program[In, Out]) Run(ctx context.Context, in *In) (Out, error) {
 	var out Out
-	if err := p.run(ctx, in, &out, options, false); err != nil {
+	if err := p.run(ctx, in, &out, false); err != nil {
 		var zero Out
 		return zero, err
 	}
@@ -144,27 +179,31 @@ func (p *Program[In, Out]) Run(ctx context.Context, in *In, options RunOptions) 
 // host that runs a program again with the same out allocates nothing for
 // it. The slices in out must not be the arguments' memory; one that is, is
 // not built into. On a failure *out is left in no particular state.
-func (p *Program[In, Out]) RunInto(ctx context.Context, in *In, out *Out, options RunOptions) error {
+func (p *Program[In, Out]) RunInto(ctx context.Context, in *In, out *Out) error {
 	if out == nil {
 		return fmt.Errorf("%w: the result's place is nil", ErrContract)
 	}
-	return p.run(ctx, in, out, options, true)
+	return p.run(ctx, in, out, true)
 }
 
-func (p *Program[In, Out]) run(ctx context.Context, in *In, out *Out, options RunOptions, reuse bool) error {
+func (p *Program[In, Out]) run(ctx context.Context, in *In, out *Out, reuse bool) error {
 	if in == nil {
 		return fmt.Errorf("%w: arguments are nil", ErrContract)
+	}
+	if p.straight {
+		return p.runStraight(ctx, in, out)
 	}
 	r := p.runtime
 	f := r.acquireFrame()
 	args := f.argSpace(len(p.args.params))
+	f.onlyReads = true
 	if err := encodeArgs(p.args, p.reads, args, in, f); err != nil {
 		// Nothing ran, so the frame would not clear what was written.
 		clear(args)
 		r.releaseFrame(f)
 		return kit.Classify(ErrContract, "", err)
 	}
-	return r.runProgram(ctx, f, args, options, p.result, placeOf(out), reuse)
+	return r.runProgram(ctx, f, args, p.result, placeOf(out), reuse)
 }
 
 // decodeInto is the result as an Out, or the zero Out with the error — never

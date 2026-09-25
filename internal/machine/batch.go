@@ -35,12 +35,10 @@ type Batch struct {
 }
 
 // BatchOptions bounds a batch: it is flushed when MaxSize requests are waiting
-// or MaxWait after the first one arrived, whichever comes first. Run applies
-// to each program.
+// or MaxWait after the first one arrived, whichever comes first.
 type BatchOptions struct {
 	MaxSize int
 	MaxWait time.Duration
-	Run     RunOptions
 }
 
 type batchSite struct {
@@ -162,7 +160,7 @@ func (b *Batch) enqueue(request *batchRequest) error {
 	if len(b.pending) >= b.options.MaxSize {
 		requests := b.take()
 		b.mu.Unlock()
-		go b.execute(requests, b.options.Run)
+		go b.execute(requests)
 		return nil
 	}
 	if len(b.pending) == 1 {
@@ -188,7 +186,7 @@ func (b *Batch) flush() {
 	requests := b.take()
 	b.mu.Unlock()
 	if len(requests) > 0 {
-		b.execute(requests, b.options.Run)
+		b.execute(requests)
 	}
 }
 
@@ -203,21 +201,21 @@ func (b *Batch) Close() {
 // execute is one batch from the queue. Its requests carry contexts of their
 // own, so the engine calls run under the earliest of their deadlines, which
 // has to be a context of its own.
-func (b *Batch) execute(requests []*batchRequest, options RunOptions) {
+func (b *Batch) execute(requests []*batchRequest) {
 	active := b.rejectCanceled(requests)
 	if len(active) == 0 {
 		return
 	}
 	ctx, cancel := earliestDeadline(active)
 	defer cancel()
-	b.executeUnder(ctx, active, options)
+	b.executeUnder(ctx, active)
 }
 
 // executeShared is one batch whose requests all carry ctx — a synchronous
 // batch — so the engine calls run under it directly, with its values.
-func (b *Batch) executeShared(ctx context.Context, requests []*batchRequest, options RunOptions) {
+func (b *Batch) executeShared(ctx context.Context, requests []*batchRequest) {
 	if active := b.rejectCanceled(requests); len(active) > 0 {
-		b.executeUnder(ctx, active, options)
+		b.executeUnder(ctx, active)
 	}
 }
 
@@ -225,7 +223,7 @@ func (b *Batch) executeShared(ctx context.Context, requests []*batchRequest, opt
 // program under its request's own. A request whose arguments the program
 // would refuse is answered first and left out: the engine sees only what a
 // run of its own would have handed it.
-func (b *Batch) executeUnder(ctx context.Context, active []*batchRequest, options RunOptions) {
+func (b *Batch) executeUnder(ctx context.Context, active []*batchRequest) {
 	active = b.admitted(active)
 	// Every request's answers in one allocation: a share each, one slot
 	// for each call of the program.
@@ -238,10 +236,11 @@ func (b *Batch) executeUnder(ctx context.Context, active []*batchRequest, option
 		b.prefetch(ctx, site, active, answers)
 	}
 	for i, request := range active {
+		var prefetched []Prefetched
 		if answers != nil {
-			options.prefetched = answers[i*calls : (i+1)*calls]
+			prefetched = answers[i*calls : (i+1)*calls]
 		}
-		request.finish(b.run(request, options))
+		request.finish(b.run(request, prefetched))
 	}
 }
 
@@ -259,12 +258,12 @@ func (b *Batch) admitted(active []*batchRequest) []*batchRequest {
 	return kept
 }
 
-func (b *Batch) run(request *batchRequest, options RunOptions) batchResult {
+func (b *Batch) run(request *batchRequest, prefetched []Prefetched) batchResult {
 	if request.typed {
-		value, err := b.runtime.runTyped(request.ctx, request.args, options)
+		value, err := b.runtime.runTyped(request.ctx, request.args, prefetched)
 		return batchResult{value: value, err: err}
 	}
-	value, err := b.runtime.RunValues(request.ctx, request.args, options)
+	value, err := b.runtime.runValues(request.ctx, request.args, prefetched)
 	return batchResult{value: value, err: err}
 }
 

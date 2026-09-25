@@ -15,7 +15,7 @@ import (
 // without losing a cent — and money will answer it on its own terms.
 func numberSpecs() []funroute.FunctionSpec {
 	specs := eachType("abs", funroute.Doc{
-		Label: "绝对值", Category: "数值", Cost: 2,
+		Label: "绝对值", Category: "数值",
 		Description: "取绝对值；整数的最小值没有相反数，所以那一个报错而不是绕回去。",
 		Params:      []string{"数值"}, Result: "绝对值",
 	}, absInt, func(value float64) (float64, error) {
@@ -30,13 +30,13 @@ func numberSpecs() []funroute.FunctionSpec {
 		{"round", "四舍五入", "四舍五入到整数，半数远离零（0.5 进 1，-0.5 进 -1）。结果是 int。要按小数位舍入金额，那是 money 的事。", math.Round},
 	} {
 		doc := funroute.Doc{
-			Label: fn.label, Category: "数值", Cost: 3,
+			Label: fn.label, Category: "数值",
 			Description: fn.description, Params: []string{"数值"}, Result: "整数",
 		}
 		specs = append(specs, logic(fn.name, doc, roundingTo(fn.name, fn.apply)))
 	}
 	return append(append(specs, powerSpecs()...), logic("mod", funroute.Doc{
-		Label: "取余", Category: "数值", Cost: 3,
+		Label: "取余", Category: "数值",
 		Description: "浮点取余，符号跟随被除数；除数不能为零。写作 a % b。",
 		Params:      []string{"被除数", "除数"}, Result: "余数",
 	}, modFloat))
@@ -65,22 +65,22 @@ func roundingTo(name string, apply func(float64) float64) func(float64) (int64, 
 func statisticSpecs() []funroute.FunctionSpec {
 	return slices.Concat(
 		eachType("avg", funroute.Doc{
-			Label: "平均值", Category: "聚合", Cost: 5,
+			Label: "平均值", Category: "聚合",
 			Description: "算术平均；空数组报错，因为没有可平均的东西。",
 			Params:      []string{"数组"}, Result: "平均值",
 		}, averageOf[int64], averageOf[float64]),
 		eachType("median", funroute.Doc{
-			Label: "中位数", Category: "聚合", Cost: 8,
+			Label: "中位数", Category: "聚合",
 			Description: "排序后的中间值；个数为偶时取中间两个的平均。空数组报错。",
 			Params:      []string{"数组"}, Result: "中位数",
 		}, medianOf[int64], medianOf[float64]),
 		eachType("stddev", funroute.Doc{
-			Label: "标准差", Category: "聚合", Cost: 9,
+			Label: "标准差", Category: "聚合",
 			Description: "总体标准差（除以个数，不是个数减一）：数据就是全部时用它，衡量成功率或费率的抖动。空数组报错。",
 			Params:      []string{"数组"}, Result: "标准差",
 		}, deviationOf[int64], deviationOf[float64]),
 		eachType("percentile", funroute.Doc{
-			Label: "分位数", Category: "聚合", Cost: 9,
+			Label: "分位数", Category: "聚合",
 			Description: "升序排列后的分位值，比例写 0 到 1（p95 就是 0.95），落在两个样本之间时线性插值。空数组报错。",
 			Params:      []string{"数组", "比例"}, Result: "分位值",
 		}, percentileOf[int64], percentileOf[float64]),
@@ -133,7 +133,7 @@ func pairwiseSpecs() []funroute.FunctionSpec {
 		{"max", "两者取大", "较大", false},
 	} {
 		doc := funroute.Doc{
-			Label: extreme.label, Category: "数值", Cost: 2,
+			Label: extreme.label, Category: "数值",
 			Description: "两个同型数值或字符串里" + extreme.which + "的那个。封顶写 min(fee, cap)。",
 			Params:      []string{"左值", "右值"}, Result: "结果",
 		}
@@ -181,7 +181,7 @@ func pairwise[T int64 | float64 | string](smallest bool) func(T, T) (T, error) {
 // and the operator table stays the size it is.
 func powerSpecs() []funroute.FunctionSpec {
 	doc := funroute.Doc{
-		Label: "幂", Category: "数值", Cost: 4,
+		Label: "幂", Category: "数值",
 		Description: "底数的指数次方。整数版的指数不能为负（那不是整数），结果溢出会报错，按平方求幂计算，指数再大也只算几十步；浮点版按 IEEE 754 计算。退避间隔写 base * pow(2, attempt)。",
 		Params:      []string{"底数", "指数"}, Result: "幂",
 	}

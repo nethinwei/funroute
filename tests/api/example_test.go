@@ -29,15 +29,14 @@ func ExampleCompileExpr() {
 		log.Fatal(err)
 	}
 	ctx := context.Background()
-	options := funroute.RunOptions{Fuel: funroute.DefaultFuel}
 
-	fee, err := runtime.Run(ctx, map[string]any{"vip": false, "amount": 120000}, options)
+	fee, err := runtime.Run(ctx, map[string]any{"vip": false, "amount": 120000})
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("by name:", fee.Any())
 
-	fee, err = runtime.RunValues(ctx, []funroute.Value{funroute.Bool(true), funroute.Int(120000)}, options)
+	fee, err = runtime.RunValues(ctx, []funroute.Value{funroute.Bool(true), funroute.Int(120000)})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -55,7 +54,6 @@ func ExampleFunctionSpec() {
 		Name: "risk.score_v1",
 		Doc: funroute.Doc{
 			Label:  "风险评分",
-			Cost:   25,
 			Params: []string{"国家", "金额"},
 		},
 		Go: func(country string, amount int64) (float64, error) {
@@ -82,7 +80,7 @@ func ExampleFunctionSpec() {
 		log.Fatal(err)
 	}
 	for _, country := range []string{"SG", "BR"} {
-		decision, err := runtime.Run(context.Background(), map[string]any{"country": country, "amount": 5000}, funroute.RunOptions{})
+		decision, err := runtime.Run(context.Background(), map[string]any{"country": country, "amount": 5000})
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -116,7 +114,7 @@ func ExampleBind() {
 	}
 	ctx := context.Background()
 
-	route, err := program.Run(ctx, &Request{Country: "SG", Amount: 120000}, funroute.RunOptions{})
+	route, err := program.Run(ctx, &Request{Country: "SG", Amount: 120000})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -124,8 +122,7 @@ func ExampleBind() {
 
 	requests := []Request{{Country: "SG", Amount: 40000}, {Country: "BR", Amount: 80000}}
 	routes := make([]Route, len(requests))
-	program.RunBatch(ctx, len(requests), func(i int) *Request { return &requests[i] }, func(i int) *Route { return &routes[i] },
-		funroute.RunOptions{}, func(i int, err error) { log.Printf("request %d: %v", i, err) })
+	program.RunBatch(ctx, len(requests), func(i int) *Request { return &requests[i] }, func(i int) *Route { return &routes[i] }, func(i int, err error) { log.Printf("request %d: %v", i, err) })
 	for i, route := range routes {
 		fmt.Printf("%d: %+v\n", i, route)
 	}
@@ -162,7 +159,7 @@ func ExampleBinding_Load() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	route, err := program.Run(context.Background(), &Request{Country: "SG", Amount: 120000}, funroute.RunOptions{})
+	route, err := program.Run(context.Background(), &Request{Country: "SG", Amount: 120000})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -194,7 +191,7 @@ func ExampleCompileExpr_recordUpdate() {
 		log.Fatal(err)
 	}
 	order := map[string]any{"amount": 1200, "currency": "SGD"}
-	discounted, err := runtime.Run(context.Background(), map[string]any{"order": order}, funroute.RunOptions{})
+	discounted, err := runtime.Run(context.Background(), map[string]any{"order": order})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -243,7 +240,7 @@ func ExampleRegistry_DeclareMoney() {
 		log.Fatal(err)
 	}
 	for _, amount := range []string{"USD 12.34", "JPY 1234"} {
-		fee, err := runtime.Run(context.Background(), map[string]any{"amount": amount}, funroute.RunOptions{})
+		fee, err := runtime.Run(context.Background(), map[string]any{"amount": amount})
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -503,7 +500,7 @@ func ExampleFxRate() {
 		dollars, _ := table.Parse("USD 10.00")
 		amount, _ := funroute.ToValue(dollars)
 		quotes, _ := funroute.ToValue(market)
-		value, err := runtime.RunValues(context.Background(), []funroute.Value{amount, quotes}, funroute.RunOptions{})
+		value, err := runtime.RunValues(context.Background(), []funroute.Value{amount, quotes})
 		if err != nil {
 			log.Fatal(err)
 		}

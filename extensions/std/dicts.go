@@ -23,7 +23,7 @@ func dictSpecs() []funroute.FunctionSpec {
 		{
 			Name: "get", Params: []funroute.Type{dict, funroute.StringType, item}, Result: item, Eval: evalGet,
 			Doc: funroute.Doc{
-				Label: "取值或默认", Category: "容器", Cost: 3,
+				Label: "取值或默认", Category: "容器",
 				Description: `按键取值，键不在就返回第三个参数。d["k"] 缺键时报错，要兜底就写 get(d, "k", 0)。`,
 				Params:      []string{"字典", "键", "默认值"}, Result: "值或默认值",
 			},
@@ -31,7 +31,7 @@ func dictSpecs() []funroute.FunctionSpec {
 		{
 			Name: "merge", Params: []funroute.Type{dict, dict}, Result: dict, Eval: evalMerge,
 			Doc: funroute.Doc{
-				Label: "合并字典", Category: "容器", Cost: 8,
+				Label: "合并字典", Category: "容器",
 				Description: "把两个字典叠在一起，键相同时取后一个的值：默认费率叠上本次覆盖就是 merge(defaults, overrides)。",
 				Params:      []string{"底层", "覆盖层"}, Result: "合并结果",
 			},

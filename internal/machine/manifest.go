@@ -144,10 +144,7 @@ func (r *Registry) applyMoney(spec *money.MoneySpec) error {
 func (r *Registry) applyFunction(function ManifestFunction) error {
 	spec := FunctionSpec{Name: function.Name, Params: function.Params, Result: function.Result, Doc: function.Doc}
 	spec.Doc.BoundedArgs = function.BoundedArgs
-	if existing, ok := r.Resolve(spec.Signature()); ok {
-		if existing.Cost() != function.Doc.Cost {
-			return fmt.Errorf("%s costs %d here and %d in the manifest", spec.Signature(), existing.Cost(), function.Doc.Cost)
-		}
+	if _, ok := r.Resolve(spec.Signature()); ok {
 		return nil
 	}
 	if function.Special != "" {

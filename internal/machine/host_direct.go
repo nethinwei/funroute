@@ -5,49 +5,87 @@ import (
 	"fmt"
 )
 
-// A Go function of a signature most hosts write — scalars and float or int
-// vectors in, a scalar out, an error or not — is called as itself: a type
-// switch finds it at registration, and the call reads its arguments out of
-// the Values and wraps its result without reflect.Call, which costs a few
-// hundred nanoseconds and five allocations. Any other signature is still
-// called through reflection. Either way the answer is the same, and so is
-// every failure: TestDirectCallsAnswerAsReflection holds each shape here to
-// its reflected call.
+// A Go function of a signature most hosts write — up to three scalars and
+// vectors in, a scalar or a vector out, an error or not, the standard pack's
+// among them — is called as itself: a type switch finds it at registration,
+// and the call reads its arguments out of the Values and wraps its result
+// without reflect.Call, which costs a few hundred nanoseconds and five
+// allocations. Any other signature is still called through reflection.
+// Either way the answer is the same, and so is every failure:
+// TestDirectCallsAnswerAsReflection and TestTheStandardShapesAreCalledDirectly
+// hold each shape here to its reflected call.
 
 // directEval is the Eval of fn when its signature is one of those.
 func directEval(fn any) (EvalFunc, bool) {
-	if eval, ok := directUnary(fn); ok {
-		return eval, true
+	for _, shapes := range []func(any) (EvalFunc, bool){directUnary, directVector, directBinary, directTernary} {
+		if eval, ok := shapes(fn); ok {
+			return eval, true
+		}
 	}
-	return directBinary(fn)
+	return nil, false
 }
 
 func directUnary(fn any) (EvalFunc, bool) {
 	switch fn := fn.(type) {
 	case func(int64) int64:
-		return unary(infallible(fn), intArg, intResult), true
+		return unaryPlain(fn, intArg, intResult), true
 	case func(int64) (int64, error):
 		return unary(fn, intArg, intResult), true
 	case func(float64) float64:
-		return unary(infallible(fn), floatArg, floatResult), true
+		return unaryPlain(fn, floatArg, floatResult), true
 	case func(float64) (float64, error):
 		return unary(fn, floatArg, floatResult), true
 	case func(string) string:
-		return unary(infallible(fn), stringArg, stringResult), true
+		return unaryPlain(fn, stringArg, stringResult), true
 	case func(string) (string, error):
 		return unary(fn, stringArg, stringResult), true
 	case func(string) bool:
-		return unary(infallible(fn), stringArg, boolResult), true
+		return unaryPlain(fn, stringArg, boolResult), true
 	case func(string) float64:
-		return unary(infallible(fn), stringArg, floatResult), true
+		return unaryPlain(fn, stringArg, floatResult), true
+	case func(float64) (int64, error):
+		return unary(fn, floatArg, intResult), true
+	}
+	return nil, false
+}
+
+// directVector is the shapes of one vector in, the standard pack's among them.
+func directVector(fn any) (EvalFunc, bool) {
+	switch fn := fn.(type) {
 	case func([]float64) float64:
-		return unary(infallible(fn), floatsArg, floatResult), true
+		return unaryPlain(fn, floatsArg, floatResult), true
 	case func([]float64) (float64, error):
 		return unary(fn, floatsArg, floatResult), true
 	case func(context.Context, []float64) (float64, error):
 		return unaryWithContext(fn, floatsArg, floatResult), true
+	case func([]float64) (int64, error):
+		return unary(fn, floatsArg, intResult), true
+	case func([]float64) []float64:
+		return unaryPlain(fn, floatsArg, floatsResult), true
+	case func([]float64) ([]float64, error):
+		return unary(fn, floatsArg, floatsResult), true
+	case func([]float64) ([]int64, error):
+		return unary(fn, floatsArg, intsResult), true
 	case func([]int64) int64:
-		return unary(infallible(fn), intsArg, intResult), true
+		return unaryPlain(fn, intsArg, intResult), true
+	case func([]int64) (int64, error):
+		return unary(fn, intsArg, intResult), true
+	case func([]int64) (float64, error):
+		return unary(fn, intsArg, floatResult), true
+	case func([]int64) []int64:
+		return unaryPlain(fn, intsArg, intsResult), true
+	case func([]int64) ([]int64, error):
+		return unary(fn, intsArg, intsResult), true
+	case func([]string) []string:
+		return unaryPlain(fn, stringsArg, stringsResult), true
+	case func([]string) (string, error):
+		return unary(fn, stringsArg, stringResult), true
+	case func([]string) (int64, error):
+		return unary(fn, stringsArg, intResult), true
+	case func([]string) ([]int64, error):
+		return unary(fn, stringsArg, intsResult), true
+	case func([]bool) (bool, error):
+		return unary(fn, boolsArg, boolResult), true
 	}
 	return nil, false
 }
@@ -55,21 +93,55 @@ func directUnary(fn any) (EvalFunc, bool) {
 func directBinary(fn any) (EvalFunc, bool) {
 	switch fn := fn.(type) {
 	case func(int64, int64) int64:
-		return binary(infallible2(fn), intArg, intArg, intResult), true
+		return binaryPlain(fn, intArg, intArg, intResult), true
 	case func(int64, int64) (int64, error):
 		return binary(fn, intArg, intArg, intResult), true
 	case func(float64, float64) float64:
-		return binary(infallible2(fn), floatArg, floatArg, floatResult), true
+		return binaryPlain(fn, floatArg, floatArg, floatResult), true
 	case func(float64, float64) (float64, error):
 		return binary(fn, floatArg, floatArg, floatResult), true
 	case func(string, float64) float64:
-		return binary(infallible2(fn), stringArg, floatArg, floatResult), true
+		return binaryPlain(fn, stringArg, floatArg, floatResult), true
 	case func(string, float64) (float64, error):
 		return binary(fn, stringArg, floatArg, floatResult), true
 	case func(string, int64) int64:
-		return binary(infallible2(fn), stringArg, intArg, intResult), true
+		return binaryPlain(fn, stringArg, intArg, intResult), true
 	case func(string, string) bool:
-		return binary(infallible2(fn), stringArg, stringArg, boolResult), true
+		return binaryPlain(fn, stringArg, stringArg, boolResult), true
+	case func(string, string) (bool, error):
+		return binary(fn, stringArg, stringArg, boolResult), true
+	case func(string, string) (string, error):
+		return binary(fn, stringArg, stringArg, stringResult), true
+	case func(string, string) ([]string, error):
+		return binary(fn, stringArg, stringArg, stringsResult), true
+	case func(float64, int64) float64:
+		return binaryPlain(fn, floatArg, intArg, floatResult), true
+	case func(float64, int64) (float64, error):
+		return binary(fn, floatArg, intArg, floatResult), true
+	case func(int64, float64) float64:
+		return binaryPlain(fn, intArg, floatArg, floatResult), true
+	case func(int64, float64) (float64, error):
+		return binary(fn, intArg, floatArg, floatResult), true
+	case func([]string, string) (string, error):
+		return binary(fn, stringsArg, stringArg, stringResult), true
+	case func([]int64, float64) (float64, error):
+		return binary(fn, intsArg, floatArg, floatResult), true
+	case func([]float64, float64) (float64, error):
+		return binary(fn, floatsArg, floatArg, floatResult), true
+	}
+	return nil, false
+}
+
+// directTernary is the shapes of three parameters: the standard pack's text
+// functions.
+func directTernary(fn any) (EvalFunc, bool) {
+	switch fn := fn.(type) {
+	case func(string, string, string) (string, error):
+		return ternary(fn, stringArg, stringArg, stringArg, stringResult), true
+	case func(string, int64, string) (string, error):
+		return ternary(fn, stringArg, intArg, stringArg, stringResult), true
+	case func(string, int64, int64) (string, error):
+		return ternary(fn, stringArg, intArg, intArg, stringResult), true
 	}
 	return nil, false
 }
@@ -104,12 +176,32 @@ func binary[A, B, R any](fn func(A, B) (R, error), first func(*Value) A, second 
 	}
 }
 
-func infallible[A, R any](fn func(A) R) func(A) (R, error) {
-	return func(a A) (R, error) { return fn(a), nil }
+// unaryPlain and binaryPlain are unary and binary for a function that
+// returns no error: called as it is, with no wrapper around it.
+func unaryPlain[A, R any](fn func(A) R, arg func(*Value) A, result func(R) (Value, error)) EvalFunc {
+	return func(_ context.Context, args []Value) (Value, error) {
+		return result(fn(arg(&args[0])))
+	}
 }
 
-func infallible2[A, B, R any](fn func(A, B) R) func(A, B) (R, error) {
-	return func(a A, b B) (R, error) { return fn(a, b), nil }
+func binaryPlain[A, B, R any](fn func(A, B) R, first func(*Value) A, second func(*Value) B, result func(R) (Value, error)) EvalFunc {
+	return func(_ context.Context, args []Value) (Value, error) {
+		return result(fn(first(&args[0]), second(&args[1])))
+	}
+}
+
+func ternary[A, B, C, R any](fn func(A, B, C) (R, error), first func(*Value) A, second func(*Value) B, third func(*Value) C, result func(R) (Value, error)) EvalFunc {
+	return func(_ context.Context, args []Value) (Value, error) {
+		answer, err := fn(first(&args[0]), second(&args[1]), third(&args[2]))
+		if err != nil {
+			return Value{}, err
+		}
+		return result(answer)
+	}
+}
+
+func infallible[A, R any](fn func(A) R) func(A) (R, error) {
+	return func(a A) (R, error) { return fn(a), nil }
 }
 
 // The arguments as the Go types: loading proved each of its parameter's
@@ -117,14 +209,37 @@ func infallible2[A, B, R any](fn func(A, B) R) func(A, B) (R, error) {
 func intArg(v *Value) int64                { return v.i }
 func floatArg(v *Value) float64            { return v.f }
 func stringArg(v *Value) string            { return v.s }
-func floatsArg(v *Value) []float64         { floats, _ := v.box.([]float64); return floats }
-func intsArg(v *Value) []int64             { ints, _ := v.box.([]int64); return ints }
+func floatsArg(v *Value) []float64         { return backing[float64](v) }
+func intsArg(v *Value) []int64             { return backing[int64](v) }
+func stringsArg(v *Value) []string         { return backing[string](v) }
+func boolsArg(v *Value) []bool             { return backing[bool](v) }
 func intResult(r int64) (Value, error)     { return Int(r), nil }
 func stringResult(r string) (Value, error) { return String(r), nil }
 func boolResult(r bool) (Value, error)     { return Bool(r), nil }
 
+// backing is an array's native backing. An array with none is empty, and
+// reflection hands it over as an empty slice, not a nil one.
+func backing[T any](v *Value) []T {
+	if items, ok := v.box.([]T); ok {
+		return items
+	}
+	return []T{}
+}
+
 // floatResult refuses a result that is not finite, as reflection's does.
 func floatResult(r float64) (Value, error) { return CheckedFloat(r) }
+
+// A vector result is wrapped as its backing, as fromGo wraps it; a float
+// vector with an item that is not finite is refused with reflection's words.
+func intsResult(r []int64) (Value, error)     { return Value{kind: ArrayKind, box: r}, nil }
+func stringsResult(r []string) (Value, error) { return Value{kind: ArrayKind, box: r}, nil }
+
+func floatsResult(r []float64) (Value, error) {
+	if err := checkFloats(r); err != nil {
+		return Value{}, err
+	}
+	return Value{kind: ArrayKind, box: r}, nil
+}
 
 // directBatch is the EvalBatch of a GoBatch of one parameter, of the shapes
 // directEval calls a single call of.

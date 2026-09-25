@@ -1,19 +1,14 @@
 package machine
 
-// Settling a block of items, a column at a time too: the stop, the fuel,
-// the fold and the items added. Each finds the first item it cannot settle,
-// and the items before it are exactly those the body would have run.
+// Settling a block of items, a column at a time too: the stop, the fold and
+// the items added. Each finds the first item it cannot settle, and the items
+// before it are exactly those the body would have run.
 
 // settle settles the first limit items, and is how many it settled: the
-// first it cannot — one that stops the loop, one the fuel does not pay for,
-// one whose fold fails — it leaves to the body.
+// first it cannot — one that stops the loop, one whose fold fails — it
+// leaves to the body.
 func (r *vecRun) settle(limit int) int {
-	limit = r.stopAt(limit)
-	paid := r.pay(limit)
-	folded := r.foldItems(paid)
-	if folded < paid {
-		r.refund(folded, paid)
-	}
+	folded := r.foldItems(r.stopAt(limit))
 	r.collectItems(folded)
 	return folded
 }
@@ -49,93 +44,12 @@ func (r *vecRun) stopAt(limit int) int {
 	return limit
 }
 
-// pay charges the fuel of as many items from the first as it pays for, up
-// to limit, and is how many. When the fuel pays for them all, the total is
-// counted a block at a time; only when it does not is each item's cost
-// needed, to find the first it does not pay for.
-func (r *vecRun) pay(limit int) int {
-	if r.plan.uniform {
-		paid := limit
-		if cost := r.plan.cost; cost > 0 {
-			paid = int(min(uint64(limit), r.f.fuelLeft/cost))
-			r.f.fuelLeft -= uint64(paid) * cost
-		}
-		return paid
-	}
-	if total := r.total(limit); total <= r.f.fuelLeft {
-		r.f.fuelLeft -= total
-		return limit
-	}
-	for i, cost := range r.costs(limit) {
-		if r.f.fuelLeft < cost {
-			return i
-		}
-		r.f.fuelLeft -= cost
-	}
-	return limit
-}
-
-// refund gives back the fuel of items from to to, which were paid for and
-// not settled.
-func (r *vecRun) refund(from, to int) {
-	if r.plan.uniform {
-		r.f.fuelLeft += uint64(to-from) * r.plan.cost
-		return
-	}
-	for _, cost := range r.costs(to)[from:] {
-		r.f.fuelLeft += cost
-	}
-}
-
-// total is the fuel of the first limit items: each block's cost for the
-// items that reach it, and a branch's target's for the items it sends there.
-func (r *vecRun) total(limit int) uint64 {
-	var total uint64
-	for k := range r.plan.chain {
-		block, alive := &r.plan.blocks[k], r.alive(k)[:limit]
-		reached, away := uint64(0), uint64(0)
-		cond := r.blocks[k].cond
-		for i, in := range alive {
-			reached += bit(in)
-			if cond != nil {
-				away += bit(in && !cond.bool(i))
-			}
-		}
-		total = addFuel(total, reached*block.cost)
-		if cond != nil {
-			total = addFuel(total, away*r.plan.blocks[block.target].cost)
-		}
-	}
-	return total
-}
-
 // bit is 1 for true and 0 for false, with no branch.
 func bit(b bool) uint64 {
 	if b {
 		return 1
 	}
 	return 0
-}
-
-// costs is each of the first limit items' fuel: the blocks it runs, and
-// where it branches, the block it goes to.
-func (r *vecRun) costs(limit int) []uint64 {
-	costs := r.f.vector.columns.costs[:limit]
-	clear(costs)
-	for k := range r.plan.chain {
-		block, alive, cond := &r.plan.blocks[k], r.alive(k), r.blocks[k].cond
-		var away uint64
-		if cond != nil {
-			away = r.plan.blocks[block.target].cost
-		}
-		for i := range costs {
-			costs[i] += bit(alive[i]) * block.cost
-			if cond != nil {
-				costs[i] += bit(alive[i] && !cond.bool(i)) * away
-			}
-		}
-	}
-	return costs
 }
 
 // foldItems folds the first n items that reach the fold into the answer,

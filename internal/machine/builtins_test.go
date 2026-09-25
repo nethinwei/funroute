@@ -21,7 +21,7 @@ func runKernel(t *testing.T, source string, x machine.Value) (machine.Value, err
 	if err != nil {
 		t.Fatal(err)
 	}
-	return runtime.RunValues(t.Context(), []machine.Value{x}, machine.RunOptions{})
+	return runtime.RunValues(t.Context(), []machine.Value{x})
 }
 
 // int(float) takes a whole float inside int64 and nothing else; 2^63 is

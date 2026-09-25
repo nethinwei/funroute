@@ -184,7 +184,7 @@ func registerRoundingScope(registry *Registry) {
 			return moneyResult(exactOf(args[0]).Round(mode))
 		},
 		Doc: Doc{
-			Cost: 1, Label: "舍入", Category: "金额",
+			Label: "舍入", Category: "金额",
 			Description: "里面乘除比例、换汇、按比例取金额这些落在两个最小单位之间的步骤都精确计算，round 在最后按写出的方式只舍入一次；里面没有这样的步骤是错误。",
 			Params:      []string{"金额", "舍入方式"}, Result: "舍入后的金额",
 		},

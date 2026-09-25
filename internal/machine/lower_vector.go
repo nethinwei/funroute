@@ -1,16 +1,17 @@
 package machine
 
+import "slices"
+
 // A loop whose body is a few int, float and bool operations — a filter, a
 // map, a fold, a count, a stop — runs a column at a time: each operation over
-// a block of items at once, then each item's effects in order: its fuel,
-// its fold into the answer, the item it adds (regvm_vector.go). That is the
-// shape of most comprehensions and aggregates, and the one where the
-// interpreter's per-operation dispatch cost the most.
+// a block of items at once, then each item's effects in order: its fold into
+// the answer, the item it adds (regvm_vector.go). That is the shape of most
+// comprehensions and aggregates, and the one where the interpreter's
+// per-operation dispatch cost the most.
 //
-// It answers as the loop does, to the word and to the fuel: where an item
-// would fail, run out of fuel or stop the loop, the vector hands the loop
-// back to the ordinary body at that item, which runs it — and fails, stops
-// or goes on — as it always did.
+// It answers as the loop does, to the word: where an item would fail or stop
+// the loop, the vector hands the loop back to the ordinary body at that
+// item, which runs it — and fails, stops or goes on — as it always did.
 
 // vecEnd is how a block of the body ends: falling into the next, the item
 // done, or the loop stopped.
@@ -22,11 +23,10 @@ const (
 	vecStop
 )
 
-// vecBlock is one basic block of the body: its fuel, the operations it runs
-// on every item that reaches it, the fold into the answer or the item it
-// collects, and the branch out of it — to target when cond is false.
+// vecBlock is one basic block of the body: the operations it runs on every
+// item that reaches it, the fold into the answer or the item it collects,
+// and the branch out of it — to target when cond is false.
 type vecBlock struct {
-	cost    uint64
 	ops     []rinstr
 	fold    rinstr
 	folds   bool
@@ -43,19 +43,20 @@ type vecPlan struct {
 	blocks    []vecBlock
 	columns   map[int32]int
 	item, acc int32
-	// body is where the body starts; prelude the fuel of a block that runs
-	// once before the first item and only jumps there — all's, which lays
-	// its stop out ahead of the body.
-	body    int32
-	prelude uint64
+	// body is where the body starts, past a prelude that runs once before
+	// the first item and only jumps there — all's, which lays its stop out
+	// ahead of the body.
+	body int32
 	// chain is how many blocks items fall through, from the first; the
 	// rest are reached by a branch. foldAt and collectAt are the chain's
 	// block that folds and the one that collects, or -1. uniform says no
-	// block branches: every item costs cost.
+	// block branches or stops: every item reaches every block.
 	chain             int
 	foldAt, collectAt int
 	uniform           bool
-	cost              uint64
+	// stops says some block stops the loop: its first blocks of items are
+	// small (regvm_vector.go).
+	stops bool
 }
 
 // maxVecBlocks bounds the body a vector takes.
@@ -80,10 +81,10 @@ func (l *lowerer) vectorize() {
 		if in.op != rLoopInit || l.out.loops[in.c].key >= 0 {
 			continue
 		}
-		body, prelude := bodyOf(l.out.code, init)
-		planner := &vecPlanner{code: l.out.code, body: body, byPC: map[int]int{}, hidden: -2}
+		body := bodyOf(l.out.code, init)
+		planner := &vecPlanner{code: l.out.code, starts: l.out.starts, body: body, byPC: map[int]int{}, hidden: -2}
 		loop := &l.out.loops[in.c]
-		planner.plan = &vecPlan{columns: map[int32]int{}, item: loop.item, acc: loop.acc, body: int32(body), prelude: prelude}
+		planner.plan = &vecPlan{columns: map[int32]int{}, item: loop.item, acc: loop.acc, body: int32(body)}
 		if planner.walk() && planner.check() {
 			loop.vec = planner.plan
 		}
@@ -91,17 +92,18 @@ func (l *lowerer) vectorize() {
 }
 
 // bodyOf is where the body of the loop started at init starts, past a
-// prelude that only jumps to it, and that prelude's fuel.
-func bodyOf(code []rinstr, init int) (int, uint64) {
-	if first := code[init+1]; first.op == rFuel && code[init+2].op == rJump {
-		return int(code[init+2].a), uint64(uint32(first.b))<<32 | uint64(uint32(first.c))
+// prelude that only jumps to it.
+func bodyOf(code []rinstr, init int) int {
+	if first := code[init+1]; first.op == rJump {
+		return int(first.a)
 	}
-	return init + 1, 0
+	return init + 1
 }
 
 // vecPlanner reads a loop body into a plan.
 type vecPlanner struct {
 	code   []rinstr
+	starts []bool
 	body   int
 	byPC   map[int]int
 	plan   *vecPlan
@@ -118,13 +120,16 @@ func (p *vecPlanner) walk() bool {
 		}
 		pc = next
 	}
+	// terminal may read another block into the plan, and move the blocks:
+	// each is found again by its index, never held across the call. A block
+	// it reads ends the item or the loop, so has no branch to resolve.
 	for i := range p.plan.blocks {
-		if block := &p.plan.blocks[i]; block.cond != -1 {
-			target, ok := p.terminal(block.target)
+		if p.plan.blocks[i].cond != -1 {
+			target, ok := p.terminal(p.plan.blocks[i].target)
 			if !ok {
 				return false
 			}
-			block.target = target
+			p.plan.blocks[i].target = target
 		}
 	}
 	return len(p.plan.blocks) <= maxVecBlocks
@@ -146,18 +151,16 @@ func (p *vecPlanner) terminal(pc int) (int, bool) {
 // block reads the block at pc into the plan, and is where it falls — -1
 // when it ends the item or the loop.
 func (p *vecPlanner) block(pc int) (int, bool) {
-	if pc >= len(p.code) || p.code[pc].op != rFuel {
+	if pc >= len(p.code) || !p.startsAt(pc) {
 		return -1, false
 	}
-	fuel := p.code[pc]
-	block := vecBlock{cost: uint64(uint32(fuel.b))<<32 | uint64(uint32(fuel.c)), collect: -1, cond: -1}
+	block := vecBlock{collect: -1, cond: -1}
 	p.byPC[pc] = len(p.plan.blocks)
-	for pc++; pc < len(p.code); pc++ {
-		in := p.code[pc]
-		if in.op == rFuel {
+	for start := pc; pc < len(p.code); pc++ {
+		if pc != start && p.startsAt(pc) {
 			return p.add(block, pc)
 		}
-		if next, ended, ok := p.read(&block, in, pc); ended || !ok {
+		if next, ended, ok := p.read(&block, p.code[pc], pc); ended || !ok {
 			if !ok {
 				return -1, false
 			}
@@ -166,6 +169,9 @@ func (p *vecPlanner) block(pc int) (int, bool) {
 	}
 	return -1, false
 }
+
+// startsAt reports an operation a block starts at.
+func (p *vecPlanner) startsAt(pc int) bool { return pc < len(p.starts) && p.starts[pc] }
 
 func (p *vecPlanner) add(block vecBlock, next int) (int, bool) {
 	p.plan.blocks = append(p.plan.blocks, block)
@@ -253,10 +259,10 @@ func (p *vecPlanner) check() bool {
 // vector runs.
 func (plan *vecPlan) shape() bool {
 	plan.foldAt, plan.collectAt, plan.uniform = -1, -1, true
+	plan.stops = slices.ContainsFunc(plan.blocks, func(block vecBlock) bool { return block.end == vecStop })
 	for k := range plan.blocks {
 		block := &plan.blocks[k]
 		plan.chain = k + 1
-		plan.cost = addFuel(plan.cost, block.cost)
 		if block.folds {
 			if plan.foldAt >= 0 {
 				return false

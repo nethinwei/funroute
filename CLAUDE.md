@@ -28,6 +28,7 @@ tests/api/           公开面的测试与 Example*，按主题组织（宿主�
 tests/conformance/   web/funroute-examples.json 的每个示例经公开 API 跑完整条流水线
 tests/limits/        生成 docs/limits.md 的表格并守着它们（make limits）
 tests/perf/          性能报告程序，写进 docs/perf.md（make perf），不进 CI 的判定
+tests/perf/expr/     与 expr 的对照：单独的 module，只有它依赖 expr，根 go.mod 保持为空
 web/src/ web/wasm/   工作台前端（TS）与浏览器里的语言服务（js/wasm）
 cmd/funroute cmd/mvp CLI 与工作台静态服务
 ```
@@ -59,8 +60,9 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 - 换汇只在 `using` 里；`using` 永远隔离、单跳、同一货币对后写的赢；找不到是 `ErrNoFxRate`。币种在运算处检查（`money` 的 `meet`），契约不约束币种。
 - 不用金额的程序 digest 逐字节不变（`TestMoneyCapabilityKeepsDigests`）。
 
-**终止性与成本**
+**终止性与运行时长**
 - 语言不图灵完备：没有递归、没有无界循环，每次 `Run` 只有一个帧。任何能重入程序的构造都会推翻 `docs/termination.md` 的定理 A 与 B。
+- 没有 fuel：运行多久由宿主的 `ctx` 决定，宿主调用前与循环每 `checkEvery` 轮（`machine/limit.go`，约 1 ms）查一次。新增会循环的执行路径（新的循环指令、向量的新走法）必须经 `turn` 计数，否则长循环停不下来。编译期折叠只按轮数（`foldTurns`）限制，不看时钟：同一份源码在哪台机器上都编出同一个 artifact。
 - 凭空造容器的函数标 `Doc.BoundedArgs`，整数实参必须由输入规模界定；扩展函数的计算量只能随输入**规模**增长，不能随参数**数值**增长（设上限或换算法，如 `range`/`pad`/`allocate` 的 10000、`pow` 的平方求幂）。
 - 常量折叠只碰 `Doc.Constexpr` 授权的函数：内核与 std 有，模型、时钟、远程调用**不标**。闭合表达式的失败是编译错误。
 
@@ -75,17 +77,18 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 - 嵌套至多 1000 层：Go 栈溢出是 `recover` 接不住的致命错误。ExprJSON 只解码一次，值槽位不接受 `null`。
 
 **错误**
-- 宿主只用 `errors.Is`；新增错误路径必须选一个类别。`fallback` 只接"数据暂不可得"（`ErrExtension`、`ErrDeadline`、`ErrNoFxRate`），规则或数据的错（`ErrArithmetic`、`ErrDomain`、`ErrCurrency`、`ErrFuel`）不接，扩展函数里发生也保留原类别。
+- 宿主只用 `errors.Is`；新增错误路径必须选一个类别。`fallback` 只接"数据暂不可得"（`ErrExtension`、`ErrDeadline`、`ErrNoFxRate`），规则或数据的错（`ErrArithmetic`、`ErrDomain`、`ErrCurrency`）不接，扩展函数里发生也保留原类别。
 - 编译错误必须带位置，只经 `syntax.At`、`syntax.Around(node, …)` 或 parser 内部的 `over` 产生。
 
 **执行性能**
-- 执行的是装载时翻译出的寄存器形式（`lower*.go` → `regvm*.go`），栈字节码只是 Artifact 的格式：翻译不改 Artifact、不改 digest，也不改跑完的程序花的 fuel。
+- 执行的是装载时翻译出的寄存器形式（`lower*.go` → `regvm*.go`），栈字节码只是 Artifact 的格式：翻译不改 Artifact、不改 digest。
 - 寄存器操作 `rinstr` 保持 16 字节、按指针读：操作数放进 a/b/c，放不下的进 `regProgram` 的旁表（`calls`/`loops`/`makes`），需要换算的在翻译时算好。
 - `frame.exec` 只放最常用的操作（50 行的上限也是它的上限），其余进 `cold`。专用内核指令只写快路径，答不出就返回 false，由 `fault` 问函数本身要错误，文案一字不差。
 - 改了翻译器、`rinstr` 或 `frame.exec`，与改动前交替跑 `BenchmarkDispatch`/`BenchmarkCall`/`BenchmarkRunPaths` 对照，再 `make perf`。
 - 值流分析（`lower_escape.go`）决定数组建在哪：不逃出运行的建在帧的 arena 槽里，box 是指向槽的指针（`*[]T`），只有翻译器为它选的指令（循环、`len_a`、`at_a`）见得到；答案建在宿主借出的槽里（`RunInto`）。**指针形式的 box 绝不能流到宿主函数、结果或容器里**——新增会读或放出数组的指令，先在值流分析里给它规则。帧里不存指向宿主 struct 的指针（它可能在宿主的栈上），只拷切片头。
-- 帧的 `release` 只清这次运行写过的部分：清含指针的内存要走写屏障，还会拖住随后交还帧的原子交换——多清三个空槽就让固定开销从 30 ns 变成 60 ns。
-- 向量（`lower_vector.go`、`regvm_vector*.go`）只跑逐列运算与折叠、收集、停止；遇到失败、fuel 不够或停止，就把循环交回标量循环体，由它重跑那一项。所以向量只写快路径，`intOp`/`floatOp` 与内核指令必须逐项同义（`TestVectorOpsAnswerAsTheKernel`、`TestTheVectorAnswersAsTheBody` 守着）。
+- 帧的 `release` 只清这次运行写过的部分：清含指针的内存要走写屏障——多清三个空槽就让固定开销从 30 ns 变成 60 ns。
+- 帧池只用 `sync.Pool`，热路径上不许有跨 goroutine 共享的可写状态：一个用原子操作取还的共享空闲帧，曾让 10 核并行比单核还慢（`BenchmarkRunParallel` 用 `-cpu 1,10` 看扩展）。
+- 向量（`lower_vector.go`、`regvm_vector*.go`）只跑逐列运算与折叠、收集、停止；遇到失败或停止，就把循环交回标量循环体，由它重跑那一项。所以向量只写快路径，`intOp`/`floatOp` 与内核指令必须逐项同义（`TestVectorOpsAnswerAsTheKernel`、`TestTheVectorAnswersAsTheBody` 守着）。
 - 类型在装载时由 `machine/verify.go` 证明一次，执行路径不再检查内核运算的结果、容器的元素、循环收集的值与局部槽是否绑定；只检查宿主函数的回答。新增会产生值的执行路径，先让验证器能证明它的类型。
 
 **Go 只做语言**
@@ -109,8 +112,8 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 | 新增函数 | 只经 `Registry.Register` 注册 `FunctionSpec`（手写 `Params`/`Result`/`Eval`，或填 `Go`/`GoBatch` 按 Go 签名反射），目录与 LSP 自动生效；`Doc` 是唯一的函数元数据结构；ABI 版本写进名字（`route.score_v1`） |
 | 新增官方函数或重载 | 补案例（内核 `machine/examples.go`，std `extensions/std/examples.go`），测试要求案例选中每个重载；一个名字服务多种元素类型用 std 的 `eachType` 并在 `TestNamesCoverEveryElementTypeTheyClaim` 加一行 |
 | 新增纯函数 | 标 `Doc.Constexpr` |
-| 新增聚合函数 | 能用一个内核函数一步步折叠、或遇到某个 bool 就停的，声明 `FunctionSpec.Fold`；融合后跑完的程序不能比原来多要 fuel（`internal/compile/aggregate_test.go` 对照） |
-| 按 Go 签名注册的新常见形状 | `host_direct.go` 一个 case，在 `TestDirectCallsAnswerAsReflection` 加一个该形状的函数 |
+| 新增聚合函数 | 能用一个内核函数一步步折叠、或遇到某个 bool 就停的，声明 `FunctionSpec.Fold`；融合后的答案与失败与按原样编译的一致（`internal/compile/aggregate_test.go` 对照） |
+| 按 Go 签名注册的新常见形状 | `host_direct.go` 一个 case，在 `TestDirectCallsAnswerAsReflection`（std 用的形状在 `TestTheStandardShapesAreCalledDirectly`）加一个该形状的函数 |
 | 新增凭空造容器的函数 | 标 `Doc.BoundedArgs`，理由写进 termination.md 定理 B 之后 |
 | 新增读运行状态的内核函数 | `FunctionSpec.readsRun`（不折叠，要求写在 `using` 里） |
 | 新增金额函数 | 先在 `internal/money` 的 Go 方法上实现；会舍入的内核运算用 `registerRounded`；非内核函数自己检查容器里币种一致（std 的 `amountsOf`）；宿主先 `DeclareMoney` 再注册 std |
@@ -138,7 +141,7 @@ make run       # 构建并在 http://127.0.0.1:8080 服务工作台
 make limits    # 重新生成 docs/limits.md 的表格（go test ./tests/limits -update）
 make perf      # 性能报告写进 docs/perf.md，需要时再提交
 go run ./examples/routing                                          # 宿主程序示例：routing、money、batch
-go test ./internal/compile -run TestIfIsLazyAndFuelIsEnforced -v   # 单个测试
+go test ./internal/compile -run TestIfIsLazy -v                    # 单个测试
 go test ./internal/machine -bench . -benchtime 2000x              # VM 基准
 go run ./cmd/funroute run -expr 'let(bps = 250, amount * bps / 10000)' -types 'amount=int' -args '{"amount":100000}'
 ```

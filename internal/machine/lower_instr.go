@@ -4,7 +4,6 @@ import "fmt"
 
 // instruction lowers one stack instruction.
 func (l *lowerer) instruction(in Instruction) {
-	l.blockSpent = addFuel(l.blockSpent, l.costOf(l.pc))
 	switch in.Op {
 	case OpConstant:
 		l.push(int32(in.A))
@@ -17,7 +16,7 @@ func (l *lowerer) instruction(in Instruction) {
 	case OpMakeArray, OpMakeDict, OpMakeRecord, OpRecordWith:
 		l.build(in)
 	case OpField:
-		l.unary(rField, int32(in.A))
+		l.field(in.A)
 	case OpEqual:
 		l.binary(rEq, false)
 	case OpCall:
@@ -65,6 +64,7 @@ func (l *lowerer) scoped(in Instruction) {
 		answer := l.pop()
 		l.flush(0)
 		l.emit(rLoopBreak, answer, 0, l.open[len(l.open)-1])
+		l.jumpTo(operandB, in.A)
 	default:
 		l.err = fmt.Errorf("internal error: no lowering of opcode %q", in.Op)
 	}
@@ -138,15 +138,26 @@ func (l *lowerer) call(in Instruction) {
 		return
 	}
 	first := l.window(in.B)
-	l.out.hosts = l.out.hosts || !function.builtin
+	// A pure function's call needs no deadline: only a host's other calls do.
+	l.out.hosts = l.out.hosts || !function.builtin && function.pure == nil
 	l.out.calls = append(l.out.calls, rcall{
 		fn: function, typ: in.Type, args: first, argc: int32(in.B), dst: first, pc: int32(l.pc),
-		refund: l.blockCost - l.blockSpent,
 		kernel: function.builtin && !function.readsRun && function.Doc.Timeout == 0 && !function.Doc.Detached,
 		direct: !function.builtin && function.EvalBatch == nil && function.Doc.Timeout == 0 && !function.Doc.Detached,
+		pure:   function.pure,
 	})
 	l.emit(rCall, int32(len(l.out.calls)-1), 0, 0)
 	l.push(first)
+}
+
+// fusedBranch is the branch the operation at last makes one with, when it is
+// this block's ordering of condition.
+func (l *lowerer) fusedBranch(last int, condition int32) (rop, bool) {
+	if int32(last) < l.blockStart || l.out.code[last].c != condition {
+		return rInvalid, false
+	}
+	fused, ok := branchOps[l.out.code[last].op]
+	return fused, ok
 }
 
 // branch lowers jump_if_false. A condition an ordering just made becomes one
@@ -154,7 +165,8 @@ func (l *lowerer) call(in Instruction) {
 func (l *lowerer) branch(target int) {
 	condition := l.pop()
 	last := len(l.out.code) - 1
-	if fused, ok := branchOps[l.out.code[last].op]; ok && int32(last) > l.blockStart && l.out.code[last].c == condition {
+	// Only an operation of this block fuses — there may be none yet.
+	if fused, ok := l.fusedBranch(last, condition); ok {
 		ordering, origin := l.out.code[last], l.out.origins[last]
 		l.out.code, l.out.origins = l.out.code[:last], l.out.origins[:last]
 		l.flush(0)
@@ -225,7 +237,7 @@ func (l *lowerer) fold(in Instruction) {
 	l.emit(rMove, acc, 0, scratch)
 	l.emit(rMove, item, 0, scratch+1)
 	l.out.calls = append(l.out.calls, rcall{
-		fn: step, typ: in.Type, args: scratch, argc: 2, dst: acc, pc: int32(l.pc), refund: l.blockCost - l.blockSpent,
+		fn: step, typ: in.Type, args: scratch, argc: 2, dst: acc, pc: int32(l.pc),
 		kernel: !step.readsRun,
 	})
 	l.emit(rCall, int32(len(l.out.calls)-1), 0, 0)
@@ -263,7 +275,7 @@ func (l *lowerer) loopNext(in Instruction) {
 	if l.pc+1 < len(l.code) && l.code[l.pc+1].Op == OpLoopSpread {
 		l.out.loops[loop].spread, l.spread = true, true
 	}
-	if last := &l.out.code[len(l.out.code)-1]; last.op == rCollect && last.b < 0 && int32(len(l.out.code)-1) > l.blockStart {
+	if last := &l.out.code[len(l.out.code)-1]; last.op == rCollect && last.b < 0 && int32(len(l.out.code)-1) >= l.blockStart {
 		last.op, last.c = rCollectNext, loop
 		l.jumpTo(operandB, in.A)
 	} else {

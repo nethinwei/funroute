@@ -196,21 +196,17 @@ type (
 	TextResult   = compile.TextResult
 )
 
-// Running an artifact. Instantiate rejects an artifact whose registry has
-// drifted; Run enforces the fuel budget.
-type (
-	Runtime    = machine.Runtime
-	RunOptions = machine.RunOptions
-)
+// Runtime runs an artifact. Instantiate rejects an artifact whose registry
+// has drifted; a run stops at the deadline of the context it is given,
+// before a host's call or within about a millisecond of a loop.
+type Runtime = machine.Runtime
 
 var Instantiate = machine.Instantiate
 
 // DecodeArgs reads a program's arguments from a JSON object, keeping every
-// digit of an integer; DefaultFuel is the budget to give a run when nobody
-// named one. A CLI, a language server and a console decode alike through it.
+// digit of an integer. A CLI, a language server and a console decode alike
+// through it.
 var DecodeArgs = machine.DecodeArgs
-
-const DefaultFuel = machine.DefaultFuel
 
 // A Batch runs one artifact for many requests and calls each model once per
 // batch: the calls the bytecode proves hoistable (arguments straight from the
@@ -230,7 +226,7 @@ var NewBatch = machine.NewBatch
 //
 //	binding, err := funroute.Bind[RouteIn, Decision](registry)
 //	program, err := binding.Compile(source)
-//	decision, err := program.Run(ctx, &request, funroute.RunOptions{})
+//	decision, err := program.Run(ctx, &request)
 //
 // No name is looked up and nothing is reflected per call. Scalars cost no
 // allocation, a slice or map is wrapped rather than copied, and an argument
@@ -405,7 +401,6 @@ var LineColumn = syntax.LineColumn
 var (
 	ErrCompile   = machine.ErrCompile
 	ErrContract  = machine.ErrContract
-	ErrFuel      = machine.ErrFuel
 	ErrDeadline  = machine.ErrDeadline
 	ErrExtension = machine.ErrExtension
 	// ErrCurrency is money meeting money of another currency where one is

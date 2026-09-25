@@ -70,7 +70,7 @@ func convert(registry *funroute.Registry, table *funroute.Currencies, amount fun
 func run(registry *funroute.Registry, source string, args map[string]any, specs ...funroute.ArgSpec) string {
 	artifact := must(funroute.CompileExpr(source, registry, funroute.CompileOptions{Args: specs}))
 	runtime := must(funroute.Instantiate(artifact, registry))
-	value := must(runtime.Run(context.Background(), args, funroute.RunOptions{}))
+	value := must(runtime.Run(context.Background(), args))
 	return string(must(registry.EncodeJSON(value)))
 }
 

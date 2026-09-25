@@ -49,7 +49,7 @@ func runConverting(t *testing.T, test convertCase) (machine.Value, error) {
 	registry := moneyRegistry(t)
 	runtime := instantiated(t, registry, "using(rates, "+test.source+")", test.contract+"; rates: array<fxrate>")
 	args := append(append([]machine.Value(nil), test.args...), quotesOf(t, registry, test.quote))
-	return runtime.RunValues(t.Context(), args, machine.RunOptions{})
+	return runtime.RunValues(t.Context(), args)
 }
 
 func instantiated(t *testing.T, registry *machine.Registry, source, contract string) *machine.Runtime {
@@ -149,11 +149,11 @@ func TestAConversionWithoutAQuoteIsErrNoFxRate(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			args := []machine.Value{machine.MoneyValue(100, "EUR"), rates}
-			value, err := instantiated(t, registry, "using(rates, round(a -> JPY, @half_even))", "a: money; rates: array<fxrate>").RunValues(t.Context(), args, machine.RunOptions{})
+			value, err := instantiated(t, registry, "using(rates, round(a -> JPY, @half_even))", "a: money; rates: array<fxrate>").RunValues(t.Context(), args)
 			if !errors.Is(err, machine.ErrNoFxRate) {
 				t.Fatalf("EUR 1.00 -> JPY = %v, %v, want ErrNoFxRate", value.Any(), err)
 			}
-			value, err = instantiated(t, registry, "fallback(using(rates, round(a -> JPY, @half_even)), JPY 7)", "a: money; rates: array<fxrate>").RunValues(t.Context(), args, machine.RunOptions{})
+			value, err = instantiated(t, registry, "fallback(using(rates, round(a -> JPY, @half_even)), JPY 7)", "a: money; rates: array<fxrate>").RunValues(t.Context(), args)
 			if got := fmt.Sprint(value.Any()); err != nil || got != "{JPY 7}" {
 				t.Fatalf("fallback(EUR 1.00 -> JPY, JPY 7) = %s, %v, want {JPY 7}", got, err)
 			}
@@ -170,7 +170,7 @@ func TestAConversionIntoItsOwnCurrencyNeedsNoRate(t *testing.T) {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			args := []machine.Value{machine.MoneyValue(100, "EUR"), quotesOf(t, registry)}
-			value, err := instantiated(t, registry, source, "a: money; rates: array<fxrate>").RunValues(t.Context(), args, machine.RunOptions{})
+			value, err := instantiated(t, registry, source, "a: money; rates: array<fxrate>").RunValues(t.Context(), args)
 			if got := fmt.Sprint(value.Any()); err != nil || got != want {
 				t.Fatalf("%s with no quotes = %s, %v, want %s", source, got, err, want)
 			}
@@ -198,7 +198,7 @@ func TestALaterQuoteWins(t *testing.T) {
 			t.Parallel()
 			args := []machine.Value{machine.MoneyValue(100, "USD"), machine.MoneyValue(900, "EUR"), quotesOf(t, registry, test.quotes...)}
 			runtime := instantiated(t, registry, test.source, "a: money; e: money; rates: array<fxrate>")
-			value, err := runtime.RunValues(t.Context(), args, machine.RunOptions{})
+			value, err := runtime.RunValues(t.Context(), args)
 			if got := fmt.Sprint(value.Any()); err != nil || got != test.want {
 				t.Fatalf("%s with %v = %s, %v, want %s", test.source, test.quotes, got, err, test.want)
 			}
@@ -221,7 +221,7 @@ func TestAQuoteOfAnUndeclaredCurrencyIsRefused(t *testing.T) {
 	registry := moneyRegistry(t)
 	runtime := instantiated(t, registry, "using(rates, round(a -> JPY, @half_even))", "a: money; rates: array<fxrate>")
 	args := []machine.Value{machine.MoneyValue(100, "USD"), quotesOf(t, other, [3]string{"USD", "GBP", "0.8"})}
-	if value, err := runtime.RunValues(t.Context(), args, machine.RunOptions{}); !errors.Is(err, machine.ErrCurrency) {
+	if value, err := runtime.RunValues(t.Context(), args); !errors.Is(err, machine.ErrCurrency) {
 		t.Fatalf("a quote in GBP, which is not declared = %v, %v, want ErrCurrency", value.Any(), err)
 	}
 	if _, err := machine.ToValue([]money.FxRate{{}}); !errors.Is(err, machine.ErrCurrency) {
@@ -245,7 +245,7 @@ func TestAConversionIsNotFolded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value, err := runtime.RunValues(t.Context(), nil, machine.RunOptions{}); err != nil || fmt.Sprint(value.Any()) != "{JPY 150}" {
+	if value, err := runtime.RunValues(t.Context(), nil); err != nil || fmt.Sprint(value.Any()) != "{JPY 150}" {
 		t.Fatalf("USD 1 -> JPY = %v, %v, want JPY 150", value.Any(), err)
 	}
 }
@@ -266,13 +266,13 @@ func TestFxReadsTheRateTheUsingConvertsAt(t *testing.T) {
 		"using(rates, fallback(fx(USD, KWD), fx(USD, JPY)))": "150 JPY / USD",
 	} {
 		runtime := instantiated(t, registry, source, "rates: array<fxrate>")
-		value, err := runtime.RunValues(t.Context(), []machine.Value{rates}, machine.RunOptions{})
+		value, err := runtime.RunValues(t.Context(), []machine.Value{rates})
 		if fx, _ := value.FxRate(); err != nil || fx.String() != want {
 			t.Errorf("%s = %v, %v, want %s", source, fx, err, want)
 		}
 	}
 	runtime := instantiated(t, registry, "using(rates, fx(USD, KWD))", "rates: array<fxrate>")
-	if _, err := runtime.RunValues(t.Context(), []machine.Value{rates}, machine.RunOptions{}); !errors.Is(err, machine.ErrNoFxRate) {
+	if _, err := runtime.RunValues(t.Context(), []machine.Value{rates}); !errors.Is(err, machine.ErrNoFxRate) {
 		t.Fatalf("fx(USD, KWD) with no such quote: error = %v, want ErrNoFxRate", err)
 	}
 	if ops := fmt.Sprint(machine.PartsOf(mustCompileMoney(t, registry, "using(150 JPY / USD, fx(USD, JPY))")).Instructions); !containsCall(ops) {
@@ -287,11 +287,11 @@ func TestAConversionAllocatesNothing(t *testing.T) {
 	registry := moneyRegistry(t)
 	runtime := instantiated(t, registry, "using(rates, round(using(fx(USD, JPY), a -> JPY) -> USD, @half_even))", "a: money; rates: array<fxrate>")
 	args := []machine.Value{machine.MoneyValue(100, "USD"), quotesOf(t, registry, [3]string{"EUR", "USD", "1.08"}, [3]string{"USD", "JPY", "150"})}
-	if value, err := runtime.RunValues(t.Context(), args, machine.RunOptions{}); err != nil || fmt.Sprint(value.Any()) != "{USD 100}" {
+	if value, err := runtime.RunValues(t.Context(), args); err != nil || fmt.Sprint(value.Any()) != "{USD 100}" {
 		t.Fatalf("USD 1.00 there and back = %v, %v, want USD 1.00", value.Any(), err)
 	}
 	allocs := testing.AllocsPerRun(100, func() {
-		if _, err := runtime.RunValues(t.Context(), args, machine.RunOptions{}); err != nil {
+		if _, err := runtime.RunValues(t.Context(), args); err != nil {
 			panic(err)
 		}
 	})

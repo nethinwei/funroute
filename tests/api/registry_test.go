@@ -67,7 +67,7 @@ func TestHostNamesTheRegistryAndArtifactTypes(t *testing.T) {
 		Name: "demo.double", Params: []funroute.Type{funroute.IntType}, Result: funroute.IntType, Eval: double,
 		// Pure arithmetic, so the host lets folding run it while compiling.
 		Doc: funroute.Doc{
-			Label: "翻倍", Category: "演示", Cost: 2, Params: []string{"值"}, Result: "两倍",
+			Label: "翻倍", Category: "演示", Params: []string{"值"}, Result: "两倍",
 			Constexpr: true,
 		},
 	}); err != nil {
@@ -154,8 +154,7 @@ func TestAHostFoldFoldsTheComprehension(t *testing.T) {
 		return sum
 	}
 	if err := registry.Register(funroute.FunctionSpec{
-		Name: "fees.total_v1", Go: total, Doc: funroute.Doc{Cost: 4},
-		Fold: &funroute.Fold{Step: "add", Init: funroute.Int(0)},
+		Name: "fees.total_v1", Go: total, Fold: &funroute.Fold{Step: "add", Init: funroute.Int(0)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +163,7 @@ func TestAHostFoldFoldsTheComprehension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := mustInstantiate(t, artifact, registry).Run(t.Context(), map[string]any{"fees": []any{5, 20, 30}}, funroute.RunOptions{})
+	value, err := mustInstantiate(t, artifact, registry).Run(t.Context(), map[string]any{"fees": []any{5, 20, 30}})
 	if got, _ := value.Int(); err != nil || got != 100 || handed != 0 {
 		t.Fatalf("the fold = %v, %v, the function handed %d arrays; want 100 and none", value.Any(), err, handed)
 	}

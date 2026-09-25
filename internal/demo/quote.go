@@ -44,7 +44,6 @@ func registerMoneyQuote(registry *funroute.Registry) error {
 			Label:       "渠道报价（金额）",
 			Description: "某渠道对这笔金额收多少手续费：百分比加固定费，结果与金额同币种。宿主在 Go 里用 funroute.Money 的方法算，舍入与规则里完全一致。",
 			Category:    "支付路由",
-			Cost:        5,
 			Params:      []string{"渠道", "金额"},
 			Result:      "手续费",
 		},

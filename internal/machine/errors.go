@@ -8,17 +8,15 @@ import (
 )
 
 // The errors a host tells apart. A caller uses errors.Is and never parses a
-// message: malformed source, a contract violation, a rule that reached its
-// fuel limit, a request that ran out of time, an extension that failed, two
-// currencies meeting where one is required, arithmetic with no answer and
-// data with no answer are different things to report or monitor. fallback
-// catches only data not at hand — the deadline, the extension, the missing
-// rate — never a program's own limits, authoring errors, currency
-// mismatches, or an arithmetic or a data failure.
+// message: malformed source, a contract violation, a request that ran out of
+// time, an extension that failed, two currencies meeting where one is
+// required, arithmetic with no answer and data with no answer are different
+// things to report or monitor. fallback catches only data not at hand — the
+// deadline, the extension, the missing rate — never authoring errors,
+// currency mismatches, or an arithmetic or a data failure.
 var (
 	ErrCompile   = errors.New("expression compilation failed")
 	ErrContract  = errors.New("runtime contract failed")
-	ErrFuel      = errors.New("execution fuel exhausted")
 	ErrDeadline  = errors.New("deadline exceeded")
 	ErrExtension = errors.New("extension failed")
 	// ErrCurrency is money meeting money of another currency where one is
@@ -62,7 +60,6 @@ var errorClasses = []errorClass{
 	{ErrDomain, "domain", false},
 	{ErrContract, "contract", false},
 	{ErrCompile, "compile", false},
-	{ErrFuel, "fuel", false},
 	{ErrDeadline, "deadline", true},
 	{ErrExtension, "extension", true},
 }

@@ -15,6 +15,10 @@ type regLoop struct {
 	bools         []bool
 	length, index int
 	site          *rloop
+	// view is an array of plain records in the host's memory, and item the
+	// frame's record each of its items is loaded into.
+	view *recordsView
+	item *recordValue
 	// out is where the comprehension's items go: its own output, or, for
 	// the inner clause of a nested one, the outer clause's. A frame's loops
 	// never move — the slice is made as deep as the program nests — so the
@@ -39,9 +43,15 @@ func (f *frame) regLoopInit(pc int, in *rinstr) (int, error) {
 		f.regs[site.dst] = f.emptyResult(site, in)
 		return int(site.exit), nil
 	}
+	if loop.view != nil {
+		loop.item = &f.items[in.c]
+	}
 	f.startOutput(loop, in)
 	if site.vec != nil {
-		next, resume, finished := f.vectorLoop(loop, site.vec, pc)
+		next, resume, finished, err := f.vectorLoop(loop, site.vec, pc)
+		if err != nil {
+			return pc, err
+		}
 		if finished {
 			return f.endLoop(int(site.exit))
 		}
@@ -76,6 +86,8 @@ func (l *regLoop) walk(keyed bool) int {
 		l.bools, l.length = box, len(box)
 	case *[]bool:
 		l.bools, l.length = *box, len(*box)
+	case *recordsView:
+		l.view, l.length = box, box.length
 	default:
 		l.length = l.source.length()
 	}
@@ -93,7 +105,7 @@ func (f *frame) startOutput(loop *regLoop, in *rinstr) {
 	case site.spread:
 		outer := &f.loops[len(f.loops)-2]
 		loop.out = outer.out
-		loop.out.grow(f.expected(outer.length-outer.index, loop.length))
+		loop.out.grow(expected(outer.length-outer.index, loop.length))
 	case site.typ.kind == DictKind:
 		loop.dict = newDictBuilder(*site.typ.elem, loop.length)
 	default:
@@ -107,13 +119,12 @@ func (f *frame) startOutput(loop *regLoop, in *rinstr) {
 }
 
 // expected is how many items to make room for when outer items are left,
-// each with inner items: no more than the fuel left can pay for — an item
-// costs at least one — and no more than maxGrow at once.
-func (f *frame) expected(outer, inner int) int {
+// each with inner items: no more than maxGrow at once.
+func expected(outer, inner int) int {
 	if inner > 0 && outer > maxGrow/inner {
-		return min(maxGrow, int(min(f.fuelLeft, maxGrow)))
+		return maxGrow
 	}
-	return min(outer*inner, int(min(f.fuelLeft, maxGrow)))
+	return min(outer*inner, maxGrow)
 }
 
 // maxGrow is the most items one estimate makes room for; past it the array
@@ -154,6 +165,9 @@ func (f *frame) bindRegs(loop *regLoop, index int) {
 		f.regs[loop.site.item] = Value{kind: StringKind, s: loop.strings[index]}
 	case loop.bools != nil:
 		f.regs[loop.site.item] = Value{kind: BoolKind, b: loop.bools[index]}
+	case loop.view != nil:
+		loop.view.load(index, loop.item)
+		f.regs[loop.site.item] = Value{kind: RecordKind, box: loop.item}
 	case loop.keys != nil:
 		value, _ := loop.source.lookup(loop.keys[index])
 		f.regs[loop.site.item] = value
@@ -188,19 +202,19 @@ func (f *frame) collectNext(pc int, in *rinstr) (int, error) {
 	return f.regLoopNext(pc, in.b)
 }
 
-// regLoopNext goes back to the body while items are left; after the last, the
-// loop's result goes in its register. Going back, it pays for the body's
-// block itself and goes on past the block's fuel operation, which is left to
-// run — and fail — only when the fuel is short.
+// regLoopNext goes back to the body while items are left, counting the turn
+// (limit.go); after the last, the loop's result goes in its register.
 func (f *frame) regLoopNext(pc int, body int32) (int, error) {
 	last := len(f.loops) - 1
 	loop := &f.loops[last]
 	loop.index++
 	if loop.index < loop.length {
-		f.bindRegs(loop, loop.index)
-		if start := &f.runtime.reg.code[body]; start.op == rFuel && f.charge(start) {
-			return int(body) + 1, nil
+		if f.watching() {
+			if err := f.turn(1); err != nil {
+				return pc, err
+			}
 		}
+		f.bindRegs(loop, loop.index)
 		return int(body), nil
 	}
 	return f.endLoop(pc)
@@ -228,7 +242,7 @@ func (f *frame) loopBreak(in *rinstr) int {
 	f.regs[site.dst] = f.regs[in.a]
 	f.loops[last] = regLoop{}
 	f.loops = f.loops[:last]
-	return int(site.exit)
+	return int(in.b)
 }
 
 // loopValue is a finished loop's value: the accumulator, the array or the

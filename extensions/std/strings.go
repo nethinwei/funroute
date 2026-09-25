@@ -25,7 +25,7 @@ func caseSpecs() []funroute.FunctionSpec {
 		{"trim", "去空白", "去掉字符串两端的空白字符。", "文本", "去掉空白的文本", strings.TrimSpace},
 	} {
 		doc := funroute.Doc{
-			Label: fn.label, Description: fn.description, Category: "字符串", Cost: 3,
+			Label: fn.label, Description: fn.description, Category: "字符串",
 			Params: []string{fn.param}, Result: fn.result,
 		}
 		apply := fn.apply
@@ -69,13 +69,10 @@ func testSpecs() []funroute.FunctionSpec {
 		{"ends_with", "以此结尾", "文本是不是以这个后缀结尾。", strings.HasSuffix},
 	} {
 		doc := funroute.Doc{
-			Label: fn.label, Description: fn.description, Category: "字符串", Cost: 3,
+			Label: fn.label, Description: fn.description, Category: "字符串",
 			Params: []string{"文本", "子串"}, Result: "是否命中",
 		}
-		test := fn.test
-		specs = append(specs, logic(fn.name, doc, func(text, part string) (bool, error) {
-			return test(text, part), nil
-		}))
+		specs = append(specs, logic(fn.name, doc, fn.test))
 	}
 	return specs
 }
@@ -85,28 +82,28 @@ func partSpecs() []funroute.FunctionSpec {
 		logic("slice", funroute.Doc{
 			Label:       "取子串",
 			Description: "按字符位置取一段，从 start 到 end（不含 end），下标从 0 开始；越界报错，不静默截断。",
-			Category:    "字符串", Cost: 4,
-			Params: []string{"文本", "起点", "终点"}, Result: "子串",
+			Category:    "字符串",
+			Params:      []string{"文本", "起点", "终点"}, Result: "子串",
 		}, sliceString),
 		logic("split", funroute.Doc{
 			Label:       "拆分",
 			Description: "按分隔符把文本拆成数组；分隔符为空是错误。",
-			Category:    "字符串", Cost: 5,
-			Params: []string{"文本", "分隔符"}, Result: "各段",
+			Category:    "字符串",
+			Params:      []string{"文本", "分隔符"}, Result: "各段",
 		}, splitString),
 		logic("join", funroute.Doc{
 			Label:       "拼接",
 			Description: "用分隔符把一组文本连起来，拼原因码用它。",
-			Category:    "字符串", Cost: 5,
-			Params: []string{"各段", "分隔符"}, Result: "文本",
+			Category:    "字符串",
+			Params:      []string{"各段", "分隔符"}, Result: "文本",
 		}, func(parts []string, separator string) (string, error) {
 			return strings.Join(parts, separator), nil
 		}),
 		logic("replace", funroute.Doc{
 			Label:       "替换",
 			Description: "把文本里出现的每一处 old 换成 new。",
-			Category:    "字符串", Cost: 5,
-			Params: []string{"文本", "被替换", "替换为"}, Result: "替换后的文本",
+			Category:    "字符串",
+			Params:      []string{"文本", "被替换", "替换为"}, Result: "替换后的文本",
 		}, func(text, old, replacement string) (string, error) {
 			return strings.ReplaceAll(text, old, replacement), nil
 		}),
@@ -125,7 +122,7 @@ func paddingSpecs() []funroute.FunctionSpec {
 		{"pad_right", "右侧补齐", "右侧", false},
 	} {
 		doc := funroute.Doc{
-			Label: side.label, Category: "字符串", Cost: 4,
+			Label: side.label, Category: "字符串",
 			Description: "把文本补到指定的字符数（至多 10000），在" + side.side + "补；填充串必须是一个字符。已经够长就原样返回 —— 截断会悄悄丢掉数据。",
 			Params:      []string{"文本", "宽度", "填充"}, Result: "补齐后的文本",
 		}
@@ -140,7 +137,7 @@ func paddingSpecs() []funroute.FunctionSpec {
 // maxPadWidth caps the width a padding call builds. A fixed-width field in a
 // payment file is tens of characters; the cap is what keeps a width written
 // as 4000000000 from allocating gigabytes — in a run, and in the compiler,
-// which folds a constant call — since fuel counts calls, not bytes.
+// which folds a constant call.
 const maxPadWidth = 10_000
 
 func padTo(text string, width int64, fill string, left bool) (string, error) {

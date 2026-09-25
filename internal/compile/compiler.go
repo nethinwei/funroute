@@ -84,7 +84,7 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	}
 	compiler := newBytecodeCompiler(registry, inferred)
 	compiler.readsArgument = argumentReaders(expr)
-	compiler.plain = options.plain
+	compiler.plain, compiler.unsealed = options.plain, options.unsealed
 	if err := compiler.compile(expr); err != nil {
 		return inferred, nil, compileError(err)
 	}
@@ -114,6 +114,9 @@ func sealArtifact(exprJSON []byte, inferred *inference, compiler *bytecodeCompil
 	parts.ExprJSON = exprJSON
 	parts.Args = inferred.Params
 	parts.ResultDoc = inferred.ResultDoc
+	if compiler.unsealed {
+		return machine.PrepareArtifact(parts, compiler.registry)
+	}
 	return machine.SealArtifact(parts, compiler.registry)
 }
 
@@ -151,6 +154,8 @@ type bytecodeCompiler struct {
 	// aggregate fusion off.
 	hoisted map[int]int
 	plain   bool
+	// unsealed is CompileOptions.unsealed.
+	unsealed bool
 }
 
 func (c *bytecodeCompiler) compile(expr syntax.Expr) error {
@@ -355,7 +360,7 @@ func (c *bytecodeCompiler) callRef(function *machine.RegisteredFunction) int {
 	if !ok {
 		callIndex = len(c.calls)
 		c.callIndex[key] = callIndex
-		c.calls = append(c.calls, machine.CallReference{Name: function.Name, Signature: key, Cost: function.Cost()})
+		c.calls = append(c.calls, machine.CallReference{Name: function.Name, Signature: key})
 	}
 	return callIndex
 }

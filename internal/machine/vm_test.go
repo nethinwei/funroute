@@ -62,12 +62,12 @@ func benchRuntime(b *testing.B, source string, contract []compile.ArgSpec) *mach
 	return runtime
 }
 
-func run(b *testing.B, runtime *machine.Runtime, args map[string]any, fuel uint64) {
+func run(b *testing.B, runtime *machine.Runtime, args map[string]any) {
 	b.Helper()
 	ctx := b.Context()
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := runtime.Run(ctx, args, machine.RunOptions{Fuel: fuel}); err != nil {
+		if _, err := runtime.Run(ctx, args); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -81,7 +81,7 @@ func BenchmarkDispatch(b *testing.B) {
 		source = "add(" + source + ",b)"
 	}
 	runtime := benchRuntime(b, source, nil)
-	run(b, runtime, map[string]any{"a": 1, "b": 2}, 10_000_000)
+	run(b, runtime, map[string]any{"a": 1, "b": 2})
 }
 
 // BenchmarkNestedComprehension builds an array from an array, which is where
@@ -93,7 +93,7 @@ func BenchmarkNestedComprehension(b *testing.B) {
 	}
 	runtime := benchRuntime(b, `[add(x,1) for x in [mul(y,2) for y in items]]`,
 		[]compile.ArgSpec{{Name: "items", Type: machine.ArrayOf(machine.IntType)}})
-	run(b, runtime, map[string]any{"items": items}, 10_000_000)
+	run(b, runtime, map[string]any{"items": items})
 }
 
 // BenchmarkReduce is the same sum through the fold form.
@@ -104,7 +104,7 @@ func BenchmarkReduce(b *testing.B) {
 	}
 	runtime := benchRuntime(b, `reduce(item in items, total = 0, add(total,item))`,
 		[]compile.ArgSpec{{Name: "items", Type: machine.ArrayOf(machine.IntType)}})
-	run(b, runtime, map[string]any{"items": items}, 10_000_000)
+	run(b, runtime, map[string]any{"items": items})
 }
 
 // BenchmarkFor builds a new array, exercising the collect path.
@@ -115,13 +115,13 @@ func BenchmarkFor(b *testing.B) {
 	}
 	runtime := benchRuntime(b, `[add(item,1) for item in items]`,
 		[]compile.ArgSpec{{Name: "items", Type: machine.ArrayOf(machine.IntType)}})
-	run(b, runtime, map[string]any{"items": items}, 10_000_000)
+	run(b, runtime, map[string]any{"items": items})
 }
 
 // BenchmarkCall measures the extension-call boundary.
 func BenchmarkCall(b *testing.B) {
 	runtime := benchRuntime(b, `add(mul(a,b),sub(a,b))`, nil)
-	run(b, runtime, map[string]any{"a": 7, "b": 3}, 1_000)
+	run(b, runtime, map[string]any{"a": 7, "b": 3})
 }
 
 func TestBenchSanity(t *testing.T) {
@@ -138,7 +138,7 @@ func TestBenchSanity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), map[string]any{"items": []any{1, 2, 3, 4, 5}}, machine.RunOptions{Fuel: 1_000})
+	value, err := runtime.Run(t.Context(), map[string]any{"items": []any{1, 2, 3, 4, 5}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func BenchmarkRunPaths(b *testing.B) {
 		ctx := b.Context()
 		b.ReportAllocs()
 		for b.Loop() {
-			if _, err := runtime.Run(ctx, args, machine.RunOptions{Fuel: 1000}); err != nil {
+			if _, err := runtime.Run(ctx, args); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -188,7 +188,7 @@ func BenchmarkRunPaths(b *testing.B) {
 		ctx := b.Context()
 		b.ReportAllocs()
 		for b.Loop() {
-			if _, err := runtime.RunValues(ctx, args, machine.RunOptions{Fuel: 1000}); err != nil {
+			if _, err := runtime.RunValues(ctx, args); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -199,6 +199,30 @@ func BenchmarkRunPaths(b *testing.B) {
 
 // benchTyped is the same artifact through a Program: the host's struct in,
 // an int64 out.
+// BenchmarkRunParallel runs one program on every core at once: ns/op falls
+// as the cores are added, since runs share nothing they write.
+func BenchmarkRunParallel(b *testing.B) {
+	registry := benchRegistry(b)
+	binding, err := compile.Bind[scalarIn, int64](registry)
+	if err != nil {
+		b.Fatal(err)
+	}
+	program, err := binding.Compile(`if(country == "SG", amount * 2, amount)`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := b.Context()
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		in := scalarIn{Country: "SG", Amount: 1000}
+		for pb.Next() {
+			if _, err := program.Run(ctx, &in); err != nil {
+				panic(err)
+			}
+		}
+	})
+}
+
 func benchTyped(b *testing.B, registry *machine.Registry, artifact *machine.Artifact) {
 	b.Helper()
 	binding, err := compile.Bind[scalarIn, int64](registry)
@@ -213,7 +237,7 @@ func benchTyped(b *testing.B, registry *machine.Registry, artifact *machine.Arti
 	b.ReportAllocs()
 	for b.Loop() {
 		in := scalarIn{Country: "SG", Amount: 1000}
-		if _, err := program.Run(ctx, &in, machine.RunOptions{Fuel: 1000}); err != nil {
+		if _, err := program.Run(ctx, &in); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -240,7 +264,6 @@ func benchVector(b *testing.B, size int) {
 	registry := benchRegistry(b)
 	err := registry.Register(machine.FunctionSpec{
 		Name: "model.score_v1",
-		Doc:  machine.Doc{Cost: 10},
 		Go: func(xs []float64) (float64, error) {
 			return xs[0] + xs[len(xs)-1], nil
 		},
@@ -266,7 +289,7 @@ func benchVector(b *testing.B, size int) {
 	args := []machine.Value{value}
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := runtime.RunValues(ctx, args, machine.RunOptions{Fuel: 1000}); err != nil {
+		if _, err := runtime.RunValues(ctx, args); err != nil {
 			b.Fatal(err)
 		}
 	}

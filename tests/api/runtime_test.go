@@ -30,7 +30,7 @@ func TestHostChecksArtifactIdentity(t *testing.T) {
 	}
 	if err := registry.Register(funroute.FunctionSpec{
 		Name: "demo.size_v1",
-		Doc:  funroute.Doc{Label: "尺寸", Cost: 2},
+		Doc:  funroute.Doc{Label: "尺寸"},
 		Go:   func(value *tensor) (int64, error) { return int64(len(value.Values)), nil },
 	}); err != nil {
 		t.Fatal(err)
@@ -95,10 +95,7 @@ func TestAHostDrivesARuleFromDataToResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.Run(t.Context(), args, funroute.RunOptions{Fuel: funroute.DefaultFuel}); err != nil {
+	if _, err := runtime.Run(t.Context(), args); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := runtime.Run(t.Context(), args, funroute.RunOptions{Fuel: 1}); !errors.Is(err, funroute.ErrFuel) {
-		t.Fatalf("Run with Fuel 1 error = %v, want ErrFuel", err)
 	}
 }

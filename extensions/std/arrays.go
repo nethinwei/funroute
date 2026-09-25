@@ -21,7 +21,7 @@ func sequenceSpecs() []funroute.FunctionSpec {
 		{
 			Name: "windows", Params: []funroute.Type{list, funroute.IntType}, Result: funroute.ArrayOf(list), Eval: slidingWindows,
 			Doc: funroute.Doc{
-				Constexpr: true, Label: "滑动窗口", Category: "数组", Cost: 8,
+				Constexpr: true, Label: "滑动窗口", Category: "数组",
 				Description: "每 size 个相邻元素一组，逐格滑动；窗口比数组还宽就一个都没有。近三笔合计写 [sum(w) for w in windows(amounts, 3)]。",
 				Params:      []string{"数组", "窗口大小"}, Result: "各窗口",
 			},
@@ -29,7 +29,7 @@ func sequenceSpecs() []funroute.FunctionSpec {
 		{
 			Name: "chunk", Params: []funroute.Type{list, funroute.IntType}, Result: funroute.ArrayOf(list), Eval: chunkItems,
 			Doc: funroute.Doc{
-				Constexpr: true, Label: "分批", Category: "数组", Cost: 6,
+				Constexpr: true, Label: "分批", Category: "数组",
 				Description: "按固定大小切成不重叠的几批，最后一批可能不满。批量提交用它。",
 				Params:      []string{"数组", "每批大小"}, Result: "各批",
 			},
@@ -37,7 +37,7 @@ func sequenceSpecs() []funroute.FunctionSpec {
 		{
 			Name: "intersect", Params: []funroute.Type{list, list}, Result: list, Eval: distinctItems,
 			Doc: funroute.Doc{
-				Constexpr: true, Label: "交集", Category: "数组", Cost: 7,
+				Constexpr: true, Label: "交集", Category: "数组",
 				Description: "两个数组里都有的元素，按第一个数组的顺序，重复只留一次。",
 				Params:      []string{"前一个", "后一个"}, Result: "交集",
 			},
@@ -45,13 +45,13 @@ func sequenceSpecs() []funroute.FunctionSpec {
 		{
 			Name: "except", Params: []funroute.Type{list, list}, Result: list, Eval: exceptItems,
 			Doc: funroute.Doc{
-				Constexpr: true, Label: "差集", Category: "数组", Cost: 7,
+				Constexpr: true, Label: "差集", Category: "数组",
 				Description: "在第一个数组里、不在第二个数组里的元素，保持原顺序，重复只留一次。",
 				Params:      []string{"前一个", "后一个"}, Result: "差集",
 			},
 		},
 	}, eachType("deltas", funroute.Doc{
-		Label: "相邻差", Category: "数组", Cost: 6,
+		Label: "相邻差", Category: "数组",
 		Description: "每一项与前一项的差，所以结果比输入少一个；一项或空数组得到空数组。与上一笔比较用它。",
 		Params:      []string{"数组"}, Result: "差值序列",
 	}, deltasOf(subtractInts), deltasOf(subtractFloats))...)
@@ -101,6 +101,16 @@ func exceptItems(_ context.Context, args []funroute.Value) (funroute.Value, erro
 // distinct is the first array's items, in order, each once: all of them, or,
 // held against a second array, those it has or those it has not.
 func distinct(args []funroute.Value, keepShared bool) (funroute.Value, error) {
+	switch items := backing(args[0]).(type) {
+	case []int64:
+		return distinctNative(items, args, keepShared)
+	case []float64:
+		return distinctNative(items, args, keepShared)
+	case []string:
+		return distinctNative(items, args, keepShared)
+	case []bool:
+		return distinctNative(items, args, keepShared)
+	}
 	var other []funroute.Value
 	if len(args) > 1 {
 		other = itemsOf(args[1])
@@ -112,6 +122,27 @@ func distinct(args []funroute.Value, keepShared bool) (funroute.Value, error) {
 		}
 	}
 	return funroute.Array(elementType(args[0]), out)
+}
+
+// distinctNative is distinct on a native array, by a set: a float's zero and
+// negative zero are one key, as they are one value.
+func distinctNative[T comparable](items []T, args []funroute.Value, keepShared bool) (funroute.Value, error) {
+	var other map[T]bool
+	if len(args) > 1 {
+		held, _ := backing(args[1]).([]T)
+		other = make(map[T]bool, len(held))
+		for _, item := range held {
+			other[item] = true
+		}
+	}
+	out, seen := []T{}, make(map[T]bool, len(items))
+	for _, item := range items {
+		if (other == nil || other[item] == keepShared) && !seen[item] {
+			seen[item] = true
+			out = append(out, item)
+		}
+	}
+	return funroute.ToValue(out)
 }
 
 func deltasOf[T int64 | float64](subtract func(T, T) (T, error)) func([]T) ([]T, error) {
@@ -150,11 +181,11 @@ func subtractFloats(left, right float64) (float64, error) {
 func shapeSpecs() []funroute.FunctionSpec {
 	item := funroute.TypeVar("T")
 	list := funroute.ArrayOf(item)
-	shaped := func(name, label, description, result string, params []funroute.Type, labels []string, cost uint64, eval funroute.EvalFunc) funroute.FunctionSpec {
+	shaped := func(name, label, description, result string, params []funroute.Type, labels []string, eval funroute.EvalFunc) funroute.FunctionSpec {
 		return funroute.FunctionSpec{
 			Name: name, Params: params, Result: list, Eval: eval,
 			Doc: funroute.Doc{
-				Label: label, Category: "数组", Cost: cost,
+				Label: label, Category: "数组",
 				Description: description, Params: labels, Result: result,
 			},
 		}
@@ -163,26 +194,26 @@ func shapeSpecs() []funroute.FunctionSpec {
 		return funroute.FunctionSpec{
 			Name: name, Params: []funroute.Type{list}, Result: item, Eval: eval,
 			Doc: funroute.Doc{
-				Label: label, Category: "数组", Cost: 2,
+				Label: label, Category: "数组",
 				Description: description, Params: []string{"数组"}, Result: result,
 			},
 		}
 	}
 	return []funroute.FunctionSpec{
-		end("first", "首个元素", "取数组的第一个元素；空数组报错，因为没有元素可取。", "首个元素", firstItem),
+		first(end("first", "首个元素", "取数组的第一个元素；空数组报错，因为没有元素可取。", "首个元素", firstItem)),
 		end("last", "末个元素", "取数组的最后一个元素；空数组报错。", "末个元素", lastItem),
 		shaped("slice", "取一段", "按下标取 [start, end) 这一段，下标从 0 开始；越界报错，不静默截断。", "这一段",
-			[]funroute.Type{list, funroute.IntType, funroute.IntType}, []string{"数组", "起点", "终点"}, 4, sliceItems),
+			[]funroute.Type{list, funroute.IntType, funroute.IntType}, []string{"数组", "起点", "终点"}, sliceItems),
 		shaped("take", "取前 n 个", "取数组的前 n 个元素；n 大于长度就取完，n 为负是错误。", "前 n 个",
-			[]funroute.Type{list, funroute.IntType}, []string{"数组", "个数"}, 4, takeItems),
+			[]funroute.Type{list, funroute.IntType}, []string{"数组", "个数"}, takeItems),
 		shaped("reverse", "反转", "把数组倒过来。", "反转后的数组",
-			[]funroute.Type{list}, []string{"数组"}, 4, reverseItems),
+			[]funroute.Type{list}, []string{"数组"}, reverseItems),
 		shaped("concat", "拼接数组", "把两个同型数组接成一个。", "拼接结果",
-			[]funroute.Type{list, list}, []string{"前一个", "后一个"}, 5, concatItems),
+			[]funroute.Type{list, list}, []string{"前一个", "后一个"}, concatItems),
 		shaped("unique", "去重", "按相等判断去掉重复元素，保留第一次出现的顺序。", "去重后的数组",
-			[]funroute.Type{list}, []string{"数组"}, 6, distinctItems),
+			[]funroute.Type{list}, []string{"数组"}, distinctItems),
 		shaped("flatten", "拉平一层", "把数组的数组拉平成一层；嵌套推导式配它就是多层遍历。", "拉平后的数组",
-			[]funroute.Type{funroute.ArrayOf(list)}, []string{"嵌套数组"}, 6, flattenItems),
+			[]funroute.Type{funroute.ArrayOf(list)}, []string{"嵌套数组"}, flattenItems),
 	}
 }
 
@@ -191,11 +222,11 @@ func shapeSpecs() []funroute.FunctionSpec {
 // sort_by, and it lives with the other two-list functions in select.go.
 func sortSpecs() []funroute.FunctionSpec {
 	return slices.Concat(eachType("sort", funroute.Doc{
-		Label: "排序", Category: "数组", Cost: 8,
+		Label: "排序", Category: "数组",
 		Description: "按自然顺序升序排列（数值按大小，字符串按 UTF-8 字节序）。要按别的键排，先用推导式算出键。",
 		Params:      []string{"数组"}, Result: "升序数组",
 	}, sorter[int64](false, nil), sorter(false, hasNegativeZero), sorter[string](false, nil)), eachType("sort_desc", funroute.Doc{
-		Label: "降序排序", Category: "数组", Cost: 8,
+		Label: "降序排序", Category: "数组",
 		Description: "按自然顺序降序排列，省得写 reverse(sort(xs))。",
 		Params:      []string{"数组"}, Result: "降序数组",
 	}, sorter[int64](true, nil), sorter(true, hasNegativeZero), sorter[string](true, nil)))
@@ -234,6 +265,13 @@ func sortStable[T cmp.Ordered](items []T, descending bool) {
 // from it, the one such pair a float array can hold.
 func hasNegativeZero(items []float64) bool {
 	return slices.ContainsFunc(items, func(f float64) bool { return f == 0 && math.Signbit(f) })
+}
+
+// first makes spec a first-item fold: first([… for x in xs if …]) stops at
+// the first item yielded, the rest neither computed nor built.
+func first(spec funroute.FunctionSpec) funroute.FunctionSpec {
+	spec.Fold = &funroute.Fold{First: true}
+	return spec
 }
 
 func firstItem(_ context.Context, args []funroute.Value) (funroute.Value, error) {
@@ -282,12 +320,30 @@ func takeFirst(array funroute.Value, count int64, negative string) (funroute.Val
 }
 
 func reverseItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+	switch items := backing(args[0]).(type) {
+	case []int64:
+		return funroute.ToValue(reversed(items))
+	case []float64:
+		return funroute.ToValue(reversed(items))
+	case []string:
+		return funroute.ToValue(reversed(items))
+	case []bool:
+		return funroute.ToValue(reversed(items))
+	}
 	items := itemsOf(args[0])
 	out := make([]funroute.Value, len(items))
 	for i, item := range items {
 		out[len(items)-1-i] = item
 	}
 	return funroute.Array(elementType(args[0]), out)
+}
+
+func reversed[T any](items []T) []T {
+	out := make([]T, len(items))
+	for i, item := range items {
+		out[len(items)-1-i] = item
+	}
+	return out
 }
 
 func concatItems(_ context.Context, args []funroute.Value) (funroute.Value, error) {
@@ -322,10 +378,31 @@ func containsValue(values []funroute.Value, wanted funroute.Value) bool {
 }
 
 // itemsOf reads a container's elements. The values are the container's own,
-// handed over read-only like everywhere else at this boundary.
+// handed over read-only like everywhere else at this boundary. A native
+// array is built into values here, so the functions that run often work on
+// its backing instead, and wrap theirs the same way.
 func itemsOf(value funroute.Value) []funroute.Value {
 	items, _ := value.Array()
 	return items
+}
+
+// backing is a native array's own slice — the []bool, []int64, []float64 or
+// []string an array of those is held in, which Any hands over with no pass —
+// or nil: for an empty array, which the general path serves as well, and for
+// any other, whose Any would build a Go value of every item.
+func backing(value funroute.Value) any {
+	first, ok := value.At(0)
+	if !ok {
+		return nil
+	}
+	_, isBool := first.Bool()
+	_, isInt := first.Int()
+	_, isFloat := first.Float()
+	_, isString := first.String()
+	if isBool || isInt || isFloat || isString {
+		return value.Any()
+	}
+	return nil
 }
 
 func elementType(value funroute.Value) funroute.Type {

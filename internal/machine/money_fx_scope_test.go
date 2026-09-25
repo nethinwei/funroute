@@ -52,7 +52,7 @@ func runUsing(t *testing.T, source, contract string, outer [][3]string, args ...
 		t.Fatalf("Instantiate(%q) error = %v", source, err)
 	}
 	args = append(args, quotesOf(t, registry, outer...))
-	value, err := runtime.RunValues(t.Context(), args, machine.RunOptions{})
+	value, err := runtime.RunValues(t.Context(), args)
 	if err != nil {
 		return "", err
 	}
@@ -354,7 +354,7 @@ func BenchmarkUsing(b *testing.B) {
 	args := []machine.Value{machine.MoneyValue(100, "USD")}
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := runtime.RunValues(b.Context(), args, machine.RunOptions{}); err != nil {
+		if _, err := runtime.RunValues(b.Context(), args); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -374,11 +374,11 @@ func TestAUsingAllocatesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := []machine.Value{machine.MoneyValue(100, "USD")}
-	if value, err := runtime.RunValues(t.Context(), args, machine.RunOptions{}); err != nil || fmt.Sprint(value.Any()) != "{JPY 150}" {
+	if value, err := runtime.RunValues(t.Context(), args); err != nil || fmt.Sprint(value.Any()) != "{JPY 150}" {
 		t.Fatalf("using(150 JPY / USD, …) = %v, %v, want JPY 150", value.Any(), err)
 	}
 	allocs := testing.AllocsPerRun(100, func() {
-		if _, err := runtime.RunValues(t.Context(), args, machine.RunOptions{}); err != nil {
+		if _, err := runtime.RunValues(t.Context(), args); err != nil {
 			t.Fatal(err)
 		}
 	})

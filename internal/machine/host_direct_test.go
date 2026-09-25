@@ -41,6 +41,48 @@ func TestDirectCallsAnswerAsReflection(t *testing.T) {
 	}
 }
 
+// The shapes the standard pack registers, with the rest of their family, are
+// called as themselves too, and answer the same.
+func TestTheStandardShapesAreCalledDirectly(t *testing.T) {
+	t.Parallel()
+	errNegative := errors.New("negative")
+	for _, fn := range []any{
+		func(x float64) (int64, error) { return int64(x), failIf(x < 0, errNegative) },
+		func(xs []float64) (int64, error) { return int64(len(xs)), failIf(len(xs) == 0, errNegative) },
+		func(xs []float64) []float64 { return append(xs, math.Inf(1)) },
+		func(xs []float64) ([]float64, error) { return xs, failIf(len(xs) == 0, errNegative) },
+		func(xs []float64) ([]int64, error) { return make([]int64, len(xs)), nil },
+		func(xs []int64) (int64, error) { return int64(len(xs)), failIf(len(xs) == 0, errNegative) },
+		func(xs []int64) (float64, error) { return float64(len(xs)) / 0, nil },
+		func(xs []int64) []int64 { return xs },
+		func(xs []int64) ([]int64, error) { return slices.Clone(xs), failIf(len(xs) == 0, errNegative) },
+		func(xs []string) []string { return xs },
+		func(xs []string) (string, error) { return strings.Join(xs, ","), failIf(len(xs) == 0, errNegative) },
+		func(xs []string) (int64, error) { return int64(len(xs)), nil },
+		func(xs []string) ([]int64, error) { return make([]int64, len(xs)), nil },
+		func(xs []bool) (bool, error) { return len(xs) > 1 && xs[1], failIf(len(xs) == 0, errNegative) },
+		func(a, b string) (bool, error) { return strings.Contains(a, b), failIf(b == "", errNegative) },
+		func(a, b string) (string, error) { return a + b, failIf(a == "", errNegative) },
+		func(a, b string) ([]string, error) { return strings.Split(a, b), failIf(b == "", errNegative) },
+		func(x float64, n int64) float64 { return x * float64(n) },
+		func(x float64, n int64) (float64, error) { return x / float64(n+4), failIf(n < 0, errNegative) },
+		func(n int64, x float64) float64 { return float64(n) / x },
+		func(n int64, x float64) (float64, error) { return float64(n) + x, failIf(x < 0, errNegative) },
+		func(xs []string, sep string) (string, error) {
+			return strings.Join(xs, sep), failIf(sep == "", errNegative)
+		},
+		func(xs []int64, x float64) (float64, error) { return float64(len(xs)) * x, failIf(x < 0, errNegative) },
+		func(xs []float64, x float64) (float64, error) { return float64(len(xs)) / x, nil },
+		func(a, b, c string) (string, error) { return a + b + c, failIf(b == "", errNegative) },
+		func(s string, n int64, pad string) (string, error) {
+			return s + strings.Repeat(pad, max(int(n), 0)), failIf(n < 0, errNegative)
+		},
+		func(s string, from, to int64) (string, error) { return s, failIf(from > to, errNegative) },
+	} {
+		assertDirectAsReflected(t, fn)
+	}
+}
+
 func failIf(fail bool, err error) error {
 	if fail {
 		return err
@@ -87,6 +129,10 @@ func argumentsFor(params []Type) [][]Value {
 			return []Value{String(""), String("a")}
 		case typ.elem.kind == IntKind:
 			return []Value{{kind: ArrayKind, box: []int64{}}, {kind: ArrayKind, box: []int64{1, 2}}}
+		case typ.elem.kind == StringKind:
+			return []Value{{kind: ArrayKind, box: []string{}}, {kind: ArrayKind, box: []string{"a", "b"}}}
+		case typ.elem.kind == BoolKind:
+			return []Value{{kind: ArrayKind, box: []bool{}}, {kind: ArrayKind, box: []bool{false, true}}}
 		}
 		return []Value{{kind: ArrayKind, box: []float64{}}, {kind: ArrayKind, box: []float64{1, 2}}}
 	}

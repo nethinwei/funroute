@@ -37,8 +37,7 @@ var single, batched atomic.Int64
 func main() {
 	registry := funroute.CoreRegistry()
 	err := registry.Register(funroute.FunctionSpec{
-		Name: "model.fraud_v1", Doc: funroute.Doc{Cost: 20},
-		Go:      func(amount float64) (float64, error) { single.Add(1); return fraud(amount), nil },
+		Name: "model.fraud_v1", Go: func(amount float64) (float64, error) { single.Add(1); return fraud(amount), nil },
 		GoBatch: func(amounts []float64) ([]float64, error) { batched.Add(1); return scores(amounts), nil },
 	})
 	if err != nil {
@@ -64,8 +63,7 @@ func held(program *funroute.Program[Payment, Verdict]) {
 	}
 	verdicts := make([]Verdict, len(payments))
 	program.RunBatch(context.Background(), len(payments),
-		func(i int) *Payment { return &payments[i] }, func(i int) *Verdict { return &verdicts[i] },
-		funroute.RunOptions{}, func(i int, err error) { log.Printf("payment %d: %v", i, err) })
+		func(i int) *Payment { return &payments[i] }, func(i int) *Verdict { return &verdicts[i] }, func(i int, err error) { log.Printf("payment %d: %v", i, err) })
 	fmt.Printf("held:      %d payments, engine ran %d batch(es) and %d single call(s); payment 99 → %+v\n",
 		len(payments), batched.Swap(0), single.Swap(0), verdicts[99])
 }

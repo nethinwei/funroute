@@ -19,7 +19,7 @@ func runRecord(t *testing.T, source, contract string, args map[string]any) strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := runtime.Run(t.Context(), args, machine.RunOptions{Fuel: 10_000})
+	value, err := runtime.Run(t.Context(), args)
 	if err != nil {
 		t.Fatal(err)
 	}

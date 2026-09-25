@@ -27,7 +27,6 @@ func modelRegistry(t *testing.T, batches *int) *funroute.Registry {
 	}
 	err := registry.Register(funroute.FunctionSpec{
 		Name: "model.embed_v1",
-		Doc:  funroute.Doc{Cost: 10},
 		Go:   func(features []float64) (*tensor, error) { return &tensor{rows: [][]float64{features}}, nil },
 		GoBatch: func(features [][]float64) ([]*tensor, error) {
 			*batches++
@@ -43,7 +42,6 @@ func modelRegistry(t *testing.T, batches *int) *funroute.Registry {
 	}
 	err = registry.Register(funroute.FunctionSpec{
 		Name: "model.score_v1",
-		Doc:  funroute.Doc{Cost: 10},
 		Go:   func(t *tensor) (float64, error) { return t.rows[0][0], nil },
 	})
 	if err != nil {
@@ -91,7 +89,7 @@ func TestHostBatchesModelCallsAcrossRequests(t *testing.T) {
 	expired, cancel := context.WithCancel(t.Context())
 	cancel()
 	features, _ := funroute.ToValue([]float64{0.9})
-	if _, err := runtime.RunValues(expired, []funroute.Value{features}, funroute.RunOptions{}); !errors.Is(err, funroute.ErrDeadline) {
+	if _, err := runtime.RunValues(expired, []funroute.Value{features}); !errors.Is(err, funroute.ErrDeadline) {
 		t.Fatalf("RunValues(cancelled ctx) error = %v, want ErrDeadline", err)
 	}
 	if handles := registry.Handles(); len(handles) != 1 || handles[0].String() != "handle<engine.tensor>" {

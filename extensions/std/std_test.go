@@ -304,7 +304,7 @@ func run(t *testing.T, source string, args map[string]any, specs ...funroute.Arg
 	if err != nil {
 		return nil, err
 	}
-	value, err := runtime.Run(t.Context(), args, funroute.RunOptions{Fuel: 100_000})
+	value, err := runtime.Run(t.Context(), args)
 	if err != nil {
 		return nil, err
 	}

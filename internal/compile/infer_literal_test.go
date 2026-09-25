@@ -261,7 +261,7 @@ func runMoney(t *testing.T, source, contract string, args map[string]any) (strin
 	if err != nil {
 		t.Fatalf("Instantiate(%q) error = %v", source, err)
 	}
-	value, err := runtime.Run(t.Context(), args, machine.RunOptions{Fuel: 10_000})
+	value, err := runtime.Run(t.Context(), args)
 	if err != nil {
 		return "", err
 	}
@@ -288,7 +288,7 @@ func runArtifact(t *testing.T, artifact *machine.Artifact, args map[string]any) 
 	if err != nil {
 		t.Fatalf("Instantiate error = %v", err)
 	}
-	value, err := runtime.Run(t.Context(), args, machine.RunOptions{Fuel: 10_000})
+	value, err := runtime.Run(t.Context(), args)
 	if err != nil {
 		return "", err
 	}

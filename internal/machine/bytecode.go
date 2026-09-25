@@ -15,7 +15,7 @@ import (
 // with any other version is refused rather than reinterpreted. Nothing is
 // deployed against this language yet, so a shape change edits the shape rather
 // than adding a version to migrate from.
-const ArtifactVersion = 2
+const ArtifactVersion = 3
 
 // OpCode is a dense enum, lowered to the register form when an artifact is
 // loaded. The JSON form keeps the original mnemonics, so artifact digests do
@@ -151,7 +151,6 @@ type Instruction struct {
 type CallReference struct {
 	Name      string `json:"name"`
 	Signature string `json:"signature"`
-	Cost      uint64 `json:"cost"`
 }
 
 // ArtifactParts is what an artifact is made of, as the machine and the
@@ -186,6 +185,22 @@ type Artifact struct{ parts ArtifactParts }
 // when the program uses money, and the digest over all of it. A nil registry
 // keeps the stamp the parts carry, for a tool resealing parts it took apart.
 func SealArtifact(parts ArtifactParts, registry *Registry) (*Artifact, error) {
+	artifact, err := PrepareArtifact(parts, registry)
+	if err != nil {
+		return nil, err
+	}
+	digest, err := ArtifactDigest(artifact)
+	if err != nil {
+		return nil, err
+	}
+	artifact.parts.Digest = digest
+	return artifact, nil
+}
+
+// PrepareArtifact is SealArtifact without the digest: for an artifact its
+// compiler hands straight to InstantiateCompiled, which does not look at it.
+// A Program made so computes the digest when it is asked for the artifact.
+func PrepareArtifact(parts ArtifactParts, registry *Registry) (*Artifact, error) {
 	parts.Version = ArtifactVersion
 	if registry != nil {
 		parts.Money = nil
@@ -199,11 +214,6 @@ func SealArtifact(parts ArtifactParts, registry *Registry) (*Artifact, error) {
 		stamp := stampFor(table, codes)
 		artifact.parts.Money = &stamp
 	}
-	digest, err := ArtifactDigest(artifact)
-	if err != nil {
-		return nil, err
-	}
-	artifact.parts.Digest = digest
 	return artifact, nil
 }
 

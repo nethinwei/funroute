@@ -8,11 +8,6 @@ import (
 	"github.com/nethinwei/funroute/internal/kit"
 )
 
-// DefaultFuel is the budget a run gets when the one who asks for it names
-// none: enough for any rule a console writes, small enough that a mistake
-// stops at once.
-const DefaultFuel uint64 = 10_000
-
 // DecodeArgs reads a program's arguments from a JSON object. Numbers stay
 // json.Number, so an integer keeps every digit on its way to the contract's
 // type; anything after the object is refused rather than ignored.

@@ -112,7 +112,7 @@ func runChecked(t *testing.T, source, result string, args map[string]any) (strin
 	if err != nil {
 		t.Fatalf("Instantiate(%q) error = %v", source, err)
 	}
-	value, err := runtime.Run(t.Context(), all, machine.RunOptions{Fuel: 10_000})
+	value, err := runtime.Run(t.Context(), all)
 	if err != nil {
 		return "", err
 	}

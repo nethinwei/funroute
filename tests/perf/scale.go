@@ -9,14 +9,14 @@ import (
 	"github.com/nethinwei/funroute"
 )
 
-// largeInputs runs programs on arrays of ten thousand to a million, fuel
-// unbounded, to show what each element costs.
+// largeInputs runs programs on arrays of ten thousand to a million, to show
+// what each element costs.
 func largeInputs(out *strings.Builder) error {
 	registry, err := newRegistry()
 	if err != nil {
 		return err
 	}
-	out.WriteString("\n## 大输入的吞吐\n\nfuel 不设限，参数是固定种子打乱的 0…n−1，两边用同一份。\"原生 Go\"是同一件事的 Go 循环，在 100 万个元素上测：筛选求和不建中间数组；排序用 `slices.Sort`，std 的 `sort` 在没有 0 与 -0 这种相等却可区分的元素时也用它。\n\n" +
+	out.WriteString("\n## 大输入的吞吐\n\n参数是固定种子打乱的 0…n−1，两边用同一份。\"原生 Go\"是同一件事的 Go 循环，在 100 万个元素上测：筛选求和不建中间数组；排序用 `slices.Sort`，std 的 `sort` 在没有 0 与 -0 这种相等却可区分的元素时也用它。\n\n" +
 		"| 程序 | n = 1 万 | n = 10 万 | n = 100 万 | 每个元素 | 原生 Go 每个元素 | 倍数 |\n|---|---|---|---|---|---|---|\n")
 	for _, c := range []struct {
 		source string
@@ -87,7 +87,7 @@ func timeOn(runtime *funroute.Runtime, n int) (time.Duration, error) {
 		return 0, err
 	}
 	return fastest(func() error {
-		_, err := runtime.RunValues(backgroundContext(), []funroute.Value{arg}, funroute.RunOptions{Fuel: 1 << 50})
+		_, err := runtime.RunValues(backgroundContext(), []funroute.Value{arg})
 		return err
 	})
 }

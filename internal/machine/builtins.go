@@ -60,7 +60,6 @@ func registerComparison(registry *Registry, name, label string, accept func(int)
 		mustRegister(registry, FunctionSpec{
 			Name: name, Params: []Type{params[0], params[1]}, Result: BoolType, Eval: eval,
 			Doc: Doc{
-				Cost:        2,
 				Label:       label,
 				Description: "比较两个数值或两个字符串；数值混合时整数会被安全提升。字符串按 UTF-8 字节序比较。",
 				Category:    "比较",
@@ -97,7 +96,6 @@ func registerControl(registry *Registry) {
 		Name: "if", Params: []Type{BoolType, t, t}, Result: t,
 		special: specialIf,
 		Doc: Doc{
-			Cost:        1,
 			Label:       "条件选择",
 			Description: "条件为真时只计算真分支，否则只计算假分支。两个分支必须返回同一类型。",
 			Category:    "控制",
@@ -109,7 +107,6 @@ func registerControl(registry *Registry) {
 	mustRegister(registry, FunctionSpec{
 		Name: "eq", Params: []Type{t, t}, Result: BoolType, takesExact: true, Eval: func(_ context.Context, args []Value) (Value, error) { return compareEqual(args[0], args[1]) },
 		Doc: Doc{
-			Cost:        2,
 			Label:       "相等判断",
 			Description: "比较两个同类型值是否完全相等。",
 			Category:    "控制",
@@ -124,9 +121,8 @@ func registerFallback(registry *Registry, t Type) {
 		Name: "fallback", Params: []Type{t, t}, Result: t,
 		special: specialFallback,
 		Doc: Doc{
-			Cost:        1,
 			Label:       "失败降级",
-			Description: "按顺序尝试候选表达式；遇到扩展失败或超时才继续下一项，不会吞掉 fuel、类型或内核运算错误。",
+			Description: "按顺序尝试候选表达式；遇到扩展失败或超时才继续下一项，不会吞掉类型或内核运算错误。",
 			Category:    "控制",
 			Params:      []string{"首选候选", "后续候选"},
 			Result:      "结果",
@@ -183,7 +179,6 @@ func registerMixedNumeric(registry *Registry, name, label string, eval func(floa
 				return eval(a, b)
 			},
 			Doc: Doc{
-				Cost:        2,
 				Label:       label,
 				Description: description,
 				Category:    "基础运算",
@@ -284,7 +279,6 @@ func registerConversion(registry *Registry, name string, from, to Type, label, d
 	mustRegister(registry, FunctionSpec{
 		Name: name, Params: []Type{from}, Result: to, Eval: eval,
 		Doc: Doc{
-			Cost:        2,
 			Label:       label,
 			Description: description,
 			Category:    "类型转换",
@@ -306,7 +300,6 @@ func registerBinary(registry *Registry, name string, typ Type, label, descriptio
 	mustRegister(registry, FunctionSpec{
 		Name: name, Params: []Type{typ, typ}, Result: typ, Eval: eval,
 		Doc: Doc{
-			Cost:        2,
 			Label:       label,
 			Description: description,
 			Category:    "基础运算",

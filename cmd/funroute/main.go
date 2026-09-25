@@ -244,7 +244,6 @@ func compile(args []string) error {
 func run(args []string) error {
 	common := flags("run")
 	argsSource := common.set.String("args", "{}", "JSON object containing argument values")
-	fuel := common.set.Uint64("fuel", funroute.DefaultFuel, "execution fuel")
 	if err := common.set.Parse(args); err != nil {
 		return err
 	}
@@ -260,7 +259,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := runtime.Run(context.Background(), rawArgs, funroute.RunOptions{Fuel: *fuel})
+	result, err := runtime.Run(context.Background(), rawArgs)
 	if err != nil {
 		return err
 	}

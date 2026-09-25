@@ -14,8 +14,8 @@ import (
 )
 
 // The request's budget reaches the extension; a function's own Timeout caps a
-// single call; both surface as ErrDeadline, distinct from ErrExtension and
-// ErrFuel. The clock is synctest's, so the timeouts cost no real time.
+// single call; both surface as ErrDeadline, distinct from ErrExtension. The
+// clock is synctest's, so the timeouts cost no real time.
 func TestDeadlinesReachExtensionsAndAreTyped(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		registry := slowRegistry(t)
@@ -54,12 +54,12 @@ func slowRegistry(t *testing.T) *machine.Registry {
 	}
 	if err := registry.Register(machine.FunctionSpec{
 		Name: "model.slow_v1",
-		Doc:  machine.Doc{Cost: 1, Timeout: 5 * time.Millisecond},
+		Doc:  machine.Doc{Timeout: 5 * time.Millisecond},
 		Go:   slow,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Register(machine.FunctionSpec{Name: "model.patient_v1", Doc: machine.Doc{Cost: 1}, Go: slow}); err != nil {
+	if err := registry.Register(machine.FunctionSpec{Name: "model.patient_v1", Go: slow}); err != nil {
 		t.Fatal(err)
 	}
 	return registry
@@ -77,17 +77,16 @@ func runOneFloat(t *testing.T, ctx context.Context, registry *machine.Registry, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.RunValues(ctx, []machine.Value{machine.Float(1)}, machine.RunOptions{Fuel: 100})
+	_, err = runtime.RunValues(ctx, []machine.Value{machine.Float(1)})
 	return err
 }
 
-// An extension's own failure and a program's fuel limit are the other two
-// kinds, and neither is mistaken for a deadline.
-func TestExtensionAndFuelErrorsAreTyped(t *testing.T) {
+// An extension's own failure is another kind, not mistaken for a deadline.
+func TestExtensionErrorsAreTyped(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()
 	failing := func(x float64) (float64, error) { return 0, errors.New("boom") }
-	if err := registry.Register(machine.FunctionSpec{Name: "model.failing_v1", Doc: machine.Doc{Cost: 1}, Go: failing}); err != nil {
+	if err := registry.Register(machine.FunctionSpec{Name: "model.failing_v1", Go: failing}); err != nil {
 		t.Fatal(err)
 	}
 	artifact, err := compile.CompileExpr(`model.failing_v1(x)`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "x", Type: machine.FloatType}}})
@@ -99,12 +98,9 @@ func TestExtensionAndFuelErrorsAreTyped(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := []machine.Value{machine.Float(1)}
-	_, err = runtime.RunValues(t.Context(), args, machine.RunOptions{Fuel: 100})
+	_, err = runtime.RunValues(t.Context(), args)
 	if !errors.Is(err, machine.ErrExtension) || errors.Is(err, machine.ErrDeadline) {
 		t.Fatalf("extension error = %v, want ErrExtension and not ErrDeadline", err)
-	}
-	if _, err := runtime.RunValues(t.Context(), args, machine.RunOptions{Fuel: 1}); !errors.Is(err, machine.ErrFuel) {
-		t.Fatalf("fuel error = %v, want ErrFuel", err)
 	}
 }
 
@@ -122,7 +118,7 @@ func TestDetachedCallsStopWaitingAtTheDeadline(t *testing.T) {
 		}
 		if err := registry.Register(machine.FunctionSpec{
 			Name: "engine.stubborn_v1",
-			Doc:  machine.Doc{Cost: 1, Timeout: timeout, Detached: true},
+			Doc:  machine.Doc{Timeout: timeout, Detached: true},
 			Go:   stubborn,
 		}); err != nil {
 			t.Fatal(err)
@@ -142,7 +138,7 @@ func TestDetachedPanicsAreContainedAndTyped(t *testing.T) {
 	registry := machine.CoreRegistry()
 	if err := registry.Register(machine.FunctionSpec{
 		Name: "engine.panic_v1",
-		Doc:  machine.Doc{Cost: 1, Detached: true},
+		Doc:  machine.Doc{Detached: true},
 		Go: func(float64) (float64, error) {
 			panic("detached exploded")
 		},
@@ -157,7 +153,7 @@ func TestDetachedPanicsAreContainedAndTyped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.RunValues(t.Context(), []machine.Value{machine.Float(1)}, machine.RunOptions{Fuel: 100})
+	_, err = runtime.RunValues(t.Context(), []machine.Value{machine.Float(1)})
 	if !errors.Is(err, machine.ErrExtension) || !strings.Contains(err.Error(), "detached exploded") {
 		t.Fatalf("detached panic = %v, want ErrExtension naming the panic", err)
 	}
@@ -169,7 +165,7 @@ func TestPanickingExtensionIsContained(t *testing.T) {
 	if err := registry.Register(machine.FunctionSpec{
 		Name: "boom_v1", Params: []machine.Type{machine.IntType}, Result: machine.IntType,
 		Eval: func(_ context.Context, args []machine.Value) (machine.Value, error) { panic("extension exploded") },
-		Doc:  machine.Doc{Label: "炸弹", Description: "总是 panic 的扩展", Category: "测试", Cost: 1},
+		Doc:  machine.Doc{Label: "炸弹", Description: "总是 panic 的扩展", Category: "测试"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -181,12 +177,12 @@ func TestPanickingExtensionIsContained(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Run(t.Context(), map[string]any{"n": 1}, machine.RunOptions{Fuel: 100})
+	_, err = runtime.Run(t.Context(), map[string]any{"n": 1})
 	if !errors.Is(err, machine.ErrExtension) || !strings.Contains(err.Error(), "extension panicked") {
 		t.Fatalf("panic was not contained: %v, want ErrExtension saying extension panicked", err)
 	}
 	// The runtime stays usable afterwards.
-	if _, err := runtime.Run(t.Context(), map[string]any{"n": 2}, machine.RunOptions{Fuel: 100}); err == nil ||
+	if _, err := runtime.Run(t.Context(), map[string]any{"n": 2}); err == nil ||
 		!strings.Contains(err.Error(), "extension panicked") {
 		t.Fatalf("second run: %v, want extension panicked again", err)
 	}
@@ -197,7 +193,6 @@ func TestPrefetchedCallStillHonorsRequestCancellation(t *testing.T) {
 	registry := machine.CoreRegistry()
 	if err := registry.Register(machine.FunctionSpec{
 		Name:    "model.score_v1",
-		Doc:     machine.Doc{Cost: 1},
 		Go:      func(x float64) (float64, error) { return x, nil },
 		GoBatch: func(xs []float64) ([]float64, error) { return xs, nil },
 	}); err != nil {
@@ -214,8 +209,8 @@ func TestPrefetchedCallStillHonorsRequestCancellation(t *testing.T) {
 	sites := machine.PrefetchSites(artifact)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = runtime.RunValues(ctx, []machine.Value{machine.Float(1)},
-		machine.WithPrefetched(runtime, machine.RunOptions{}, map[int]machine.Prefetched{sites[0].PC: {Value: machine.Float(1)}}))
+	_, err = machine.RunPrefetched(ctx, runtime, []machine.Value{machine.Float(1)},
+		map[int]machine.Prefetched{sites[0].PC: {Value: machine.Float(1)}})
 	if !errors.Is(err, machine.ErrDeadline) {
 		t.Fatalf("canceled prefetched call = %v, want ErrDeadline", err)
 	}
@@ -280,7 +275,7 @@ func TestAHostResultIsHeldToItsCurrenciesAllTheWayIn(t *testing.T) {
 			if strings.HasPrefix(test.contract, "a:") {
 				args = map[string]any{"a": "USD 1.00"}
 			}
-			got, err := runtime.Run(t.Context(), args, machine.RunOptions{})
+			got, err := runtime.Run(t.Context(), args)
 			if !errors.Is(err, machine.ErrCurrency) {
 				t.Fatalf("%s = %v, %v, want ErrCurrency", test.source, got, err)
 			}
@@ -300,7 +295,7 @@ func TestAHostResultInItsCurrencyPasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := runtime.Run(t.Context(), map[string]any{"a": "EUR 1.00"}, machine.RunOptions{})
+	got, err := runtime.Run(t.Context(), map[string]any{"a": "EUR 1.00"})
 	if money, ok := got.Money(); err != nil || !ok || money.Currency() != "EUR" || money.Minor() != 100 {
 		t.Fatalf("lies.echo_v1(EUR 1.00) = %v, %v, want EUR 1.00", got, err)
 	}
@@ -314,7 +309,6 @@ func classedFailureRegistry(t *testing.T) *machine.Registry {
 	for name, class := range map[string]error{"h.nofxrate_v1": machine.ErrNoFxRate, "h.currency_v1": machine.ErrCurrency} {
 		err := registry.Register(machine.FunctionSpec{
 			Name: name,
-			Doc:  machine.Doc{Cost: 1},
 			Go:   func(float64) (float64, error) { return 0, fmt.Errorf("quote: %w", class) },
 		})
 		if err != nil {
@@ -356,7 +350,7 @@ func TestAClassifiedErrorOutlivesTheDeadline(t *testing.T) {
 		}
 		if err := registry.Register(machine.FunctionSpec{
 			Name: "h.late_v1",
-			Doc:  machine.Doc{Cost: 1, Timeout: 5 * time.Millisecond},
+			Doc:  machine.Doc{Timeout: 5 * time.Millisecond},
 			Go:   late,
 		}); err != nil {
 			t.Fatal(err)
@@ -371,7 +365,7 @@ func TestAClassifiedErrorOutlivesTheDeadline(t *testing.T) {
 // made an extension failure besides.
 func TestAHostErrorKeepsAnyClassItHas(t *testing.T) {
 	t.Parallel()
-	for _, class := range []error{machine.ErrCompile, machine.ErrContract, machine.ErrFuel, machine.ErrDeadline, machine.ErrArithmetic} {
+	for _, class := range []error{machine.ErrCompile, machine.ErrContract, machine.ErrDeadline, machine.ErrArithmetic} {
 		t.Run(class.Error(), func(t *testing.T) {
 			t.Parallel()
 			registry := machine.CoreRegistry()
@@ -389,7 +383,7 @@ func TestAHostErrorKeepsAnyClassItHas(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = runtime.Run(t.Context(), nil, machine.RunOptions{})
+			_, err = runtime.Run(t.Context(), nil)
 			if !errors.Is(err, class) || errors.Is(err, machine.ErrExtension) {
 				t.Fatalf("a host error wrapping %v = %v, want %v and not ErrExtension", class, err, class)
 			}

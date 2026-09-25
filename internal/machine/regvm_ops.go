@@ -13,12 +13,8 @@ type rop uint8
 
 const (
 	rInvalid rop = iota
-	// rFuel opens a basic block: it charges the block's fuel, b and c the
-	// high and low halves, and holds the deepest the block takes the stack,
-	// a, to the run's limit.
-	rFuel
-	rMove // c = a
-	rJump // to a
+	rMove        // c = a
+	rJump        // to a
 	// rBranch goes to b unless register a is true.
 	rBranch
 	rAddI
@@ -72,7 +68,7 @@ const (
 	// loops[c]'s result in its register and goes on.
 	rLoopNext
 	// rLoopBreak ends loops[c] with register a as its answer, and goes to
-	// the loop's exit.
+	// b: the loop's exit, or wherever the stack instruction went on to.
 	rLoopBreak
 	// rCollectNext is rCollect of register a and then rLoopNext back to b —
 	// c is the loop, for a listing —:
@@ -87,7 +83,7 @@ const (
 )
 
 var ropNames = [ropCount]string{
-	rInvalid: "invalid", rFuel: "fuel", rMove: "move", rJump: "jump", rBranch: "branch",
+	rInvalid: "invalid", rMove: "move", rJump: "jump", rBranch: "branch",
 	rAddI: "add_i", rSubI: "sub_i", rMulI: "mul_i", rDivI: "div_i", rModI: "mod_i",
 	rAddF: "add_f", rSubF: "sub_f", rMulF: "mul_f", rDivF: "div_f", rConcat: "concat",
 	rLtI: "lt_i", rLeI: "le_i", rLtF: "lt_f", rLeF: "le_f", rLtS: "lt_s", rLeS: "le_s",
@@ -131,9 +127,11 @@ type regProgram struct {
 	// args is where the arguments start, and size how many registers there
 	// are.
 	args, size int32
-	// scalar is set when no register ever holds a pointer, and hosts when
-	// the program calls a host's function.
-	scalar, hosts bool
+	// scalar is set when no register ever holds a pointer, and scalarReads
+	// when none does but the slots of arguments the program never reads,
+	// which a Program leaves unwritten; hosts is set when the program calls
+	// a host's function.
+	scalar, scalarReads, hosts bool
 	// nesting is how many loops deep the program goes; arenas and dests
 	// how many arena and answer slots it builds in.
 	nesting       int
@@ -141,20 +139,25 @@ type regProgram struct {
 	// fieldOnly is, by argument, a record the program only reads field by
 	// field, and viewOnly an array it only walks, measures or indexes.
 	fieldOnly, viewOnly []bool
+	// promotions are the fields read straight off a record argument, each
+	// in a register of its own (lower_promote.go).
+	promotions []promotion
+	// starts marks, by operation, where a basic block starts.
+	starts []bool
 }
 
 // rcall is one call: the function, the call's type, its arguments' first
-// register and how many, where the result goes, the stack instruction a Batch
-// knows it by, and the block's fuel after it — what a failure fallback takes
-// gives back, since the block paid for what did not run.
+// register and how many, where the result goes, and the stack instruction a
+// Batch knows it by.
 type rcall struct {
-	fn     *RegisteredFunction
-	typ    *Type
-	args   int32
-	argc   int32
-	dst    int32
-	pc     int32
-	refund uint64
+	fn   *RegisteredFunction
+	typ  *Type
+	args int32
+	argc int32
+	dst  int32
+	pc   int32
+	// pure calls a pure host function straight from the registers.
+	pure pureCall
 	// kernel marks a kernel function that reads nothing of the run: it is
 	// called straight away, with none of what a host's call is held to.
 	// direct marks a host's function no Batch hoists — it has no batch

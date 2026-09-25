@@ -44,7 +44,7 @@ func main() {
 	if err := registry.EnableForm(funroute.SwitchForm); err != nil {
 		log.Fatal(err)
 	}
-	if err := registry.Register(funroute.FunctionSpec{Name: "risk.score_v1", Doc: funroute.Doc{Cost: 10}, Go: score}); err != nil {
+	if err := registry.Register(funroute.FunctionSpec{Name: "risk.score_v1", Go: score}); err != nil {
 		log.Fatal(err)
 	}
 	binding, err := funroute.Bind[Request, Decision](registry)
@@ -60,7 +60,7 @@ func main() {
 		log.Fatal(err)
 	}
 	for _, request := range []Request{{"SG", 120000}, {"US", 5000}, {"BR", 900000}, {"XX", 100}} {
-		decision, err := program.Run(context.Background(), &request, funroute.RunOptions{})
+		decision, err := program.Run(context.Background(), &request)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -106,6 +106,6 @@ func ruleError(registry *funroute.Registry) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	_, err = runtime.Run(context.Background(), map[string]any{"amount": 100, "parts": 0}, funroute.RunOptions{})
+	_, err = runtime.Run(context.Background(), map[string]any{"amount": 100, "parts": 0})
 	fmt.Printf("fallback(amount / 0, 0): arithmetic=%v extension=%v (%v)\n", errors.Is(err, funroute.ErrArithmetic), errors.Is(err, funroute.ErrExtension), err)
 }

@@ -8,7 +8,10 @@ package machine
 // array a program answers, and the fields of the record it answers, are
 // built where the host said, when it said (Program.RunInto). A record
 // argument that is only read field by field is loaded into the frame's own
-// record.
+// record; so is each item of an array of plain records that is only walked
+// or measured, and whose items are only read field by field — the loop's
+// name holds the argument's origin, so any other use of an item lets the
+// argument out.
 //
 // The walk is the verifier's: a state per join, one state carried through
 // straight code. It tracks, for each stack slot and local, where the value
@@ -43,7 +46,8 @@ type flow struct {
 	answer int
 	// fieldOnly is, by argument, a record that is only read field by field,
 	// and viewOnly an array of natives that is only walked, measured or
-	// indexed: a Program hands either over in place.
+	// indexed, or an array of plain records only walked or measured, its
+	// items only read field by field: a Program hands either over in place.
 	fieldOnly, viewOnly []bool
 }
 
@@ -231,7 +235,7 @@ func (w *flower) straight(pc int, in Instruction, s *fstate) {
 		s.push(fromElsewhere)
 	case OpLoadArg:
 		s.push(fromElsewhere)
-		if typ := w.args[in.A].typ; typ.kind == RecordKind || nativeElem(typ) {
+		if typ := w.args[in.A].typ; typ.kind == RecordKind || nativeElem(typ) || plainRecords(typ) {
 			s.stack[len(s.stack)-1] = argOrigin(in.A)
 		}
 	case OpLoadLocal:
@@ -241,10 +245,11 @@ func (w *flower) straight(pc int, in Instruction, s *fstate) {
 	case OpMakeArray, OpMakeDict, OpMakeRecord:
 		w.build(pc, in, s)
 	case OpField:
-		// A field read keeps a record argument where it is.
+		// A field read keeps a record argument where it is, and an item of
+		// an array of records, whose name holds the array's origin.
 		record := s.pop(1)[0]
 		i, argument := record.arg()
-		w.use(pc, record, argument && w.args[i].typ.kind == RecordKind)
+		w.use(pc, record, argument && (w.args[i].typ.kind == RecordKind || plainRecords(w.args[i].typ)))
 		s.push(fromElsewhere)
 	case OpCall:
 		w.call(pc, in, s)
@@ -281,6 +286,23 @@ func nativeElem(typ Type) bool {
 	return false
 }
 
+// plainRecords reports an array of records whose fields are all bools, ints,
+// floats or strings: an item loads in place with nothing to check but a
+// float's being finite.
+func plainRecords(typ Type) bool {
+	if typ.kind != ArrayKind || typ.elem == nil || typ.elem.kind != RecordKind {
+		return false
+	}
+	for _, field := range typ.elem.fields {
+		switch field.typ.kind {
+		case BoolKind, IntKind, FloatKind, StringKind:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // arenaKernels are the kernel functions that read an array argument and
 // keep nothing of it.
 var arenaKernels = map[string]bool{"len(array<T>)->int": true, "at(array<T>,int)->T": true}
@@ -290,13 +312,21 @@ var arenaKernels = map[string]bool{"len(array<T>)->int": true, "at(array<T>,int)
 func (w *flower) call(pc int, in Instruction, s *fstate) {
 	function := w.functions[in.A]
 	for i, arg := range s.pop(in.B) {
-		reads := i == 0 && function.builtin && arenaKernels[function.key]
+		// An index into an array of records would make a record of an item:
+		// only len reads one where it is.
+		reads := i == 0 && function.builtin && arenaKernels[function.key] && (function.key == "len(array<T>)->int" || !w.recordsArg(arg))
 		w.use(pc, arg, reads)
 		if reads {
 			w.consumers[pc] = arg
 		}
 	}
 	s.push(fromElsewhere)
+}
+
+// recordsArg reports an array of plain records given as an argument.
+func (w *flower) recordsArg(o origin) bool {
+	i, argument := o.arg()
+	return argument && plainRecords(w.args[i].typ)
 }
 
 // consume follows the instructions that take values and make none.
@@ -334,6 +364,9 @@ func (w *flower) loopInit(pc int, in Instruction, s *fstate) []fedge {
 		if slot != NoKey {
 			s.locals[slot] = fromElsewhere
 		}
+	}
+	if walks && w.recordsArg(source) {
+		s.locals[in.B] = source
 	}
 	s.loops = append(s.loops, pc)
 	return []fedge{{pc + 1, s}, {in.A, past}}
@@ -376,7 +409,7 @@ func (w *flower) result(parts *ArtifactParts) flow {
 	}
 	for i, param := range parts.Args {
 		f.fieldOnly[i] = param.typ.kind == RecordKind && !w.argEscaped[i]
-		f.viewOnly[i] = nativeElem(param.typ) && !w.argEscaped[i]
+		f.viewOnly[i] = (nativeElem(param.typ) || plainRecords(param.typ)) && !w.argEscaped[i]
 	}
 	for pc, o := range w.consumers {
 		i, argument := o.arg()

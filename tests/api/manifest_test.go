@@ -21,7 +21,7 @@ func TestManifestStandsInForTheHostsFunctions(t *testing.T) {
 	if err := funroute.DefineHandle[*engineTensor](host, "demo.tensor"); err != nil {
 		t.Fatal(err)
 	}
-	doc := funroute.Doc{Label: "风险分", Cost: 25, Params: []string{"国家", "金额"}}
+	doc := funroute.Doc{Label: "风险分", Params: []string{"国家", "金额"}}
 	if err := host.Register(funroute.FunctionSpec{
 		Name: "risk.score_v1",
 		Doc:  doc,
@@ -65,7 +65,7 @@ func checkUnavailableCall(t *testing.T, artifact *funroute.Artifact, browser, ho
 		t.Fatal(err)
 	}
 	ctx, calls := funroute.TrackUnavailable(t.Context())
-	value, err := runtime.Run(ctx, args, funroute.RunOptions{Fuel: 1000})
+	value, err := runtime.Run(ctx, args)
 	if err != nil || value.Any() != false || !slices.Equal(calls(), []string{"risk.score_v1"}) {
 		t.Fatalf("in the browser: %v, %v, calls %v; want false, no error, calls [risk.score_v1]", value.Any(), err, calls())
 	}
@@ -73,7 +73,7 @@ func checkUnavailableCall(t *testing.T, artifact *funroute.Artifact, browser, ho
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value, err := hosted.Run(t.Context(), args, funroute.RunOptions{Fuel: 1000}); err != nil || value.Any() != true {
+	if value, err := hosted.Run(t.Context(), args); err != nil || value.Any() != true {
 		t.Fatalf("at the host: %v, %v; want true", value.Any(), err)
 	}
 	bare, err := funroute.CompileExpr(`risk.score_v1("SG", 1)`, browser, funroute.CompileOptions{})
@@ -81,37 +81,12 @@ func checkUnavailableCall(t *testing.T, artifact *funroute.Artifact, browser, ho
 		t.Fatal(err)
 	}
 	direct, _ := funroute.Instantiate(bare, browser)
-	if _, err := direct.Run(t.Context(), nil, funroute.RunOptions{Fuel: 1000}); !errors.Is(err, funroute.ErrUnavailable) || !errors.Is(err, funroute.ErrExtension) {
+	if _, err := direct.Run(t.Context(), nil); !errors.Is(err, funroute.ErrUnavailable) || !errors.Is(err, funroute.ErrExtension) {
 		t.Fatalf("Run(risk.score_v1(\"SG\", 1)) error = %v, want ErrUnavailable and ErrExtension", err)
 	}
 }
 
-// raiseAddCost sets the cost of add in a manifest's JSON document to 99.
-func raiseAddCost(t *testing.T, document map[string]any) {
-	t.Helper()
-	functions, ok := document["functions"].([]any)
-	if !ok {
-		t.Fatalf("manifest functions = %T, want an array", document["functions"])
-	}
-	for _, function := range functions {
-		entry, ok := function.(map[string]any)
-		if !ok {
-			t.Fatalf("manifest function = %T, want an object", function)
-		}
-		if entry["name"] != "add" {
-			continue
-		}
-		doc, ok := entry["doc"].(map[string]any)
-		if !ok {
-			t.Fatalf("add's doc = %T, want an object", entry["doc"])
-		}
-		doc["cost"] = 99.0
-		return
-	}
-}
-
-// A function the registry already has must cost what the manifest says, or
-// what one compiles the other would refuse to bind.
+// A manifest of another shape is refused rather than read as this one.
 func TestManifestRefusesADisagreement(t *testing.T) {
 	t.Parallel()
 	edited := func(edit func(map[string]any)) funroute.Manifest {
@@ -130,10 +105,6 @@ func TestManifestRefusesADisagreement(t *testing.T) {
 			t.Fatal(err)
 		}
 		return manifest
-	}
-	costlier := edited(func(document map[string]any) { raiseAddCost(t, document) })
-	if err := costlier.Apply(withStandard(t)); err == nil {
-		t.Fatal("a manifest that disagrees on a cost was applied")
 	}
 	newer := edited(func(document map[string]any) { document["version"] = float64(funroute.ManifestVersion + 1) })
 	if err := newer.Apply(withStandard(t)); err == nil {

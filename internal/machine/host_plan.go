@@ -63,6 +63,22 @@ type codec struct {
 type fieldCodec struct {
 	offset uintptr
 	codec  *codec
+	// plain is the Go kind of a plain bool, int, float or string field — no
+	// enum to hold it to — which is loaded in place, without the codec's
+	// call; reflect.Invalid for any other.
+	plain reflect.Kind
+}
+
+// newFieldCodec is the plan of a field at offset.
+func newFieldCodec(offset uintptr, plan *codec) fieldCodec {
+	field := fieldCodec{offset: offset, codec: plan}
+	if plan.shape == shapeScalar && plan.typ.kind != EnumKind {
+		switch kind := plan.goKind; kind {
+		case reflect.Bool, reflect.Int, reflect.Int64, reflect.Float64, reflect.String:
+			field.plain = kind
+		}
+	}
+	return field
 }
 
 // newCodecFor plans how a Go type carries want. A Go type that cannot is
@@ -135,7 +151,7 @@ func (c *codec) planRecord(registry *Registry) error {
 		if err != nil {
 			return fmt.Errorf("field %q: %w", wanted.name, err)
 		}
-		c.fields[i] = fieldCodec{offset: field.Offset, codec: plan}
+		c.fields[i] = newFieldCodec(field.Offset, plan)
 	}
 	return nil
 }
@@ -222,7 +238,7 @@ func newArgsCodec(registry *Registry, typ reflect.Type, params []Parameter) (*ar
 		if err != nil {
 			return nil, fmt.Errorf("argument %q: %w", param.name, err)
 		}
-		fields[i] = fieldCodec{offset: field.Offset, codec: plan}
+		fields[i] = newFieldCodec(field.Offset, plan)
 	}
 	return &argsCodec{params: params, fields: fields}, nil
 }

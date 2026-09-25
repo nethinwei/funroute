@@ -40,7 +40,7 @@ func moneySpec(name string, params []funroute.Type, result funroute.Type, label,
 }
 
 func moneyDoc(label, description string) funroute.Doc {
-	return funroute.Doc{Label: label, Category: "金额", Cost: 4, Description: description}
+	return funroute.Doc{Label: label, Category: "金额", Description: description}
 }
 
 // roundedMoneySpecs are avg and median, whose results fall between minor

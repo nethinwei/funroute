@@ -99,12 +99,15 @@ test-js:
 
 # limits writes the tables of docs/limits.md anew from a run; make test holds
 # the file to them. perf measures the speed into docs/perf.md, committed when
-# it is wanted: timings are the machine's, so nothing asserts them.
+# it is wanted: timings are the machine's, so nothing asserts them. The
+# comparison with expr is a module of its own, tests/perf/expr, so that expr
+# never enters go.mod; its section goes at the end of the report.
 limits:
 	$(GO) test ./tests/limits -update
 
 perf: wasm
 	$(GO) run ./tests/perf > docs/perf.md
+	cd tests/perf/expr && $(GO) run . >> ../../../docs/perf.md
 
 check-js:
 	@for file in web/*.js; do $(NODE) --check $$file || exit 1; done

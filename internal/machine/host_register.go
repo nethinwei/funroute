@@ -19,7 +19,6 @@ type Doc struct {
 	Label       string   `json:"label"`
 	Description string   `json:"description,omitempty"`
 	Category    string   `json:"category"`
-	Cost        uint64   `json:"cost"`
 	Params      []string `json:"params,omitempty"` // parameter labels, in order
 	Result      string   `json:"result,omitempty"` // result label
 	// Examples show the function at work, one call each with the value it
@@ -89,6 +88,9 @@ func (r *Registry) reflectSpec(spec *FunctionSpec) error {
 	spec.Params, spec.Result, spec.Eval = single.params, single.result, single.call
 	if direct, ok := directEval(spec.Go); ok {
 		spec.Eval, spec.madeResult = direct, true
+	}
+	if spec.Doc.Constexpr && spec.Doc.Timeout == 0 && !spec.Doc.Detached && spec.GoBatch == nil {
+		spec.pure = pureOf(spec.Go)
 	}
 	if spec.GoBatch == nil {
 		return nil

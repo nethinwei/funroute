@@ -11,7 +11,7 @@ import (
 // built, and none handed over. And the inner source of a nested
 // comprehension, when it does not depend on the outer item, is computed once
 // rather than once an item. Both keep the order things are computed in, and
-// what fails; the fuel a program needs goes down.
+// what fails.
 
 // foldAnswer is the name a fused fold's answer is bound to: no program can
 // write it, so it hides nothing.
@@ -28,6 +28,9 @@ func (c *bytecodeCompiler) compileAggregate(node *syntax.CallExpr, function *mac
 	comprehension, ok := node.Args[0].(*syntax.ForExpr)
 	if !ok || comprehension.Flatten || comprehension.YieldKey != nil || fold.Counts && !plainValue(comprehension.Yield) {
 		return false, nil
+	}
+	if fold.First {
+		return c.compileFirst(node, function, comprehension)
 	}
 	answer, item := c.inferred.NodeTypes[node.ID], elemOf(c.inferred.NodeTypes[comprehension.ID])
 	init := fold.Init
@@ -49,6 +52,69 @@ func (c *bytecodeCompiler) compileAggregate(node *syntax.CallExpr, function *mac
 	// A stop leaves the loop where loop_next's last iteration does.
 	c.patch(*breaks, len(c.instructions))
 	return true, err
+}
+
+// compileFirst lays out a first on a comprehension as the loop that stops at
+// the first item it yields, which is the answer. A loop that ends with none
+// drops its seed and calls the function on an empty array, which fails as
+// the call on the array built would have. It reports false, compiling
+// nothing, for an item type with no seed to stand for the answer until then.
+func (c *bytecodeCompiler) compileFirst(node *syntax.CallExpr, function *machine.RegisteredFunction, comprehension *syntax.ForExpr) (bool, error) {
+	answer := c.inferred.NodeTypes[node.ID]
+	seed, ok := seedOf(answer)
+	if !ok {
+		return false, nil
+	}
+	if err := c.compile(comprehension.Source); err != nil {
+		return true, err
+	}
+	if err := c.emitConstant(seed, answer); err != nil {
+		return true, err
+	}
+	var found []int
+	err := c.compileLoop(loopShape{
+		key: comprehension.KeyVariable, value: comprehension.Variable, accumulator: foldAnswer,
+		where: comprehension.Where, result: &answer,
+		body: func() error {
+			if err := c.compile(comprehension.Yield); err != nil {
+				return err
+			}
+			found = append(found, c.emit(machine.Instruction{Op: machine.OpLoopBreak, Type: &answer}))
+			return nil
+		},
+	})
+	if err != nil {
+		return true, err
+	}
+	dropped := c.nextLocal
+	c.nextLocal++
+	c.emit(machine.Instruction{Op: machine.OpStoreLocal, A: dropped})
+	empty, err := machine.Array(answer, nil)
+	if err != nil {
+		return true, err
+	}
+	if err := c.emitConstant(empty, machine.ArrayOf(answer)); err != nil {
+		return true, err
+	}
+	c.emitCall(function, 1, answer)
+	c.patch(found, len(c.instructions))
+	return true, nil
+}
+
+// seedOf is a value of typ to stand for a first's answer until an item is
+// found: a zero, which no run answers with, for the plain types.
+func seedOf(typ machine.Type) (machine.Value, bool) {
+	switch typ.Kind() {
+	case machine.BoolKind:
+		return machine.Bool(false), true
+	case machine.IntKind:
+		return machine.Int(0), true
+	case machine.FloatKind:
+		return machine.Float(0), true
+	case machine.StringKind:
+		return machine.String(""), true
+	}
+	return machine.Value{}, false
 }
 
 // plainValue reports an expression that is only read — a name or a

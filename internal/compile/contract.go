@@ -51,6 +51,9 @@ type CompileOptions struct {
 	// plain compiles every call as written: no aggregate fused, no source
 	// hoisted — for the tests that hold the two to one answer.
 	plain bool
+	// unsealed leaves the digest out, for a Binding that loads the artifact
+	// at once and computes the digest only when asked (Program.Artifact).
+	unsealed bool
 }
 
 func (o CompileOptions) argTypes() map[string]machine.Type {

@@ -29,7 +29,7 @@ func moneyRegistry(t testing.TB) *machine.Registry {
 // and runs it on args.
 func evalMoney(t *testing.T, source, contract string, args map[string]any) (machine.Value, error) {
 	t.Helper()
-	return moneyRuntime(t, source, contract, "").Run(t.Context(), args, machine.RunOptions{})
+	return moneyRuntime(t, source, contract, "").Run(t.Context(), args)
 }
 
 // runMoney is evalMoney with the arguments as values, in the contract's
@@ -37,7 +37,7 @@ func evalMoney(t *testing.T, source, contract string, args map[string]any) (mach
 // what they are.
 func runMoney(t *testing.T, source, contract string, args ...machine.Value) (machine.Value, error) {
 	t.Helper()
-	return moneyRuntime(t, source, contract, "").RunValues(t.Context(), args, machine.RunOptions{})
+	return moneyRuntime(t, source, contract, "").RunValues(t.Context(), args)
 }
 
 // moneyRuntime compiles source against the contract, and against a declared
@@ -322,7 +322,7 @@ func TestRatioArithmeticDoesNotAllocate(t *testing.T) {
 		args := []machine.Value{machine.RatioValue(machine.NewRatio(1, 2)), machine.RatioValue(machine.NewRatio(1, 5))}[:len(artifact.Args())]
 		ctx := t.Context()
 		allocs := testing.AllocsPerRun(100, func() {
-			if _, err := runtime.RunValues(ctx, args, machine.RunOptions{}); err != nil {
+			if _, err := runtime.RunValues(ctx, args); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -349,7 +349,7 @@ func BenchmarkMoneyFee(b *testing.B) {
 	args := []machine.Value{machine.MoneyValue(10_000, "EUR"), machine.MoneyValue(500, "EUR")}
 	ctx := b.Context()
 	for b.Loop() {
-		if _, err := runtime.RunValues(ctx, args, machine.RunOptions{}); err != nil {
+		if _, err := runtime.RunValues(ctx, args); err != nil {
 			b.Fatal(err)
 		}
 	}

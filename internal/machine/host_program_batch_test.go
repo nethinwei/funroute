@@ -149,7 +149,7 @@ func TestRunBatchRequiresAFailureCallback(t *testing.T) {
 	program := scoreProgram(t, &single, &batched)
 	in, out := scoreIn{Features: []float64{1}}, 0.0
 	call := func() {
-		program.RunBatch(t.Context(), 1, func(int) *scoreIn { return &in }, func(int) *float64 { return &out }, machine.RunOptions{}, nil)
+		program.RunBatch(t.Context(), 1, func(int) *scoreIn { return &in }, func(int) *float64 { return &out }, nil)
 	}
 	if got, want := panicOf(call), "RunBatch: failed must not be nil"; got != want {
 		t.Errorf("RunBatch panicked with %v, want %q", got, want)
@@ -241,8 +241,7 @@ func TestRunBatchReachesFieldsOfLargerObjects(t *testing.T) {
 			}
 			return &requests[i].Score
 		},
-		func(i int) *float64 { return &responses[i].Value },
-		machine.RunOptions{}, failed)
+		func(i int) *float64 { return &responses[i].Value }, failed)
 	if len(errs) != 1 || !errors.Is(errs[1], machine.ErrContract) {
 		t.Fatalf("errs = %v, want one ErrContract at 1", errs)
 	}
@@ -261,7 +260,6 @@ func TestRunBatchHandsTheEngineTheHostsContext(t *testing.T) {
 	var seen any
 	err := registry.Register(machine.FunctionSpec{
 		Name: "model.echo_v1",
-		Doc:  machine.Doc{Cost: 1},
 		Go:   func(ctx context.Context, x float64) (float64, error) { return x, nil },
 		GoBatch: func(ctx context.Context, xs []float64) ([]float64, error) {
 			seen = ctx.Value(traceKey{})
@@ -335,7 +333,7 @@ func TestRunBatchReportsTheRequestsOwnError(t *testing.T) {
 	cancel()
 	errs, failed := failures()
 	in := scoreIn{Features: []float64{1}}
-	program.RunBatch(ctx, 1, func(int) *scoreIn { return &in }, func(int) *float64 { return nil }, machine.RunOptions{}, failed)
+	program.RunBatch(ctx, 1, func(int) *scoreIn { return &in }, func(int) *float64 { return nil }, failed)
 	if !errors.Is(errs[0], machine.ErrDeadline) {
 		t.Fatalf("errs = %v, want ErrDeadline at 0", errs)
 	}
@@ -345,11 +343,11 @@ func TestRunBatchReportsTheRequestsOwnError(t *testing.T) {
 // host most often has.
 func runSlice[In, Out any](ctx context.Context, program *machine.Program[In, Out], in []In, failed func(int, error)) []Out {
 	out := make([]Out, len(in))
-	program.RunBatch(ctx, len(in), func(i int) *In { return &in[i] }, func(i int) *Out { return &out[i] }, machine.RunOptions{}, failed)
+	program.RunBatch(ctx, len(in), func(i int) *In { return &in[i] }, func(i int) *Out { return &out[i] }, failed)
 	return out
 }
 
 // runInto runs a batch whose results go into objects the host already has.
 func runInto[In, Out any](ctx context.Context, program *machine.Program[In, Out], in []In, out []*Out, failed func(int, error)) {
-	program.RunBatch(ctx, len(in), func(i int) *In { return &in[i] }, func(i int) *Out { return out[i] }, machine.RunOptions{}, failed)
+	program.RunBatch(ctx, len(in), func(i int) *In { return &in[i] }, func(i int) *Out { return out[i] }, failed)
 }

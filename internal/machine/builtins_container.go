@@ -38,7 +38,7 @@ func registerAt(registry *Registry, t Type) {
 	mustRegister(registry, FunctionSpec{
 		Name: "at", Params: []Type{ArrayOf(t), IntType}, Result: t, Eval: evalArrayAt,
 		Doc: Doc{
-			Cost: 2, Label: "取元素", Category: "容器",
+			Label: "取元素", Category: "容器",
 			Description: "按下标取数组元素，下标从 0 开始；越界是错误，不会返回空值。写作 xs[i]。",
 			Params:      []string{"数组", "下标"}, Result: "元素",
 		},
@@ -46,7 +46,7 @@ func registerAt(registry *Registry, t Type) {
 	mustRegister(registry, FunctionSpec{
 		Name: "at", Params: []Type{DictOf(t), StringType}, Result: t, Eval: evalDictAt,
 		Doc: Doc{
-			Cost: 2, Label: "取值", Category: "容器",
+			Label: "取值", Category: "容器",
 			Description: `按键取字典的值；键不存在是错误，不会返回空值。写作 d["key"]。`,
 			Params:      []string{"字典", "键"}, Result: "值",
 		},
@@ -54,7 +54,7 @@ func registerAt(registry *Registry, t Type) {
 	mustRegister(registry, FunctionSpec{
 		Name: "at", Params: []Type{StringType, IntType}, Result: StringType, Eval: evalStringAt,
 		Doc: Doc{
-			Cost: 3, Label: "取字符", Category: "容器",
+			Label: "取字符", Category: "容器",
 			Description: "按位置取一个字符，从 0 开始，按 UTF-8 码点数而不是字节；越界是错误。结果仍是字符串，语言里没有单字符类型。写作 s[i]。",
 			Params:      []string{"文本", "位置"}, Result: "那个字符",
 		},
@@ -65,7 +65,7 @@ func registerMember(registry *Registry, t Type) {
 	mustRegister(registry, FunctionSpec{
 		Name: "member", Params: []Type{t, ArrayOf(t)}, Result: BoolType, Eval: evalArrayMember,
 		Doc: Doc{
-			Cost: 3, Label: "是否在数组里", Category: "容器",
+			Label: "是否在数组里", Category: "容器",
 			Description: "数组里有没有这个元素，按相等判断逐个比较。写作 x in xs。",
 			Params:      []string{"元素", "数组"}, Result: "是否命中",
 		},
@@ -73,7 +73,7 @@ func registerMember(registry *Registry, t Type) {
 	mustRegister(registry, FunctionSpec{
 		Name: "member", Params: []Type{StringType, DictOf(t)}, Result: BoolType, Eval: evalDictMember,
 		Doc: Doc{
-			Cost: 2, Label: "是否有这个键", Category: "容器",
+			Label: "是否有这个键", Category: "容器",
 			Description: `字典里有没有这个键（不看值）。写作 "key" in d。`,
 			Params:      []string{"键", "字典"}, Result: "是否存在",
 		},
@@ -81,7 +81,7 @@ func registerMember(registry *Registry, t Type) {
 	mustRegister(registry, FunctionSpec{
 		Name: "member", Params: []Type{StringType, StringType}, Result: BoolType, Eval: evalStringMember,
 		Doc: Doc{
-			Cost: 3, Label: "是否含子串", Category: "容器",
+			Label: "是否含子串", Category: "容器",
 			Description: `文本里有没有这段子串，和 Python 的 in 一样。写作 "b" in text；参数顺序相反的写法是 contains(text, "b")。`,
 			Params:      []string{"子串", "文本"}, Result: "是否命中",
 		},
@@ -90,7 +90,7 @@ func registerMember(registry *Registry, t Type) {
 
 func registerLength(registry *Registry, t Type) {
 	container := Doc{
-		Cost: 2, Label: "长度", Category: "容器",
+		Label: "长度", Category: "容器",
 		Description: "数组的元素个数、字典的键个数，或字符串的字符数（UTF-8 码点）。",
 		Params:      []string{"容器"}, Result: "个数",
 	}

@@ -33,14 +33,14 @@ func TestSampleInfersArgumentsAndRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(t.Context(), map[string]any{"a": true, "b": 41}, machine.RunOptions{})
+	result, err := runtime.Run(t.Context(), map[string]any{"a": true, "b": 41})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if value, ok := result.Int(); !ok || value != 41 {
 		t.Fatalf("Run(a=true, b=41) = %#v, want 41", result.Any())
 	}
-	result, err = runtime.Run(t.Context(), map[string]any{"a": false, "b": 41}, machine.RunOptions{})
+	result, err = runtime.Run(t.Context(), map[string]any{"a": false, "b": 41})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestStrongTypesAllowNumericWideningButRejectMixedContainers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.Run(t.Context(), map[string]any{}, machine.RunOptions{})
+	result, err := runtime.Run(t.Context(), map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,7 +2,6 @@ package machine_test
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -17,8 +16,7 @@ import (
 // A random program answers as itself with its arguments written in: the
 // compiler folds every closed part of that one, each part lowered and run on
 // its own, so the two runs share no register, block or fuse. The value and
-// the failure are the same, word for word, and a run given exactly the fuel
-// it needs answers as one given plenty.
+// the failure are the same, word for word.
 
 func TestRandomProgramsAnswerAsTheirFoldedSelves(t *testing.T) {
 	t.Parallel()
@@ -33,16 +31,12 @@ func TestRandomProgramsAnswerAsTheirFoldedSelves(t *testing.T) {
 		}
 		for range 3 {
 			args := g.args()
-			want := assertFuelKeepsTheAnswer(t, runtime, source, args)
+			want := assertAnswers(t, runtime, source, args)
 			folded, err := load(written(source, args), registry, compile.CompileOptions{})
 			if err != nil {
 				continue // a part that fails when folded fails to compile
 			}
-			// Two programs out of fuel ran out in two places: nothing to hold.
-			got := outcome(t, folded, nil, 1<<24)
-			if strings.Contains(want, "fuel exhausted") && strings.Contains(got, "fuel exhausted") {
-				continue
-			}
+			got := outcome(t, folded, nil)
 			compared++
 			if got != want {
 				t.Fatalf("%s with %v gives %s; with the arguments written in, %s", source, args, want, got)
@@ -106,29 +100,24 @@ func literal(value any) string {
 	return fmt.Sprint(value)
 }
 
-// assertFuelKeepsTheAnswer runs the program with plenty of fuel and with
-// just what it needs, and returns the answer they agree on.
-func assertFuelKeepsTheAnswer(t *testing.T, runtime *machine.Runtime, source string, args map[string]any) string {
+// assertAnswers runs the program and returns its answer, which is no
+// internal error, and an array in memory of its own, not the frame's.
+func assertAnswers(t *testing.T, runtime *machine.Runtime, source string, args map[string]any) string {
 	t.Helper()
-	plenty := outcome(t, runtime, args, 1<<24)
-	if strings.Contains(plenty, "internal error") {
-		t.Fatalf("%s with %v: %s", source, args, plenty)
+	answer := outcome(t, runtime, args)
+	if strings.Contains(answer, "internal error") {
+		t.Fatalf("%s with %v: %s", source, args, answer)
 	}
-	if value, err := runtime.Run(t.Context(), args, machine.RunOptions{Fuel: 1 << 24}); err == nil && !machine.NativeBacked(value) {
+	if value, err := runtime.Run(t.Context(), args); err == nil && !machine.NativeBacked(value) {
 		t.Fatalf("%s with %v answers an array in the frame's slot", source, args)
 	}
-	if needed := fuelNeeded(t, runtime, args); needed > 0 {
-		if exact := outcome(t, runtime, args, needed); exact != plenty {
-			t.Fatalf("%s with %v gives %s with plenty of fuel, %s with the %d it needs", source, args, plenty, exact, needed)
-		}
-	}
-	return plenty
+	return answer
 }
 
 // outcome is what one run gave, as text: the value's JSON or the failure.
-func outcome(t *testing.T, runtime *machine.Runtime, args map[string]any, fuel uint64) string {
+func outcome(t *testing.T, runtime *machine.Runtime, args map[string]any) string {
 	t.Helper()
-	value, err := runtime.Run(t.Context(), args, machine.RunOptions{Fuel: fuel})
+	value, err := runtime.Run(t.Context(), args)
 	if err != nil {
 		return "error: " + err.Error()
 	}
@@ -137,28 +126,6 @@ func outcome(t *testing.T, runtime *machine.Runtime, args map[string]any, fuel u
 		t.Fatal(err)
 	}
 	return string(encoded)
-}
-
-// fuelNeeded is the least fuel a run needs to end other than out of fuel,
-// or 0 when a large budget is not enough.
-func fuelNeeded(t *testing.T, runtime *machine.Runtime, args map[string]any) uint64 {
-	t.Helper()
-	enough := func(fuel uint64) bool {
-		_, err := runtime.Run(t.Context(), args, machine.RunOptions{Fuel: fuel})
-		return !errors.Is(err, machine.ErrFuel)
-	}
-	low, high := uint64(1), uint64(1<<24)
-	if !enough(high) {
-		return 0
-	}
-	for low < high {
-		if middle := low + (high-low)/2; enough(middle) {
-			high = middle
-		} else {
-			low = middle + 1
-		}
-	}
-	return low
 }
 
 // randomRegistry is the whole language and a host function that fails when
@@ -175,7 +142,7 @@ func randomRegistry(t *testing.T) *machine.Registry {
 		}
 		return x * 2, nil
 	}
-	if err := registry.Register(machine.FunctionSpec{Name: "host.flaky_v1", Doc: machine.Doc{Cost: 5}, Go: flaky}); err != nil {
+	if err := registry.Register(machine.FunctionSpec{Name: "host.flaky_v1", Go: flaky}); err != nil {
 		t.Fatal(err)
 	}
 	// total sums what it is handed: an array in a frame's slot, handed over
@@ -187,7 +154,7 @@ func randomRegistry(t *testing.T) *machine.Registry {
 		}
 		return sum
 	}
-	if err := registry.Register(machine.FunctionSpec{Name: "host.total_v1", Doc: machine.Doc{Cost: 5}, Go: total}); err != nil {
+	if err := registry.Register(machine.FunctionSpec{Name: "host.total_v1", Go: total}); err != nil {
 		t.Fatal(err)
 	}
 	return registry
