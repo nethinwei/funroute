@@ -30,7 +30,7 @@ tests/limits/        生成 docs/limits.md 的表格并守着它们（make limit
 tests/perf/          性能报告程序，写进 docs/perf.md（make perf），不进 CI 的判定
 tests/perf/expr/     与 expr 的对照：单独的 module，只有它依赖 expr，根 go.mod 保持为空
 web/src/ web/wasm/   工作台前端（TS）与浏览器里的语言服务（js/wasm）
-cmd/funroute cmd/mvp CLI 与工作台静态服务
+cmd/funroute cmd/playground CLI 与工作台静态服务
 ```
 
 - 依赖严格单向（`go list -deps` 验证）；kit 在最底层，所有实现包与 `lsp/` 都可以用它，表里不再逐一写。

@@ -1,4 +1,4 @@
-// Command mvp serves the workbench. The language server runs in the page, as
+// Command playground serves the workbench. The language server runs in the page, as
 // WebAssembly in a worker, so all this does is hand out the files make site
 // puts in site/: the same files the GitHub Pages workflow publishes.
 package main

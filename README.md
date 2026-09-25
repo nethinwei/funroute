@@ -746,8 +746,8 @@ registry.Register(funroute.FunctionSpec{
 - 常见签名——标量与 `[]float64`/`[]int64` 进、标量出，可带 `error`——直接调用，每次约 25 ns、0 次分配；其余签名经 `reflect.Call`，约 300 ns。也可以不填 `Go`，手写 `Params`、`Result`、`Eval`；两种写法二选一。
 - 以一个数组为参数的聚合可以声明 `Fold`，套推导式调用时就边算边折叠，不建数组、也不调用它：`Fold: &funroute.Fold{Step: "add", Init: funroute.Int(0)}` 是一个求和，`Step` 是把"到目前的答案"和下一个元素并起来的内核函数；`Stops`/`Stop` 让一个 bool 的折叠遇到 `Stop` 就停（`any` 停在 true）；`Counts` 是计数；`First` 取第一个元素并就此停下（`first`），一个都没有时对空数组调用函数本身、照样报错。折叠必须与函数本身给出同样的答案。
 - 金额直接写 Go 类型：`funroute.Money`、`funroute.Ratio`、`funroute.FxRate`、`funroute.Currency` 及它们的切片与映射（零拷贝），`Go` 的签名反射就能读出；手写 `Params` 时用 `funroute.MoneyType` 等。币种是值的属性，签名不约束它：收到几笔金额的函数自己检查它们同币种（错了返回 `ErrCurrency`），返回的金额币种必须已声明，否则是 `ErrCurrency`。
-- 名字里的 `_v1` 只是约定。函数的身份是完整签名，签名或成本变了，旧 artifact 会拒绝装载。
-- `Doc` 只写机器算不出来的东西：标签、说明、成本、参数标签，以及可选的案例 `Examples: []funroute.Example{{Source: "risk.score_v1(\"SG\", 100)", Result: "0.9"}}`（源码与它的 JSON 结果）。签名来自 Go 类型，分类默认取命名空间（`risk.score_v1` → `risk`）。
+- 名字里的 `_v1` 只是约定。函数的身份是完整签名，签名变了，旧 artifact 会拒绝装载。
+- `Doc` 只写机器算不出来的东西：标签、说明、参数标签，以及可选的案例 `Examples: []funroute.Example{{Source: "risk.score_v1(\"SG\", 100)", Result: "0.9"}}`（源码与它的 JSON 结果）。签名来自 Go 类型，分类默认取命名空间（`risk.score_v1` → `risk`）。
 - 语言服务从注册表读函数的说明与案例，用在悬停和补全里，新增函数不需要改任何前端代码。
 - 内核与标准库的每个函数都带案例，由测试逐条运行、比对结果，并要求它们合起来用到这个名字的每一个重载，所以案例不会与实现走样。
 
@@ -947,7 +947,7 @@ make wasm                                 # web/dist/funroute.wasm，在浏览�
 浏览器里跑不了宿主的深度模型或网络调用，开发工具里通常也不应该链接它们。语言服务需要的只是函数的**签名**：
 
 ```go
-manifest := hostRegistry.Manifest()   // 导出：签名、成本、Doc、句柄、形式
+manifest := hostRegistry.Manifest()   // 导出：签名、Doc、句柄、形式
 json.Marshal(manifest)                 // 交给语言服务
 
 base := funroute.CoreRegistry()            // 内核 + 标准库是原生实现
@@ -957,7 +957,7 @@ manifest.Apply(base)                   // 宿主的函数只登记签名
 
 - 类型检查、悬停、补全、签名提示都照常工作。
 - 运行时调用只有签名的函数，会返回 `funroute.ErrUnavailable`（它同时也是 `ErrExtension`，所以 `fallback` 会照常兜底）。`funroute.TrackUnavailable(ctx)` 会记下这次运行调用了哪些这样的函数，试运行的结果里会标出来。
-- 清单和真实注册表的签名或成本不一致时，`Apply` 会拒绝。
+- 清单和真实注册表的签名不一致时，`Apply` 会拒绝。
 - **部署用的 artifact 由宿主用真实注册表编译**：宿主的纯函数如果标了 `Constexpr`，两边的常量折叠结果会不同，digest 也会跟着不同。
 
 ## 策略工作台
@@ -966,7 +966,7 @@ manifest.Apply(base)                   // 宿主的函数只登记签名
 make run        # 构建前端与 wasm，组装 site/，然后启动静态服务：http://127.0.0.1:8080
 ```
 
-工作台是纯静态页面：语言服务以 WebAssembly 的形式在 Worker 里运行。`make site` 把要发布的文件组装到 `site/`，`cmd/mvp` 只负责提供这个目录，GitHub Pages（`.github/workflows/pages.yml`）上传的也是它，所以本地能跑的就是线上发布的。
+工作台是纯静态页面：语言服务以 WebAssembly 的形式在 Worker 里运行。`make site` 把要发布的文件组装到 `site/`，`cmd/playground` 只负责提供这个目录，GitHub Pages（`.github/workflows/pages.yml`）上传的也是它，所以本地能跑的就是线上发布的。
 
 - **编辑器**：CodeMirror 接上语言服务，高亮、诊断、补全、悬停、签名提示、格式化都来自服务端。`⌘/Ctrl + Enter` 运行。
 - **代码与结构两个页签**：表达式区块里的"代码"是编辑器，"结构"是结构视图，右侧的试运行两边共用。只有当前文本已检查完、没有错误时才能切换，否则停在原页签并在状态栏说明原因。
@@ -1077,7 +1077,7 @@ tests/perf/            性能报告，写进 docs/perf.md（make perf）
 tests/perf/expr/       与 expr 的对照（单独的 module，只有它依赖 expr）
 web/src/               工作台前端（TypeScript），每个组件一个入口，打包到 web/dist/
 web/wasm/              浏览器用的语言服务入口（js/wasm）
-cmd/funroute  cmd/mvp  CLI（含 fmt、lsp）与工作台静态服务
+cmd/funroute  cmd/playground  CLI（含 fmt、lsp）与工作台静态服务
 ```
 
 `internal/` 下的实现只有 `funroute.go` 与 `lsp/` 可以导入，由 `make lint` 检查。

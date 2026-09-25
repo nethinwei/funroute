@@ -139,7 +139,7 @@ site: web wasm
 	cp web/dist/*.js web/dist/funroute.wasm site/dist/
 
 run: site
-	$(GO) run ./cmd/mvp
+	$(GO) run ./cmd/playground
 
 clean:
 	$(GO) clean ./...
