@@ -64,8 +64,10 @@ func Register(registry *funroute.Registry) error {
 	return nil
 }
 
+// sumSpecs fold as add does, item by item from 0: a sum of a comprehension
+// adds as it goes, and an overflow is add's.
 func sumSpecs() []funroute.FunctionSpec {
-	return eachType("sum", funroute.Doc{
+	specs := eachType("sum", funroute.Doc{
 		Label:       "求和",
 		Description: "把数组里的元素依次加起来；空数组是 0。要加的东西先用推导式算出来，再交给它。",
 		Category:    "聚合",
@@ -73,6 +75,10 @@ func sumSpecs() []funroute.FunctionSpec {
 		Params:      []string{"数组"},
 		Result:      "总和",
 	}, sumInts, sumFloats)
+	zero, _ := funroute.Float(0) // 0 is finite
+	specs[0].Fold = &funroute.Fold{Step: "add", Init: funroute.Int(0)}
+	specs[1].Fold = &funroute.Fold{Step: "add", Init: zero}
+	return specs
 }
 
 func extremeSpecs() []funroute.FunctionSpec {
@@ -101,11 +107,13 @@ func extremeSpecs() []funroute.FunctionSpec {
 	return specs
 }
 
+// quantifierSpecs stop at the item that decides them: any([p(x) for x in
+// xs]) computes no p past the first true, as || computes nothing past it.
 func quantifierSpecs() []funroute.FunctionSpec {
-	return []funroute.FunctionSpec{
+	specs := []funroute.FunctionSpec{
 		logic("any", funroute.Doc{
 			Label:       "任一为真",
-			Description: "数组里只要有一个 true 就是 true；空数组是 false。",
+			Description: "数组里只要有一个 true 就是 true；空数组是 false。对推导式求值时遇到第一个 true 就停，后面的元素不再计算，和 || 一样。",
 			Category:    "聚合",
 			Cost:        3,
 			Params:      []string{"布尔数组"},
@@ -113,13 +121,16 @@ func quantifierSpecs() []funroute.FunctionSpec {
 		}, anyTrue),
 		logic("all", funroute.Doc{
 			Label:       "全部为真",
-			Description: "数组里每一个都是 true 才是 true；空数组是 true。",
+			Description: "数组里每一个都是 true 才是 true；空数组是 true。对推导式求值时遇到第一个 false 就停，后面的元素不再计算，和 && 一样。",
 			Category:    "聚合",
 			Cost:        3,
 			Params:      []string{"布尔数组"},
 			Result:      "是否全部满足",
 		}, allTrue),
 	}
+	specs[0].Fold = &funroute.Fold{Init: funroute.Bool(false), Stops: true, Stop: true}
+	specs[1].Fold = &funroute.Fold{Init: funroute.Bool(true), Stops: true, Stop: false}
+	return specs
 }
 
 // rangeSpecs are the only source of a sequence that does not come from the

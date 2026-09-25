@@ -194,25 +194,46 @@ func sortSpecs() []funroute.FunctionSpec {
 		Label: "排序", Category: "数组", Cost: 8,
 		Description: "按自然顺序升序排列（数值按大小，字符串按 UTF-8 字节序）。要按别的键排，先用推导式算出键。",
 		Params:      []string{"数组"}, Result: "升序数组",
-	}, sorter[int64](false), sorter[float64](false), sorter[string](false)), eachType("sort_desc", funroute.Doc{
+	}, sorter[int64](false, nil), sorter(false, hasNegativeZero), sorter[string](false, nil)), eachType("sort_desc", funroute.Doc{
 		Label: "降序排序", Category: "数组", Cost: 8,
 		Description: "按自然顺序降序排列，省得写 reverse(sort(xs))。",
 		Params:      []string{"数组"}, Result: "降序数组",
-	}, sorter[int64](true), sorter[float64](true), sorter[string](true)))
+	}, sorter[int64](true, nil), sorter(true, hasNegativeZero), sorter[string](true, nil)))
 }
 
-// sorter sorts a copy, stably: a Value's backing is read-only, so sorting in
-// place would edit the caller's array.
-func sorter[T cmp.Ordered](descending bool) func([]T) []T {
+// sorter sorts a copy: a Value's backing is read-only, so sorting in place
+// would edit the caller's array. The sort is stable. Where no two equal
+// items can be told apart — ints, strings, floats without a -0 among them,
+// which distinct, when it is given, looks for — the order among equal ones
+// cannot show, and the faster sort gives the same array.
+func sorter[T cmp.Ordered](descending bool, distinct func([]T) bool) func([]T) []T {
 	return func(items []T) []T {
 		out := append([]T(nil), items...)
-		if descending {
-			slices.SortStableFunc(out, func(a, b T) int { return cmp.Compare(b, a) })
-		} else {
-			slices.SortStableFunc(out, cmp.Compare[T])
+		switch {
+		case distinct != nil && distinct(out):
+			sortStable(out, descending)
+		case descending:
+			slices.Sort(out)
+			slices.Reverse(out)
+		default:
+			slices.Sort(out)
 		}
 		return out
 	}
+}
+
+func sortStable[T cmp.Ordered](items []T, descending bool) {
+	if descending {
+		slices.SortStableFunc(items, func(a, b T) int { return cmp.Compare(b, a) })
+	} else {
+		slices.SortStableFunc(items, cmp.Compare[T])
+	}
+}
+
+// hasNegativeZero reports a -0 among floats: it equals 0 and still differs
+// from it, the one such pair a float array can hold.
+func hasNegativeZero(items []float64) bool {
+	return slices.ContainsFunc(items, func(f float64) bool { return f == 0 && math.Signbit(f) })
 }
 
 func firstItem(_ context.Context, args []funroute.Value) (funroute.Value, error) {

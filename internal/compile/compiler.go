@@ -84,6 +84,7 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	}
 	compiler := newBytecodeCompiler(registry, inferred)
 	compiler.readsArgument = argumentReaders(expr)
+	compiler.plain = options.plain
 	if err := compiler.compile(expr); err != nil {
 		return inferred, nil, compileError(err)
 	}
@@ -100,6 +101,7 @@ func newBytecodeCompiler(registry *machine.Registry, inferred *inference) *bytec
 		argIndex:  map[string]int{},
 		names:     scoped[nameSlot]{},
 		callIndex: map[string]int{},
+		hoisted:   map[int]int{},
 	}
 	for i, param := range inferred.Params {
 		compiler.argIndex[param.Name()] = i
@@ -144,9 +146,18 @@ type bytecodeCompiler struct {
 	// usingDepth is how many using bodies the compiler is inside: a
 	// conversion outside every one has no rates to convert at.
 	usingDepth int
+	// hoisted is, by node, the local slot an expression computed before its
+	// loop's first item is in (hoistInnerSource); plain turns that and
+	// aggregate fusion off.
+	hoisted map[int]int
+	plain   bool
 }
 
 func (c *bytecodeCompiler) compile(expr syntax.Expr) error {
+	if slot, ok := c.hoisted[expr.NodeID()]; ok {
+		c.emit(machine.Instruction{Op: machine.OpLoadLocal, A: slot})
+		return nil
+	}
 	folded, err := c.tryFold(expr)
 	if err != nil {
 		return err
@@ -317,6 +328,9 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	if err := c.exactStep(node, function); err != nil {
 		return err
 	}
+	if fused, err := c.compileAggregate(node, function); fused || err != nil {
+		return err
+	}
 	if function.IsRoundingScope() {
 		if err := c.compileRoundingScope(node); err != nil {
 			return err
@@ -324,15 +338,26 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	} else if err := c.compileAll(node.Args); err != nil {
 		return err
 	}
+	c.emitCall(function, len(node.Args), c.inferred.NodeTypes[node.ID])
+	return nil
+}
+
+// emitCall calls function with the argc values on the stack, for a result of
+// resultType.
+func (c *bytecodeCompiler) emitCall(function *machine.RegisteredFunction, argc int, resultType machine.Type) {
+	c.emit(machine.Instruction{Op: machine.OpCall, A: c.callRef(function), B: argc, Type: &resultType})
+}
+
+// callRef is the artifact's reference to function, added the first time.
+func (c *bytecodeCompiler) callRef(function *machine.RegisteredFunction) int {
+	key := function.Key()
 	callIndex, ok := c.callIndex[key]
 	if !ok {
 		callIndex = len(c.calls)
 		c.callIndex[key] = callIndex
 		c.calls = append(c.calls, machine.CallReference{Name: function.Name, Signature: key, Cost: function.Cost()})
 	}
-	resultType := c.inferred.NodeTypes[node.ID]
-	c.emit(machine.Instruction{Op: machine.OpCall, A: callIndex, B: len(node.Args), Type: &resultType})
-	return nil
+	return callIndex
 }
 
 func (c *bytecodeCompiler) compileSwitch(node *syntax.SwitchExpr) error {
@@ -501,35 +526,53 @@ func (c *bytecodeCompiler) compileFor(node *syntax.ForExpr) error {
 		(resultType.Kind() != machine.ArrayKind && resultType.Kind() != machine.DictKind) {
 		return errors.New("cannot compile for with unresolved result type")
 	}
-	return c.compileLoop(node.KeyVariable, node.Variable, "", node.Where, &resultType, func() error {
-		return c.compileYield(node, resultType)
+	return c.compileLoop(loopShape{
+		key: node.KeyVariable, value: node.Variable, where: node.Where, result: &resultType,
+		prelude: c.hoistInnerSource(node),
+		body:    func() error { return c.compileYield(node, resultType) },
 	})
 }
 
-// compileLoop lays out a loop over the source on the stack: loop_init, the
-// condition, body, loop_next. accumulator is the name a reduce folds into,
-// and empty for a comprehension; a filtered item jumps straight to loop_next.
-func (c *bytecodeCompiler) compileLoop(key, value, accumulator string, where syntax.Expr, resultType *machine.Type, body func() error) error {
-	slot := c.bindLocal(value)
-	defer c.unbindLocal(value)
-	keySlot := c.bindLocal(key)
-	defer c.unbindLocal(key)
-	accSlot := c.bindLocal(accumulator)
-	defer c.unbindLocal(accumulator)
+// loopShape is a loop to lay out: the names it binds — accumulator is the
+// one a reduce folds into, and empty for a comprehension — its filter, its
+// type, and what it runs: prelude once, before the first item, when there is
+// one, and body for each item the filter keeps.
+type loopShape struct {
+	key, value, accumulator string
+	where                   syntax.Expr
+	result                  *machine.Type
+	prelude, body           func() error
+}
 
-	init := c.emit(machine.Instruction{Op: machine.OpLoopInit, B: slot, C: accSlot, D: keySlot, Type: resultType})
+// compileLoop lays out a loop over the source on the stack: loop_init, the
+// prelude, the condition, body, loop_next. A filtered item jumps straight to
+// loop_next, which goes back past the prelude.
+func (c *bytecodeCompiler) compileLoop(shape loopShape) error {
+	slot := c.bindLocal(shape.value)
+	defer c.unbindLocal(shape.value)
+	keySlot := c.bindLocal(shape.key)
+	defer c.unbindLocal(shape.key)
+	accSlot := c.bindLocal(shape.accumulator)
+	defer c.unbindLocal(shape.accumulator)
+
+	init := c.emit(machine.Instruction{Op: machine.OpLoopInit, B: slot, C: accSlot, D: keySlot, Type: shape.result})
+	if shape.prelude != nil {
+		if err := shape.prelude(); err != nil {
+			return err
+		}
+	}
 	loopStart := len(c.instructions)
 	jumpFiltered := -1
-	if where != nil {
-		if err := c.compile(where); err != nil {
+	if shape.where != nil {
+		if err := c.compile(shape.where); err != nil {
 			return err
 		}
 		jumpFiltered = c.emit(machine.Instruction{Op: machine.OpJumpIfFalse})
 	}
-	if err := body(); err != nil {
+	if err := shape.body(); err != nil {
 		return err
 	}
-	next := c.emit(machine.Instruction{Op: machine.OpLoopNext, A: loopStart, Type: resultType})
+	next := c.emit(machine.Instruction{Op: machine.OpLoopNext, A: loopStart, Type: shape.result})
 	if jumpFiltered >= 0 {
 		c.instructions[jumpFiltered].A = next
 	}
@@ -599,12 +642,15 @@ func (c *bytecodeCompiler) compileReduce(node *syntax.ReduceExpr) error {
 	if err := c.compile(node.Init); err != nil {
 		return err
 	}
-	return c.compileLoop(node.KeyVariable, node.Variable, node.Accumulator, node.Where, &resultType, func() error {
-		if err := c.compile(node.Body); err != nil {
-			return err
-		}
-		c.emit(machine.Instruction{Op: machine.OpLoopCollect, Type: &resultType})
-		return nil
+	return c.compileLoop(loopShape{
+		key: node.KeyVariable, value: node.Variable, accumulator: node.Accumulator, where: node.Where, result: &resultType,
+		body: func() error {
+			if err := c.compile(node.Body); err != nil {
+				return err
+			}
+			c.emit(machine.Instruction{Op: machine.OpLoopCollect, Type: &resultType})
+			return nil
+		},
 	})
 }
 

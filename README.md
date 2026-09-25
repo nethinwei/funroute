@@ -227,6 +227,8 @@ reduce(name, weight in weights, total = 0.0, total + weight)            // 遍�
 | 字符串 | `upper` `lower` `trim` `contains` `starts_with` `ends_with` `split` `join` `replace` `pad_left` `pad_right`（宽度至多 10000） |
 | 数值 | `abs` `ceil` `floor` `round` `pow` |
 
+`sum`、`any`、`all` 与内核的 `len` 套推导式时边算边折叠，不建中间数组；`any`/`all` 在决定答案的元素处停下，后面的元素不再计算——`any([10 / x > 2 for x in xs])` 在第一个为真的元素之后不会再除零，和 `||` 一样。
+
 `range(n)` 是唯一能凭空造出数组的函数，所以它的参数必须由输入规模界定：字面量、`len(容器)`，或它们的算术组合。`range(len(fees))` 可以，`range(n)`（`n` 是任意入参）不行 —— 否则一个整数就能让规则跑任意久。
 
 ### 记录
@@ -728,7 +730,8 @@ registry.Register(funroute.FunctionSpec{
 ```
 
 - 参数可以是 Go 标量、任意嵌套的切片和 `map[string]…`、struct（见[记录](#记录)）或句柄；首参数可选 `context.Context`；返回 `R`，会失败的返回 `(R, error)`。
-- 每次调用约 300 ns。对性能敏感的函数不填 `Go`，手写 `Params`、`Result`、`Eval`，成本与内核函数相同；两种写法二选一。
+- 常见签名——标量与 `[]float64`/`[]int64` 进、标量出，可带 `error`——直接调用，每次约 25 ns、0 次分配；其余签名经 `reflect.Call`，约 300 ns。也可以不填 `Go`，手写 `Params`、`Result`、`Eval`；两种写法二选一。
+- 以一个数组为参数的聚合可以声明 `Fold`，套推导式调用时就边算边折叠，不建数组、也不调用它：`Fold: &funroute.Fold{Step: "add", Init: funroute.Int(0)}` 是一个求和，`Step` 是把"到目前的答案"和下一个元素并起来的内核函数；`Stops`/`Stop` 让一个 bool 的折叠遇到 `Stop` 就停（`any` 停在 true）；`Counts` 是计数。折叠必须与函数本身给出同样的答案。
 - 金额直接写 Go 类型：`funroute.Money`、`funroute.Ratio`、`funroute.FxRate`、`funroute.Currency` 及它们的切片与映射（零拷贝），`Go` 的签名反射就能读出；手写 `Params` 时用 `funroute.MoneyType` 等。币种是值的属性，签名不约束它：收到几笔金额的函数自己检查它们同币种（错了返回 `ErrCurrency`），返回的金额币种必须已声明，否则是 `ErrCurrency`。
 - 名字里的 `_v1` 只是约定。函数的身份是完整签名，签名或成本变了，旧 artifact 会拒绝装载。
 - `Doc` 只写机器算不出来的东西：标签、说明、成本、参数标签，以及可选的案例 `Examples: []funroute.Example{{Source: "risk.score_v1(\"SG\", 100)", Result: "0.9"}}`（源码与它的 JSON 结果）。签名来自 Go 类型，分类默认取命名空间（`risk.score_v1` → `risk`）。
@@ -997,35 +1000,20 @@ make run        # 构建前端与 wasm，组装 site/，然后启动静态服务
 
 ## 性能
 
-VM 是栈式字节码解释器，**执行本身不分配内存**，只有程序构造的数据（比如推导式产出的数组）才分配。金额也一样：边界上的币种扫描、金额运算、换汇与 `using` 都是 0 次分配，因为比例、汇率与 `round` 里的精确金额都是 int64 分子/分母，`using` 的作用域挂在帧上。
+字节码装载时翻译成带类型的寄存器形式再执行：参数、常量和局部变量原地读，内核的算术与比较是一条条专用指令，比较与其后的跳转、推导式的收集与下一轮都合成一条；fuel 按基本块在入口一次扣完。Artifact 的格式与 digest 不受影响。**执行本身不分配内存**，只有程序构造的数据（比如推导式产出的数组）才分配。金额也一样：边界上的币种扫描、金额运算、换汇与 `using` 都是 0 次分配，因为比例、汇率与 `round` 里的精确金额都是 int64 分子/分母，`using` 的作用域挂在帧上。
 
-Apple M5，`go test ./internal/machine ./internal/compile -bench . -benchtime 1s -count 5`，取中位数（VM 与边界的基准在 machine，编译基准在 compile）：
+编译器另做两处不改变结果的改写：声明了 `Fold` 的函数（`sum`、`any`、`all`、`len`）套推导式时编译成单遍折叠，不建中间数组；嵌套推导的内层源不依赖外层元素时只算一次。`any`/`all` 因此在决定答案的元素处停下，后面的元素不再计算，也不会报错，和 `||`、`&&` 一样。
+
+Apple M5 上的几个数（完整的对照表见 [`docs/perf.md`](docs/perf.md)，由 `make perf` 生成，每项旁边是同一件事直接用 Go 写的耗时）：
 
 | 场景 | 耗时 | 分配 |
 |---|---|---|
-| 简单表达式 `RunValues` | 179 ns | 0 |
-| 简单表达式 `Run(map)` | 216 ns | 0 |
-| 简单表达式 `Program.Run`（从宿主 struct 读参数） | 212 ns | 0 |
-| record 进、record 出：`ToValue` + `RunValues` + `FromValue` vs `Program.Run` | 2.77 µs vs 0.76 µs | 20 次 vs 5 次 |
-| 200 层嵌套算术 | 5.7 µs | 0 |
-| 500 元素 `reduce` | 44 µs | 2 次 / 4 KB |
-| 500 元素推导式映射 | 44 µs | 5 次 / 8 KB |
-| 500 元素嵌套推导式 | 77 µs | 8 次 / 12 KB |
-| 向量透传，n = 16 / 1024 / 65536 | 271 / 271 / 271 ns | 4 次 |
-| 按 Go 签名注册的函数调用 vs 内核 `add` | 329 ns vs 189 ns | 6 次 vs 0 |
-| 编译（含推导与常量折叠） | 43 µs | 625 次 / 93 KB |
-| 模型调用（模拟 20 µs 引擎开销）：单条 vs 64 条一批 | 27.6 µs vs 1.03 µs / 请求 | — |
-
-向量透传的耗时与长度无关，说明容器从宿主到扩展函数全程没有拷贝。
-
-与通用求值器 `expr` v1.17.8 同机对照（同一时段测量，`expr` 用 struct 环境；复现方法见 roadmap 的[性能基线](docs/roadmap.md#性能基线)）：
-
-| 场景 | FunRoute | expr |
-|---|---|---|
-| 算术 `amount * bps / 10000 + fixed` | 161 ns / 0 次分配（`Program.Run` 从宿主 struct 读参数时 205 ns / 0 次） | 70 ns / 5 次分配 |
-| 64 元素 filter + sum | 6.0 µs / 8 次分配 | 3.4 µs / 168 次分配 |
-
-单次延迟 expr 快 1.7–2.3 倍，主要差在调用协议：它把 `a * b` 编成一条内联指令，我们编成一次函数调用。提速方案见 roadmap 的[阶段 5](docs/roadmap.md#阶段-5执行层提速)。
+| `amount * bps / 10000 + fixed`：`RunValues` / `Program.Run` / `Run(map)` | 30 / 43 / 52 ns | 0 |
+| 按 Go 签名注册的宿主函数调用（常见签名不经反射） | 49 ns | 0 |
+| 500 元素 `reduce` / 推导式 | 2.4 / 3.5 µs | 0 / 2 次 |
+| `sum([x * 2 for x in xs if x % 3 == 0])`，每个元素 | 14 ns | 0 |
+| 把 16 到 65536 个 float 交给宿主函数（与长度无关：不拷贝） | 69 ns | 0 |
+| 模型调用（引擎每次 20 µs）：单条 vs 64 条一批 | 27 µs vs 0.86 µs / 请求 | — |
 
 ## 现状
 
@@ -1065,8 +1053,12 @@ internal/money/        金额、比例、汇率、币种表与舍入：纯 Go �
 internal/machine/      值、类型、字节码、VM、注册表、目录、签名清单（依赖 money）
 internal/syntax/       词法、语法、AST、ExprJSON、词法段、格式化、语法树（只依赖 machine）
 internal/compile/      推导、编译、常量折叠、契约、Analyze（依赖 syntax + machine）
-internal/hosttest/     公开面的测试与可运行示例（只用公开包）
 internal/demo/         演示控制台：宿主组装注册表的范例，工作台用它（只用公开包）
+examples/              可运行的 Go 宿主程序：路由、金额、批处理（go run ./examples/<名字>，只用公开包）
+tests/api/             公开面的测试与 godoc 示例，按主题组织（只用公开包）
+tests/conformance/     把 web/funroute-examples.json 的每个示例经公开 API 跑完整条流水线
+tests/limits/          生成并守着 docs/limits.md 的表格（make limits）
+tests/perf/            性能报告，写进 docs/perf.md（make perf）
 web/src/               工作台前端（TypeScript），每个组件一个入口，打包到 web/dist/
 web/wasm/              浏览器用的语言服务入口（js/wasm）
 cmd/funroute  cmd/mvp  CLI（含 fmt、lsp）与工作台静态服务

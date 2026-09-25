@@ -215,7 +215,7 @@ func TestPrefetchedCallStillHonorsRequestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err = runtime.RunValues(ctx, []machine.Value{machine.Float(1)},
-		machine.WithPrefetched(machine.RunOptions{}, map[int]machine.Prefetched{sites[0].PC: {Value: machine.Float(1)}}))
+		machine.WithPrefetched(runtime, machine.RunOptions{}, map[int]machine.Prefetched{sites[0].PC: {Value: machine.Float(1)}}))
 	if !errors.Is(err, machine.ErrDeadline) {
 		t.Fatalf("canceled prefetched call = %v, want ErrDeadline", err)
 	}

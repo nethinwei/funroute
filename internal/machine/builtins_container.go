@@ -3,6 +3,7 @@ package machine
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -93,7 +94,9 @@ func registerLength(registry *Registry, t Type) {
 		Description: "数组的元素个数、字典的键个数，或字符串的字符数（UTF-8 码点）。",
 		Params:      []string{"容器"}, Result: "个数",
 	}
-	mustRegister(registry, FunctionSpec{Name: "len", Params: []Type{ArrayOf(t)}, Result: IntType, Eval: evalLength, Doc: container})
+	// len of a comprehension counts what it would have yielded, with no
+	// array built.
+	mustRegister(registry, FunctionSpec{Name: "len", Params: []Type{ArrayOf(t)}, Result: IntType, Eval: evalLength, Doc: container, Fold: &Fold{Counts: true}})
 	mustRegister(registry, FunctionSpec{Name: "len", Params: []Type{DictOf(t)}, Result: IntType, Eval: evalLength, Doc: container})
 	mustRegister(registry, FunctionSpec{Name: "len", Params: []Type{StringType}, Result: IntType, Eval: evalStringLength, Doc: container})
 }
@@ -138,6 +141,9 @@ func evalStringMember(_ context.Context, args []Value) (Value, error) {
 
 func evalArrayMember(_ context.Context, args []Value) (Value, error) {
 	item, container := args[0], args[1]
+	if found, native := nativeMember(item, container.box); native {
+		return Bool(found), nil
+	}
 	for i := range container.length() {
 		equal, err := compareEqual(container.at(i), item)
 		if err != nil {
@@ -148,6 +154,22 @@ func evalArrayMember(_ context.Context, args []Value) (Value, error) {
 		}
 	}
 	return Bool(false), nil
+}
+
+// nativeMember is whether a native array of scalars holds item, as the
+// equality walk would find: native is false for any other array.
+func nativeMember(item Value, backing any) (found, native bool) {
+	switch items := backing.(type) {
+	case []int64:
+		return slices.Contains(items, item.i), true
+	case []float64:
+		return slices.Contains(items, item.f), true
+	case []string:
+		return slices.Contains(items, item.s), true
+	case []bool:
+		return slices.Contains(items, item.b), true
+	}
+	return false, false
 }
 
 func evalDictMember(_ context.Context, args []Value) (Value, error) {

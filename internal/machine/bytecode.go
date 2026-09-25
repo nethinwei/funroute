@@ -17,8 +17,9 @@ import (
 // than adding a version to migrate from.
 const ArtifactVersion = 2
 
-// OpCode is a dense enum so the interpreter dispatches through a jump table.
-// The JSON form keeps the original mnemonics, so artifact digests do not move.
+// OpCode is a dense enum, lowered to the register form when an artifact is
+// loaded. The JSON form keeps the original mnemonics, so artifact digests do
+// not move.
 type OpCode uint8
 
 const (
@@ -44,6 +45,8 @@ const (
 	OpRecordWith
 	OpFxPush
 	OpFxPop
+	OpLoopBreak
+	OpLoopFold
 )
 
 // Parameter is one argument of an artifact's contract: its name, its type

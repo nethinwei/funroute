@@ -191,6 +191,7 @@ func (c *bytecodeCompiler) compileNested(expr syntax.Expr) (*bytecodeCompiler, b
 	sub.names = c.names
 	sub.readsArgument = c.readsArgument
 	sub.inRound = c.inRound
+	sub.plain = c.plain
 	return sub, sub.compile(expr) == nil
 }
 

@@ -7,9 +7,10 @@ import (
 
 // What makes an opcode well-formed lives in one row: the name it takes in
 // JSON and the operands it must have. How it moves the typed stack is
-// verify.go's, and how it runs frame.step's. Adding an opcode means a row
-// here, a case in each of the two; TestEveryOpcodeIsExecutableAndNamed checks
-// they agree, so there is no fourth place to remember.
+// verify.go's, and what it becomes in the register form lower_instr.go's.
+// Adding an opcode means a row here, a case in each of the two;
+// TestEveryOpcodeIsExecutableAndNamed checks they agree, so there is no
+// fourth place to remember.
 //
 // The table is indexed by the opcode itself, which is what keeps the names
 // aligned: a list in a different order used to be a silent mismatch.
@@ -93,7 +94,7 @@ var opcodes = [...]opcodeSpec{
 	OpEndFallback: {name: "end_fallback"},
 	// Pops a record and one value per name in Keys, and pushes the record with
 	// those fields replaced — a copy, since values are immutable. The names are
-	// resolved to indexes when the artifact is loaded (Runtime.updates).
+	// resolved to indexes when the artifact is lowered (rmake.fields).
 	OpRecordWith: {
 		name:     "record_with",
 		validate: validateRecordWith,
@@ -105,6 +106,22 @@ var opcodes = [...]opcodeSpec{
 		validate: func(in Instruction, _ *Artifact, fail failFunc) error { return validateFxPush(in, fail) },
 	},
 	OpFxPop: {name: "fx_pop"},
+	// Pops the answer of the innermost loop, a fold's, and ends the loop
+	// with it: a fold that stops — any at the first true — goes to A, past
+	// its loop_next, as the loop's last iteration would.
+	OpLoopBreak: {name: "loop_break", validate: validateLoopInstruction},
+	// Pops an item of the innermost loop, a fold's, and folds it into the
+	// answer with the kernel function Calls[A]: answer = f(answer, item). It
+	// costs what loop_collect does, as collecting the item for a function
+	// of the whole array did.
+	OpLoopFold: {name: "loop_fold", validate: validateLoopFold},
+}
+
+func validateLoopFold(in Instruction, a *Artifact, fail failFunc) error {
+	if in.A < 0 || in.A >= len(a.parts.Calls) || in.Type == nil {
+		return fail("malformed loop fold")
+	}
+	return nil
 }
 
 func (o OpCode) spec() opcodeSpec {

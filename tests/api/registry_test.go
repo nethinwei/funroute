@@ -1,4 +1,4 @@
-package hosttest
+package api
 
 import (
 	"context"
@@ -132,5 +132,40 @@ func TestCatalogNamesResultsAndSpecials(t *testing.T) {
 	}
 	if want := map[string]string{"if": "if", "fallback": "fallback"}; !maps.Equal(specials, want) {
 		t.Fatalf("Special() = %v, want %v", specials, want)
+	}
+}
+
+// A host's function of an array may say it is a fold, and a call of it on a
+// comprehension is then the comprehension folding as it goes: the answer the
+// function gives, and the function itself is never handed an array.
+func TestAHostFoldFoldsTheComprehension(t *testing.T) {
+	t.Parallel()
+	registry := funroute.CoreRegistry()
+	if err := registry.EnableForm(funroute.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	var handed int
+	total := func(fees []int64) int64 {
+		handed++
+		sum := int64(0)
+		for _, fee := range fees {
+			sum += fee
+		}
+		return sum
+	}
+	if err := registry.Register(funroute.FunctionSpec{
+		Name: "fees.total_v1", Go: total, Doc: funroute.Doc{Cost: 4},
+		Fold: &funroute.Fold{Step: "add", Init: funroute.Int(0)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fees := funroute.ArgSpec{Name: "fees", Type: funroute.ArrayOf(funroute.IntType)}
+	artifact, err := funroute.CompileExpr(`fees.total_v1([fee * 2 for fee in fees if fee > 10])`, registry, funroute.CompileOptions{Args: []funroute.ArgSpec{fees}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := mustInstantiate(t, artifact, registry).Run(t.Context(), map[string]any{"fees": []any{5, 20, 30}}, funroute.RunOptions{})
+	if got, _ := value.Int(); err != nil || got != 100 || handed != 0 {
+		t.Fatalf("the fold = %v, %v, the function handed %d arrays; want 100 and none", value.Any(), err, handed)
 	}
 }

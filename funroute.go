@@ -104,11 +104,14 @@ func DefineHandle[T any](registry *Registry, name string) error {
 // a FunctionSpec that names a Go function in Go, its signature read once by
 // reflection — any arity, an optional leading context.Context, Go containers
 // nested to any depth, a result with or without an error — and GoBatch when it
-// also has a batch implementation.
+// also has a batch implementation. A function of one array may declare a
+// Fold, and a call of it on a comprehension then folds as the comprehension
+// runs, with no array built.
 type (
 	Registry     = machine.Registry
 	FunctionSpec = machine.FunctionSpec
 	EvalFunc     = machine.EvalFunc
+	Fold         = machine.Fold
 	Doc          = machine.Doc
 	Example      = machine.Example
 	Form         = machine.Form

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 
@@ -50,10 +51,42 @@ type nestedDict struct {
 
 // recordValue backs a record: the fields in the type's order, plus the type
 // itself, because a record's fields are what it is. A field access already
-// knows its index at compile time, so nothing here is looked up by name.
+// knows its index at compile time, so nothing here is looked up by name. The
+// type is shared — the artifact's, or a codec's — never written, and never
+// copied per record.
 type recordValue struct {
-	typ    Type
+	typ    *Type
 	fields []Value
+}
+
+// newRecord is a record of typ with n fields, all zero, for the caller to
+// fill: for the sizes most records have, one allocation holds the fields
+// and the record both.
+func newRecord(typ *Type, n int) *recordValue {
+	switch {
+	case n <= 2:
+		r := &struct {
+			recordValue
+			store [2]Value
+		}{}
+		r.recordValue = recordValue{typ: typ, fields: r.store[:n]}
+		return &r.recordValue
+	case n <= 4:
+		r := &struct {
+			recordValue
+			store [4]Value
+		}{}
+		r.recordValue = recordValue{typ: typ, fields: r.store[:n]}
+		return &r.recordValue
+	case n <= 8:
+		r := &struct {
+			recordValue
+			store [8]Value
+		}{}
+		r.recordValue = recordValue{typ: typ, fields: r.store[:n]}
+		return &r.recordValue
+	}
+	return &recordValue{typ: typ, fields: make([]Value, n)}
 }
 
 func Bool(v bool) Value     { return Value{kind: BoolKind, b: v} }
@@ -99,7 +132,7 @@ func Record(typ Type, fields []Value) (Value, error) {
 	if len(fields) != len(typ.fields) {
 		return Value{}, fmt.Errorf("record %s takes %d fields, got %d", typ, len(typ.fields), len(fields))
 	}
-	stored := make([]Value, len(fields))
+	record := newRecord(&typ, len(fields))
 	for i, field := range fields {
 		if !field.hasType(typ.fields[i].typ) {
 			return Value{}, fmt.Errorf("field %q has type %s, want %s",
@@ -108,9 +141,9 @@ func Record(typ Type, fields []Value) (Value, error) {
 		if err := field.validateInvariant(); err != nil {
 			return Value{}, fmt.Errorf("field %q: %w", typ.fields[i].name, err)
 		}
-		stored[i] = field
+		record.fields[i] = field
 	}
-	return Value{kind: RecordKind, box: &recordValue{typ: typ, fields: stored}}, nil
+	return Value{kind: RecordKind, box: record}, nil
 }
 
 // Field is the value at a record's i-th field. The compiler resolved the name
@@ -204,7 +237,7 @@ func (v Value) Type() Type {
 		return HandleOf(v.s)
 	case RecordKind:
 		if record, ok := v.box.(*recordValue); ok {
-			return record.typ
+			return *record.typ
 		}
 	}
 	return Type{kind: InvalidKind}
@@ -421,6 +454,9 @@ func jsonTree(v Value, walk func(Value) bool, leaf func(Value) any) any {
 // language cannot see into them, and the VM refuses to compare them at all
 // (see compareEqual), so this answer is only a safe default.
 func (v Value) Equal(other Value) bool {
+	if equal, native := nativeEqual(v, other); native {
+		return equal
+	}
 	if IsUnitKind(v.kind) {
 		return v.kind == other.kind && v.equalUnits(other)
 	}
@@ -482,6 +518,9 @@ func equalItems(left, right Value, same func(a, b Value) (bool, error)) (bool, e
 // compareEqual is the VM's equality: eq and switch both use it. Handles are
 // opaque, so comparing them is an error rather than a guess.
 func compareEqual(left, right Value) (Value, error) {
+	if equal, native := nativeEqual(left, right); native {
+		return Bool(equal), nil
+	}
 	if left.kind == HandleKind || right.kind == HandleKind {
 		return Value{}, errors.New("handles cannot be compared")
 	}
@@ -528,4 +567,49 @@ func (v Value) validateInvariant() error {
 		return errors.New("non-finite floats are not supported")
 	}
 	return nil
+}
+
+// nativeEqual compares two containers of one native backing of scalars —
+// no units to hold to, and a type that is the backing's — as Go compares
+// them: what the item-by-item walk would find, without building a type or
+// boxing an item. native is false for anything else.
+func nativeEqual(left, right Value) (equal, native bool) {
+	switch a := left.box.(type) {
+	case []int64:
+		return sameSlice(a, right.box)
+	case []float64:
+		return sameSlice(a, right.box)
+	case []string:
+		return sameSlice(a, right.box)
+	case []bool:
+		return sameSlice(a, right.box)
+	case map[string]int64:
+		return sameMap(a, right.box)
+	case map[string]float64:
+		return sameMap(a, right.box)
+	case map[string]string:
+		return sameMap(a, right.box)
+	case map[string]bool:
+		return sameMap(a, right.box)
+	}
+	return false, false
+}
+
+func sameSlice[T comparable](a []T, other any) (equal, native bool) {
+	b, ok := other.([]T)
+	if !ok {
+		return false, false
+	}
+	if len(a) == len(b) && (len(a) == 0 || &a[0] == &b[0]) {
+		return true, true // one backing
+	}
+	return slices.Equal(a, b), true
+}
+
+func sameMap[T comparable](a map[string]T, other any) (equal, native bool) {
+	b, ok := other.(map[string]T)
+	if !ok {
+		return false, false
+	}
+	return maps.Equal(a, b), true
 }

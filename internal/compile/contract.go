@@ -47,6 +47,10 @@ type CompileOptions struct {
 	ResultDoc string
 
 	MaxInstructions int
+
+	// plain compiles every call as written: no aggregate fused, no source
+	// hoisted — for the tests that hold the two to one answer.
+	plain bool
 }
 
 func (o CompileOptions) argTypes() map[string]machine.Type {

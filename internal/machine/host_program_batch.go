@@ -107,7 +107,7 @@ func (p *Program[In, Out]) decodeInPlace(result batchResult, out *Out) error {
 type ProgramBatch[In, Out any] struct {
 	args   *argsCodec
 	result *codec
-	reads  []int
+	reads  []argRead
 	batch  *Batch
 }
 

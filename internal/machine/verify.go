@@ -117,23 +117,36 @@ type verifier struct {
 	states  []*vstate
 	work    []int
 	deepest int
+	// depths is how deep the stack is on entering each instruction, and -1
+	// for one no path reaches: what the register form is laid out by.
+	depths []int32
 }
 
-// verify walks the artifact's bytecode, calling functions, and returns how
-// deep its stack gets.
-func verify(artifact *Artifact, functions []*RegisteredFunction) (int, error) {
+// proof is what the walk establishes about a program beyond its being typed:
+// how deep its stack gets, overall and on entering each instruction.
+type proof struct {
+	depth  int
+	depths []int32
+}
+
+// verify walks the artifact's bytecode, calling functions.
+func verify(artifact *Artifact, functions []*RegisteredFunction) (proof, error) {
 	instructions := artifact.parts.Instructions
 	v := &verifier{artifact: artifact, functions: functions, joins: joinsOf(instructions), states: make([]*vstate, len(instructions)+1)}
+	v.depths = make([]int32, len(instructions)+1)
+	for pc := range v.depths {
+		v.depths[pc] = -1
+	}
 	v.states[0] = &vstate{locals: make([]*Type, artifact.parts.Locals)}
 	v.work = []int{0}
 	for len(v.work) > 0 {
 		pc := v.work[len(v.work)-1]
 		v.work = v.work[:len(v.work)-1]
 		if err := v.walk(pc, v.states[pc].clone()); err != nil {
-			return 0, err
+			return proof{}, err
 		}
 	}
-	return max(v.deepest, 1), nil
+	return proof{depth: max(v.deepest, 1), depths: v.depths}, nil
 }
 
 // joinsOf marks the start and every instruction a jump lands on.
@@ -142,7 +155,7 @@ func joinsOf(instructions []Instruction) []bool {
 	joins[0] = true
 	for _, in := range instructions {
 		switch in.Op {
-		case OpJump, OpJumpIfFalse, OpLoopInit, OpLoopNext, OpBeginFallback:
+		case OpJump, OpJumpIfFalse, OpLoopInit, OpLoopNext, OpBeginFallback, OpLoopBreak:
 			if in.A >= 0 && in.A <= len(instructions) {
 				joins[in.A] = true
 			}
@@ -158,6 +171,7 @@ func joinsOf(instructions []Instruction) []bool {
 // carried on is no other path's.
 func (v *verifier) walk(pc int, s *vstate) error {
 	for {
+		v.depths[pc] = int32(len(s.stack))
 		edges, err := v.step(pc, s)
 		if err != nil {
 			return fmt.Errorf("invalid bytecode at %d: %w", pc, err)
@@ -234,6 +248,8 @@ func (v *verifier) step(pc int, s *vstate) ([]edge, error) {
 		return v.loopInit(pc, in, s)
 	case OpLoopNext:
 		return v.loopNext(pc, in, s)
+	case OpLoopBreak:
+		return v.loopBreak(in, s)
 	}
 	return []edge{{pc + 1, s}}, v.straight(in, s)
 }
@@ -286,6 +302,8 @@ func (v *verifier) scoped(in Instruction, s *vstate) error {
 	switch in.Op {
 	case OpLoopCollect:
 		return v.loopCollect(in, s)
+	case OpLoopFold:
+		return v.loopFold(in, s)
 	case OpLoopSpread:
 		return v.loopSpread(in, s)
 	case OpEndFallback:
@@ -475,6 +493,31 @@ func (v *verifier) loopCollect(in Instruction, s *vstate) error {
 	return err
 }
 
+// loopFold types a fold's item going into its answer: the step is a kernel
+// function of the answer and the item that gives the answer.
+func (v *verifier) loopFold(in Instruction, s *vstate) error {
+	loop, err := s.innermost()
+	if err != nil {
+		return err
+	}
+	step := v.functions[in.A]
+	if !loop.folds || !in.Type.Equal(loop.result) || !step.builtin || step.special != specialNone || len(step.Params) != 2 {
+		return fmt.Errorf("%s does not fold into %s", step.key, loop.result.Summary())
+	}
+	item, err := s.pop1(nil)
+	if err != nil {
+		return err
+	}
+	vars := map[string]Type{}
+	if !matchType(step.Params[0], loop.result, vars) || !matchType(step.Params[1], item, vars) {
+		return fmt.Errorf("%s does not fold %s into %s", step.key, item.Summary(), loop.result.Summary())
+	}
+	if result, ok := substituteType(step.Result, vars); !ok || !result.Equal(loop.result) {
+		return fmt.Errorf("%s does not fold into %s", step.key, loop.result.Summary())
+	}
+	return nil
+}
+
 // loopSpread types the outer clause of a nested comprehension: the inner
 // clause's whole array, spliced into the result.
 func (v *verifier) loopSpread(in Instruction, s *vstate) error {
@@ -499,6 +542,16 @@ func (v *verifier) loopNext(pc int, in Instruction, s *vstate) ([]edge, error) {
 	if !in.Type.Equal(loop.result) {
 		return nil, fmt.Errorf("the loop is %s, loop_next says %s", loop.result.Summary(), in.Type.Summary())
 	}
+	past, err := s.pastLoop(loop)
+	if err != nil {
+		return nil, err
+	}
+	return []edge{{in.A, s}, {pc + 1, past}}, nil
+}
+
+// pastLoop is the state after the innermost loop ends: its names unbound,
+// its result pushed.
+func (s *vstate) pastLoop(loop vloop) (*vstate, error) {
 	if guard, inside := s.fallback(); inside && len(s.loops) == guard.loops {
 		return nil, errors.New("a fallback's candidate ends a loop it is inside")
 	}
@@ -510,7 +563,27 @@ func (v *verifier) loopNext(pc int, in Instruction, s *vstate) ([]edge, error) {
 		}
 	}
 	past.push(loop.result)
-	return []edge{{in.A, s}, {pc + 1, past}}, nil
+	return past, nil
+}
+
+// loopBreak ends a fold's loop with the answer on the stack: the path past
+// the loop is loop_next's last one, the answer the loop's.
+func (v *verifier) loopBreak(in Instruction, s *vstate) ([]edge, error) {
+	loop, err := s.innermost()
+	if err != nil {
+		return nil, err
+	}
+	if !loop.folds || !in.Type.Equal(loop.result) {
+		return nil, fmt.Errorf("loop_break of %s ends %s", in.Type.Summary(), loop.result.Summary())
+	}
+	if _, err := s.pop1(in.Type); err != nil {
+		return nil, err
+	}
+	past, err := s.pastLoop(loop)
+	if err != nil {
+		return nil, err
+	}
+	return []edge{{in.A, past}}, nil
 }
 
 // fxPush types a using's quotes: each an exchange rate or an array of them.

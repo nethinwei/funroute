@@ -1,4 +1,4 @@
-package hosttest
+package api
 
 import (
 	"encoding/json"
@@ -32,6 +32,7 @@ var (
 	_ funroute.FunctionDescriptor
 	_ funroute.FormDescriptor
 	_ funroute.Example
+	_ funroute.Fold
 	_ []funroute.Parameter
 	_ funroute.Manifest
 	_ *funroute.Artifact
@@ -506,7 +507,7 @@ func TestTwoFieldsCannotShareATag(t *testing.T) {
 		A int64 `funroute:"a"`
 		B int64 `funroute:"a"`
 	}
-	const want = `fields A and B of hosttest.twice are both tagged "a"`
+	const want = `fields A and B of api.twice are both tagged "a"`
 	if _, err := funroute.ToValue(twice{}); err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("ToValue(twice{}) error = %v, want %q", err, want)
 	}

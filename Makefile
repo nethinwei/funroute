@@ -1,7 +1,7 @@
 GO ?= go
 NODE ?= node
 
-.PHONY: ci build test test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean
+.PHONY: ci build test test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits perf
 
 # ci must pass before any commit.
 ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize golangci deadcode lint build wasm test test-js
@@ -96,6 +96,15 @@ test:
 
 test-js:
 	$(NODE) --test web/src/*.test.ts web/funroute-lsp.test.mjs
+
+# limits writes the tables of docs/limits.md anew from a run; make test holds
+# the file to them. perf measures the speed into docs/perf.md, committed when
+# it is wanted: timings are the machine's, so nothing asserts them.
+limits:
+	$(GO) test ./tests/limits -update
+
+perf: wasm
+	$(GO) run ./tests/perf > docs/perf.md
 
 check-js:
 	@for file in web/*.js; do $(NODE) --check $$file || exit 1; done

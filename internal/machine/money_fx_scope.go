@@ -9,8 +9,8 @@ import (
 
 // A using runs part of a program with the exchange rates it names — its
 // quotes, each an fxrate or an array<fxrate> — and no others: rates outside
-// the using take no part. OpFxPush moves the quotes off the stack onto the
-// frame; OpFxPop drops them. A conversion inside reads the innermost using's
+// the using take no part. OpFxPush moves the quotes out of their registers
+// onto the frame; OpFxPop drops them. A conversion inside reads the innermost using's
 // quotes, a later one over an earlier, and a quote the other way round by
 // its inverse. Nothing is built: the quotes are the values the rule gave,
 // the host's []FxRate among them, so opening a using allocates nothing.
@@ -19,17 +19,6 @@ func validateFxPush(in Instruction, fail failFunc) error {
 	if in.A != 0 || in.C != 0 || in.B < 1 || len(in.Keys) != 0 {
 		return fail("fx_push takes B quotes, at least one, and nothing else, not A=%d B=%d C=%d", in.A, in.B, in.C)
 	}
-	return nil
-}
-
-// pushScope opens a using: its quotes are on the stack.
-func (f *frame) pushScope(in Instruction) error {
-	quotes, err := f.popN(in.B)
-	if err != nil {
-		return err
-	}
-	f.fxMarks = append(f.fxMarks, len(f.fxQuotes))
-	f.fxQuotes = append(f.fxQuotes, quotes...)
 	return nil
 }
 

@@ -66,8 +66,9 @@ type Example struct {
 // kinds, string, slices and string-keyed maps of those at any depth, and types
 // the registry has DefineHandle'd — optionally preceded by a context.Context,
 // and whose results are R, or (R, error), for such an R. The signature and the
-// conversions are derived by reflection once, here; a call then goes through
-// reflect.Call, which costs a few hundred nanoseconds. GoBatch takes every
+// conversions are derived by reflection once, here; a call of a common
+// signature then calls Go as itself (host_direct.go), and any other goes
+// through reflect.Call, which costs a few hundred nanoseconds. GoBatch takes every
 // request's arguments as slices — one per parameter of Go, in order, after the
 // optional context — and answers one result per request, the way an inference
 // engine is called: a Batch uses it, a plain Run uses Go.
@@ -86,6 +87,9 @@ func (r *Registry) reflectSpec(spec *FunctionSpec) error {
 		return fmt.Errorf("function %s: %w", spec.Name, err)
 	}
 	spec.Params, spec.Result, spec.Eval = single.params, single.result, single.call
+	if direct, ok := directEval(spec.Go); ok {
+		spec.Eval, spec.madeResult = direct, true
+	}
 	if spec.GoBatch == nil {
 		return nil
 	}

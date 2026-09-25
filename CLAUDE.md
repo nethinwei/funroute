@@ -22,15 +22,19 @@ internal/money/      金额、比例、汇率、币种表、舍入与分摊的 G
 internal/machine/    值、类型、字节码、VM、注册表、目录、清单        ← 只依赖 money
 internal/syntax/     词法、语法、AST、ExprJSON、格式化、语法树       ← 只依赖 machine
 internal/compile/    推导、编译、常量折叠、契约、Analyze             ← 依赖 syntax + machine
-internal/hosttest/   公开面的测试与 Example*（宿主侧）
 internal/demo/       演示控制台：宿主组装注册表的范例，工作台用它（宿主侧）
+examples/            可运行的 Go 宿主程序，只用公开包；只放宿主程序，不放规则示例
+tests/api/           公开面的测试与 Example*，按主题组织（宿主侧）
+tests/conformance/   web/funroute-examples.json 的每个示例经公开 API 跑完整条流水线
+tests/limits/        生成 docs/limits.md 的表格并守着它们（make limits）
+tests/perf/          性能报告程序，写进 docs/perf.md（make perf），不进 CI 的判定
 web/src/ web/wasm/   工作台前端（TS）与浏览器里的语言服务（js/wasm）
 cmd/funroute cmd/mvp CLI 与工作台静态服务
 ```
 
 - 依赖严格单向（`go list -deps` 验证）；kit 在最底层，所有实现包与 `lsp/` 都可以用它，表里不再逐一写。
 - **同一段逻辑只写一处**：两个包以上都要的放进 `internal/kit`，只有一个包要的留在那个包（奥卡姆剃刀：kit 不收"将来可能用到"的东西）。kit 不懂语言，不放任何带 FunRoute 语义的代码。
-- **导入规则由 `tools/lint/imports.go` 强制**：实现包只有 `funroute.go` 与 `lsp/` 可以导入；宿主侧包（`internal/hosttest`、`internal/demo`）只能用公开包，谁都可以导入它们。Go 的 internal 规则挡不住本模块自己的 `extensions/`、`cmd/`、`web/wasm`，所以需要这条检查。
+- **导入规则由 `tools/lint/imports.go` 强制**：实现包只有 `funroute.go` 与 `lsp/` 可以导入；`tests/`、`examples/` 与宿主侧包 `internal/demo` 只能用公开包，谁都可以导入 `internal/demo`。Go 的 internal 规则挡不住本模块自己的 `extensions/`、`examples/`、`tests/`、`cmd/`、`web/wasm`，所以需要这条检查。
 - machine 的文件按领域加前缀：`money_*.go` 是金额，`host_*.go` 是宿主绑定。
 - value/container/convert/vm/frame 必须同包：VM 直接操作 `Value` 的私有 backing，拆开就只能走公开 accessor。
 - 跨层要用内部件时，导出一个**语义明确的入口**（如 `EvaluateClosed`、`Resolve`），不导出零件。
@@ -40,7 +44,7 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 **公开面**
 - `funroute` 不导出任何宿主能写字段的数据类型：值只能经构造函数、`Parse`/JSON 或注册表得到，经访问方法读，JSON 形状由 `MarshalJSON` 固定。新增值类型必须同时给构造、访问与 JSON。
 - machine 为 compile/syntax 准备的内部构造入口不在公开包转发。`Registry` 是类型别名，它的方法宿主都能调，所以这类入口写成以 `*Registry` 为参数的包级函数，不写成方法；money 给 machine 的入口同理（`money/machine.go`）。
-- AST 不公开，程序一律用 ExprJSON 交换。`internal/hosttest/value_test.go` 的类型断言块把每个公开类型写一遍。
+- AST 不公开，程序一律用 ExprJSON 交换。`tests/api/value_test.go` 的类型断言块把每个公开类型写一遍。
 
 **值的边界：零拷贝、零分配**
 - 容器的 backing 就是原生 Go 值（`[]float64`、`map[string]int64`、`[]Money`），交给 `Value` 与从 `Value` 取出的都不复制，从那一刻起**只读**。新增取值入口必须保持"交出 backing、注释写明只读"。唯一的 backing 表是 `machine/container.go` 的 `natives`；读 backing 的 switch（容器操作、`fromGo`、`host_access.go`）为了热路径不改成间接调用，由 `TestEveryBackingIsHandledEverywhere` 逐项对照。
@@ -75,8 +79,10 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 - 编译错误必须带位置，只经 `syntax.At`、`syntax.Around(node, …)` 或 parser 内部的 `over` 产生。
 
 **执行性能**
-- 不要为一个 opcode 给 `Instruction` 加字段：解释循环按值复制指令，多一个切片头就让所有程序慢约 7%。操作数放进已有字段，需要换算的在装载时算好放进 `Runtime`。
-- 改了 `Instruction` 或 `frame.step`，与改动前交替跑 `BenchmarkDispatch`/`BenchmarkCall` 对照。
+- 执行的是装载时翻译出的寄存器形式（`lower*.go` → `regvm*.go`），栈字节码只是 Artifact 的格式：翻译不改 Artifact、不改 digest，也不改跑完的程序花的 fuel。
+- 寄存器操作 `rinstr` 保持 16 字节、按指针读：操作数放进 a/b/c，放不下的进 `regProgram` 的旁表（`calls`/`loops`/`makes`），需要换算的在翻译时算好。
+- `frame.exec` 只放最常用的操作（50 行的上限也是它的上限），其余进 `cold`。专用内核指令只写快路径，答不出就返回 false，由 `fault` 问函数本身要错误，文案一字不差。
+- 改了翻译器、`rinstr` 或 `frame.exec`，与改动前交替跑 `BenchmarkDispatch`/`BenchmarkCall`/`BenchmarkRunPaths` 对照，再 `make perf`。
 - 类型在装载时由 `machine/verify.go` 证明一次，执行路径不再检查内核运算的结果、容器的元素、循环收集的值与局部槽是否绑定；只检查宿主函数的回答。新增会产生值的执行路径，先让验证器能证明它的类型。
 
 **Go 只做语言**
@@ -90,13 +96,16 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 
 | 改了什么 | 还要动哪里 |
 |---|---|
-| 新增 opcode | `machine/opcode.go` 表一行 + `verify.go` 的类型规则 + `frame.step` 一个 case（`TestEveryOpcodeIsExecutableAndNamed` 兜底） |
+| 新增 opcode | `machine/opcode.go` 表一行 + `verify.go` 的类型规则 + `lower_instr.go` 的翻译规则（`TestEveryOpcodeIsExecutableAndNamed` 兜底）；要新的寄存器操作就在 `regvm_ops.go` 加一行、在 `exec` 或 `cold` 里执行；会跳转的在 `leadersOf` 里另起一块 |
+| 内核函数要专用指令 | `lower_kernel.go` 的 `kernelOps` 一行 + `regvm_ops.go` 的操作 + `regvm_kernel.go` 的快路径（`TestKernelOpsAnswerAsTheirFunctions` 在边界值上对照函数） |
 | 新增形式 | `machine/catalog.go` 的 `languageForms` 一行（可开关的写 `optional`，能包进表达式的写 `wrap` 模板）；节点的 kind tag 写 `,form`（可开关的再写 `,optional`，`TestTheOptionalFormsAreTheMachines` 对照）；termination.md |
 | 新增 ExprJSON 节点 | `syntax/ast.go`（嵌入 `Node` 并写 `kind` tag，字段带 tag，加进 `nodeTypes`）；语义在 `compile/infer_expr.go`、`compiler.go`；打印在 `syntax/print.go`、`format.go`；按节点分派的还有 `compile/enum.go`、`fold.go`；示例要用到它（`lsp/funroute_test.go` 检查） |
 | 改语法 | README 附录 A 的文法；跑 `go test ./internal/syntax -run XXX -fuzz FuzzFormatRoundTrip -fuzztime 60s` |
 | 新增函数 | 只经 `Registry.Register` 注册 `FunctionSpec`（手写 `Params`/`Result`/`Eval`，或填 `Go`/`GoBatch` 按 Go 签名反射），目录与 LSP 自动生效；`Doc` 是唯一的函数元数据结构；ABI 版本写进名字（`route.score_v1`） |
 | 新增官方函数或重载 | 补案例（内核 `machine/examples.go`，std `extensions/std/examples.go`），测试要求案例选中每个重载；一个名字服务多种元素类型用 std 的 `eachType` 并在 `TestNamesCoverEveryElementTypeTheyClaim` 加一行 |
 | 新增纯函数 | 标 `Doc.Constexpr` |
+| 新增聚合函数 | 能用一个内核函数一步步折叠、或遇到某个 bool 就停的，声明 `FunctionSpec.Fold`；融合后跑完的程序不能比原来多要 fuel（`internal/compile/aggregate_test.go` 对照） |
+| 按 Go 签名注册的新常见形状 | `host_direct.go` 一个 case，在 `TestDirectCallsAnswerAsReflection` 加一个该形状的函数 |
 | 新增凭空造容器的函数 | 标 `Doc.BoundedArgs`，理由写进 termination.md 定理 B 之后 |
 | 新增读运行状态的内核函数 | `FunctionSpec.readsRun`（不折叠，要求写在 `using` 里） |
 | 新增金额函数 | 先在 `internal/money` 的 Go 方法上实现；会舍入的内核运算用 `registerRounded`；非内核函数自己检查容器里币种一致（std 的 `amountsOf`）；宿主先 `DeclareMoney` 再注册 std |
@@ -104,7 +113,8 @@ cmd/funroute cmd/mvp CLI 与工作台静态服务
 | `Kind` 加值 | `kindNames`；有运行时表示的还有 `Value.hasType`/`Type()`/`Any()`、`compile/infer.go` 的 `typeTerm`、`implicitTypeScore`、`ParseType` |
 | 新增原生 backing | `machine/container.go` 的 `natives` 一行与 `host_plan.go` 的 `native` 常量；`TestEveryBackingIsHandledEverywhere` 指出每个还要补的 switch |
 | `reflectType`/`fromGo` 新增非容器的 Go 类型 | `machine/host_plan.go` 的 `newCodecFor` 与 `host_access.go` |
-| 新增公开 API | `funroute.go` 对应的一节；新类型进 `internal/hosttest/value_test.go` 的断言块，并在 `internal/hosttest` 以宿主视角用一次。能不加就不加 |
+| 新增公开 API | `funroute.go` 对应的一节；新类型进 `tests/api/value_test.go` 的断言块，并在 `tests/api` 以宿主视角用一次。能不加就不加 |
+| 改了 docs/limits.md 表格里的行为 | `make limits` 重新生成，读一遍 diff；新增边界就在 `tests/limits` 的用例表加一行，说明写在用例里 |
 | 新增例子 | 只改 `web/funroute-examples.json`（源码 + 契约 + 入参 + 期望值）；示例合起来要覆盖演示注册表的全部函数、形式、运算符与节点 |
 | 新增语言服务能力 | `lsp/`：标准方法优先，专有的用 `funroute/*` 或 `workspace/executeCommand`；`web/wasm` 只是传输 |
 | 新增颜色 | 只在 `web/tokens.css`，用 `light-dark(浅, 深)`；组件只消费 token |
@@ -120,6 +130,9 @@ make test | make lint | make vet | make fmt
 make wasm      # web/dist/funroute.wasm
 make web       # web/dist/*.js（先在 web/ 里 npm install；产物不提交）
 make run       # 构建并在 http://127.0.0.1:8080 服务工作台
+make limits    # 重新生成 docs/limits.md 的表格（go test ./tests/limits -update）
+make perf      # 性能报告写进 docs/perf.md，需要时再提交
+go run ./examples/routing                                          # 宿主程序示例：routing、money、batch
 go test ./internal/compile -run TestIfIsLazyAndFuelIsEnforced -v   # 单个测试
 go test ./internal/machine -bench . -benchtime 2000x              # VM 基准
 go run ./cmd/funroute run -expr 'let(bps = 250, amount * bps / 10000)' -types 'amount=int' -args '{"amount":100000}'
@@ -143,6 +156,6 @@ go run ./cmd/funroute run -expr 'let(bps = 250, amount * bps / 10000)' -types 'a
 - 不睡：依赖定时器的测试跑在 `testing/synctest` 上。
 - 基准写 `for b.Loop()`。
 - 测试辅助函数第一句 `t.Helper()`。
-- **`foo_test.go` 对应同目录的 `foo.go`**。例外：`example_test.go`、`export_test.go`，以及只有 `doc.go` 的测试套件目录（`internal/hosttest`）。没有 `helpers_test.go`。测 machine 行为又要先编译的测试写成 `package machine_test`，内部件经 `export_test.go` 暴露。
+- **`foo_test.go` 对应同目录的 `foo.go`**。例外：`example_test.go`、`export_test.go`，以及只有 `doc.go` 的测试套件目录（`tests/` 下的 `api`、`conformance`、`limits`）。没有 `helpers_test.go`。测 machine 行为又要先编译的测试写成 `package machine_test`，内部件经 `export_test.go` 暴露。
 
 其余靠评审：表驱动测试每个用例一个 `t.Run`；独立的测试第一句 `t.Parallel()`（`testing.AllocsPerRun`、synctest、共享状态、计时敏感的除外）；失败信息写出输入、实际与期望。

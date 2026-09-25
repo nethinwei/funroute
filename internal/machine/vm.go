@@ -1,13 +1,13 @@
 package machine
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/nethinwei/funroute/internal/kit"
 )
@@ -17,25 +17,31 @@ type Runtime struct {
 	registry  *Registry
 	constants []Value
 	functions []*RegisteredFunction
-	// updates holds, for each record_with, the indexes of the fields it
-	// replaces, by program counter; nil when the program has none.
-	updates [][]int
 	// money is what the runtime knows about the currencies its arguments
 	// carry; empty for a program without money.
 	money moneyPlan
 	// depth is how deep the stack gets, which loading proved.
-	depth  int
+	depth int
+	// reg is the program in register form, which is what runs.
+	reg regProgram
+	// scalars is, by argument, the kind of a bool, int, float or string
+	// parameter, which a value of that kind has without looking further;
+	// InvalidKind for the rest.
+	scalars []Kind
+	// idle is a frame kept for the next run, taken and given back without
+	// the pool's bookkeeping; frames holds the rest.
+	idle   atomic.Pointer[frame]
 	frames sync.Pool
 }
 
 type RunOptions struct {
 	Fuel     uint64
 	MaxStack int
-	// prefetched holds results a Batch computed ahead of the program, keyed
-	// by the call instruction's program counter. The program takes them
-	// instead of calling. Only a Batch sets it: a host that could would skip
-	// the real call.
-	prefetched map[int]Prefetched
+	// prefetched holds results a Batch computed ahead of the program, one
+	// for each call of the register form (regProgram.calls), ready or not.
+	// The program takes them instead of calling. Only a Batch sets it: a host
+	// that could would skip the real call.
+	prefetched []Prefetched
 }
 
 // Instantiate validates the artifact digest and binds its exact function
@@ -74,14 +80,30 @@ func newRuntime(artifact *Artifact, registry *Registry) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	depth, err := verify(artifact, functions)
+	proof, err := verify(artifact, functions)
+	if err != nil {
+		return nil, err
+	}
+	reg, err := lower(artifact, constants, functions, proof)
 	if err != nil {
 		return nil, err
 	}
 	return &Runtime{
-		artifact: artifact, registry: registry, constants: constants, functions: functions, depth: depth,
-		updates: resolveUpdates(artifact), money: newMoneyPlan(artifact, registry),
+		artifact: artifact, registry: registry, constants: constants, functions: functions, depth: proof.depth, reg: reg,
+		money: newMoneyPlan(artifact, registry), scalars: scalarKinds(artifact.parts.Args),
 	}, nil
+}
+
+// scalarKinds is what Runtime.scalars says of params.
+func scalarKinds(params []Parameter) []Kind {
+	kinds := make([]Kind, len(params))
+	for i, param := range params {
+		switch param.typ.kind {
+		case BoolKind, IntKind, FloatKind, StringKind:
+			kinds[i] = param.typ.kind
+		}
+	}
+	return kinds
 }
 
 // declaredConstants holds an artifact's constants to the registry's currency
@@ -99,25 +121,6 @@ func declaredConstants(constants []Value, registry *Registry) error {
 		}
 	}
 	return nil
-}
-
-// resolveUpdates turns each record_with's field names into the indexes the
-// frame writes by, once, at load. The names stay in the instruction rather
-// than an index list of its own because the interpreter copies an Instruction
-// on every step: one more slice header in it made every program 7% slower,
-// record updates or not.
-func resolveUpdates(artifact *Artifact) [][]int {
-	var updates [][]int
-	for pc, instruction := range artifact.parts.Instructions {
-		if instruction.Op != OpRecordWith {
-			continue
-		}
-		if updates == nil {
-			updates = make([][]int, len(artifact.parts.Instructions))
-		}
-		updates[pc] = kit.Map(instruction.Keys, instruction.Type.FieldIndex)
-	}
-	return updates
 }
 
 // EvaluateClosed runs an artifact that takes no arguments and returns its
@@ -310,7 +313,7 @@ func validateLoopInstruction(instruction Instruction, artifact *Artifact, fail f
 	if instruction.A < 0 || instruction.A > len(artifact.parts.Instructions) {
 		return fail("malformed loop target %d", instruction.A)
 	}
-	if instruction.Op == OpLoopNext {
+	if instruction.Op == OpLoopNext || instruction.Op == OpLoopBreak {
 		return nil
 	}
 	if instruction.B < 0 || instruction.B >= artifact.parts.Locals {
@@ -378,7 +381,12 @@ func (r *Runtime) RunValues(ctx context.Context, args []Value, options RunOption
 	if err := r.checkKinds(args, false); err != nil {
 		return Value{}, err
 	}
-	return r.runTyped(ctx, args, options)
+	// runTyped's work, written out: one call less on the path every
+	// service request takes.
+	f := r.acquireFrame()
+	space := f.argSpace(len(args))
+	copy(space, args)
+	return r.runFrame(ctx, f, space, options)
 }
 
 // admit checks a request's arguments as a run would — their kinds unless a
@@ -402,7 +410,13 @@ func (r *Runtime) checkKinds(args []Value, typed bool) error {
 	if len(args) != len(params) {
 		return fmt.Errorf("%w: expected %d arguments, got %d", ErrContract, len(params), len(args))
 	}
-	for i := 0; !typed && i < len(params); i++ {
+	if typed {
+		return nil
+	}
+	for i, kind := range r.scalars {
+		if kind != InvalidKind && args[i].kind == kind {
+			continue
+		}
 		if !args[i].hasType(params[i].typ) {
 			return argumentError(params[i], args[i])
 		}
@@ -431,31 +445,15 @@ func (r *Runtime) runTyped(ctx context.Context, args []Value, options RunOptions
 	return r.runFrame(ctx, f, space, options)
 }
 
-func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, options RunOptions) (Value, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	f.fuelCell = cmp.Or(options.Fuel, DefaultFuel)
-	f.reset(r, args, &f.fuelCell, cmp.Or(options.MaxStack, 1_024))
-	f.ctx = ctx
-	f.deadline = ctx.Done() != nil
-	f.prefetched = options.prefetched
-	if r.money.any {
-		if err := r.checkUnits(args); err != nil {
-			r.releaseFrame(f)
-			return Value{}, err
-		}
-	}
-	value, err := f.guardedRun()
-	r.releaseFrame(f)
-	return value, err
-}
-
 func (r *Runtime) bindArgs(args []Value, rawArgs map[string]any) error {
 	for i, param := range r.artifact.parts.Args {
 		raw, ok := rawArgs[param.name]
 		if !ok {
 			return fmt.Errorf("missing argument %q of type %s", param.name, param.typ)
+		}
+		if value, plain := plainScalar(raw, r.scalars[i]); plain {
+			args[i] = value
+			continue
 		}
 		value, err := coerceWith(raw, param.typ, r.money.table)
 		if err != nil {
@@ -474,14 +472,37 @@ func (r *Runtime) bindArgs(args []Value, rawArgs map[string]any) error {
 	return nil
 }
 
+// plainScalar is raw as a value of kind, when it is one as it is: what
+// coerceWith makes of it, without the conversions it tries first.
+func plainScalar(raw any, kind Kind) (Value, bool) {
+	switch raw := raw.(type) {
+	case int:
+		return Int(int64(raw)), kind == IntKind
+	case int64:
+		return Int(raw), kind == IntKind
+	case string:
+		return String(raw), kind == StringKind
+	case bool:
+		return Bool(raw), kind == BoolKind
+	case float64:
+		return Float(raw), kind == FloatKind && finite(raw)
+	}
+	return Value{}, false
+}
+
 func (r *Runtime) acquireFrame() *frame {
+	if f := r.idle.Swap(nil); f != nil {
+		return f
+	}
 	if f, ok := r.frames.Get().(*frame); ok {
 		return f
 	}
-	return &frame{}
+	return r.newFrame()
 }
 
 func (r *Runtime) releaseFrame(f *frame) {
 	f.release()
-	r.frames.Put(f)
+	if !r.idle.CompareAndSwap(nil, f) {
+		r.frames.Put(f)
+	}
 }

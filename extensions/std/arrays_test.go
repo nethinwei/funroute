@@ -1,6 +1,7 @@
 package std_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/nethinwei/funroute"
@@ -56,5 +57,36 @@ func TestConvenienceShortcuts(t *testing.T) {
 				t.Fatalf("%s must fail", source)
 			}
 		})
+	}
+}
+
+// A sort is stable where it can show: 0 and -0 are equal and still two
+// values, and keep their order; anything else sorts as it does.
+func TestSortKeepsEqualsThatDifferInOrder(t *testing.T) {
+	t.Parallel()
+	negative := math.Copysign(0, -1)
+	xs := funroute.ArgSpec{Name: "xs", Type: funroute.ArrayOf(funroute.FloatType)}
+	for _, test := range []struct {
+		source string
+		in     []float64
+		signs  []bool
+	}{
+		{"sort(xs)", []float64{0, 1, negative, -1, 0}, []bool{true, false, true, false, false}},
+		{"sort_desc(xs)", []float64{negative, 1, 0, -1}, []bool{false, true, false, true}},
+		{"sort(xs)", []float64{3, 1, 2}, []bool{false, false, false}},
+	} {
+		got, err := run(t, test.source, map[string]any{"xs": test.in}, xs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sorted, ok := got.([]float64)
+		if !ok || len(sorted) != len(test.signs) {
+			t.Fatalf("%s of %v = %v", test.source, test.in, got)
+		}
+		for i, value := range sorted {
+			if math.Signbit(value) != test.signs[i] {
+				t.Errorf("%s of %v = %v, want signs %v", test.source, test.in, sorted, test.signs)
+			}
+		}
 	}
 }

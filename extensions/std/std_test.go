@@ -348,3 +348,25 @@ func TestPackWithoutMoneyHasNoMoneySignature(t *testing.T) {
 		}
 	}
 }
+
+// any and all of a comprehension stop at the item that decides them, as ||
+// and && do: nothing after it is computed, so nothing after it fails.
+func TestQuantifiersStopAtTheItemThatDecides(t *testing.T) {
+	t.Parallel()
+	xs := funroute.ArgSpec{Name: "xs", Type: funroute.ArrayOf(funroute.IntType)}
+	for _, test := range []struct {
+		source string
+		want   bool
+	}{
+		{`any([10 / x > 2 for x in xs])`, true},
+		{`all([10 / x > 5 for x in xs])`, false},
+	} {
+		got, err := run(t, test.source, map[string]any{"xs": []any{1, 5, 0}}, xs)
+		if err != nil || got != test.want {
+			t.Errorf("%s over [1, 5, 0] = %v, %v, want %v: the 0 is past the item that decides", test.source, got, err, test.want)
+		}
+	}
+	if _, err := run(t, `any([10 / x > 20 for x in xs])`, map[string]any{"xs": []any{1, 0}}, xs); !errors.Is(err, funroute.ErrArithmetic) {
+		t.Errorf("any with nothing true before the 0 = %v, want its division by zero", err)
+	}
+}

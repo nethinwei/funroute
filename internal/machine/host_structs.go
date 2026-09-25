@@ -113,7 +113,7 @@ func intoStruct(registry *Registry, value Value, typ reflect.Type) (reflect.Valu
 	}
 	out := reflect.New(typ).Elem()
 	for i, wanted := range record.typ.fields {
-		field, err := structFieldFor(typ, declared, indexes, record.typ, wanted.name)
+		field, err := structFieldFor(typ, declared, indexes, *record.typ, wanted.name)
 		if err != nil {
 			return reflect.Value{}, err
 		}

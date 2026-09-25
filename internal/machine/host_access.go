@@ -33,20 +33,70 @@ type sliceHeader struct {
 	cap  int
 }
 
+// argRead is one argument a program reads from the host's struct: its
+// slot, where it is in the struct and how to load it. A plain bool, int,
+// float or string field — no enum to hold it to — has its Go kind here and is
+// loaded in place, without the codec's call.
+type argRead struct {
+	index  int
+	offset uintptr
+	kind   reflect.Kind
+	codec  *codec
+}
+
+func newArgRead(index int, plan *argsCodec) argRead {
+	field := plan.fields[index]
+	read := argRead{index: index, offset: field.offset, codec: field.codec}
+	if field.codec.shape == shapeScalar && field.codec.typ.kind != EnumKind {
+		switch kind := field.codec.goKind; kind {
+		case reflect.Bool, reflect.Int, reflect.Int64, reflect.Float64, reflect.String:
+			read.kind = kind
+		}
+	}
+	return read
+}
+
 // encodeArgs fills a program's argument slots from the host's struct. Only
 // the arguments the bytecode reads are loaded; the others stay zero, and the
 // program never looks at them.
-func encodeArgs[In any](plan *argsCodec, reads []int, args []Value, in *In) error {
+func encodeArgs[In any](plan *argsCodec, reads []argRead, args []Value, in *In) error {
 	base := unsafe.Pointer(in)
-	for _, i := range reads {
-		field := plan.fields[i]
-		value, err := field.codec.load(unsafe.Add(base, field.offset))
-		if err != nil {
-			return fmt.Errorf("argument %q: %w", plan.params[i].name, err)
+	for _, read := range reads {
+		p := unsafe.Add(base, read.offset)
+		if loadPlain(read.kind, p, &args[read.index]) {
+			continue
 		}
-		args[i] = value
+		value, err := read.codec.load(p)
+		if err != nil {
+			return fmt.Errorf("argument %q: %w", plan.params[read.index].name, err)
+		}
+		args[read.index] = value
 	}
 	return nil
+}
+
+// loadPlain loads a plain field of kind at p into slot, and reports whether
+// it did: a float that is not finite is left to the codec, which refuses it.
+func loadPlain(kind reflect.Kind, p unsafe.Pointer, slot *Value) bool {
+	switch kind {
+	case reflect.Int64:
+		*slot = Value{kind: IntKind, i: *(*int64)(p)}
+	case reflect.Int:
+		*slot = Value{kind: IntKind, i: int64(*(*int)(p))}
+	case reflect.Bool:
+		*slot = Value{kind: BoolKind, b: *(*bool)(p)}
+	case reflect.String:
+		*slot = Value{kind: StringKind, s: *(*string)(p)}
+	case reflect.Float64:
+		f := *(*float64)(p)
+		if !finite(f) {
+			return false
+		}
+		*slot = Value{kind: FloatKind, f: f}
+	default:
+		return false
+	}
+	return true
 }
 
 // decodeResult writes a program's result into the host's Go value. A
@@ -201,15 +251,15 @@ func loadBacking[T any](kind Kind, p unsafe.Pointer) Value {
 // fields are already known to have it, so Record's clone and checks would only
 // repeat what planning established.
 func (c *codec) loadRecord(p unsafe.Pointer) (Value, error) {
-	fields := make([]Value, len(c.fields))
+	record := newRecord(&c.typ, len(c.fields))
 	for i, field := range c.fields {
 		value, err := field.codec.load(unsafe.Add(p, field.offset))
 		if err != nil {
 			return Value{}, fmt.Errorf("field %q: %w", c.typ.fields[i].name, err)
 		}
-		fields[i] = value
+		record.fields[i] = value
 	}
-	return Value{kind: RecordKind, box: &recordValue{typ: c.typ, fields: fields}}, nil
+	return Value{kind: RecordKind, box: record}, nil
 }
 
 func (c *codec) loadSlice(p unsafe.Pointer) (Value, error) {

@@ -74,7 +74,7 @@ func (c *Codec[In, Out]) Instantiate(artifact *Artifact) (*Program[In, Out], err
 		return nil, kit.Classify(ErrContract, "result: ", err)
 	}
 	return &Program[In, Out]{
-		args: args, result: result, runtime: runtime, reads: argumentReads(declared),
+		args: args, result: result, runtime: runtime, reads: argumentReads(declared, args),
 		hoisted: NewBatch(runtime, BatchOptions{}),
 	}, nil
 }
@@ -82,17 +82,17 @@ func (c *Codec[In, Out]) Instantiate(artifact *Artifact) (*Program[In, Out], err
 // argumentReads lists the arguments the bytecode loads. An argument the
 // program never reads is never converted either, so one host struct can serve
 // many rules and each pays only for the fields it uses.
-func argumentReads(artifact *Artifact) []int {
+func argumentReads(artifact *Artifact, plan *argsCodec) []argRead {
 	read := make([]bool, len(artifact.parts.Args))
 	for _, instruction := range artifact.parts.Instructions {
 		if instruction.Op == OpLoadArg {
 			read[instruction.A] = true
 		}
 	}
-	var reads []int
+	var reads []argRead
 	for i, ok := range read {
 		if ok {
-			reads = append(reads, i)
+			reads = append(reads, newArgRead(i, plan))
 		}
 	}
 	return reads
@@ -104,7 +104,7 @@ type Program[In, Out any] struct {
 	args    *argsCodec
 	result  *codec
 	runtime *Runtime
-	reads   []int
+	reads   []argRead
 	// hoisted is the program's batchable calls, found once. RunBatch executes
 	// through it directly; it never queues and never starts a timer.
 	hoisted *Batch

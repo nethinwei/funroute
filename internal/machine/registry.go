@@ -81,6 +81,10 @@ type FunctionSpec struct {
 	// a front end, so there is one structure rather than an input shape and a
 	// parallel output shape that have to be kept in step.
 	Doc Doc
+	// Fold, when it is set, declares the function a fold of its one array
+	// argument, and a call of it on a comprehension is then computed in one
+	// pass over the comprehension's source, with no array built (see Fold).
+	Fold *Fold
 
 	special specialForm
 	builtin bool
@@ -99,6 +103,10 @@ type FunctionSpec struct {
 	// it does with whole minor units: sums, counts, comparisons, the rounding
 	// variants. Exact money reaches no other function.
 	takesExact bool
+	// madeResult marks a host's function whose Eval makes its result of the
+	// right type, invariants kept — a Go function called as itself, of a
+	// scalar result — so a call does not look at it again.
+	madeResult bool
 }
 
 func (s FunctionSpec) Signature() string {
@@ -350,6 +358,9 @@ func (r *Registry) Register(spec FunctionSpec) error {
 		return err
 	}
 	if err := normalizeDoc(&spec); err != nil {
+		return err
+	}
+	if err := r.validateFold(&spec); err != nil {
 		return err
 	}
 	key := spec.Signature()

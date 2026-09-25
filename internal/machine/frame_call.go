@@ -7,35 +7,51 @@ import (
 	"github.com/nethinwei/funroute/internal/kit"
 )
 
-// call runs one call instruction. There are three ways to get the value,
-// cheapest first: a Batch already computed it; the plain call every kernel
-// function takes; or the bounded call of a function with a Timeout or
-// Detached. A hoisted call still costs its fuel so a program's budget does
-// not depend on how it ran.
+// callSite runs one call. There are three ways to get the value, cheapest
+// first: a Batch already computed it; the plain call every kernel function
+// takes; or the bounded call of a function with a Timeout or Detached. The
+// call's block paid its fuel, so a program's budget does not depend on how
+// it ran; a call past its deadline did not run, and gets its cost back with
+// the rest of the block if a fallback takes the failure.
 //
-// The result is then held to the call's type. Currencies first: money the
-// registry cannot hold, or in the wrong currency, is an ErrCurrency like
+// A host's result is then held to the call's type. Currencies first: money
+// the registry cannot hold, or in the wrong currency, is an ErrCurrency like
 // everywhere else, which fallback does not take; any other wrong result is
-// the extension's fault. A host function's result is also looked into all
-// the way down, containers and records included, for currencies the registry
-// did not declare and amounts with no currency that are not zero. A kernel
-// function's checks stay inline: a call of their own costs every kernel call
-// a nanosecond or two.
-func (f *frame) call(pc int, instruction Instruction) error {
-	function := f.runtime.functions[instruction.A]
+// the extension's fault. The result is also looked into all the way down,
+// containers and records included, for currencies the registry did not
+// declare and amounts with no currency that are not zero. A kernel
+// function's result is of its signature's type, which loading proved.
+func (f *frame) callSite(call int32) error {
+	site := &f.runtime.reg.calls[call]
+	f.refund = site.refund
+	function := site.fn
+	args := f.regs[site.args : site.args+site.argc : site.args+site.argc]
+	if site.kernel && len(f.fallbacks) == 0 {
+		value, err := function.Eval(f.ctx, args)
+		if err != nil {
+			return fmt.Errorf("%s: %w", function.Name, err)
+		}
+		f.regs[site.dst] = value
+		return nil
+	}
 	if !function.IsBuiltin() && f.deadline && f.ctx.Err() != nil {
+		f.refund = addFuel(f.refund, function.Doc.Cost)
 		return fmt.Errorf("%s: %w", function.Name, kit.Classify(ErrDeadline, "", f.ctx.Err()))
 	}
-	if f.fuelLeft < function.Doc.Cost {
-		return fmt.Errorf("%w before %s", ErrFuel, function.Name)
-	}
-	f.fuelLeft -= function.Doc.Cost
-	callArgs, err := f.popN(instruction.B)
+	value, err := f.invoke(int(call), function, args, site.typ)
 	if err != nil {
 		return err
 	}
+	f.regs[site.dst] = value
+	return nil
+}
+
+// invoke makes the call-th call of function with args and holds its answer
+// to typ.
+func (f *frame) invoke(call int, function *RegisteredFunction, callArgs []Value, typ *Type) (Value, error) {
 	var value Value
-	if ready, ok := f.prefetchedAt(pc); ok {
+	var err error
+	if ready, ok := f.prefetchedAt(call); ok {
 		value, err = ready.Value, ready.Err
 	} else if function.Doc.Timeout == 0 && !function.Doc.Detached {
 		ctx := f.ctx
@@ -52,16 +68,16 @@ func (f *frame) call(pc int, instruction Instruction) error {
 		value, err = f.invokeBounded(function, callArgs)
 	}
 	if err != nil {
-		return fmt.Errorf("%s: %w", function.Name, f.functionError(function, err))
+		return Value{}, fmt.Errorf("%s: %w", function.Name, f.functionError(function, err))
 	}
 	// A kernel function's result is of its signature's type, which loading
-	// proved the call's; a host's is looked at.
-	if !function.IsBuiltin() {
-		if err := f.hostResult(function, value, instruction.Type); err != nil {
-			return err
+	// proved the call's; a host's is looked at, unless its Eval made it.
+	if !function.IsBuiltin() && !function.madeResult {
+		if err := f.hostResult(function, value, typ); err != nil {
+			return Value{}, err
 		}
 	}
-	return f.push(value)
+	return value, nil
 }
 
 // hostResult holds a host function's result to the call's type: declared
@@ -93,12 +109,11 @@ func (f *frame) resultTypeError(function *RegisteredFunction, value Value, typ T
 
 // prefetchedAt is small enough to inline, so the common case — no batch — is
 // one nil check on the call path.
-func (f *frame) prefetchedAt(pc int) (Prefetched, bool) {
-	if f.prefetched == nil {
+func (f *frame) prefetchedAt(call int) (Prefetched, bool) {
+	if f.prefetched == nil || !f.prefetched[call].ready {
 		return Prefetched{}, false
 	}
-	ready, ok := f.prefetched[pc]
-	return ready, ok
+	return f.prefetched[call], true
 }
 
 // invokeBounded caps one call by the function's Timeout and, for a Detached

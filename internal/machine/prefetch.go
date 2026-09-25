@@ -104,4 +104,16 @@ func callOperands(code []Instruction, guarded []bool, pc, count int) ([]Operand,
 type Prefetched struct {
 	Value Value
 	Err   error
+	ready bool
+}
+
+// callAt is the call of the register form the stack instruction at pc
+// became, or -1.
+func (r *Runtime) callAt(pc int) int {
+	for i, call := range r.reg.calls {
+		if int(call.pc) == pc {
+			return i
+		}
+	}
+	return -1
 }

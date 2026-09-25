@@ -12,14 +12,14 @@ import (
 // The implementation under internal/ is imported only by the code that
 // publishes it: the root package, whose files are aliases and forwards, and
 // the language server in lsp/. Go's internal rule stops a host outside the
-// module, but not this module's own extensions/, examples/ and cmd/, which are
-// meant to stand where a host stands — so this check keeps them there, and
-// the host-side code under internal/ (hostSide) too.
+// module, but not this module's own extensions/, examples/, tests/ and cmd/,
+// which are meant to stand where a host stands — so this check keeps them
+// there, and the host-side code under internal/ (hostSide) too.
 
 // hostSide is the code under internal/ that stands where a host stands and
-// may use only the public package: the public surface's tests, and the demo
-// console that shows a host how to assemble one.
-var hostSide = map[string]bool{"internal/hosttest": true, "internal/demo": true}
+// may use only the public package: the demo console that shows a host how to
+// assemble one. Being a host itself, anyone may import it.
+var hostSide = map[string]bool{"internal/demo": true}
 
 // modulePath reads the module path from root's go.mod.
 func modulePath(root string) (string, error) {

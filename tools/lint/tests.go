@@ -14,9 +14,9 @@ import (
 // to foo.go, so the tests of a piece of code are found where the code is.
 // Go's own conventions are the exceptions: example_test.go holds a package's
 // godoc examples, and export_test.go gives external tests the internals they
-// need. So is a test suite, a package whose only source file is doc.go — the
-// public surface's, internal/hosttest, tests the one file funroute.go by
-// topic.
+// need. So is a test suite, a package whose only source file is doc.go: the
+// ones under tests/ test what no one file holds — the public surface by
+// topic, the language against its examples, the limits the docs state.
 var unpairedTestFiles = map[string]bool{"example_test.go": true, "export_test.go": true}
 
 func checkTestPairing(path string) []violation {

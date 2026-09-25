@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -44,6 +45,8 @@ type BatchOptions struct {
 type batchSite struct {
 	PrefetchSite
 	function *RegisteredFunction
+	// call is the call of the register form the site is.
+	call int
 }
 
 // batchRequest is one program run inside a batch. A request that someone is
@@ -85,7 +88,7 @@ func NewBatch(runtime *Runtime, options BatchOptions) *Batch {
 	for _, site := range PrefetchSites(runtime.artifact) {
 		function := runtime.functions[site.Call]
 		if function.EvalBatch != nil {
-			batch.sites = append(batch.sites, batchSite{PrefetchSite: site, function: function})
+			batch.sites = append(batch.sites, batchSite{PrefetchSite: site, function: function, call: runtime.callAt(site.PC)})
 		}
 	}
 	return batch
@@ -113,16 +116,37 @@ func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, er
 	if err := ctx.Err(); err != nil {
 		return Value{}, kit.Classify(ErrDeadline, "", err)
 	}
-	request := &batchRequest{ctx: ctx, args: args, done: make(chan batchResult, 1), typed: typed}
+	request := newRequest(ctx, args, typed)
 	if err := b.enqueue(request); err != nil {
 		return Value{}, err
 	}
 	select {
 	case result := <-request.done:
+		// Answered, the request is nobody's any more.
+		releaseRequest(request)
 		return result.value, result.err
 	case <-ctx.Done():
+		// The batch still holds the request and will answer it: it is not
+		// given back.
 		return Value{}, kit.Classify(ErrDeadline, "", ctx.Err())
 	}
+}
+
+// requests keeps answered requests for the requests to come. Not their
+// channels: a channel belongs to where it was made — a synctest bubble
+// refuses one from outside — so each request makes its own.
+var requests = sync.Pool{New: func() any { return new(batchRequest) }}
+
+func newRequest(ctx context.Context, args []Value, typed bool) *batchRequest {
+	request, _ := requests.Get().(*batchRequest)
+	request.ctx, request.args, request.typed = ctx, args, typed
+	request.done = make(chan batchResult, 1)
+	return request
+}
+
+func releaseRequest(request *batchRequest) {
+	*request = batchRequest{}
+	requests.Put(request)
 }
 
 func (b *Batch) enqueue(request *batchRequest) error {
@@ -200,12 +224,20 @@ func (b *Batch) executeShared(ctx context.Context, requests []*batchRequest, opt
 // run of its own would have handed it.
 func (b *Batch) executeUnder(ctx context.Context, active []*batchRequest, options RunOptions) {
 	active = b.admitted(active)
-	prefetched := make([]map[int]Prefetched, len(active))
+	// Every request's answers in one allocation: a share each, one slot
+	// for each call of the program.
+	calls := len(b.runtime.reg.calls)
+	var answers []Prefetched
+	if len(b.sites) > 0 {
+		answers = make([]Prefetched, len(active)*calls)
+	}
 	for _, site := range b.sites {
-		b.prefetch(ctx, site, active, prefetched)
+		b.prefetch(ctx, site, active, answers)
 	}
 	for i, request := range active {
-		options.prefetched = prefetched[i]
+		if answers != nil {
+			options.prefetched = answers[i*calls : (i+1)*calls]
+		}
 		request.finish(b.run(request, options))
 	}
 }
@@ -261,9 +293,12 @@ func earliestDeadline(requests []*batchRequest) (context.Context, context.Cancel
 	} else {
 		ctx, cancel = context.WithDeadline(context.Background(), earliest)
 	}
+	// Requests that share a context — a Done channel — are watched once.
 	stops := make([]func() bool, 0, len(requests))
+	watched := make([]<-chan struct{}, 0, len(requests))
 	for _, request := range requests {
-		if request.ctx.Done() != nil {
+		if done := request.ctx.Done(); done != nil && !slices.Contains(watched, done) {
+			watched = append(watched, done)
 			stops = append(stops, context.AfterFunc(request.ctx, cancel))
 		}
 	}
@@ -276,11 +311,12 @@ func earliestDeadline(requests []*batchRequest) (context.Context, context.Cancel
 }
 
 // prefetch runs one hoisted call for the whole batch and files each request's
-// share of the answer under the call's program counter.
-func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchRequest, prefetched []map[int]Prefetched) {
+// share of the answer in its slot for the call.
+func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchRequest, answers []Prefetched) {
 	calls := make([][]Value, len(requests))
+	operands := make([]Value, len(requests)*len(site.Operands))
 	for i, request := range requests {
-		calls[i] = b.operands(site, request.args)
+		calls[i] = b.operands(site, request.args, operands[i*len(site.Operands):(i+1)*len(site.Operands)])
 	}
 	results, err := invokeBatch(ctx, site.function, calls)
 	if err != nil {
@@ -288,15 +324,14 @@ func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchR
 	} else if len(results) != len(requests) {
 		err = fmt.Errorf("batch returned %d results for %d requests", len(results), len(requests))
 	}
+	stride := len(b.runtime.reg.calls)
 	for i := range requests {
-		if prefetched[i] == nil {
-			prefetched[i] = make(map[int]Prefetched, len(b.sites))
-		}
+		slot := &answers[i*stride+site.call]
 		if err != nil {
-			prefetched[i][site.PC] = Prefetched{Err: err} // the call site adds the function's name
+			*slot = Prefetched{Err: err, ready: true} // the call site adds the function's name
 			continue
 		}
-		prefetched[i][site.PC] = Prefetched{Value: results[i]}
+		*slot = Prefetched{Value: results[i], ready: true}
 	}
 }
 
@@ -322,9 +357,8 @@ func callBatchSafely(ctx context.Context, function *RegisteredFunction, calls []
 	return function.EvalBatch(ctx, calls)
 }
 
-// operands assembles one request's arguments for a hoisted call.
-func (b *Batch) operands(site batchSite, args []Value) []Value {
-	values := make([]Value, len(site.Operands))
+// operands assembles one request's arguments for a hoisted call in values.
+func (b *Batch) operands(site batchSite, args, values []Value) []Value {
 	for i, operand := range site.Operands {
 		if operand.Arg == NoArgument {
 			values[i] = b.runtime.constants[operand.Constant]
