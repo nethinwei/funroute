@@ -205,21 +205,3 @@ func (c *bytecodeCompiler) artifact(result machine.Type) machine.ArtifactParts {
 		Instructions: c.instructions,
 	}
 }
-
-// argumentReaders is every node of the program whose subtree reads one of
-// its arguments, found in one walk up from the reads.
-func argumentReaders(program syntax.Expr) map[int]bool {
-	reads := syntax.FreeReads(program)
-	out := map[int]bool{}
-	var mark func(syntax.Expr) bool
-	mark = func(expr syntax.Expr) bool {
-		hit := reads[expr.NodeID()]
-		for _, child := range syntax.Children(expr) {
-			hit = mark(child) || hit
-		}
-		out[expr.NodeID()] = hit
-		return hit
-	}
-	mark(program)
-	return out
-}

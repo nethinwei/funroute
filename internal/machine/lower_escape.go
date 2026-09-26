@@ -43,13 +43,8 @@ func (o origin) item() (int, bool) { return int(itemBase - o), o <= itemBase }
 
 // flow is what the analysis found.
 type flow struct {
-	// arena is each producer whose array never leaves the run, by pc; its
-	// uses, by pc, are the consumers that read it there.
-	arena map[int]bool
-	uses  map[int]bool
-	// dest is each producer that builds the program's answer, by pc: 0 for
-	// the whole answer, i+1 for field i of the answer's record.
-	dest map[int]int
+	// at is what the analysis says of each instruction, by pc.
+	at []flowAt
 	// answer is the make_record the program answers, or -1.
 	answer int
 	// fieldOnly is, by argument, a record that is only read field by field,
@@ -57,10 +52,19 @@ type flow struct {
 	// indexed, or an array of plain records only walked or measured: a
 	// Program hands either over in place.
 	fieldOnly, viewOnly []bool
-	// itemsInPlace is each loop over an array of plain records, by pc,
-	// whose item is only read field by field: it loads each item into the
-	// frame's own record.
-	itemsInPlace map[int]bool
+}
+
+// flowAt is what the analysis says of the instruction at one pc. arena says
+// the array it produces never leaves the run, and uses that it is a
+// consumer reading an array where it is: in its arena slot, or an argument
+// handed over in place. builds says it builds the program's answer, dest
+// being 0 for the whole answer and i+1 for field i of the answer's record.
+// itemsInPlace says it is a loop over an array of plain records whose item
+// is only read field by field: it loads each item into the frame's own
+// record.
+type flowAt struct {
+	arena, uses, builds, itemsInPlace bool
+	dest                              int
 }
 
 // fstate is what the walk knows on entering an instruction.
@@ -83,29 +87,43 @@ func (s *fstate) pop(n int) []origin {
 
 // flower is the walk.
 type flower struct {
+	out       []fedge
 	code      []Instruction
 	args      []Parameter
 	functions []*RegisteredFunction
 	joins     []bool
 	states    []*fstate
 	work      []int
-	// escaped is each producer, and each record argument, some use lets
-	// out; usedAt is where each producer is used — a set, since the walk
-	// may pass an instruction more than once — and fields the origins of
-	// each make_record's fields.
-	escaped, argEscaped, itemEscaped map[int]bool
-	usedAt                           map[int]map[int]bool
-	fields                           map[int][]origin
-	consumers                        map[int]origin
-	answer                           origin
+	// facts is what the walk finds of each instruction, by pc, and
+	// argEscaped each argument some use lets out.
+	facts      []pcFacts
+	argEscaped []bool
+	answer     origin
+}
+
+// pcFacts is what the walk finds of the instruction at one pc: whether a
+// use lets out what it produces, or its loop's item; where what it produces
+// is used, which matters only while that is one place — the walk may pass a
+// use more than once; the origins of a make_record's fields; and what it
+// reads where it is, when it does.
+type pcFacts struct {
+	escaped, itemEscaped bool
+	firstUse             int32
+	usedElsewhere        bool
+	consumes             bool
+	consumer             origin
+	fields               []origin
 }
 
 // flowOf analyzes a verified program.
 func flowOf(parts *ArtifactParts, functions []*RegisteredFunction) flow {
 	w := &flower{
 		code: parts.Instructions, args: parts.Args, functions: functions, joins: joinsOf(parts.Instructions),
-		states: make([]*fstate, len(parts.Instructions)+1), escaped: map[int]bool{}, argEscaped: map[int]bool{}, itemEscaped: map[int]bool{},
-		usedAt: map[int]map[int]bool{}, fields: map[int][]origin{}, consumers: map[int]origin{}, answer: fromElsewhere,
+		states: make([]*fstate, len(parts.Instructions)+1), facts: make([]pcFacts, len(parts.Instructions)+1),
+		argEscaped: make([]bool, len(parts.Args)), answer: fromElsewhere,
+	}
+	for pc := range w.facts {
+		w.facts[pc].firstUse = -1
 	}
 	start := &fstate{locals: make([]origin, parts.Locals)}
 	for i := range start.locals {
@@ -144,6 +162,13 @@ func (w *flower) walk(pc int, s *fstate) {
 type fedge struct {
 	pc    int
 	state *fstate
+}
+
+// to is the paths out of an instruction, in the walk's own list: the walk
+// is done with them before it steps again.
+func (w *flower) to(edges ...fedge) []fedge {
+	w.out = append(w.out[:0], edges...)
+	return w.out
 }
 
 // merge brings a path into a join. A slot that holds different values on
@@ -186,19 +211,21 @@ func (w *flower) escape(o origin) {
 	if i, ok := o.arg(); ok {
 		w.argEscaped[i] = true
 	} else if pc, ok := o.item(); ok {
-		w.itemEscaped[pc] = true
+		w.facts[pc].itemEscaped = true
 	} else if o >= 0 {
-		w.escaped[int(o)] = true
+		w.facts[o].escaped = true
 	}
 }
 
 // use records a use of o at pc, which lets it out unless stays is set.
 func (w *flower) use(pc int, o origin, stays bool) {
 	if o >= 0 {
-		if w.usedAt[int(o)] == nil {
-			w.usedAt[int(o)] = map[int]bool{}
+		switch fact := &w.facts[o]; {
+		case fact.firstUse < 0:
+			fact.firstUse = int32(pc)
+		case int(fact.firstUse) != pc:
+			fact.usedElsewhere = true
 		}
-		w.usedAt[int(o)][pc] = true
 	}
 	if !stays {
 		w.escape(o)
@@ -212,7 +239,9 @@ func (w *flower) useAll(pc int, origins []origin) {
 }
 
 // usedOnce reports a producer used at one place only.
-func (w *flower) usedOnce(pc int) bool { return len(w.usedAt[pc]) == 1 }
+func (w *flower) usedOnce(pc int) bool {
+	return w.facts[pc].firstUse >= 0 && !w.facts[pc].usedElsewhere
+}
 
 // step is the paths out of the instruction at pc, entered in state s.
 func (w *flower) step(pc int, s *fstate) []fedge {
@@ -224,23 +253,23 @@ func (w *flower) step(pc int, s *fstate) []fedge {
 	in := w.code[pc]
 	switch in.Op {
 	case OpJump:
-		return []fedge{{in.A, s}}
+		return w.to(fedge{in.A, s})
 	case OpJumpIfFalse:
 		s.pop(1)
-		return []fedge{{pc + 1, s}, {in.A, s.clone()}}
+		return w.to(fedge{pc + 1, s}, fedge{in.A, s.clone()})
 	case OpBeginFallback:
-		return []fedge{{pc + 1, s}, {in.A, s.clone()}}
+		return w.to(fedge{pc + 1, s}, fedge{in.A, s.clone()})
 	case OpLoopInit:
 		return w.loopInit(pc, in, s)
 	case OpLoopNext:
 		past := w.pastLoop(s)
-		return []fedge{{in.A, s}, {pc + 1, past}}
+		return w.to(fedge{in.A, s}, fedge{pc + 1, past})
 	case OpLoopBreak:
 		w.use(pc, s.pop(1)[0], false)
-		return []fedge{{in.A, w.pastLoop(s)}}
+		return w.to(fedge{in.A, w.pastLoop(s)})
 	}
 	w.straight(pc, in, s)
-	return []fedge{{pc + 1, s}}
+	return w.to(fedge{pc + 1, s})
 }
 
 // straight follows an instruction that goes on to the next one.
@@ -279,7 +308,7 @@ func (w *flower) straight(pc int, in Instruction, s *fstate) {
 func (w *flower) build(pc int, in Instruction, s *fstate) {
 	items := s.pop(in.A)
 	if in.Op == OpMakeRecord {
-		w.fields[pc] = append([]origin(nil), items...)
+		w.facts[pc].fields = append([]origin(nil), items...)
 	}
 	w.useAll(pc, items)
 	made := fromElsewhere
@@ -333,7 +362,7 @@ func (w *flower) call(pc int, in Instruction, s *fstate) {
 		reads := i == 0 && function.builtin && arenaKernels[function.key] && (function.key == "len(array<T>)->int" || !w.recordsArg(arg))
 		w.use(pc, arg, reads)
 		if reads {
-			w.consumers[pc] = arg
+			w.facts[pc].consumes, w.facts[pc].consumer = true, arg
 		}
 	}
 	s.push(fromElsewhere)
@@ -376,7 +405,7 @@ func (w *flower) loopInit(pc int, in Instruction, s *fstate) []fedge {
 	walks := in.D == NoKey
 	w.use(pc, source, walks)
 	if walks {
-		w.consumers[pc] = source
+		w.facts[pc].consumes, w.facts[pc].consumer = true, source
 	}
 	past := s.clone()
 	past.push(w.loopResult(pc))
@@ -389,7 +418,7 @@ func (w *flower) loopInit(pc int, in Instruction, s *fstate) []fedge {
 		s.locals[in.B] = itemOrigin(pc)
 	}
 	s.loops = append(s.loops, pc)
-	return []fedge{{pc + 1, s}, {in.A, past}}
+	return w.to(fedge{pc + 1, s}, fedge{in.A, past})
 }
 
 // pastLoop is the state after the innermost loop, its result pushed.
@@ -419,24 +448,24 @@ func (w *flower) arrayProducer(pc int) bool {
 // result reads the walk's findings out.
 func (w *flower) result(parts *ArtifactParts) flow {
 	f := flow{
-		arena: map[int]bool{}, uses: map[int]bool{}, dest: map[int]int{}, answer: -1,
-		fieldOnly: make([]bool, len(parts.Args)), viewOnly: make([]bool, len(parts.Args)), itemsInPlace: map[int]bool{},
+		at: make([]flowAt, len(w.code)+1), answer: -1,
+		fieldOnly: make([]bool, len(parts.Args)), viewOnly: make([]bool, len(parts.Args)),
 	}
 	for pc := range w.code {
-		if w.arrayProducer(pc) && !w.escaped[pc] {
-			f.arena[pc] = true
-		}
+		f.at[pc].arena = w.arrayProducer(pc) && !w.facts[pc].escaped
 	}
 	for i, param := range parts.Args {
 		f.fieldOnly[i] = param.typ.kind == RecordKind && !w.argEscaped[i]
 		f.viewOnly[i] = (nativeElem(param.typ) || plainRecords(param.typ)) && !w.argEscaped[i]
 	}
-	for pc, o := range w.consumers {
-		i, argument := o.arg()
-		f.uses[pc] = o >= 0 && f.arena[int(o)] || argument && f.viewOnly[i]
-		if w.code[pc].Op == OpLoopInit && w.recordsArg(o) && !w.itemEscaped[pc] {
-			f.itemsInPlace[pc] = true
+	for pc := range w.code {
+		if !w.facts[pc].consumes {
+			continue
 		}
+		o := w.facts[pc].consumer
+		i, argument := o.arg()
+		f.at[pc].uses = o >= 0 && f.at[o].arena || argument && f.viewOnly[i]
+		f.at[pc].itemsInPlace = w.code[pc].Op == OpLoopInit && w.recordsArg(o) && !w.facts[pc].itemEscaped
 	}
 	if answer := int(w.answer); w.answer >= 0 && w.usedOnce(answer) {
 		w.answerDest(&f, answer)
@@ -448,16 +477,16 @@ func (w *flower) result(parts *ArtifactParts) flow {
 // each array field of it built for it alone.
 func (w *flower) answerDest(f *flow, answer int) {
 	if w.arrayProducer(answer) {
-		f.dest[answer] = 0
+		f.at[answer].builds, f.at[answer].dest = true, 0
 		return
 	}
 	if op := w.code[answer].Op; op != OpMakeRecord && op != OpRecordWith {
 		return
 	}
 	f.answer = answer
-	for i, field := range w.fields[answer] {
+	for i, field := range w.facts[answer].fields {
 		if field >= 0 && w.arrayProducer(int(field)) && w.usedOnce(int(field)) {
-			f.dest[int(field)] = i + 1
+			f.at[field].builds, f.at[field].dest = true, i+1
 		}
 	}
 }

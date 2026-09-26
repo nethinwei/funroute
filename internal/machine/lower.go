@@ -72,6 +72,9 @@ func lower(artifact *Artifact, constants []Value, functions []*RegisteredFunctio
 		code: parts.Instructions, constants: constants, functions: functions, depths: proof.depths, leaders: leadersOf(parts.Instructions, functions),
 		at: make([]int32, len(parts.Instructions)+1), stackBase: nconst + args,
 	}
+	// A stack instruction lowers to one operation or none, mostly: room
+	// for as many, and the halt.
+	l.out.code, l.out.origins = make([]rinstr, 0, len(parts.Instructions)+1), make([]int32, 0, len(parts.Instructions)+1)
 	l.localBase = l.stackBase + int32(proof.depth)
 	l.locals = int32(parts.Locals)
 	l.out.promotions = promotionsOf(parts, l.leaders, l.localBase+l.locals)
@@ -150,7 +153,7 @@ func scalarProgram(parts *ArtifactParts, promotions []promotion, readsOnly bool)
 // the answer's slot, or neither.
 func (l *lowerer) builtFor(pc int) built {
 	where := built{arena: -1, dest: -1}
-	if l.flow.arena[pc] {
+	if l.flow.at[pc].arena {
 		slot, ok := l.slots[pc]
 		if !ok {
 			slot = int32(len(l.slots))
@@ -159,9 +162,9 @@ func (l *lowerer) builtFor(pc int) built {
 		}
 		where.arena = slot
 	}
-	if dest, ok := l.flow.dest[pc]; ok {
-		where.dest = int32(dest)
-		l.out.dests = max(l.out.dests, dest+1)
+	if at := l.flow.at[pc]; at.builds {
+		where.dest = int32(at.dest)
+		l.out.dests = max(l.out.dests, at.dest+1)
 	}
 	return where
 }

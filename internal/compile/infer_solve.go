@@ -12,7 +12,6 @@ package compile
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/nethinwei/funroute/internal/kit"
@@ -52,13 +51,13 @@ func (s *inferState) finish(d *deferred) {
 // apply unifies the call with one candidate's signature and records it as
 // the call's function.
 func (s *inferState) apply(c *choice, function *machine.RegisteredFunction) error {
-	vars := map[string]typeTerm{}
+	var vars namedTerms
 	for i, param := range function.Params {
-		if err := s.unify(c.args[i], s.instantiate(param, vars)); err != nil {
+		if err := s.unify(c.args[i], s.instantiate(param, &vars)); err != nil {
 			return err
 		}
 	}
-	if err := s.unify(c.result, s.instantiate(function.Result, vars)); err != nil {
+	if err := s.unify(c.result, s.instantiate(function.Result, &vars)); err != nil {
 		return err
 	}
 	s.selectKey(c.node.ID, function.Key())
@@ -109,24 +108,80 @@ func (s *inferState) offer(c *choice, functions []*machine.RegisteredFunction) e
 		vars = s.freeVars(arg, vars)
 	}
 	for _, v := range vars {
-		s.watchers[v] = append(s.watchers[v], c)
+		s.watch(v, c)
 	}
 	return nil
 }
 
 // narrowChoice drops the candidates that no longer fit, taking the last one
-// standing.
+// standing. What the kinds already rule out is dropped without a trial, and
+// a last candidate is taken without one: if it does not fit after all, what
+// it changed is taken back, and nothing fits.
 func (s *inferState) narrowChoice(c *choice) error {
-	kept := slices.DeleteFunc(slices.Clone(c.open), func(function *machine.RegisteredFunction) bool { return !s.fits(c, function) })
+	open := kept(c.open, func(function *machine.RegisteredFunction) bool { return s.mayFit(c, function) })
+	if len(open) > 1 {
+		open = kept(open, func(function *machine.RegisteredFunction) bool { return s.fits(c, function) })
+	}
 	switch {
-	case len(kept) == 0:
+	case len(open) == 0:
 		return noOverloadError(c.node, s, c.args)
-	case len(kept) == 1:
-		return s.commit(c, kept[0])
-	case len(kept) < len(c.open):
-		s.setOpen(c, kept)
+	case len(open) == 1:
+		mark := s.mark()
+		if s.commit(c, open[0]) != nil {
+			s.undoTo(mark)
+			return noOverloadError(c.node, s, c.args)
+		}
+	case len(open) < len(c.open):
+		s.setOpen(c, open)
 	}
 	return nil
+}
+
+// mayFit reports a candidate each of whose parameters could still meet its
+// argument: false only where the unification would fail on a kind or a
+// name, so it drops no candidate a trial would keep.
+func (s *inferState) mayFit(c *choice, function *machine.RegisteredFunction) bool {
+	for i, param := range function.Params {
+		if !s.couldBe(c.args[i], param) {
+			return false
+		}
+	}
+	return true
+}
+
+// couldBe reports whether term could unify with an instance of t.
+func (s *inferState) couldBe(term typeTerm, t machine.Type) bool {
+	term = s.deref(term)
+	kind := t.Kind()
+	switch {
+	case kind == machine.VarKind || kind == machine.EnumKind && t.Name() == "":
+		return true
+	case term.kind == machine.VarKind:
+		return s.infoOf(term.id).domain.has(kind)
+	case term.kind != kind || term.name != t.Name():
+		return false
+	case term.elem != nil && (kind == machine.ArrayKind || kind == machine.DictKind) && hasElem(t):
+		return s.couldBe(*term.elem, elemOf(t))
+	}
+	return true
+}
+
+// kept is the items keep is true of, in order: items itself when that is
+// every one, so only a list that shrinks costs one of its own.
+func kept[T any](items []T, keep func(T) bool) []T {
+	for i, item := range items {
+		if keep(item) {
+			continue
+		}
+		out := append(make([]T, 0, len(items)-1), items[:i]...)
+		for _, rest := range items[i+1:] {
+			if keep(rest) {
+				out = append(out, rest)
+			}
+		}
+		return out
+	}
+	return items
 }
 
 // propagate narrows every open choice a binding may have narrowed and runs
@@ -220,7 +275,7 @@ func (s *inferState) decide() (bool, error) {
 			return true, nil
 		}
 		s.undoTo(mark)
-		s.setOpen(c, slices.DeleteFunc(slices.Clone(c.open), func(f *machine.RegisteredFunction) bool { return f == best }))
+		s.setOpen(c, kept(c.open, func(f *machine.RegisteredFunction) bool { return f != best }))
 		return true, nil
 	}
 	if first == nil {

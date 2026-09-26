@@ -3,7 +3,6 @@ package syntax
 import (
 	"fmt"
 	"iter"
-	"maps"
 	"reflect"
 	"slices"
 	"sort"
@@ -59,6 +58,8 @@ type structPlan struct {
 	fields []fieldPlan
 	binds  bool
 	rest   bool
+	// sorts says one of its lists is kept in key order.
+	sorts bool
 }
 
 var (
@@ -105,6 +106,7 @@ func planStruct(typ reflect.Type) *structPlan {
 		plan.fields = append(plan.fields, planned)
 		plan.binds = plan.binds || len(planned.binds) > 0 || (planned.item != nil && planned.item.binds)
 		plan.rest = plan.rest || slices.Contains(planned.binds, "@rest")
+		plan.sorts = plan.sorts || planned.kind == fieldList && planned.sortKey != ""
 	}
 	return plan
 }
@@ -147,7 +149,7 @@ func planOf(expr Expr) *structPlan {
 // finish normalises a freshly built node and applies its own rules. The parser
 // and the importer both call it, so source and JSON obey the same checks.
 func finish(expr Expr) (Expr, error) {
-	if plan := planOf(expr); plan != nil {
+	if plan := planOf(expr); plan != nil && plan.sorts {
 		sortLists(reflect.ValueOf(expr).Elem(), plan)
 	}
 	if node, ok := expr.(checker); ok {
@@ -186,8 +188,14 @@ func keyField(plan *structPlan, name string) int {
 // skipping absent optional ones.
 func Children(expr Expr) []Expr {
 	var out []Expr
-	walkChildren(expr, nil, func(child Expr, _ scope) { out = append(out, child) })
+	EachChild(expr, func(child Expr) { out = append(out, child) })
 	return out
+}
+
+// EachChild visits a node's direct subexpressions in Children's order,
+// without gathering them.
+func EachChild(expr Expr, visit func(Expr)) {
+	walkChildren(expr, nil, func(child Expr, _ scope) { visit(child) })
 }
 
 // Nodes is root and every node under it, parents before their children and
@@ -200,27 +208,38 @@ func preorder(expr Expr, yield func(Expr) bool) bool {
 	if !yield(expr) {
 		return false
 	}
-	for _, child := range Children(expr) {
-		if !preorder(child, yield) {
-			return false
-		}
-	}
-	return true
+	going := true
+	EachChild(expr, func(child Expr) { going = going && preorder(child, yield) })
+	return going
 }
 
-// scope is the set of locally bound names at a point in the tree.
-type scope map[string]bool
+// scope is the locally bound names at a point in the tree, outermost
+// first; a name may be there twice, when an inner form binds it again.
+type scope []string
 
+func (s scope) has(name string) bool { return slices.Contains(s, name) }
+
+// with is s and names after it, in a list of its own: s itself is shared by
+// every sibling, so it is never appended to in place.
 func (s scope) with(names []string) scope {
 	if len(names) == 0 {
 		return s
 	}
-	inner := make(scope, len(s)+len(names))
-	maps.Copy(inner, s)
-	for _, name := range names {
-		inner[name] = true
+	return append(slices.Clip(s), names...)
+}
+
+// boundName is a name a node binds and the field it is visible in.
+type boundName struct{ target, name string }
+
+// in is s and the names binds makes visible in field.
+func (s scope) in(binds []boundName, field string) scope {
+	var names []string
+	for _, bind := range binds {
+		if bind.target == field {
+			names = append(names, bind.name)
+		}
 	}
-	return inner
+	return s.with(names)
 }
 
 // walkChildren visits each direct child with the names bound at it: the
@@ -231,13 +250,12 @@ func walkChildren(expr Expr, bound scope, visit func(Expr, scope)) {
 		return
 	}
 	value := reflect.ValueOf(expr).Elem()
-	var binds map[string][]string
+	var binds []boundName
 	if plan.binds {
-		binds = map[string][]string{}
-		collectBinds(value, plan, binds)
+		binds = collectBinds(value, plan, binds)
 	}
 	for _, field := range plan.fields {
-		inner := bound.with(binds[field.name])
+		inner := bound.in(binds, field.name)
 		if field.kind == fieldList {
 			walkList(value.Field(field.index), field.item, inner, visit)
 			continue
@@ -250,29 +268,31 @@ func walkChildren(expr Expr, bound scope, visit func(Expr, scope)) {
 // from the node's own name fields, and from the name fields of its list items
 // (a let binding's name is visible in the let's body). "@rest" is left for
 // walkList, which knows the item order.
-func collectBinds(value reflect.Value, plan *structPlan, binds map[string][]string) {
+func collectBinds(value reflect.Value, plan *structPlan, binds []boundName) []boundName {
 	for _, field := range plan.fields {
 		switch field.kind {
 		case fieldName:
-			addBinds(binds, value.Field(field.index).String(), field.binds)
+			binds = addBinds(binds, value.Field(field.index).String(), field.binds)
 		case fieldList:
 			list := value.Field(field.index)
 			for i := range list.Len() {
-				collectBinds(list.Index(i), field.item, binds)
+				binds = collectBinds(list.Index(i), field.item, binds)
 			}
 		}
 	}
+	return binds
 }
 
-func addBinds(binds map[string][]string, name string, targets []string) {
+func addBinds(binds []boundName, name string, targets []string) []boundName {
 	if name == "" {
-		return
+		return binds
 	}
 	for _, target := range targets {
 		if target != "@rest" {
-			binds[target] = append(binds[target], name)
+			binds = append(binds, boundName{target: target, name: name})
 		}
 	}
+	return binds
 }
 
 // walkList visits the expressions inside each list item. An item's names that
@@ -340,6 +360,36 @@ func heldExpr(value reflect.Value) Expr {
 	return expr
 }
 
+// Survey walks root once by the scope rule, visiting every node parents
+// first, as Nodes does: first is where each free variable is first read, as
+// FirstReads says, and readers every node whose subtree reads one — the
+// reads themselves among them.
+func Survey(root Expr, visit func(Expr)) (first []*VariableExpr, readers map[int]bool) {
+	readers = map[int]bool{}
+	var walk func(Expr, scope) bool
+	walk = func(expr Expr, bound scope) bool {
+		visit(expr)
+		if variable, ok := expr.(*VariableExpr); ok {
+			if bound.has(variable.Name) {
+				return false
+			}
+			if !slices.ContainsFunc(first, func(read *VariableExpr) bool { return read.Name == variable.Name }) {
+				first = append(first, variable)
+			}
+			readers[variable.ID] = true
+			return true
+		}
+		reads := false
+		walkChildren(expr, bound, func(child Expr, inner scope) { reads = walk(child, inner) || reads })
+		if reads {
+			readers[expr.NodeID()] = true
+		}
+		return reads
+	}
+	walk(root, nil)
+	return first, readers
+}
+
 // FreeVariables returns the free variables in the order they first appear,
 // which is the argument order a program gets when its host declares no
 // contract. Locals bound by let, for and reduce are not free, so a name used
@@ -382,12 +432,12 @@ func eachVariable(root Expr, visit func(variable *VariableExpr, local bool)) {
 	var walk func(Expr, scope)
 	walk = func(expr Expr, bound scope) {
 		if variable, ok := expr.(*VariableExpr); ok {
-			visit(variable, bound[variable.Name])
+			visit(variable, bound.has(variable.Name))
 			return
 		}
 		walkChildren(expr, bound, walk)
 	}
-	walk(root, scope{})
+	walk(root, nil)
 }
 
 // NodeKinds lists every node's ExprJSON tag: the four literal kinds and one

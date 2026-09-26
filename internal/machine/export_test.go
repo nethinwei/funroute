@@ -3,7 +3,6 @@ package machine
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 
@@ -93,12 +92,17 @@ type FlowFacts struct {
 func Flow(r *Runtime) FlowFacts {
 	found := flowOf(&r.artifact.parts, r.functions)
 	name := func(pc int) string { return fmt.Sprintf("%s@%d", r.artifact.parts.Instructions[pc].Op, pc) }
-	facts := FlowFacts{Dest: map[string]int{}, FieldOnly: found.fieldOnly, ViewOnly: found.viewOnly, ItemsInPlace: len(found.itemsInPlace)}
-	for _, pc := range slices.Sorted(maps.Keys(found.arena)) {
-		facts.Arena = append(facts.Arena, name(pc))
-	}
-	for pc, dest := range found.dest {
-		facts.Dest[name(pc)] = dest
+	facts := FlowFacts{Dest: map[string]int{}, FieldOnly: found.fieldOnly, ViewOnly: found.viewOnly}
+	for pc, at := range found.at {
+		if at.arena {
+			facts.Arena = append(facts.Arena, name(pc))
+		}
+		if at.builds {
+			facts.Dest[name(pc)] = at.dest
+		}
+		if at.itemsInPlace {
+			facts.ItemsInPlace++
+		}
 	}
 	if found.answer >= 0 {
 		facts.Answer = name(found.answer)

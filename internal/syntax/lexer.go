@@ -79,7 +79,9 @@ type lexer struct {
 // token and the lexing goes on, so everything after it is still known; the
 // first such error is the one returned.
 func (l *lexer) tokens() ([]token, error) {
-	var out []token
+	// A token is about three bytes of source, a name or a number more: one
+	// slice of that size mostly holds them all.
+	out := make([]token, 0, len(l.source)/3+2)
 	var first error
 	for {
 		tok, err := l.next()
@@ -157,14 +159,25 @@ func (l *lexer) next() (token, error) {
 	return tok, nil
 }
 
+// singleChars is singleCharTokens by byte, for the lexer to read without a
+// map lookup.
+var singleChars = func() (table [256]struct {
+	kind tokenKind
+	ok   bool
+}) {
+	for ch, kind := range singleCharTokens {
+		table[ch].kind, table[ch].ok = kind, true
+	}
+	return table
+}()
+
+// lexeme reads the token at start. An operator is all symbols, so what
+// starts with a quote, a digit, an @ or a letter is never one.
 func (l *lexer) lexeme(start int) (token, error) {
 	ch := l.source[l.pos]
-	if kind, ok := singleCharTokens[ch]; ok {
+	if single := singleChars[ch]; single.ok {
 		l.pos++
-		return token{kind: kind, text: string(ch), pos: start}, nil
-	}
-	if operator, ok := l.operator(start); ok {
-		return operator, nil
+		return token{kind: single.kind, text: string(ch), pos: start}, nil
 	}
 	switch {
 	case ch == '"':
@@ -175,9 +188,11 @@ func (l *lexer) lexeme(start int) (token, error) {
 		return l.enumMember(start)
 	case kit.IsNameStart(ch):
 		return l.identifier(start)
-	default:
-		return token{}, unexpectedCharacter(l.source, start)
 	}
+	if operator, ok := l.operator(start); ok {
+		return operator, nil
+	}
+	return token{}, unexpectedCharacter(l.source, start)
 }
 
 // unexpectedCharacter names what stopped the lexer: the character when the

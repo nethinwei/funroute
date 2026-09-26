@@ -120,6 +120,15 @@ type verifier struct {
 	// depths is how deep the stack is on entering each instruction, and -1
 	// for one no path reaches: what the register form is laid out by.
 	depths []int32
+	// out holds the paths out of the instruction last stepped, which walk
+	// is done with before it steps again.
+	out []edge
+}
+
+// to is the paths out of an instruction, in the verifier's own list.
+func (v *verifier) to(edges ...edge) []edge {
+	v.out = append(v.out[:0], edges...)
+	return v.out
 }
 
 // proof is what the walk establishes about a program beyond its being typed:
@@ -137,7 +146,7 @@ func verify(artifact *Artifact, functions []*RegisteredFunction) (proof, error) 
 	for pc := range v.depths {
 		v.depths[pc] = -1
 	}
-	v.states[0] = &vstate{locals: make([]*Type, artifact.parts.Locals)}
+	v.states[0] = &vstate{stack: make([]Type, 0, 8), locals: make([]*Type, artifact.parts.Locals)}
 	v.work = []int{0}
 	for len(v.work) > 0 {
 		pc := v.work[len(v.work)-1]
@@ -230,12 +239,12 @@ func (v *verifier) step(pc int, s *vstate) ([]edge, error) {
 	in := instructions[pc]
 	switch in.Op {
 	case OpJump:
-		return []edge{{in.A, s}}, nil
+		return v.to(edge{in.A, s}), nil
 	case OpJumpIfFalse:
 		if _, err := s.pop1(&BoolType); err != nil {
 			return nil, err
 		}
-		return []edge{{pc + 1, s}, {in.A, s.clone()}}, nil
+		return v.to(edge{pc + 1, s}, edge{in.A, s.clone()}), nil
 	case OpBeginFallback:
 		handler := s.clone()
 		bound := make([]bool, len(s.locals))
@@ -243,7 +252,7 @@ func (v *verifier) step(pc int, s *vstate) ([]edge, error) {
 			bound[slot] = typ != nil
 		}
 		s.fallbacks = append(s.fallbacks, vfallback{depth: len(s.stack), loops: len(s.loops), scopes: s.scopes, bound: bound})
-		return []edge{{pc + 1, s}, {in.A, handler}}, nil
+		return v.to(edge{pc + 1, s}, edge{in.A, handler}), nil
 	case OpLoopInit:
 		return v.loopInit(pc, in, s)
 	case OpLoopNext:
@@ -251,7 +260,7 @@ func (v *verifier) step(pc int, s *vstate) ([]edge, error) {
 	case OpLoopBreak:
 		return v.loopBreak(in, s)
 	}
-	return []edge{{pc + 1, s}}, v.straight(in, s)
+	return v.to(edge{pc + 1, s}), v.straight(in, s)
 }
 
 // finish holds the end of the program: its result, and nothing open.
@@ -434,7 +443,7 @@ func (v *verifier) loopInit(pc int, in Instruction, s *vstate) ([]edge, error) {
 		return nil, err
 	}
 	s.loops = append(s.loops, loop)
-	return []edge{{pc + 1, s}, {in.A, past}}, nil
+	return v.to(edge{pc + 1, s}, edge{in.A, past}), nil
 }
 
 // bindLoop binds a loop's names: the item, the key of a dictionary's entry
@@ -546,7 +555,7 @@ func (v *verifier) loopNext(pc int, in Instruction, s *vstate) ([]edge, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []edge{{in.A, s}, {pc + 1, past}}, nil
+	return v.to(edge{in.A, s}, edge{pc + 1, past}), nil
 }
 
 // pastLoop is the state after the innermost loop ends: its names unbound,
@@ -583,7 +592,7 @@ func (v *verifier) loopBreak(in Instruction, s *vstate) ([]edge, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []edge{{in.A, past}}, nil
+	return v.to(edge{in.A, past}), nil
 }
 
 // fxPush types a using's quotes: each an exchange rate or an array of them.

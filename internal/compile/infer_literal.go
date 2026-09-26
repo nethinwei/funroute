@@ -54,7 +54,7 @@ func (s *inferState) literalTerm(value machine.Value, money bool) typeTerm {
 		return s.concrete(typ)
 	}
 	term := s.fresh()
-	s.info[term.id] = info
+	s.vars[term.id].info, s.vars[term.id].restricted = info, true
 	s.literals = append(s.literals, term.id)
 	return term
 }

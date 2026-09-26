@@ -107,7 +107,7 @@ func ValidateContract(options CompileOptions) error {
 // validate checks the declared contract against the names the expression
 // actually reads. An empty argument list still means inference for the library
 // API; products that require a contract validate that policy at their edge.
-func (o CompileOptions) validate(expr syntax.Expr) error {
+func (o CompileOptions) validate(program programSurvey) error {
 	if err := ValidateContract(o); err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func (o CompileOptions) validate(expr syntax.Expr) error {
 		return nil
 	}
 	declared := o.argTypes()
-	for _, read := range syntax.FirstReads(expr) {
+	for _, read := range program.first {
 		if _, ok := declared[read.Name]; !ok {
 			return kit.Classify(machine.ErrContract, "",
 				syntax.Around(read, "the expression reads %q but the contract does not declare it", read.Name))
@@ -124,17 +124,36 @@ func (o CompileOptions) validate(expr syntax.Expr) error {
 	return nil
 }
 
-// validateForms rejects a program that uses a special form its registry does
-// not enable. It runs on the AST, so source and ExprJSON go through the same
-// check and a console cannot smuggle a form in as JSON.
+// programSurvey is what one walk of a program finds before it is typed:
+// where each free variable is first read, in that order, and every node whose
+// subtree reads one.
+type programSurvey struct {
+	first   []*syntax.VariableExpr
+	readers map[int]bool
+}
+
+// survey walks the program once, and rejects one that uses a special form its
+// registry does not enable. It runs on the AST, so source and ExprJSON go
+// through the same check and a console cannot smuggle a form in as JSON.
 //
 // Which nodes are forms is declared on the nodes themselves (syntax.Form), and
 // the walk is the generic one, so a new form needs nothing here.
-func validateForms(expr syntax.Expr, registry *machine.Registry) error {
-	for node := range syntax.Nodes(expr) {
-		if form, ok := syntax.FormOf(node); ok && !registry.FormEnabled(form) {
-			return syntax.Around(node, "%s is not enabled in this registry", string(form))
+func survey(expr syntax.Expr, registry *machine.Registry) (programSurvey, error) {
+	var disabled syntax.Expr
+	first, readers := syntax.Survey(expr, func(node syntax.Expr) {
+		if form, ok := syntax.FormOf(node); disabled == nil && ok && !registry.FormEnabled(form) {
+			disabled = node
 		}
+	})
+	if disabled != nil {
+		form, _ := syntax.FormOf(disabled)
+		return programSurvey{}, syntax.Around(disabled, "%s is not enabled in this registry", string(form))
 	}
-	return nil
+	return programSurvey{first: first, readers: readers}, nil
+}
+
+// names is the free variables, in the order they are first read: the
+// arguments of a program no contract orders.
+func (p programSurvey) names() []string {
+	return kit.Map(p.first, func(read *syntax.VariableExpr) string { return read.Name })
 }

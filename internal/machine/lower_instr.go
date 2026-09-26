@@ -128,7 +128,7 @@ func (l *lowerer) call(in Instruction) {
 	function := l.functions[in.A]
 	if kernel, ok := kernelOps[function.key]; ok && function.builtin {
 		// An array in an arena slot is read there.
-		if l.flow.uses[l.pc] && kernel.op == rAt {
+		if l.flow.at[l.pc].uses && kernel.op == rAt {
 			kernel.op = rAtA
 		}
 		if kernel.unary {
@@ -206,7 +206,7 @@ func (l *lowerer) loopInit(in Instruction) {
 	source := l.pop()
 	l.flush(0)
 	loop := rloop{typ: in.Type, item: l.localBase + int32(in.B), key: -1, acc: -1, dst: l.top(), exit: int32(in.A), built: l.builtFor(l.pc),
-		itemsInPlace: l.flow.itemsInPlace[l.pc]}
+		itemsInPlace: l.flow.at[l.pc].itemsInPlace}
 	if in.D != NoKey {
 		loop.key = l.localBase + int32(in.D)
 	}

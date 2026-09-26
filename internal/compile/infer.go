@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
@@ -56,10 +57,12 @@ func (v varInfo) forced() int {
 }
 
 type inferState struct {
-	nextVar    int
-	subst      map[int]typeTerm
-	info       map[int]varInfo
-	nodeTypes  map[int]typeTerm
+	// vars is every type variable by id, from 1: what it is bound to, what
+	// it may still become, and the open choices its binding may narrow.
+	vars []varSlot
+	// nodeTypes is every node's term by node id; selections is every
+	// call's function by node id.
+	nodeTypes  []typeTerm
 	selections map[int]string
 	// converted is how many literals became something other than what they
 	// were written as: allowed, never preferred.
@@ -67,12 +70,10 @@ type inferState struct {
 	literals  []int
 	choices   []*choice
 	deferred  []*deferred
-	// watchers is the open choices each variable's binding may narrow,
-	// queue the ones to narrow again, and probing how deep inside a trial
-	// the state is: a trial is taken back, so it narrows nothing.
-	watchers map[int][]*choice
-	queue    []*choice
-	probing  int
+	// queue is the open choices to narrow again, and probing how deep inside
+	// a trial the state is: a trial is taken back, so it narrows nothing.
+	queue   []*choice
+	probing int
 	// checks run once everything is decided: what can only be proven of
 	// settled types.
 	checks []func() error
@@ -86,6 +87,17 @@ type inferState struct {
 	oldConverted []int
 	oldChoices   []openChoice
 	oldDeferred  []*deferred
+}
+
+// varSlot is one type variable. bound says term is what it is, and
+// restricted that info says what it may become; a variable nothing
+// restricts may become anything.
+type varSlot struct {
+	term       typeTerm
+	info       varInfo
+	bound      bool
+	restricted bool
+	watchers   []*choice
 }
 
 // undo is one change on the trail: its kind, what it changed, and whether
@@ -115,13 +127,52 @@ const (
 
 func newInferState() *inferState {
 	return &inferState{
-		nextVar:    1,
-		subst:      map[int]typeTerm{},
-		info:       map[int]varInfo{},
-		nodeTypes:  map[int]typeTerm{},
+		vars:       make([]varSlot, 1, 8),
 		selections: map[int]string{},
-		watchers:   map[int][]*choice{},
+		trail:      make([]undo, 0, 16),
+		oldTerms:   make([]typeTerm, 0, 8),
 	}
+}
+
+// inferStates keeps the states of finished inferences: a compile would
+// otherwise make its lists and maps afresh, mostly to the same sizes again.
+var inferStates = sync.Pool{New: func() any { return newInferState() }}
+
+// maxKeptVars is the most variables a state goes back to the pool with; a
+// larger one is left to the collector.
+const maxKeptVars = 1 << 10
+
+func acquireInferState() *inferState {
+	if s, ok := inferStates.Get().(*inferState); ok {
+		return s
+	}
+	return newInferState()
+}
+
+// release empties s and gives it back: nothing it holds outlives the
+// inference, whose answer is built of its own, except selections, which the
+// answer takes and s replaces.
+func (s *inferState) release() {
+	if len(s.vars) > maxKeptVars {
+		return
+	}
+	clear(s.vars)
+	clear(s.nodeTypes)
+	clear(s.choices)
+	clear(s.deferred)
+	clear(s.queue)
+	clear(s.checks)
+	clear(s.oldTerms)
+	clear(s.oldKeys)
+	clear(s.oldChoices)
+	clear(s.oldDeferred)
+	*s = inferState{
+		vars: s.vars[:1], nodeTypes: s.nodeTypes[:0], selections: map[int]string{}, literals: s.literals[:0],
+		choices: s.choices[:0], deferred: s.deferred[:0], queue: s.queue[:0], checks: s.checks[:0],
+		trail: s.trail[:0], oldTerms: s.oldTerms[:0], oldInfos: s.oldInfos[:0], oldKeys: s.oldKeys[:0],
+		oldConverted: s.oldConverted[:0], oldChoices: s.oldChoices[:0], oldDeferred: s.oldDeferred[:0],
+	}
+	inferStates.Put(s)
 }
 
 // mark is a point on the trail to come back to.
@@ -139,11 +190,17 @@ func (s *inferState) undoTo(mark int) {
 func (s *inferState) revert(entry undo) {
 	switch entry.op {
 	case undoSubst:
-		restore(s.subst, entry.id, popped(&s.oldTerms), entry.had)
+		slot := &s.vars[entry.id]
+		slot.term, slot.bound = popped(&s.oldTerms), entry.had
 	case undoInfo:
-		restore(s.info, entry.id, popped(&s.oldInfos), entry.had)
+		slot := &s.vars[entry.id]
+		slot.info, slot.restricted = popped(&s.oldInfos), entry.had
 	case undoSelection:
-		restore(s.selections, entry.id, popped(&s.oldKeys), entry.had)
+		if old := popped(&s.oldKeys); entry.had {
+			s.selections[entry.id] = old
+		} else {
+			delete(s.selections, entry.id)
+		}
 	case undoConverted:
 		s.converted = popped(&s.oldConverted)
 	case undoChoice:
@@ -152,6 +209,12 @@ func (s *inferState) revert(entry undo) {
 	case undoDeferred:
 		popped(&s.oldDeferred).done = false
 	}
+}
+
+// changed puts a change on the trail and what it replaced on its stack.
+func changed[V any](s *inferState, entry undo, stack *[]V, old V) {
+	s.trail = append(s.trail, entry)
+	*stack = append(*stack, old)
 }
 
 // popped takes the top of a stack of what a change replaced.
@@ -164,31 +227,23 @@ func popped[V any](stack *[]V) V {
 	return old
 }
 
-func restore[V any](m map[int]V, id int, old V, had bool) {
-	if had {
-		m[id] = old
-	} else {
-		delete(m, id)
-	}
-}
-
 func (s *inferState) bind(id int, term typeTerm) {
-	old, had := s.subst[id]
-	s.trail, s.oldTerms = append(s.trail, undo{op: undoSubst, id: id, had: had}), append(s.oldTerms, old)
-	s.subst[id] = term
+	slot := &s.vars[id]
+	changed(s, undo{op: undoSubst, id: id, had: slot.bound}, &s.oldTerms, slot.term)
+	slot.term, slot.bound = term, true
 	if s.probing > 0 {
 		return
 	}
 	s.touch(id)
 	for _, v := range s.freeVars(term, nil) {
-		s.watchers[v] = append(s.watchers[v], s.watchers[id]...)
+		s.vars[v].watchers = append(s.vars[v].watchers, s.vars[id].watchers...)
 	}
 }
 
 func (s *inferState) setInfo(id int, info varInfo) {
-	old, had := s.info[id]
-	s.trail, s.oldInfos = append(s.trail, undo{op: undoInfo, id: id, had: had}), append(s.oldInfos, old)
-	s.info[id] = info
+	slot := &s.vars[id]
+	changed(s, undo{op: undoInfo, id: id, had: slot.restricted}, &s.oldInfos, slot.info)
+	slot.info, slot.restricted = info, true
 	if s.probing == 0 {
 		s.touch(id)
 	}
@@ -196,12 +251,17 @@ func (s *inferState) setInfo(id int, info varInfo) {
 
 // touch queues the open choices watching variable id.
 func (s *inferState) touch(id int) {
-	for _, c := range s.watchers[id] {
+	for _, c := range s.vars[id].watchers {
 		if c.open != nil && !c.queued {
 			c.queued = true
 			s.queue = append(s.queue, c)
 		}
 	}
+}
+
+// watch has c narrowed again whenever variable id is bound.
+func (s *inferState) watch(id int, c *choice) {
+	s.vars[id].watchers = append(s.vars[id].watchers, c)
 }
 
 // freeVars appends the open variables term holds to vars.
@@ -221,7 +281,7 @@ func (s *inferState) freeVars(term typeTerm, vars []int) []int {
 
 func (s *inferState) selectKey(node int, key string) {
 	old, had := s.selections[node]
-	s.trail, s.oldKeys = append(s.trail, undo{op: undoSelection, id: node, had: had}), append(s.oldKeys, old)
+	changed(s, undo{op: undoSelection, id: node, had: had}, &s.oldKeys, old)
 	s.selections[node] = key
 }
 
@@ -229,23 +289,30 @@ func (s *inferState) convert(delta int) {
 	if delta == 0 {
 		return
 	}
-	s.trail, s.oldConverted = append(s.trail, undo{op: undoConverted}), append(s.oldConverted, s.converted)
+	changed(s, undo{op: undoConverted}, &s.oldConverted, s.converted)
 	s.converted += delta
+}
+
+// setType stamps node id's term.
+func (s *inferState) setType(id int, term typeTerm) {
+	if id >= len(s.nodeTypes) {
+		s.nodeTypes = append(s.nodeTypes, make([]typeTerm, id+1-len(s.nodeTypes))...)
+	}
+	s.nodeTypes[id] = term
 }
 
 // infoOf is what variable id may become; a variable nothing restricts may
 // become anything.
 func (s *inferState) infoOf(id int) varInfo {
-	if info, ok := s.info[id]; ok {
-		return info
+	if slot := &s.vars[id]; slot.restricted {
+		return slot.info
 	}
 	return varInfo{domain: allKinds}
 }
 
 func (s *inferState) fresh() typeTerm {
-	term := varTerm(s.nextVar)
-	s.nextVar++
-	return term
+	s.vars = append(s.vars, varSlot{})
+	return varTerm(len(s.vars) - 1)
 }
 
 // varTerm is the term of type variable id.
@@ -259,11 +326,11 @@ func containerTerm(kind machine.Kind, elem typeTerm) typeTerm {
 
 func (s *inferState) deref(term typeTerm) typeTerm {
 	for term.kind == machine.VarKind {
-		next, ok := s.subst[term.id]
-		if !ok {
+		slot := &s.vars[term.id]
+		if !slot.bound {
 			return term
 		}
-		term = next
+		term = slot.term
 	}
 	return term
 }
@@ -359,16 +426,36 @@ func (s *inferState) occurs(id int, term typeTerm) bool {
 	return slices.ContainsFunc(term.fields, func(field fieldTerm) bool { return s.occurs(id, field.term) })
 }
 
+// namedTerms is a few terms by name: a program's arguments, or the call's
+// variable for each type variable of a signature met so far. There are few
+// enough that a list is quicker than a map.
+type namedTerms []namedTerm
+
+type namedTerm struct {
+	name string
+	term typeTerm
+}
+
+// find is the term named name.
+func (n namedTerms) find(name string) (typeTerm, bool) {
+	for _, named := range n {
+		if named.name == name {
+			return named.term, true
+		}
+	}
+	return typeTerm{}, false
+}
+
 // instantiate is a signature's type with its type variables replaced by the
 // call's, one fresh variable per name.
-func (s *inferState) instantiate(t machine.Type, vars map[string]typeTerm) typeTerm {
+func (s *inferState) instantiate(t machine.Type, vars *namedTerms) typeTerm {
 	switch t.Kind() {
 	case machine.VarKind:
-		if existing, ok := vars[t.Name()]; ok {
+		if existing, ok := vars.find(t.Name()); ok {
 			return existing
 		}
 		fresh := s.fresh()
-		vars[t.Name()] = fresh
+		*vars = append(*vars, namedTerm{name: t.Name(), term: fresh})
 		return fresh
 	case machine.ArrayKind, machine.DictKind:
 		if !hasElem(t) {
@@ -462,10 +549,11 @@ type inference struct {
 }
 
 type inferContext struct {
-	args     map[string]typeTerm
+	// args is the program's arguments, and locals the names the loops and
+	// lets around a node bind, innermost first, hiding an argument's.
+	args     namedTerms
+	locals   *localName
 	registry *machine.Registry
-	// hints is the contract's argument types.
-	hints map[string]machine.Type
 	// money is whether the registry declares money, which is what lets a
 	// literal become a ratio or money.
 	money bool
@@ -485,13 +573,13 @@ type inferContext struct {
 // rejecting it, and every node the result flows from — the items of an
 // array, the branches of an if — is typed by it.
 func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string]machine.Type, order []string, ret *machine.Type) (*inference, error) {
-	names := syntax.FreeVariables(expr)
-	if order != nil {
-		names = order
+	names := order
+	if names == nil {
+		names = syntax.FreeVariables(expr)
 	}
-	state := newInferState()
+	state := acquireInferState()
+	defer state.release()
 	context := newInferContext(state, names, registry)
-	context.hints = hints
 	if err := collectEnums(context.enums, hints, ret); err != nil {
 		return nil, err
 	}
@@ -532,9 +620,11 @@ func applyResultType(expr syntax.Expr, state *inferState, result typeTerm, ret *
 	if ret == nil {
 		return nil
 	}
-	found := state.describe(result)
+	mark := state.mark()
 	if err := state.unify(result, state.concrete(*ret)); err != nil {
-		return syntax.Around(expr, "type error: the contract returns %s but the expression returns %s", ret, found)
+		// Said of the result as it was before the contract met it.
+		state.undoTo(mark)
+		return syntax.Around(expr, "type error: the contract returns %s but the expression returns %s", ret, state.describe(result))
 	}
 	return nil
 }
@@ -542,17 +632,18 @@ func applyResultType(expr syntax.Expr, state *inferState, result typeTerm, ret *
 // newInferContext allocates one type variable per free variable, in the order
 // the variables appear, which is also the argument order of the program.
 func newInferContext(state *inferState, names []string, registry *machine.Registry) inferContext {
-	args := make(map[string]typeTerm, len(names))
-	for _, name := range names {
-		args[name] = state.fresh()
+	args := make(namedTerms, len(names))
+	for i, name := range names {
+		args[i] = namedTerm{name: name, term: state.fresh()}
 	}
 	_, money := registry.Money()
 	return inferContext{args: args, registry: registry, enums: map[string]machine.Type{}, money: money}
 }
 
-func applyHints(state *inferState, args map[string]typeTerm, hints map[string]machine.Type) error {
+func applyHints(state *inferState, args namedTerms, hints map[string]machine.Type) error {
 	for name, hint := range hints {
-		if err := state.unify(args[name], state.concrete(hint)); err != nil {
+		arg, _ := args.find(name)
+		if err := state.unify(arg, state.concrete(hint)); err != nil {
 			return fmt.Errorf("type hint for %q: %w", name, err)
 		}
 	}
@@ -561,7 +652,7 @@ func applyHints(state *inferState, args map[string]typeTerm, hints map[string]ma
 
 // inference is what the solved state says of the program: every argument's
 // type, the result's, every node's and every call's function.
-func (s *inferState) inference(names []string, args map[string]typeTerm, result typeTerm) (*inference, error) {
+func (s *inferState) inference(names []string, args namedTerms, result typeTerm) (*inference, error) {
 	for _, check := range s.checks {
 		if err := check(); err != nil {
 			return nil, err
@@ -569,7 +660,7 @@ func (s *inferState) inference(names []string, args map[string]typeTerm, result 
 	}
 	params := make([]machine.Parameter, len(names))
 	for i, name := range names {
-		typ, ok := s.publicType(args[name])
+		typ, ok := s.publicType(args[i].term)
 		if !ok {
 			return nil, fmt.Errorf("cannot infer a concrete type for %s; provide a compile-time type hint", name)
 		}

@@ -3,7 +3,6 @@ package compile
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 
@@ -14,7 +13,7 @@ import (
 
 // record stamps the inferred type of expr.
 func record(expr syntax.Expr, state *inferState, term typeTerm) typeTerm {
-	state.nodeTypes[expr.NodeID()] = term
+	state.setType(expr.NodeID(), term)
 	return term
 }
 
@@ -66,7 +65,7 @@ func inferEnum(node *syntax.EnumExpr, state *inferState, context inferContext) (
 }
 
 func inferVariable(node *syntax.VariableExpr, state *inferState, context inferContext) (typeTerm, error) {
-	term, ok := context.args[node.Name]
+	term, ok := context.lookup(node.Name)
 	if !ok {
 		return typeTerm{}, fmt.Errorf("internal error: variable %q was not collected", node.Name)
 	}
@@ -327,17 +326,29 @@ func withLoopLocals(context inferContext, key, value string, elem typeTerm) infe
 	return withLocal(local, key, scalarTerm(machine.StringKind))
 }
 
-// withLocal binds a `for` local name without touching the outer arguments.
+// localName is a name a loop or a let binds, and the ones bound around it.
+type localName struct {
+	name  string
+	term  typeTerm
+	outer *localName
+}
+
+// withLocal binds a local name in front of the ones around it, leaving the
+// context it came from as it was.
 func withLocal(context inferContext, name string, term typeTerm) inferContext {
-	local := context
-	local.args = make(map[string]typeTerm, len(context.args)+1)
-	maps.Copy(local.args, context.args)
-	local.args[name] = term
-	if _, shadowed := context.hints[name]; shadowed {
-		local.hints = maps.Clone(context.hints)
-		delete(local.hints, name)
+	context.locals = &localName{name: name, term: term, outer: context.locals}
+	return context
+}
+
+// lookup is the term of a name: the innermost local by that name, or else
+// the argument.
+func (c inferContext) lookup(name string) (typeTerm, bool) {
+	for local := c.locals; local != nil; local = local.outer {
+		if local.name == name {
+			return local.term, true
+		}
 	}
-	return local
+	return c.args.find(name)
 }
 
 // loopSourceHint explains which source shape the variable count asks for.

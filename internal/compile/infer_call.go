@@ -6,7 +6,6 @@ package compile
 // per-node rules in infer_expr.go.
 
 import (
-	"slices"
 	"strings"
 
 	"github.com/nethinwei/funroute/internal/machine"
@@ -27,7 +26,7 @@ func inferArgs(args []syntax.Expr, state *inferState, context inferContext) ([]t
 }
 
 func inferCall(node *syntax.CallExpr, state *inferState, context inferContext) (typeTerm, error) {
-	functions := context.registry.Overloads(node.Name)
+	functions := machine.OverloadsOf(context.registry, node.Name)
 	if len(functions) == 0 {
 		return typeTerm{}, syntax.Around(node, "unknown function %q", node.Name)
 	}
@@ -38,7 +37,7 @@ func inferCall(node *syntax.CallExpr, state *inferState, context inferContext) (
 	if err != nil {
 		return typeTerm{}, err
 	}
-	functions = slices.DeleteFunc(functions, func(function *machine.RegisteredFunction) bool { return len(function.Params) != len(node.Args) })
+	functions = kept(functions, func(function *machine.RegisteredFunction) bool { return len(function.Params) == len(node.Args) })
 	c := &choice{node: node, args: args, result: state.fresh()}
 	if err := state.offer(c, functions); err != nil {
 		return typeTerm{}, err
@@ -56,14 +55,14 @@ func inferFallback(node *syntax.CallExpr, state *inferState, context inferContex
 	if err != nil {
 		return typeTerm{}, err
 	}
-	vars := map[string]typeTerm{}
+	var vars namedTerms
 	for _, arg := range args {
-		if state.unify(arg, state.instantiate(function.Params[0], vars)) != nil {
+		if state.unify(arg, state.instantiate(function.Params[0], &vars)) != nil {
 			return typeTerm{}, noOverloadError(node, state, args)
 		}
 	}
 	state.selectKey(node.ID, function.Key())
-	return record(node, state, state.instantiate(function.Result, vars)), nil
+	return record(node, state, state.instantiate(function.Result, &vars)), nil
 }
 
 // overloadHint names what the writer probably wanted. `+` joins strings, so

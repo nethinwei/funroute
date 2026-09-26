@@ -346,7 +346,7 @@ func TestTheEnumWildcardIsFilledByTheContractsEnum(t *testing.T) {
 		t.Fatalf("CompileExpr(string(ch) + string(@stripe)) = %v, want a string", err)
 	}
 	state := newInferState()
-	wildcard := state.instantiate(machine.AnyEnumType, map[string]typeTerm{})
+	wildcard := state.instantiate(machine.AnyEnumType, &namedTerms{})
 	if got := state.describe(wildcard); got != "enum" {
 		t.Fatalf("the wildcard reads %s, want enum", got)
 	}

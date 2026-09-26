@@ -173,3 +173,19 @@ func TestAScalarConstantReadsAsTheDecoderReadsIt(t *testing.T) {
 		}
 	}
 }
+
+// A scalar constant is written as json.Marshal writes its value, byte for
+// byte: the digest covers every constant.
+func TestAScalarConstantIsItsValuesJSON(t *testing.T) {
+	t.Parallel()
+	for _, value := range []machine.Value{
+		machine.Int(0), machine.Int(-9223372036854775808), machine.Int(42), machine.Bool(true), machine.Bool(false),
+		machine.String(""), machine.String("adyen"), machine.String("<a&b>"), machine.String("银行卡😀"), machine.String("\xff\t\"\\ "),
+	} {
+		constant, ok := machine.ConstantOf(value, value.Type())
+		want, err := json.Marshal(value)
+		if !ok || err != nil || string(constant.Value) != string(want) {
+			t.Errorf("ConstantOf(%#v) = %s, %v; json.Marshal says %s, %v", value.Any(), constant.Value, ok, want, err)
+		}
+	}
+}

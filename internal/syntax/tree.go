@@ -64,9 +64,7 @@ func treeOf(expr Expr, names map[string][]Span) Tree {
 	if plan != nil {
 		tree.Form = plan.isForm
 		own := ownSource{node: tree.Span}
-		for _, child := range Children(expr) {
-			own.children = append(own.children, child.Extent())
-		}
+		EachChild(expr, func(child Expr) { own.children = append(own.children, child.Extent()) })
 		tree.Fields = fieldsOf(reflect.ValueOf(expr).Elem(), plan, own, names)
 	}
 	return tree

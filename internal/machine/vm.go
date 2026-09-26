@@ -224,23 +224,28 @@ func validateInstructions(artifact *Artifact) error {
 }
 
 func validateInstruction(index int, instruction Instruction, artifact *Artifact) error {
-	fail := func(format string, args ...any) error {
-		return fmt.Errorf("invalid instruction %d: %s", index, fmt.Sprintf(format, args...))
-	}
+	var err error
 	spec := instruction.Op.spec()
-	if instruction.Op == OpInvalid || spec.name == opcodes[OpInvalid].name {
-		return fail("unknown opcode %q", instruction.Op)
-	}
+	switch {
+	case instruction.Op == OpInvalid || spec.name == opcodes[OpInvalid].name:
+		err = problem("unknown opcode %q", instruction.Op)
 	// Every type the walk reads off an instruction is whole: an array with
 	// its element, a record with its fields.
-	if instruction.Type != nil && !instruction.Type.IsConcrete() {
-		return fail("type %s is not concrete", instruction.Type)
+	case instruction.Type != nil && !instruction.Type.IsConcrete():
+		err = problem("type %s is not concrete", instruction.Type)
+	case spec.validate != nil:
+		err = spec.validate(instruction, artifact, problem)
 	}
-	if spec.validate == nil {
-		return nil
+	if err != nil {
+		return fmt.Errorf("invalid instruction %d: %s", index, err.Error())
 	}
-	return spec.validate(instruction, artifact, fail)
+	return nil
 }
+
+// problem is what is wrong with an instruction, which validateInstruction
+// says which instruction of: a function that holds nothing, so handing it
+// to every validator costs nothing.
+func problem(format string, args ...any) error { return fmt.Errorf(format, args...) }
 
 func loadConstants(artifact *Artifact) ([]Value, error) {
 	constants := make([]Value, len(artifact.parts.Constants))

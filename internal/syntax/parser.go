@@ -113,7 +113,9 @@ func (p *parser) parseBinary(lowest int) (Expr, error) {
 // climb reads the infix operators after left, whose precedence is at least
 // lowest.
 func (p *parser) climb(left Expr, lowest int) (Expr, error) {
-	var last *operatorSpec
+	// last points at previous, the operator before this one, once there is
+	// one: a pointer to spec itself would move every spec to the heap.
+	var last, previous *operatorSpec = nil, new(operatorSpec)
 	for {
 		operator := p.peek()
 		spec, ok := p.infixOperator(operator)
@@ -130,7 +132,8 @@ func (p *parser) climb(left Expr, lowest int) (Expr, error) {
 			return nil, err
 		}
 		left = p.stamp(left.Extent().Start, p.expandOperator(operator, spec, left, right))
-		last = &spec
+		*previous = spec
+		last = previous
 	}
 }
 
@@ -219,9 +222,7 @@ func tooDeep(root Expr) Expr {
 		if top.depth > maxNesting {
 			return top.expr
 		}
-		for _, child := range Children(top.expr) {
-			stack = append(stack, entry{child, top.depth + 1})
-		}
+		EachChild(top.expr, func(child Expr) { stack = append(stack, entry{child, top.depth + 1}) })
 	}
 	return nil
 }

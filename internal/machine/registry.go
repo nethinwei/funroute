@@ -465,6 +465,16 @@ func (r *Registry) Overloads(name string) []*RegisteredFunction {
 	return out
 }
 
+// OverloadsOf is Overloads without the copy, for inference to walk: the
+// caller only reads it. Registering only appends, so the signatures it
+// holds never change under it, and its capacity ends at its length, so an
+// append makes a slice of its own.
+func OverloadsOf(r *Registry, name string) []*RegisteredFunction {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return slices.Clip(r.byName[name])
+}
+
 // Resolve looks up the exact signature a call is bound to.
 func (r *Registry) Resolve(key string) (*RegisteredFunction, bool) {
 	r.mu.RLock()

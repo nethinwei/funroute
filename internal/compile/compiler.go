@@ -64,17 +64,22 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	if registry == nil {
 		return nil, nil, compileError(errors.New("registry is required"))
 	}
-	if err := validateForms(expr, registry); err != nil {
+	surveyed, err := survey(expr, registry)
+	if err != nil {
 		return nil, nil, compileError(err)
 	}
 	options.hints = options.argTypes()
-	if err := options.validate(expr); err != nil {
+	if err := options.validate(surveyed); err != nil {
 		return nil, nil, err
 	}
 	if err := validateMoneyContract(options, registry); err != nil {
 		return nil, nil, err
 	}
-	inferred, err := inferProgram(expr, registry, options.argTypes(), options.argOrder(), options.Result)
+	order := options.argOrder()
+	if order == nil {
+		order = surveyed.names()
+	}
+	inferred, err := inferProgram(expr, registry, options.argTypes(), order, options.Result)
 	if err != nil {
 		return nil, nil, compileError(err)
 	}
@@ -84,7 +89,7 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 		return inferred, nil, compileError(err)
 	}
 	compiler := newBytecodeCompiler(registry, inferred)
-	compiler.readsArgument = argumentReaders(expr)
+	compiler.readsArgument = surveyed.readers
 	compiler.plain, compiler.unsealed = options.plain, options.unsealed
 	if err := compiler.compile(expr); err != nil {
 		return inferred, nil, compileError(err)

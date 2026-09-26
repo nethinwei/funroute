@@ -120,8 +120,25 @@ func ConstantOf(value Value, typ Type) (Constant, bool) {
 	if value.kind == HandleKind || IsExact(value) || !typ.IsConcrete() || !value.hasType(typ) {
 		return Constant{}, false
 	}
+	if data, ok := scalarJSON(value); ok {
+		return Constant{Type: typ, Value: data}, true
+	}
 	data, err := json.Marshal(value)
 	return Constant{Type: typ, Value: data}, err == nil
+}
+
+// scalarJSON is the JSON of an int, a bool or a string, written as
+// json.Marshal writes it without going through it; false for anything else.
+func scalarJSON(value Value) ([]byte, bool) {
+	switch value.kind {
+	case IntKind:
+		return strconv.AppendInt(nil, value.i, 10), true
+	case BoolKind:
+		return strconv.AppendBool(nil, value.b), true
+	case StringKind:
+		return kit.AppendJSONString(nil, value.s), true
+	}
+	return nil, false
 }
 
 // value reads the constant back as a value of its type.

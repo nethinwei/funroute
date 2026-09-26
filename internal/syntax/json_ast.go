@@ -29,7 +29,10 @@ const ExprJSONVersion = 1
 // ExportExprJSON produces canonical, tagged JSON.
 func ExportExprJSON(expr Expr) ([]byte, error) {
 	var buf bytes.Buffer
-	fmt.Fprintf(&buf, `{"version":%d,"expr":`, ExprJSONVersion)
+	buf.Grow(256)
+	buf.WriteString(`{"version":`)
+	buf.WriteString(strconv.Itoa(ExprJSONVersion))
+	buf.WriteString(`,"expr":`)
 	if err := exportNode(&buf, expr); err != nil {
 		return nil, err
 	}
@@ -48,8 +51,9 @@ func exportNode(buf *bytes.Buffer, expr Expr) error {
 	if plan == nil {
 		return fmt.Errorf("unsupported expression node %T", expr)
 	}
-	fmt.Fprintf(buf, `{"node":%q`, plan.kind)
-	if err := exportFields(buf, reflect.ValueOf(expr).Elem(), plan); err != nil {
+	buf.WriteString(`{"node":`)
+	writeJSONString(buf, plan.kind)
+	if err := exportFields(buf, reflect.ValueOf(expr).Elem(), plan, true); err != nil {
 		return err
 	}
 	buf.WriteByte('}')
@@ -59,33 +63,51 @@ func exportNode(buf *bytes.Buffer, expr Expr) error {
 // Literals are scalars, so the public accessors cost nothing here: there is no
 // container to copy. A float is written as text so 1.0 stays a float.
 func exportLiteral(buf *bytes.Buffer, node *LiteralExpr) error {
-	var encoded []byte
-	var err error
-	switch node.Value.Kind() {
-	case machine.IntKind, machine.StringKind, machine.BoolKind:
-		encoded, err = json.Marshal(node.Value.Any())
-	case machine.FloatKind:
-		encoded, err = json.Marshal(node.Decimal.String())
-	default:
+	kind := node.Value.Kind()
+	if kind != machine.IntKind && kind != machine.StringKind && kind != machine.BoolKind && kind != machine.FloatKind {
 		return fmt.Errorf("literal node has unsupported value type %s", node.Value.Type())
 	}
-	if err != nil {
-		return err
+	buf.WriteString(`{"node":`)
+	writeJSONString(buf, kind.String())
+	buf.WriteByte(',')
+	writeJSONString(buf, kind.String())
+	buf.WriteByte(':')
+	switch kind {
+	case machine.IntKind:
+		whole, _ := node.Value.Int()
+		buf.WriteString(strconv.FormatInt(whole, 10))
+	case machine.StringKind:
+		text, _ := node.Value.String()
+		writeJSONString(buf, text)
+	case machine.BoolKind:
+		truth, _ := node.Value.Bool()
+		buf.WriteString(strconv.FormatBool(truth))
+	default:
+		writeJSONString(buf, node.Decimal.String())
 	}
-	kind := node.Value.Kind().String()
-	fmt.Fprintf(buf, `{"node":%q,%q:%s}`, kind, kind, encoded)
+	buf.WriteByte('}')
 	return nil
+}
+
+// writeJSONString writes text as json.Marshal does.
+func writeJSONString(buf *bytes.Buffer, text string) {
+	buf.Write(kit.AppendJSONString(buf.AvailableBuffer(), text))
 }
 
 // exportFields writes a struct's tagged fields in declaration order, skipping
 // an optional field that is absent.
-func exportFields(buf *bytes.Buffer, value reflect.Value, plan *structPlan) error {
+func exportFields(buf *bytes.Buffer, value reflect.Value, plan *structPlan, after bool) error {
 	for _, field := range plan.fields {
 		current := value.Field(field.index)
 		if field.optional && isAbsent(current) {
 			continue
 		}
-		fmt.Fprintf(buf, `,%q:`, field.name)
+		if after {
+			buf.WriteByte(',')
+		}
+		after = true
+		writeJSONString(buf, field.name)
+		buf.WriteByte(':')
 		if err := exportField(buf, current, field); err != nil {
 			return err
 		}
@@ -111,12 +133,10 @@ func exportField(buf *bytes.Buffer, value reflect.Value, field fieldPlan) error 
 	case fieldExpr:
 		return exportNode(buf, heldExpr(value))
 	case fieldName:
-		encoded, _ := json.Marshal(value.String())
-		buf.Write(encoded)
+		writeJSONString(buf, value.String())
 		return nil
 	case fieldFlag:
-		encoded, _ := json.Marshal(value.Bool())
-		buf.Write(encoded)
+		buf.WriteString(strconv.FormatBool(value.Bool()))
 		return nil
 	default:
 		return exportList(buf, value, field)
@@ -137,11 +157,9 @@ func exportList(buf *bytes.Buffer, list reflect.Value, field fieldPlan) error {
 			continue
 		}
 		buf.WriteByte('{')
-		var item bytes.Buffer
-		if err := exportFields(&item, list.Index(i), field.item); err != nil {
+		if err := exportFields(buf, list.Index(i), field.item, false); err != nil {
 			return err
 		}
-		buf.Write(item.Bytes()[1:]) // drop the leading comma
 		buf.WriteByte('}')
 	}
 	buf.WriteByte(']')

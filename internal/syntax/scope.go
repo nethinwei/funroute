@@ -3,8 +3,6 @@ package syntax
 import (
 	"slices"
 	"strings"
-
-	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // What a position in a program can see, by the rule FreeVariables follows: a
@@ -16,7 +14,7 @@ import (
 // The program's arguments are the contract's, not the program's, so they are
 // not in the list.
 func ScopeAt(root Expr, offset int) []string {
-	bound := scope{}
+	var bound scope
 	for current := root; ; {
 		next, inner := childAt(current, bound, offset)
 		if next == nil {
@@ -24,7 +22,9 @@ func ScopeAt(root Expr, offset int) []string {
 		}
 		current, bound = next, inner
 	}
-	return kit.SortedKeys(bound)
+	names := append(make([]string, 0, len(bound)), bound...)
+	slices.Sort(names)
+	return slices.Compact(names)
 }
 
 // childAt is the child of expr whose source holds offset, with the names
