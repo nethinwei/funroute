@@ -45,6 +45,8 @@ func coldKernel(regs []Value, pc int, in *rinstr) (int, bool) {
 		return pc, at(regs, in)
 	case rAtA:
 		return pc, arenaAt(regs, in)
+	case rTake:
+		return pc, takeOp(regs, in)
 	case rIntToF:
 		return pc, intToFloat(regs, in)
 	}
@@ -70,10 +72,6 @@ func compare(regs []Value, in *rinstr) bool {
 		regs[in.c] = Bool(a.s < b.s)
 	case rLeS:
 		regs[in.c] = Bool(a.s <= b.s)
-	case rLen:
-		regs[in.c] = Int(int64(a.length()))
-	case rLenA:
-		regs[in.c] = Int(int64(arenaLength(*a)))
 	}
 	return true
 }

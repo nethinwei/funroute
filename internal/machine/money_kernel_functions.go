@@ -89,10 +89,10 @@ func allocateByWeight(_ context.Context, args []Value) (Value, error) {
 	if err != nil {
 		return Value{}, err
 	}
-	weights, _ := args[1].box.([]int64)
+	weights, _ := nativeItems[int64](args[1])
 	amount, _ := args[0].Money()
 	shares, err := amount.AllocateBy(strategy, weights...)
-	return Value{kind: ArrayKind, box: shares}, err
+	return arrayOf(shares), err
 }
 
 func allocateEvenly(_ context.Context, args []Value) (Value, error) {
@@ -102,7 +102,7 @@ func allocateEvenly(_ context.Context, args []Value) (Value, error) {
 	}
 	amount, _ := args[0].Money()
 	shares, err := amount.SplitBy(strategy, int(args[1].i))
-	return Value{kind: ArrayKind, box: shares}, err
+	return arrayOf(shares), err
 }
 
 // registerProportions registers prorate, which lands between two minor

@@ -75,8 +75,8 @@ func converterInto(registry *Registry, typ reflect.Type) func(Value) (reflect.Va
 // intoGo converts one value into a Go type. A container whose backing already
 // is the wanted Go type is handed over as it is.
 func intoGo(registry *Registry, value Value, typ reflect.Type) (reflect.Value, error) {
-	if value.box != nil && reflect.TypeOf(value.box) == typ {
-		return reflect.ValueOf(value.box), nil
+	if backing := nativeAny(value); backing != nil && reflect.TypeOf(backing) == typ {
+		return reflect.ValueOf(backing), nil
 	}
 	if converted, ok, err := intoMoneyGo(value, typ); ok {
 		return converted, err

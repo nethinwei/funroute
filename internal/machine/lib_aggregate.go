@@ -191,22 +191,21 @@ func sequence(start, stop, step int64) (Value, error) {
 	if step == 0 {
 		return Value{}, fmt.Errorf("%w: range step must not be zero", ErrArithmetic)
 	}
-	items := make([]int64, 0, rangeLength(start, stop, step))
-	for value := start; step > 0 && value < stop || step < 0 && value > stop; value += step {
-		if len(items) == maxRangeLength {
-			return Value{}, fmt.Errorf("%w: range is longer than %d items", ErrArithmetic, maxRangeLength)
-		}
-		items = append(items, value)
-		// The next value would be past int64, so past stop as well.
-		if step > 0 && value > math.MaxInt64-step || step < 0 && value < math.MinInt64-step {
-			break
-		}
+	n := rangeLength(start, stop, step)
+	if n > maxRangeLength {
+		return Value{}, fmt.Errorf("%w: range is longer than %d items", ErrArithmetic, maxRangeLength)
 	}
-	return Value{kind: ArrayKind, box: items}, nil
+	items := make([]int64, n)
+	// Every item is between start and stop, so an int64; the product may
+	// wrap on the way, and the sum wraps back.
+	for i := range items {
+		items[i] = start + int64(i)*step
+	}
+	return arrayOf(items), nil
 }
 
-// rangeLength is how many items sequence makes, at most one past its limit:
-// the capacity to make them in at once.
+// rangeLength is how many items there are from start to stop by step, or
+// one past sequence's limit when there are more.
 func rangeLength(start, stop, step int64) int {
 	var span, stride uint64
 	switch {

@@ -46,7 +46,7 @@ func indicesOf(_ context.Context, args []Value) (Value, error) {
 	for i := range out {
 		out[i] = int64(i)
 	}
-	return nativeArray(out), nil
+	return arrayOf(out), nil
 }
 
 // errNotInArray is index_of of an item the array does not hold.
@@ -55,15 +55,15 @@ var errNotInArray = fmt.Errorf("%w: the array does not contain that item", ErrDo
 func indexOfItem(_ context.Context, args []Value) (Value, error) {
 	wanted := args[1]
 	var at int
-	switch items := args[0].box.(type) {
-	case []int64:
-		at = slices.Index(items, wanted.i)
-	case []float64:
-		at = slices.Index(items, wanted.f)
-	case []string:
-		at = slices.Index(items, wanted.s)
-	case []bool:
-		at = slices.Index(items, wanted.b)
+	switch first := args[0].box.(type) {
+	case *int64:
+		at = slices.Index(itemsAt(first, args[0].i), wanted.i)
+	case *float64:
+		at = slices.Index(itemsAt(first, args[0].i), wanted.f)
+	case *string:
+		at = slices.Index(itemsAt(first, args[0].i), wanted.s)
+	case *bool:
+		at = slices.Index(itemsAt(first, args[0].i), wanted.b)
 	default:
 		at = slices.IndexFunc(valuesOf(args[0]), wanted.Equal)
 	}
@@ -137,12 +137,12 @@ func sortedBy(args []Value, ascending bool) (Value, error) {
 	}
 	var order []int
 	switch box := keys.box.(type) {
-	case []int64:
-		order = orderBy(box, ascending)
-	case []float64:
-		order = orderBy(box, ascending)
-	case []string:
-		order = orderBy(box, ascending)
+	case *int64:
+		order = orderBy(itemsAt(box, keys.i), ascending)
+	case *float64:
+		order = orderBy(itemsAt(box, keys.i), ascending)
+	case *string:
+		order = orderBy(itemsAt(box, keys.i), ascending)
 	default:
 		return Value{}, fmt.Errorf("internal error: keys of %s", keys.Type())
 	}
@@ -163,12 +163,12 @@ func rankedBy(args []Value, ascending bool) (Value, error) {
 	k := int(min(count, int64(n)))
 	var order []int
 	switch box := keys.box.(type) {
-	case []int64:
-		order = firstOf(box, k, ascending)
-	case []float64:
-		order = firstOf(box, k, ascending)
-	case []string:
-		order = firstOf(box, k, ascending)
+	case *int64:
+		order = firstOf(itemsAt(box, keys.i), k, ascending)
+	case *float64:
+		order = firstOf(itemsAt(box, keys.i), k, ascending)
+	case *string:
+		order = firstOf(itemsAt(box, keys.i), k, ascending)
 	default:
 		return Value{}, fmt.Errorf("internal error: keys of %s", keys.Type())
 	}

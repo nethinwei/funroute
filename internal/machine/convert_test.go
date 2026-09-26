@@ -38,7 +38,7 @@ func TestNativeContainersAreWrappedNotCopied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := coerced.box.([]float64); !sameBacking(features, got) {
+	if got, _ := nativeAny(coerced).([]float64); !sameBacking(features, got) {
 		t.Fatal("coerce copied the slice")
 	}
 }

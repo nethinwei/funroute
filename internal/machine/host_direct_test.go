@@ -128,13 +128,13 @@ func argumentsFor(params []Type) [][]Value {
 		case typ.kind == StringKind:
 			return []Value{String(""), String("a")}
 		case typ.elem.kind == IntKind:
-			return []Value{{kind: ArrayKind, box: []int64{}}, {kind: ArrayKind, box: []int64{1, 2}}}
+			return []Value{arrayOf([]int64{}), arrayOf([]int64{1, 2})}
 		case typ.elem.kind == StringKind:
-			return []Value{{kind: ArrayKind, box: []string{}}, {kind: ArrayKind, box: []string{"a", "b"}}}
+			return []Value{arrayOf([]string{}), arrayOf([]string{"a", "b"})}
 		case typ.elem.kind == BoolKind:
-			return []Value{{kind: ArrayKind, box: []bool{}}, {kind: ArrayKind, box: []bool{false, true}}}
+			return []Value{arrayOf([]bool{}), arrayOf([]bool{false, true})}
 		}
-		return []Value{{kind: ArrayKind, box: []float64{}}, {kind: ArrayKind, box: []float64{1, 2}}}
+		return []Value{arrayOf([]float64{}), arrayOf([]float64{1, 2})}
 	}
 	calls := [][]Value{nil}
 	for _, param := range params {

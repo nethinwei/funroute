@@ -57,7 +57,7 @@ func viewRecords(view *recordsView, plan *codec, p unsafe.Pointer, inPlace bool)
 		view = new(recordsView)
 	}
 	*view = recordsView{data: header.data, length: header.len, plan: plan}
-	return Value{kind: ArrayKind, box: view}
+	return viewed(view)
 }
 
 // item is where item i is in the host's memory.

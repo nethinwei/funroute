@@ -220,7 +220,7 @@ func boolResult(r bool) (Value, error)     { return Bool(r), nil }
 // backing is an array's native backing. An array with none is empty, and
 // reflection hands it over as an empty slice, not a nil one.
 func backing[T any](v *Value) []T {
-	if items, ok := v.box.([]T); ok {
+	if items, ok := nativeItems[T](*v); ok {
 		return items
 	}
 	return []T{}
@@ -229,9 +229,9 @@ func backing[T any](v *Value) []T {
 func floatResult(r float64) (Value, error) { return Float(r), nil }
 
 // A vector result is wrapped as its backing, as fromGo wraps it.
-func intsResult(r []int64) (Value, error)     { return Value{kind: ArrayKind, box: r}, nil }
-func floatsResult(r []float64) (Value, error) { return Value{kind: ArrayKind, box: r}, nil }
-func stringsResult(r []string) (Value, error) { return Value{kind: ArrayKind, box: r}, nil }
+func intsResult(r []int64) (Value, error)     { return arrayOf(r), nil }
+func floatsResult(r []float64) (Value, error) { return arrayOf(r), nil }
+func stringsResult(r []string) (Value, error) { return arrayOf(r), nil }
 
 // directBatch is the EvalBatch of a GoBatch of one parameter, of the shapes
 // directEval calls a single call of.

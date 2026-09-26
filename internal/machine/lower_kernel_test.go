@@ -53,7 +53,7 @@ func operandsOf(params []Type, ints []int64, floats []float64, strings []string)
 				out = append(out, String(s))
 			}
 		case ArrayKind, DictKind:
-			out = append(out, Value{kind: ArrayKind, box: []int64{}}, Value{kind: ArrayKind, box: []int64{4, 5, 6}})
+			out = append(out, arrayOf([]int64{}), arrayOf([]int64{4, 5, 6}))
 		}
 		return out
 	}
@@ -110,6 +110,9 @@ func runKernelOp(f *frame, in *rinstr) bool {
 		return divI(regs, in)
 	case rAddF:
 		return addF(regs, in)
+	case rLen:
+		lengthOp(regs, in)
+		return true
 	}
 	if in.op == rIntToF {
 		return intToFloat(regs, in)

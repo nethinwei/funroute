@@ -36,8 +36,14 @@ func fromGo(input any) (Value, error) {
 		return Float(x), nil
 	case string:
 		return String(x), nil
-	case []bool, []int64, []float64, []string:
-		return Value{kind: ArrayKind, box: x}, nil
+	case []bool:
+		return arrayOf(x), nil
+	case []int64:
+		return arrayOf(x), nil
+	case []float64:
+		return arrayOf(x), nil
+	case []string:
+		return arrayOf(x), nil
 	case [][]float64:
 		return nestedFloats(x), nil
 	case map[string]bool, map[string]int64, map[string]float64, map[string]string:
@@ -51,9 +57,9 @@ func fromGo(input any) (Value, error) {
 	case money.Currency:
 		return CurrencyValue(x.Code()), nil
 	case []money.Money:
-		return Value{kind: ArrayKind, box: x}, nil
+		return arrayOf(x), nil
 	case []money.FxRate:
-		return Value{kind: ArrayKind, box: x}, checkFxRates(x)
+		return arrayOf(x), checkFxRates(x)
 	case map[string]money.Money:
 		return Value{kind: DictKind, box: x}, nil
 	default:
@@ -93,17 +99,17 @@ func checkFxRates(rates []money.FxRate) error {
 func nestedFloats(rows [][]float64) Value {
 	items := make([]Value, len(rows))
 	for i, row := range rows {
-		items[i] = Value{kind: ArrayKind, box: row}
+		items[i] = arrayOf(row)
 	}
-	return Value{kind: ArrayKind, box: &nestedArray{elem: ArrayOf(FloatType), items: items}}
+	return nestedOf(ArrayOf(FloatType), items)
 }
 
 // ToValue wraps a Go value for RunValues or for an extension's result. The
 // caller must not write to a slice or map after handing it over.
 //
-// Scalars are matched through a pointer so they are never boxed; a container
-// is boxed once, and that box — a slice header, not the elements — is the
-// Value's backing.
+// Scalars and native slices are matched through a pointer so they are never
+// boxed; any other container is boxed once, and that box — a header, not the
+// elements — is the Value's backing.
 func ToValue[T any](input T) (Value, error) {
 	switch scalar := any(&input).(type) {
 	case *bool:
@@ -120,6 +126,14 @@ func ToValue[T any](input T) (Value, error) {
 		return RatioValue(*scalar), nil
 	case *money.Currency:
 		return CurrencyValue(scalar.Code()), nil
+	case *[]bool:
+		return arrayOf(*scalar), nil
+	case *[]int64:
+		return arrayOf(*scalar), nil
+	case *[]float64:
+		return arrayOf(*scalar), nil
+	case *[]string:
+		return arrayOf(*scalar), nil
 	}
 	value, err := fromGo(input)
 	if errors.Is(err, errUnsupportedGoType) {
@@ -133,6 +147,9 @@ func ToValue[T any](input T) (Value, error) {
 // read-only.
 func FromValue[T any](value Value) (T, error) {
 	var out T
+	if unwrapNative(any(&out), value) {
+		return out, nil
+	}
 	switch target := any(&out).(type) {
 	case *bool:
 		return out, assign(target, Value.Bool, value)
@@ -195,6 +212,36 @@ func assign[T any](target *T, get func(Value) (T, bool), value Value) error {
 	return nil
 }
 
+// unwrapNative sets target, a native slice, to the array value is, the
+// backing itself, and reports whether value is one of that slice.
+func unwrapNative(target any, value Value) bool {
+	switch target := target.(type) {
+	case *[]bool:
+		return unwrapItems(target, value)
+	case *[]int64:
+		return unwrapItems(target, value)
+	case *[]float64:
+		return unwrapItems(target, value)
+	case *[]string:
+		return unwrapItems(target, value)
+	case *[]money.Money:
+		return unwrapItems(target, value)
+	case *[]money.FxRate:
+		return unwrapItems(target, value)
+	}
+	return false
+}
+
+// unwrapItems sets target to the native array value is, the backing
+// itself, and reports whether value is one.
+func unwrapItems[T any](target *[]T, value Value) bool {
+	items, ok := nativeItems[T](value)
+	if ok {
+		*target = items
+	}
+	return ok
+}
+
 // assignRows unwraps a matrix: the rows are the backings themselves.
 func assignRows(target *[][]float64, value Value) error {
 	nested, ok := value.box.(*nestedArray)
@@ -203,7 +250,7 @@ func assignRows(target *[][]float64, value Value) error {
 	}
 	rows := make([][]float64, len(nested.items))
 	for i, item := range nested.items {
-		rows[i], _ = item.box.([]float64)
+		rows[i], _ = nativeItems[float64](item)
 	}
 	*target = rows
 	return nil

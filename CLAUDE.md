@@ -52,7 +52,8 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 - 容器的 backing 就是原生 Go 值（`[]float64`、`map[string]int64`、`[]Money`），交给 `Value` 与从 `Value` 取出的都不复制，从那一刻起**只读**。新增取值入口必须保持"交出 backing、注释写明只读"。唯一的 backing 表是 `machine/container.go` 的 `natives`；读 backing 的 switch（容器操作、`fromGo`、`host_access.go`）为了热路径不改成间接调用，由 `TestEveryBackingIsHandledEverywhere` 逐项对照。
 - float 按 IEEE 754（与 Go 一致）：NaN、±Inf 是合法的值，float 运算从不失败；`==`/`<` 与成员判断（`in`、`index_of`、`unique`）按 IEEE，排序按 Go 的全序 `cmp.Compare`（NaN 最前），`min`/`max` 与 `arg_min`/`arg_max` 遇 NaN 得 NaN 或它的下标；边界上不扫 float。int 照旧检查溢出。
 - 不变量在值诞生处确立（币种已声明），使用处不复查；深度扫描会让大向量每次多花微秒级时间。金额容器在边界上做一次只读 O(n) 扫描，这是唯一的例外。
-- 边界上不许分配：`TestArgumentChecksDoNotAllocate`、`TestProgramScalarsDoNotAllocate`、`BenchmarkVectorPassThrough`（耗时与长度无关）守着。`machine/host_access.go` 是唯一用 `unsafe` 的文件。
+- 边界上不许分配：`TestArgumentChecksDoNotAllocate`、`TestProgramScalarsDoNotAllocate`、`BenchmarkVectorPassThrough`（耗时与长度无关）守着。`unsafe` 只在 `container.go`（原生数组的指针与长度）与 `host_*.go`（宿主内存）里用。
+- 原生数组在 `Value` 里是首元素指针加长度：box 是 `*T`、`i` 是长度，切片装进接口要分配切片头，指针不用。只经 `container.go` 的 `arrayOf` 装入、`nativeItems`/`itemsAt` 取出，不再把切片本身放进 box。**每个数组 `Value` 的 `i` 都是它的长度**（嵌套数组用 `nestedOf`、视图用 `viewed`、arena 形式在建成时写入），`length()` 与 `len` 只读它。
 
 **金额**（规则见 README「金额」，取舍见 roadmap）
 - 金额运算只写在 `internal/money` 的 Go 方法里，内核与 std 只做 Value 转换，所以宿主与规则永远同一个答案。语言能做而 Go 做不到的运算就是缺口。
@@ -88,7 +89,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 - 寄存器操作 `rinstr` 保持 16 字节、按指针读：操作数放进 a/b/c，放不下的进 `regProgram` 的旁表（`calls`/`loops`/`makes`），需要换算的在翻译时算好。
 - `frame.exec` 只放最常用的操作（50 行的上限也是它的上限），其余进 `cold`。专用内核指令只写快路径，答不出就返回 false，由 `fault` 问函数本身要错误，文案一字不差。
 - 改了翻译器、`rinstr` 或 `frame.exec`，与改动前交替跑 `BenchmarkDispatch`/`BenchmarkCall`/`BenchmarkRunPaths` 对照，再 `make perf`。
-- 值流分析（`lower_escape.go`）决定数组建在哪：不逃出运行的建在帧的 arena 槽里，box 是指向槽的指针（`*[]T`），只有翻译器为它选的指令（循环、`len_a`、`at_a`）见得到；答案建在宿主借出的槽里（`RunInto`）。**指针形式的 box 绝不能流到宿主函数、结果或容器里**——新增会读或放出数组的指令，先在值流分析里给它规则。帧里不存指向宿主 struct 的指针（它可能在宿主的栈上），只拷切片头。
+- 值流分析（`lower_escape.go`）决定数组建在哪：不逃出运行的建在帧的 arena 槽里，box 是指向槽的指针（`*[]T`），只有翻译器为它选的指令（循环、`at_a`）见得到；答案建在宿主借出的槽里（`RunInto`）。**指针形式的 box 绝不能流到宿主函数、结果或容器里**——新增会读或放出数组的指令，先在值流分析里给它规则。帧里不存指向宿主 struct 的指针（它可能在宿主的栈上），只拷切片头。
 - 纯标量字段的 record 数组以视图（`recordsView`）为 backing：新增读数组的路径（`length`、`at`、`Slice`、`Array`、`elemType`、写回）都要认得它，派生视图（`perm`、子视图）不指向帧；只有 `rloop.itemsInPlace` 的循环复用 `f.items`，并置 `frame.walked` 让收尾清掉。
 - 帧的 `release` 只清这次运行写过的部分：清含指针的内存要走写屏障——多清三个空槽就让固定开销从 30 ns 变成 60 ns。
 - `Session` 独占一个帧（`frame.owned`，不回池），给单个 goroutine 反复运行；还帧一律经 `putFrame`。`exec` 只交回答案所在的寄存器，调用方在收尾前取值一次。
@@ -124,7 +125,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 新增金额函数 | 先在 `internal/money` 的 Go 方法上实现；会舍入的内核运算用 `registerRounded`；非内核函数自己检查容器里币种一致（std 的 `amountsOf`）；宿主先 `DeclareMoney` 再注册 std |
 | 改 `Doc` 里影响编译的字段 | `machine/manifest.go` 的 `ManifestFunction` |
 | `Kind` 加值 | `kindNames`；有运行时表示的还有 `Value.hasType`/`Type()`/`Any()`、`compile/infer.go` 的 `typeTerm`、`implicitTypeScore`、`ParseType` |
-| 新增原生 backing | `machine/container.go` 的 `natives` 一行与 `host_plan.go` 的 `native` 常量；`TestEveryBackingIsHandledEverywhere` 指出每个还要补的 switch |
+| 新增原生 backing | `machine/container.go` 的 `natives` 一行（装入取出只经 `arrayOf`/`nativeItems`）与 `host_plan.go` 的 `native` 常量；`TestEveryBackingIsHandledEverywhere` 指出每个还要补的 switch |
 | `reflectType`/`fromGo` 新增非容器的 Go 类型 | `machine/host_plan.go` 的 `newCodecFor` 与 `host_access.go` |
 | 新增公开 API | `funroute.go` 对应的一节；新类型进 `tests/api/value_test.go` 的断言块，并在 `tests/api` 以宿主视角用一次。能不加就不加 |
 | 有意改变了某个答案或失败 | `make golden` 重写 `tests/golden/testdata/outcomes.jsonl`，逐条读 diff；只改执行方式时金库必须一字不差 |

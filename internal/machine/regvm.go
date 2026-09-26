@@ -48,6 +48,8 @@ func (f *frame) exec() (int32, error) {
 			pc, err = f.collectNext(pc, in)
 		case rCall:
 			err = f.callSite(in.a)
+		case rLen:
+			lengthOp(regs, in)
 		case rHalt:
 			return in.a, nil
 		default:

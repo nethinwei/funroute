@@ -44,16 +44,16 @@ func finishIn(slot *arenaSlot, builder *arrayBuilder) Value {
 	switch builder.elem.kind {
 	case BoolKind:
 		slot.bools = builder.bools
-		return Value{kind: ArrayKind, box: &slot.bools}
+		return Value{kind: ArrayKind, i: int64(len(slot.bools)), box: &slot.bools}
 	case IntKind:
 		slot.ints = builder.ints
-		return Value{kind: ArrayKind, box: &slot.ints}
+		return Value{kind: ArrayKind, i: int64(len(slot.ints)), box: &slot.ints}
 	case FloatKind:
 		slot.floats = builder.floats
-		return Value{kind: ArrayKind, box: &slot.floats}
+		return Value{kind: ArrayKind, i: int64(len(slot.floats)), box: &slot.floats}
 	}
 	slot.strings = builder.strings
-	return Value{kind: ArrayKind, box: &slot.strings}
+	return Value{kind: ArrayKind, i: int64(len(slot.strings)), box: &slot.strings}
 }
 
 // release drops the strings a slot holds, and a slot grown past maxKept.
@@ -64,37 +64,18 @@ func (s *arenaSlot) release() {
 	}
 }
 
-// arenaLength is the length of an array in a slot, or of one of its own:
-// an argument a Program handed over in place points at the host's slice,
-// but the same program run through RunValues is handed the slice itself.
-func arenaLength(v Value) int {
-	switch box := v.box.(type) {
-	case *[]bool:
-		return len(*box)
-	case *[]int64:
-		return len(*box)
-	case *[]float64:
-		return len(*box)
-	case *[]string:
-		return len(*box)
-	case *recordsView:
-		return box.length
-	}
-	return v.length()
-}
-
 // unarena is an array in a slot as an ordinary Value, for a failure's
 // sake: the function that says why is handed what it always is.
 func unarena(v Value) Value {
 	switch box := v.box.(type) {
 	case *[]bool:
-		return Value{kind: ArrayKind, box: *box}
+		return arrayOf(*box)
 	case *[]int64:
-		return Value{kind: ArrayKind, box: *box}
+		return arrayOf(*box)
 	case *[]float64:
-		return Value{kind: ArrayKind, box: *box}
+		return arrayOf(*box)
 	case *[]string:
-		return Value{kind: ArrayKind, box: *box}
+		return arrayOf(*box)
 	}
 	return v
 }
@@ -102,7 +83,7 @@ func unarena(v Value) Value {
 // arenaAt is item b of the array in a slot, refusing an index outside it.
 func arenaAt(regs []Value, in *rinstr) bool {
 	index := regs[in.b].i
-	if index < 0 || index >= int64(arenaLength(regs[in.a])) {
+	if index < 0 || index >= regs[in.a].i {
 		return false
 	}
 	switch box := regs[in.a].box.(type) {

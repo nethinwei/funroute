@@ -69,8 +69,8 @@ func TestEveryBackingIsHandledEverywhere(t *testing.T) {
 func checkBacking(t *testing.T, registry *Registry, container reflect.Value, typ Type, item Value, want native) {
 	t.Helper()
 	value, err := fromGo(container.Interface())
-	if err != nil || reflect.TypeOf(value.box) != container.Type() || value.length() != 1 {
-		t.Fatalf("fromGo(%s) = %T, %v, want the %s itself", container.Type(), value.box, err, container.Type())
+	if err != nil || reflect.TypeOf(nativeAny(value)) != container.Type() || value.length() != 1 {
+		t.Fatalf("fromGo(%s) = %T, %v, want the %s itself", container.Type(), nativeAny(value), err, container.Type())
 	}
 	one, ok := value.at(0), true
 	if typ.kind == DictKind {
@@ -85,8 +85,8 @@ func checkBacking(t *testing.T, registry *Registry, container reflect.Value, typ
 		builder := newArrayBuilder(item.Type(), 1)
 		builder.add(item)
 		part, ok := value.Slice(0, 1)
-		if built := builder.finish(); reflect.TypeOf(built.box) != container.Type() || !ok || reflect.ValueOf(part.box).UnsafePointer() != container.UnsafePointer() {
-			t.Fatalf("the builder of %s makes a %T, want a %s", item.Type(), built.box, container.Type())
+		if built := builder.finish(); reflect.TypeOf(nativeAny(built)) != container.Type() || !ok || reflect.ValueOf(nativeAny(part)).UnsafePointer() != container.UnsafePointer() {
+			t.Fatalf("the builder of %s makes a %T, want a %s", item.Type(), nativeAny(built), container.Type())
 		}
 	}
 	if !ok || !one.Equal(item) {

@@ -25,12 +25,12 @@ func TestTheBoundaryChecksEveryCurrencyAnArgumentHolds(t *testing.T) {
 		args  []Value
 		fails bool
 	}{
-		"one currency throughout": {[]Value{MoneyValue(1, "USD"), {kind: ArrayKind, box: []money.Money{money.Make("USD", 2), money.Make("", 0)}}}, false},
+		"one currency throughout": {[]Value{MoneyValue(1, "USD"), arrayOf([]money.Money{money.Make("USD", 2), money.Make("", 0)})}, false},
 		// money is any declared currency, each value its own: a list of
 		// two is the aggregate's to refuse, not the boundary's.
-		"two currencies":         {[]Value{MoneyValue(1, "USD"), {kind: ArrayKind, box: []money.Money{money.Make("EUR", 2)}}}, false},
-		"an undeclared currency": {[]Value{MoneyValue(1, "GBP"), {kind: ArrayKind, box: []money.Money{}}}, true},
-		"an undeclared item":     {[]Value{MoneyValue(0, ""), {kind: ArrayKind, box: []money.Money{money.Make("GBP", 2)}}}, true},
+		"two currencies":         {[]Value{MoneyValue(1, "USD"), arrayOf([]money.Money{money.Make("EUR", 2)})}, false},
+		"an undeclared currency": {[]Value{MoneyValue(1, "GBP"), arrayOf([]money.Money{})}, true},
+		"an undeclared item":     {[]Value{MoneyValue(0, ""), arrayOf([]money.Money{money.Make("GBP", 2)})}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -42,7 +42,7 @@ func TestTheBoundaryChecksEveryCurrencyAnArgumentHolds(t *testing.T) {
 	}
 }
 
-func moneyArray(items ...money.Money) Value { return Value{kind: ArrayKind, box: items} }
+func moneyArray(items ...money.Money) Value { return arrayOf(items) }
 
 func moneyDict(entries map[string]money.Money) Value { return Value{kind: DictKind, box: entries} }
 

@@ -114,6 +114,20 @@ func eq(regs []Value, in *rinstr) bool {
 	return true
 }
 
+// takeOp is take: the array's first b items, all of them when it has
+// fewer, sharing its backing. A negative count is the function's to refuse.
+func takeOp(regs []Value, in *rinstr) bool {
+	count := regs[in.b].i
+	if count < 0 {
+		return false
+	}
+	regs[in.c], _ = regs[in.a].Slice(0, int(min(count, regs[in.a].i)))
+	return true
+}
+
+// lengthOp is len of the array or dictionary in a, which never fails.
+func lengthOp(regs []Value, in *rinstr) { regs[in.c] = Int(int64(regs[in.a].length())) }
+
 // intToFloat is float(int): exact within 2^53, refused past it.
 func intToFloat(regs []Value, in *rinstr) bool {
 	value, ok := intFloat(regs[in.a].i)

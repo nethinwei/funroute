@@ -100,22 +100,22 @@ func reverseItems(_ context.Context, args []Value) (Value, error) {
 // in the backing array has, which is the array's type.
 func rearranged(array Value, n int, at func(int) int) Value {
 	switch box := array.box.(type) {
-	case []bool:
-		return nativeArray(picked(box, n, at))
-	case []int64:
-		return nativeArray(picked(box, n, at))
-	case []float64:
-		return nativeArray(picked(box, n, at))
-	case []string:
-		return nativeArray(picked(box, n, at))
-	case []money.Money:
-		return nativeArray(picked(box, n, at))
-	case []money.FxRate:
-		return nativeArray(picked(box, n, at))
+	case *bool:
+		return arrayOf(picked(itemsAt(box, array.i), n, at))
+	case *int64:
+		return arrayOf(picked(itemsAt(box, array.i), n, at))
+	case *float64:
+		return arrayOf(picked(itemsAt(box, array.i), n, at))
+	case *string:
+		return arrayOf(picked(itemsAt(box, array.i), n, at))
+	case *money.Money:
+		return arrayOf(picked(itemsAt(box, array.i), n, at))
+	case *money.FxRate:
+		return arrayOf(picked(itemsAt(box, array.i), n, at))
 	case *nestedArray:
-		return Value{kind: ArrayKind, box: &nestedArray{elem: box.elem, items: picked(box.items, n, at)}}
+		return nestedOf(box.elem, picked(box.items, n, at))
 	case *recordsView:
-		return Value{kind: ArrayKind, box: box.arranged(n, at)}
+		return viewed(box.arranged(n, at))
 	}
 	return array
 }
@@ -128,29 +128,27 @@ func picked[T any](items []T, n int, at func(int) int) []T {
 	return out
 }
 
-func nativeArray[T any](items []T) Value { return Value{kind: ArrayKind, box: items} }
-
 // concatItems joins two arrays of one type: their backings are of one
 // kind, as their type is one.
 func concatItems(_ context.Context, args []Value) (Value, error) {
 	switch left := args[0].box.(type) {
-	case []bool:
-		return joined(left, args[1].box), nil
-	case []int64:
-		return joined(left, args[1].box), nil
-	case []float64:
-		return joined(left, args[1].box), nil
-	case []string:
-		return joined(left, args[1].box), nil
-	case []money.Money:
-		return joined(left, args[1].box), nil
-	case []money.FxRate:
-		return joined(left, args[1].box), nil
+	case *bool:
+		return joined(itemsAt(left, args[0].i), args[1]), nil
+	case *int64:
+		return joined(itemsAt(left, args[0].i), args[1]), nil
+	case *float64:
+		return joined(itemsAt(left, args[0].i), args[1]), nil
+	case *string:
+		return joined(itemsAt(left, args[0].i), args[1]), nil
+	case *money.Money:
+		return joined(itemsAt(left, args[0].i), args[1]), nil
+	case *money.FxRate:
+		return joined(itemsAt(left, args[0].i), args[1]), nil
 	}
 	// Arrays of anything else — nested, or records in the host's memory —
 	// join as their items.
 	items := appended(valuesOf(args[0]), valuesOf(args[1]))
-	return Value{kind: ArrayKind, box: &nestedArray{elem: args[0].elemType(), items: items}}, nil
+	return nestedOf(args[0].elemType(), items), nil
 }
 
 // appended is left and then right in a slice of its own, never nil: two
@@ -159,9 +157,9 @@ func appended[T any](left, right []T) []T {
 	return append(append(make([]T, 0, len(left)+len(right)), left...), right...)
 }
 
-func joined[T any](left []T, right any) Value {
-	tail, _ := right.([]T)
-	return nativeArray(appended(left, tail))
+func joined[T any](left []T, right Value) Value {
+	tail, _ := nativeItems[T](right)
+	return arrayOf(appended(left, tail))
 }
 
 // uniqueItems is an array's items, in order, each once: a native array's by
@@ -170,14 +168,14 @@ func joined[T any](left []T, right any) Value {
 // Equal.
 func uniqueItems(_ context.Context, args []Value) (Value, error) {
 	switch box := args[0].box.(type) {
-	case []bool:
-		return nativeArray(distinctOf(box)), nil
-	case []int64:
-		return nativeArray(distinctOf(box)), nil
-	case []float64:
-		return nativeArray(distinctOf(box)), nil
-	case []string:
-		return nativeArray(distinctOf(box)), nil
+	case *bool:
+		return arrayOf(distinctOf(itemsAt(box, args[0].i))), nil
+	case *int64:
+		return arrayOf(distinctOf(itemsAt(box, args[0].i))), nil
+	case *float64:
+		return arrayOf(distinctOf(itemsAt(box, args[0].i))), nil
+	case *string:
+		return arrayOf(distinctOf(itemsAt(box, args[0].i))), nil
 	}
 	items, _ := args[0].Array()
 	out := make([]Value, 0, len(items))

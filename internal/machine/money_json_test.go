@@ -17,7 +17,7 @@ func TestEncodeJSONWritesMoneyAsPeopleDo(t *testing.T) {
 		t.Fatal(err)
 	}
 	for value, want := range map[*Value]string{
-		{kind: ArrayKind, box: []money.Money{money.Make("JPY", 150), money.Make("USD", 1)}}: `["JPY 150","USD 0.01"]`,
+		new(arrayOf([]money.Money{money.Make("JPY", 150), money.Make("USD", 1)})): `["JPY 150","USD 0.01"]`,
 		&record: `{"net":"USD -0.05","rate":"0.029","zero":0}`,
 	} {
 		encoded, err := registry.EncodeJSON(*value)

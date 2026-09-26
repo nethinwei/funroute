@@ -31,9 +31,11 @@ type Value struct {
 	i    int64
 	f    float64
 	s    string // a string's text, or a handle's type name
-	// box is the container backing: []bool, []int64, []float64, []string,
-	// *nestedArray, or the map[string] counterparts and *nestedDict. For a
-	// handle it is the host's payload, untouched.
+	// box is the container backing: for a native array, a *bool, *int64,
+	// *float64, *string, *money.Money or *money.FxRate at the first item, i
+	// being the count (container.go); a *nestedArray, *recordsView, the
+	// map[string] counterparts or a *nestedDict. For a handle it is the
+	// host's payload, untouched.
 	box any
 }
 
@@ -169,17 +171,17 @@ func (v Value) Kind() Kind { return v.kind }
 // the answer costs no allocation.
 func (v Value) elemType() Type {
 	switch box := v.box.(type) {
-	case []bool, map[string]bool:
+	case *bool, map[string]bool:
 		return BoolType
-	case []int64, map[string]int64:
+	case *int64, map[string]int64:
 		return IntType
-	case []float64, map[string]float64:
+	case *float64, map[string]float64:
 		return FloatType
-	case []string, map[string]string:
+	case *string, map[string]string:
 		return StringType
-	case []money.Money, map[string]money.Money:
+	case *money.Money, map[string]money.Money:
 		return MoneyType
-	case []money.FxRate:
+	case *money.FxRate:
 		return FxRateType
 	case *nestedArray:
 		return box.elem
@@ -190,6 +192,25 @@ func (v Value) elemType() Type {
 	default:
 		return Type{kind: InvalidKind}
 	}
+}
+
+// elemIs reports a container whose elements are of type elem: for a native
+// backing, which holds one kind of scalar, that is elem being that kind.
+func (v Value) elemIs(elem *Type) bool {
+	var kind Kind
+	switch v.box.(type) {
+	case *bool, map[string]bool:
+		kind = BoolKind
+	case *int64, map[string]int64:
+		kind = IntKind
+	case *float64, map[string]float64:
+		kind = FloatKind
+	case *string, map[string]string:
+		kind = StringKind
+	default:
+		return v.elemType().Equal(*elem)
+	}
+	return elem.kind == kind
 }
 
 // hasType answers the same question as Type().Equal(t) without building a Type,
@@ -210,7 +231,7 @@ func (v Value) hasType(t Type) bool {
 		record, ok := v.box.(*recordValue)
 		return ok && record.typ.Equal(t)
 	case ArrayKind, DictKind:
-		return t.elem != nil && v.elemType().Equal(*t.elem)
+		return t.elem != nil && v.elemIs(t.elem)
 	case MoneyKind, CurrencyKind, FxRateKind:
 		return v.hasUnits()
 	default:
@@ -367,7 +388,7 @@ func (v Value) containerAny() any {
 		}
 		return out
 	default:
-		return box
+		return nativeAny(v)
 	}
 }
 
@@ -558,14 +579,14 @@ func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value
 // boxing an item. native is false for anything else.
 func nativeEqual(left, right Value) (equal, native bool) {
 	switch a := left.box.(type) {
-	case []int64:
-		return sameSlice(a, right.box)
-	case []float64:
-		return sameSlice(a, right.box)
-	case []string:
-		return sameSlice(a, right.box)
-	case []bool:
-		return sameSlice(a, right.box)
+	case *int64:
+		return sameSlice(itemsAt(a, left.i), right)
+	case *float64:
+		return sameSlice(itemsAt(a, left.i), right)
+	case *string:
+		return sameSlice(itemsAt(a, left.i), right)
+	case *bool:
+		return sameSlice(itemsAt(a, left.i), right)
 	case map[string]int64:
 		return sameMap(a, right.box)
 	case map[string]float64:
@@ -578,8 +599,8 @@ func nativeEqual(left, right Value) (equal, native bool) {
 	return false, false
 }
 
-func sameSlice[T comparable](a []T, other any) (equal, native bool) {
-	b, ok := other.([]T)
+func sameSlice[T comparable](a []T, other Value) (equal, native bool) {
+	b, ok := nativeItems[T](other)
 	if !ok {
 		return false, false
 	}

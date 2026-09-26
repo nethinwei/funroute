@@ -321,7 +321,7 @@ func (l *lowerer) retarget(value, reg int32) bool {
 func writesC(op rop) bool {
 	switch op {
 	case rMove, rAddI, rSubI, rMulI, rDivI, rModI, rAddF, rSubF, rMulF, rDivF, rConcat,
-		rLtI, rLeI, rLtF, rLeF, rLtS, rLeS, rEq, rLen, rAt, rField:
+		rLtI, rLeI, rLtF, rLeF, rLtS, rLeS, rEq, rLen, rAt, rTake, rField:
 		return true
 	}
 	return false

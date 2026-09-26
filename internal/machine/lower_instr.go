@@ -128,8 +128,8 @@ func (l *lowerer) call(in Instruction) {
 	function := l.functions[in.A]
 	if kernel, ok := kernelOps[function.key]; ok && function.builtin {
 		// An array in an arena slot is read there.
-		if l.flow.uses[l.pc] {
-			kernel.op = map[rop]rop{rLen: rLenA, rAt: rAtA}[kernel.op]
+		if l.flow.uses[l.pc] && kernel.op == rAt {
+			kernel.op = rAtA
 		}
 		if kernel.unary {
 			l.unary(kernel.op, 0)

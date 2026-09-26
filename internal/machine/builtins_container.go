@@ -141,7 +141,7 @@ func evalStringMember(_ context.Context, args []Value) (Value, error) {
 
 func evalArrayMember(_ context.Context, args []Value) (Value, error) {
 	item, container := args[0], args[1]
-	if found, native := nativeMember(item, container.box); native {
+	if found, native := nativeMember(item, container); native {
 		return Bool(found), nil
 	}
 	for i := range container.length() {
@@ -158,16 +158,16 @@ func evalArrayMember(_ context.Context, args []Value) (Value, error) {
 
 // nativeMember is whether a native array of scalars holds item, as the
 // equality walk would find: native is false for any other array.
-func nativeMember(item Value, backing any) (found, native bool) {
-	switch items := backing.(type) {
-	case []int64:
-		return slices.Contains(items, item.i), true
-	case []float64:
-		return slices.Contains(items, item.f), true
-	case []string:
-		return slices.Contains(items, item.s), true
-	case []bool:
-		return slices.Contains(items, item.b), true
+func nativeMember(item, array Value) (found, native bool) {
+	switch first := array.box.(type) {
+	case *int64:
+		return slices.Contains(itemsAt(first, array.i), item.i), true
+	case *float64:
+		return slices.Contains(itemsAt(first, array.i), item.f), true
+	case *string:
+		return slices.Contains(itemsAt(first, array.i), item.s), true
+	case *bool:
+		return slices.Contains(itemsAt(first, array.i), item.b), true
 	}
 	return false, false
 }

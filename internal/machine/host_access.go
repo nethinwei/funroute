@@ -76,7 +76,8 @@ func newArgRead(index int, plan *argsCodec, fieldOnly, viewOnly bool) argRead {
 // or indexes into the frame's own slot — the slice's header, not its items.
 func encodeArgs[In any](plan *argsCodec, reads []argRead, args []Value, in *In, f *frame) error {
 	base := unsafe.Pointer(in)
-	for _, read := range reads {
+	for i := range reads {
+		read := &reads[i]
 		p := unsafe.Add(base, read.offset)
 		if loadPlain(read.kind, p, &args[read.index]) {
 			continue
@@ -100,7 +101,7 @@ func encodeArgs[In any](plan *argsCodec, reads []argRead, args []Value, in *In, 
 // only reads its fields.
 // Nothing in the frame points into the host's struct — it may be on the
 // host's stack — only at what its fields point at.
-func (read argRead) load(p unsafe.Pointer, f *frame) (Value, error) {
+func (read *argRead) load(p unsafe.Pointer, f *frame) (Value, error) {
 	switch {
 	case f == nil:
 	case read.fieldOnly:
@@ -123,16 +124,16 @@ func viewIn(slot *arenaSlot, kind native, p unsafe.Pointer) Value {
 	switch kind {
 	case nativeBools:
 		slot.bools = *(*[]bool)(p)
-		return Value{kind: ArrayKind, box: &slot.bools}
+		return Value{kind: ArrayKind, i: int64(len(slot.bools)), box: &slot.bools}
 	case nativeInts:
 		slot.ints = *(*[]int64)(p)
-		return Value{kind: ArrayKind, box: &slot.ints}
+		return Value{kind: ArrayKind, i: int64(len(slot.ints)), box: &slot.ints}
 	case nativeFloats:
 		slot.floats = *(*[]float64)(p)
-		return Value{kind: ArrayKind, box: &slot.floats}
+		return Value{kind: ArrayKind, i: int64(len(slot.floats)), box: &slot.floats}
 	}
 	slot.strings = *(*[]string)(p)
-	return Value{kind: ArrayKind, box: &slot.strings}
+	return Value{kind: ArrayKind, i: int64(len(slot.strings)), box: &slot.strings}
 }
 
 // loadPlain loads a plain field of kind at p into slot, and reports whether
@@ -274,17 +275,17 @@ func loadInt(kind reflect.Kind, p unsafe.Pointer) (Value, error) {
 func loadNative(kind native, p unsafe.Pointer) (Value, error) {
 	switch kind {
 	case nativeBools:
-		return loadBacking[[]bool](ArrayKind, p), nil
+		return loadItems[bool](p), nil
 	case nativeInts:
-		return loadBacking[[]int64](ArrayKind, p), nil
+		return loadItems[int64](p), nil
 	case nativeFloats:
-		return loadBacking[[]float64](ArrayKind, p), nil
+		return loadItems[float64](p), nil
 	case nativeStrings:
-		return loadBacking[[]string](ArrayKind, p), nil
+		return loadItems[string](p), nil
 	case nativeMonies:
-		return loadBacking[[]money.Money](ArrayKind, p), nil
+		return loadItems[money.Money](p), nil
 	case nativeFxRates:
-		return loadBacking[[]money.FxRate](ArrayKind, p), checkFxRates(*(*[]money.FxRate)(p))
+		return loadItems[money.FxRate](p), checkFxRates(*(*[]money.FxRate)(p))
 	case nativeMoneyMap:
 		return loadBacking[map[string]money.Money](DictKind, p), nil
 	case nativeBoolMap:
@@ -302,6 +303,8 @@ func loadNative(kind native, p unsafe.Pointer) (Value, error) {
 func loadBacking[T any](kind Kind, p unsafe.Pointer) Value {
 	return Value{kind: kind, box: *(*T)(p)}
 }
+
+func loadItems[T any](p unsafe.Pointer) Value { return arrayOf(*(*[]T)(p)) }
 
 // loadRecord builds the record directly: the plan's type is shared, and the
 // fields are already known to have it, so Record's clone and checks would only
@@ -353,7 +356,7 @@ func (c *codec) loadRecords(header *sliceHeader) (Value, error) {
 		}
 		items[i] = Value{kind: RecordKind, box: record}
 	}
-	return Value{kind: ArrayKind, box: &nestedArray{elem: *c.typ.elem, items: items}}, nil
+	return nestedOf(*c.typ.elem, items), nil
 }
 
 func (c *codec) loadBoxed(p unsafe.Pointer) (Value, error) {
@@ -469,17 +472,17 @@ func put[T int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32](
 func storeNative(kind native, p unsafe.Pointer, v Value) error {
 	switch kind {
 	case nativeBools:
-		return storeBacking[[]bool](p, v)
+		return storeItems[bool](p, v)
 	case nativeInts:
-		return storeBacking[[]int64](p, v)
+		return storeItems[int64](p, v)
 	case nativeFloats:
-		return storeBacking[[]float64](p, v)
+		return storeItems[float64](p, v)
 	case nativeStrings:
-		return storeBacking[[]string](p, v)
+		return storeItems[string](p, v)
 	case nativeMonies:
-		return storeBacking[[]money.Money](p, v)
+		return storeItems[money.Money](p, v)
 	case nativeFxRates:
-		return storeBacking[[]money.FxRate](p, v)
+		return storeItems[money.FxRate](p, v)
 	case nativeMoneyMap:
 		return storeBacking[map[string]money.Money](p, v)
 	case nativeBoolMap:
@@ -494,12 +497,21 @@ func storeNative(kind native, p unsafe.Pointer, v Value) error {
 	panic(fmt.Sprintf("machine: native backing %d has no Go form", kind))
 }
 
-func storeBacking[T any](p unsafe.Pointer, v Value) error {
+func storeItems[T any](p unsafe.Pointer, v Value) error {
 	// An answer built in a frame's slot points at the slot's slice.
-	if slot, ok := v.box.(*T); ok {
-		*(*T)(p) = *slot
+	if slot, ok := v.box.(*[]T); ok {
+		*(*[]T)(p) = *slot
 		return nil
 	}
+	items, ok := nativeItems[T](v)
+	if !ok {
+		return fmt.Errorf("value is %s, want %T", v.Type().Summary(), items)
+	}
+	*(*[]T)(p) = items
+	return nil
+}
+
+func storeBacking[T any](p unsafe.Pointer, v Value) error {
 	backing, ok := v.box.(T)
 	if !ok {
 		return fmt.Errorf("value is %s, want %T", v.Type().Summary(), backing)
@@ -647,7 +659,7 @@ func lendSlot(slot *arenaSlot, kind native, p unsafe.Pointer, args []Value) {
 // overlapsAny reports an argument, or a field of a record argument, whose
 // native slice shares memory with the one header describes.
 func overlapsAny(header *sliceHeader, args []Value) bool {
-	meets := func(v Value) bool { return overlaps(header, v.box) }
+	meets := func(v Value) bool { return overlaps(header, v) }
 	for _, arg := range args {
 		if record, ok := arg.box.(*recordValue); ok && slices.ContainsFunc(record.fields, meets) || meets(arg) {
 			return true
@@ -656,21 +668,21 @@ func overlapsAny(header *sliceHeader, args []Value) bool {
 	return false
 }
 
-// overlaps reports a native slice in box whose memory meets header's.
-func overlaps(header *sliceHeader, box any) bool {
+// overlaps reports a native array v whose items meet header's memory.
+func overlaps(header *sliceHeader, v Value) bool {
 	var other sliceHeader
 	var size uintptr
 	// An argument handed over in place points at the host's slice.
-	box = unarena(Value{box: box}).box
-	switch items := box.(type) {
-	case []bool:
-		other, size = headerOf(items), unsafe.Sizeof(false)
-	case []int64:
-		other, size = headerOf(items), unsafe.Sizeof(int64(0))
-	case []float64:
-		other, size = headerOf(items), unsafe.Sizeof(float64(0))
-	case []string:
-		other, size = headerOf(items), unsafe.Sizeof("")
+	v = unarena(v)
+	switch first := v.box.(type) {
+	case *bool:
+		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(false)
+	case *int64:
+		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(int64(0))
+	case *float64:
+		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(float64(0))
+	case *string:
+		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof("")
 	default:
 		return false
 	}

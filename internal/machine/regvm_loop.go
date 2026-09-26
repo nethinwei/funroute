@@ -88,20 +88,20 @@ func (l *regLoop) walk(keyed bool) int {
 		return l.length
 	}
 	switch box := l.source.box.(type) {
-	case []int64:
-		l.ints, l.length = box, len(box)
+	case *int64:
+		l.ints, l.length = itemsAt(box, l.source.i), int(l.source.i)
 	case *[]int64:
 		l.ints, l.length = *box, len(*box)
-	case []float64:
-		l.floats, l.length = box, len(box)
+	case *float64:
+		l.floats, l.length = itemsAt(box, l.source.i), int(l.source.i)
 	case *[]float64:
 		l.floats, l.length = *box, len(*box)
-	case []string:
-		l.strings, l.length = box, len(box)
+	case *string:
+		l.strings, l.length = itemsAt(box, l.source.i), int(l.source.i)
 	case *[]string:
 		l.strings, l.length = *box, len(*box)
-	case []bool:
-		l.bools, l.length = box, len(box)
+	case *bool:
+		l.bools, l.length = itemsAt(box, l.source.i), int(l.source.i)
 	case *[]bool:
 		l.bools, l.length = *box, len(*box)
 	case *recordsView:

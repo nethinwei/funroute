@@ -53,7 +53,7 @@ func quoteBetween(quotes []Value, from, to string) (money.FxRate, bool) {
 	// and a conversion allocates nothing.
 	for i := range quotes {
 		quote := quotes[len(quotes)-1-i]
-		if rates, ok := quote.box.([]money.FxRate); ok {
+		if rates, ok := nativeItems[money.FxRate](quote); ok {
 			if rate, found := lastBetween(rates, from, to); found {
 				return rate, true
 			}

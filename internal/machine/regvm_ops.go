@@ -47,8 +47,8 @@ const (
 	rLen    // c = the length of the array or dictionary in a
 	rAt     // c = item b of the array in a
 	rIntToF // c = float(a), refusing an int past 2^53
-	rLenA   // rLen of an array in an arena slot
 	rAtA    // rAt of an array in an arena slot
+	rTake   // c = the first b items of the array in a
 	// rCall is a call: calls[a] says of what, from which registers, into
 	// which.
 	rCall
@@ -89,7 +89,7 @@ var ropNames = [ropCount]string{
 	rLtI: "lt_i", rLeI: "le_i", rLtF: "lt_f", rLeF: "le_f", rLtS: "lt_s", rLeS: "le_s",
 	rBranchLtI: "branch_lt_i", rBranchLeI: "branch_le_i", rBranchLtF: "branch_lt_f",
 	rBranchLeF: "branch_le_f", rBranchLtS: "branch_lt_s", rBranchLeS: "branch_le_s", rBranchEq: "branch_eq",
-	rEq: "eq", rLen: "len", rAt: "at", rLenA: "len_a", rIntToF: "int_to_f", rAtA: "at_a", rCall: "call", rField: "field",
+	rEq: "eq", rLen: "len", rAt: "at", rIntToF: "int_to_f", rAtA: "at_a", rTake: "take", rCall: "call", rField: "field",
 	rMakeArray: "make_array", rMakeDict: "make_dict", rMakeRecord: "make_record", rRecordWith: "record_with",
 	rLoopInit: "loop_init", rCollect: "collect", rSpread: "spread", rLoopNext: "loop_next", rLoopBreak: "loop_break", rCollectNext: "collect_next",
 	rBeginFallback: "begin_fallback", rEndFallback: "end_fallback", rFxPush: "fx_push", rFxPop: "fx_pop",

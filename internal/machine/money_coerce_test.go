@@ -251,13 +251,13 @@ func TestMoneyContainersKeepTheNativeBacking(t *testing.T) {
 	amounts := []money.Money{money.Make("USD", 1)}
 	if value, err := coerceWith(amounts, ArrayOf(MoneyType), nil); err != nil {
 		t.Fatalf("coerce([]money.Money) = %v, %v, want the same backing", value.box, err)
-	} else if packed, ok := value.box.([]money.Money); !ok || &packed[0] != &amounts[0] {
+	} else if packed, ok := nativeAny(value).([]money.Money); !ok || &packed[0] != &amounts[0] {
 		t.Fatalf("coerce([]money.Money) = %v, %v, want the same backing", value.box, err)
 	}
 	table := declared(t, money.CurrencySpec{Code: "USD", Digits: 2}).currencies()
 	list, err := coerceWith([]any{"USD 1.00", map[string]any{"currency": "USD", "minor": 2}, 0}, ArrayOf(MoneyType), table)
-	if packed, ok := list.box.([]money.Money); err != nil || !ok || !slices.Equal(packed, []money.Money{money.Make("USD", 100), money.Make("USD", 2), {}}) {
-		t.Fatalf("coerce(a JSON list of money) = %#v, %v, want a []money.Money backing", list.box, err)
+	if packed, ok := nativeAny(list).([]money.Money); err != nil || !ok || !slices.Equal(packed, []money.Money{money.Make("USD", 100), money.Make("USD", 2), {}}) {
+		t.Fatalf("coerce(a JSON list of money) = %#v, %v, want a []money.Money backing", nativeAny(list), err)
 	}
 	dict, err := coerceWith(map[string]any{"a": "USD 0.01"}, DictOf(MoneyType), table)
 	if packed, ok := dict.box.(map[string]money.Money); err != nil || !ok || packed["a"] != (money.Make("USD", 1)) {

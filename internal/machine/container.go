@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"unsafe"
 
 	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
@@ -42,25 +43,68 @@ var natives = []nativeBacking{
 	{FxRateKind, reflect.TypeFor[money.FxRate](), false},
 }
 
+// Every array's i is its length, whatever backs it. A native array is held
+// as where its items start and how many: box is a *T at the first item (nil
+// for a nil slice). A slice put in an interface would allocate its header
+// every time; a pointer does not. arrayOf puts a slice in a Value and
+// nativeItems takes it back out, and nothing else builds or reads the pair.
+
+// arrayOf is the array backed by items.
+func arrayOf[T any](items []T) Value {
+	return Value{kind: ArrayKind, i: int64(len(items)), box: unsafe.SliceData(items)}
+}
+
+// nestedOf is the array of items, containers or records of elem.
+func nestedOf(elem Type, items []Value) Value {
+	return Value{kind: ArrayKind, i: int64(len(items)), box: &nestedArray{elem: elem, items: items}}
+}
+
+// viewed is the array view is.
+func viewed(view *recordsView) Value {
+	return Value{kind: ArrayKind, i: int64(view.length), box: view}
+}
+
+// itemsAt is the n items from first: a native backing as it was put in.
+func itemsAt[T any](first *T, n int64) []T { return unsafe.Slice(first, n) }
+
+// nativeItems is the []T backing v, and whether one does.
+func nativeItems[T any](v Value) ([]T, bool) {
+	first, ok := v.box.(*T)
+	if !ok || v.kind != ArrayKind {
+		return nil, false
+	}
+	return unsafe.Slice(first, v.i), true
+}
+
+// nativeAny is the backing of a native array as the slice itself, and v's box
+// for any other value.
+func nativeAny(v Value) any {
+	if v.kind != ArrayKind {
+		return v.box
+	}
+	switch first := v.box.(type) {
+	case *bool:
+		return itemsAt(first, v.i)
+	case *int64:
+		return itemsAt(first, v.i)
+	case *float64:
+		return itemsAt(first, v.i)
+	case *string:
+		return itemsAt(first, v.i)
+	case *money.Money:
+		return itemsAt(first, v.i)
+	case *money.FxRate:
+		return itemsAt(first, v.i)
+	}
+	return v.box
+}
+
 // length is the item count of an array or the entry count of a dictionary.
 func (v Value) length() int {
+	if v.kind == ArrayKind {
+		return int(v.i)
+	}
 	switch box := v.box.(type) {
-	case []bool:
-		return len(box)
-	case []int64:
-		return len(box)
-	case []float64:
-		return len(box)
-	case []string:
-		return len(box)
-	case []money.Money:
-		return len(box)
-	case []money.FxRate:
-		return len(box)
-	case *nestedArray:
-		return len(box.items)
-	case *recordsView:
-		return box.length
 	case map[string]bool:
 		return len(box)
 	case map[string]int64:
@@ -82,18 +126,19 @@ func (v Value) length() int {
 // is exactly what loading a []Value item would copy anyway.
 func (v Value) at(i int) Value {
 	switch box := v.box.(type) {
-	case []bool:
-		return Bool(box[i])
-	case []int64:
-		return Int(box[i])
-	case []float64:
-		return Float(box[i])
-	case []string:
-		return String(box[i])
-	case []money.Money:
-		return MoneyValue(box[i].Minor(), box[i].Currency())
-	case []money.FxRate:
-		return FxRateValue(box[i])
+	case *bool:
+		return Bool(itemsAt(box, v.i)[i])
+	case *int64:
+		return Int(itemsAt(box, v.i)[i])
+	case *float64:
+		return Float(itemsAt(box, v.i)[i])
+	case *string:
+		return String(itemsAt(box, v.i)[i])
+	case *money.Money:
+		amount := itemsAt(box, v.i)[i]
+		return MoneyValue(amount.Minor(), amount.Currency())
+	case *money.FxRate:
+		return FxRateValue(itemsAt(box, v.i)[i])
 	case *nestedArray:
 		return box.items[i]
 	case *recordsView:
@@ -224,22 +269,22 @@ func (v Value) Slice(from, to int) (Value, bool) {
 		return Value{}, false
 	}
 	switch box := v.box.(type) {
-	case []bool:
-		return Value{kind: ArrayKind, box: box[from:to:to]}, true
-	case []int64:
-		return Value{kind: ArrayKind, box: box[from:to:to]}, true
-	case []float64:
-		return Value{kind: ArrayKind, box: box[from:to:to]}, true
-	case []string:
-		return Value{kind: ArrayKind, box: box[from:to:to]}, true
-	case []money.Money:
-		return Value{kind: ArrayKind, box: box[from:to:to]}, true
-	case []money.FxRate:
-		return Value{kind: ArrayKind, box: box[from:to:to]}, true
+	case *bool:
+		return arrayOf(itemsAt(box, v.i)[from:to:to]), true
+	case *int64:
+		return arrayOf(itemsAt(box, v.i)[from:to:to]), true
+	case *float64:
+		return arrayOf(itemsAt(box, v.i)[from:to:to]), true
+	case *string:
+		return arrayOf(itemsAt(box, v.i)[from:to:to]), true
+	case *money.Money:
+		return arrayOf(itemsAt(box, v.i)[from:to:to]), true
+	case *money.FxRate:
+		return arrayOf(itemsAt(box, v.i)[from:to:to]), true
 	case *nestedArray:
-		return Value{kind: ArrayKind, box: &nestedArray{elem: box.elem, items: box.items[from:to:to]}}, true
+		return nestedOf(box.elem, box.items[from:to:to]), true
 	case *recordsView:
-		return Value{kind: ArrayKind, box: box.slice(from, to)}, true
+		return viewed(box.slice(from, to)), true
 	}
 	return Value{}, false
 }
@@ -313,19 +358,19 @@ func (b *arrayBuilder) addAll(value Value) {
 func (b *arrayBuilder) finish() Value {
 	switch b.elem.kind {
 	case BoolKind:
-		return Value{kind: ArrayKind, box: b.bools}
+		return arrayOf(b.bools)
 	case IntKind:
-		return Value{kind: ArrayKind, box: b.ints}
+		return arrayOf(b.ints)
 	case FloatKind:
-		return Value{kind: ArrayKind, box: b.floats}
+		return arrayOf(b.floats)
 	case StringKind:
-		return Value{kind: ArrayKind, box: b.strings}
+		return arrayOf(b.strings)
 	case MoneyKind:
-		return Value{kind: ArrayKind, box: b.monies}
+		return arrayOf(b.monies)
 	case FxRateKind:
-		return Value{kind: ArrayKind, box: b.fxRates}
+		return arrayOf(b.fxRates)
 	default:
-		return Value{kind: ArrayKind, box: &nestedArray{elem: b.elem, items: b.values}}
+		return nestedOf(b.elem, b.values)
 	}
 }
 
