@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
+	"sync"
 
 	"github.com/nethinwei/funroute/internal/kit"
 )
@@ -19,6 +21,17 @@ type Codec[In, Out any] struct {
 	in, out  reflect.Type
 	params   []Parameter
 	result   Type
+	// plans is the crossing of the whole contract, planned once: what bind
+	// uses for an artifact that declares the contract as it is, as every
+	// one a Binding compiles does.
+	plans contractPlans
+}
+
+type contractPlans struct {
+	once   sync.Once
+	args   *argsCodec
+	result *codec
+	err    error
 }
 
 // NewCodec reads the contract off In and Out. In must be a struct; its
@@ -77,17 +90,14 @@ func (c *Codec[In, Out]) InstantiateCompiled(artifact *Artifact) (*Program[In, O
 
 // bind plans the Go types' crossing for a loaded runtime.
 func (c *Codec[In, Out]) bind(runtime *Runtime) (*Program[In, Out], error) {
-	// Planned against the runtime's own artifact — a snapshot, or one its
-	// compiler handed over — so the types the codecs share belong to it and
-	// no caller can change them.
+	// Planned against what the runtime's own artifact declares — a snapshot,
+	// or one its compiler handed over — or, when that is the contract as it
+	// is, the contract's plans: their types are the Codec's own, which no
+	// caller can change either.
 	declared := runtime.artifact
-	args, err := newArgsCodec(c.registry, c.in, declared.parts.Args)
+	args, result, err := c.plansFor(declared)
 	if err != nil {
-		return nil, kit.Classify(ErrContract, "", err)
-	}
-	result, err := newCodecFor(c.registry, c.out, declared.parts.Result)
-	if err != nil {
-		return nil, kit.Classify(ErrContract, "result: ", err)
+		return nil, err
 	}
 	reads := argumentReads(declared, args, &runtime.reg)
 	program := &Program[In, Out]{
@@ -98,6 +108,34 @@ func (c *Codec[In, Out]) bind(runtime *Runtime) (*Program[In, Out], error) {
 		program.plain = plainLoadsOf(reads, runtime.reg.args)
 	}
 	return program, nil
+}
+
+// plansFor plans how In and Out carry what artifact declares: the plans of
+// the whole contract, made once, when it declares the contract as it is, and
+// plans of its own otherwise.
+func (c *Codec[In, Out]) plansFor(artifact *Artifact) (*argsCodec, *codec, error) {
+	if !slices.EqualFunc(artifact.parts.Args, c.params, sameParameter) || !artifact.parts.Result.Equal(c.result) {
+		return planCrossing(c.registry, c.in, c.out, artifact.parts.Args, artifact.parts.Result)
+	}
+	c.plans.once.Do(func() {
+		c.plans.args, c.plans.result, c.plans.err = planCrossing(c.registry, c.in, c.out, c.params, c.result)
+	})
+	return c.plans.args, c.plans.result, c.plans.err
+}
+
+func sameParameter(a, b Parameter) bool { return a.name == b.name && a.typ.Equal(b.typ) }
+
+// planCrossing is the plans of the arguments params and the result.
+func planCrossing(registry *Registry, in, out reflect.Type, params []Parameter, result Type) (*argsCodec, *codec, error) {
+	args, err := newArgsCodec(registry, in, params)
+	if err != nil {
+		return nil, nil, kit.Classify(ErrContract, "", err)
+	}
+	plan, err := newCodecFor(registry, out, result)
+	if err != nil {
+		return nil, nil, kit.Classify(ErrContract, "result: ", err)
+	}
+	return args, plan, nil
 }
 
 // argumentReads lists the arguments the bytecode loads. An argument the

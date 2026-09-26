@@ -71,19 +71,11 @@ func valueCodes(value Value, add func(string)) error {
 // argument, the result, an instruction's or a constant's — is a money type.
 // Only then does it carry a MoneyStamp.
 func ArtifactUsesMoney(artifact *Artifact) bool {
-	types := []Type{artifact.parts.Result}
-	for _, param := range artifact.parts.Args {
-		types = append(types, param.typ)
-	}
-	for _, instruction := range artifact.parts.Instructions {
-		if instruction.Type != nil {
-			types = append(types, *instruction.Type)
-		}
-	}
-	for _, constant := range artifact.parts.Constants {
-		types = append(types, constant.Type)
-	}
-	return slices.ContainsFunc(types, typeUsesMoney)
+	parts := &artifact.parts
+	return typeUsesMoney(parts.Result) ||
+		slices.ContainsFunc(parts.Args, func(param Parameter) bool { return typeUsesMoney(param.typ) }) ||
+		slices.ContainsFunc(parts.Instructions, func(in Instruction) bool { return in.Type != nil && typeUsesMoney(*in.Type) }) ||
+		slices.ContainsFunc(parts.Constants, func(constant Constant) bool { return typeUsesMoney(constant.Type) })
 }
 
 func typeUsesMoney(typ Type) bool { return typeHas(typ, IsMoneyKind) }

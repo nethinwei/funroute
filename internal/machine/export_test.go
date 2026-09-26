@@ -180,3 +180,11 @@ func LibraryNames() []string {
 	}
 	return names
 }
+
+// ConstantBothWays is a constant read the quick way, when it is a scalar
+// the quick way reads, and the decoder's way.
+func ConstantBothWays(c Constant) (quick Value, ok bool, decoded Value, err error) {
+	quick, ok = c.scalar()
+	decoded, err = c.decoded()
+	return quick, ok, decoded, err
+}

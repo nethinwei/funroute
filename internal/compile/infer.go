@@ -76,21 +76,30 @@ type inferState struct {
 	// checks run once everything is decided: what can only be proven of
 	// settled types.
 	checks []func() error
-	trail  []undo
+	// trail is every change a trial may take back, in order; what each
+	// replaced is on the stack of its kind, last on top, so a change costs
+	// the trail no more than its kind and where.
+	trail        []undo
+	oldTerms     []typeTerm
+	oldInfos     []varInfo
+	oldKeys      []string
+	oldConverted []int
+	oldChoices   []openChoice
+	oldDeferred  []*deferred
 }
 
-// undo is one change on the trail, with what it replaced.
+// undo is one change on the trail: its kind, what it changed, and whether
+// there was a value before, which is on its kind's stack.
 type undo struct {
-	op        undoOp
-	id        int
-	term      typeTerm
-	info      varInfo
-	had       bool
-	key       string
-	converted int
-	choice    *choice
-	deferred  *deferred
-	open      []*machine.RegisteredFunction
+	op  undoOp
+	had bool
+	id  int
+}
+
+// openChoice is a choice as it was: its candidates still open.
+type openChoice struct {
+	choice *choice
+	open   []*machine.RegisteredFunction
 }
 
 type undoOp uint8
@@ -130,18 +139,29 @@ func (s *inferState) undoTo(mark int) {
 func (s *inferState) revert(entry undo) {
 	switch entry.op {
 	case undoSubst:
-		restore(s.subst, entry.id, entry.term, entry.had)
+		restore(s.subst, entry.id, popped(&s.oldTerms), entry.had)
 	case undoInfo:
-		restore(s.info, entry.id, entry.info, entry.had)
+		restore(s.info, entry.id, popped(&s.oldInfos), entry.had)
 	case undoSelection:
-		restore(s.selections, entry.id, entry.key, entry.had)
+		restore(s.selections, entry.id, popped(&s.oldKeys), entry.had)
 	case undoConverted:
-		s.converted = entry.converted
+		s.converted = popped(&s.oldConverted)
 	case undoChoice:
-		entry.choice.open = entry.open
+		old := popped(&s.oldChoices)
+		old.choice.open = old.open
 	case undoDeferred:
-		entry.deferred.done = false
+		popped(&s.oldDeferred).done = false
 	}
+}
+
+// popped takes the top of a stack of what a change replaced.
+func popped[V any](stack *[]V) V {
+	last := len(*stack) - 1
+	old := (*stack)[last]
+	var zero V
+	(*stack)[last] = zero
+	*stack = (*stack)[:last]
+	return old
 }
 
 func restore[V any](m map[int]V, id int, old V, had bool) {
@@ -154,7 +174,7 @@ func restore[V any](m map[int]V, id int, old V, had bool) {
 
 func (s *inferState) bind(id int, term typeTerm) {
 	old, had := s.subst[id]
-	s.trail = append(s.trail, undo{op: undoSubst, id: id, term: old, had: had})
+	s.trail, s.oldTerms = append(s.trail, undo{op: undoSubst, id: id, had: had}), append(s.oldTerms, old)
 	s.subst[id] = term
 	if s.probing > 0 {
 		return
@@ -167,7 +187,7 @@ func (s *inferState) bind(id int, term typeTerm) {
 
 func (s *inferState) setInfo(id int, info varInfo) {
 	old, had := s.info[id]
-	s.trail = append(s.trail, undo{op: undoInfo, id: id, info: old, had: had})
+	s.trail, s.oldInfos = append(s.trail, undo{op: undoInfo, id: id, had: had}), append(s.oldInfos, old)
 	s.info[id] = info
 	if s.probing == 0 {
 		s.touch(id)
@@ -201,7 +221,7 @@ func (s *inferState) freeVars(term typeTerm, vars []int) []int {
 
 func (s *inferState) selectKey(node int, key string) {
 	old, had := s.selections[node]
-	s.trail = append(s.trail, undo{op: undoSelection, id: node, key: old, had: had})
+	s.trail, s.oldKeys = append(s.trail, undo{op: undoSelection, id: node, had: had}), append(s.oldKeys, old)
 	s.selections[node] = key
 }
 
@@ -209,7 +229,7 @@ func (s *inferState) convert(delta int) {
 	if delta == 0 {
 		return
 	}
-	s.trail = append(s.trail, undo{op: undoConverted, converted: s.converted})
+	s.trail, s.oldConverted = append(s.trail, undo{op: undoConverted}), append(s.oldConverted, s.converted)
 	s.converted += delta
 }
 
@@ -283,8 +303,15 @@ func (s *inferState) unifyFields(left, right typeTerm) error {
 }
 
 func (s *inferState) cannotUnify(left, right typeTerm) error {
+	if s.probing > 0 {
+		return errNoFit
+	}
 	return fmt.Errorf("cannot unify %s with %s", s.describe(left), s.describe(right))
 }
+
+// errNoFit is every failure inside a trial: a trial asks only whether a
+// candidate fits, and is taken back, so what failed is never said.
+var errNoFit = errors.New("does not fit")
 
 // bindVar binds an open variable to term, keeping what the variable may
 // become: two variables meet in what both may become, and a variable meets
@@ -308,6 +335,9 @@ func (s *inferState) bindVar(variable, term typeTerm) error {
 		return nil
 	}
 	if !mine.domain.has(term.kind) {
+		if s.probing > 0 {
+			return errNoFit
+		}
 		return fmt.Errorf("a literal cannot be %s", s.describe(term))
 	}
 	if s.occurs(variable.id, term) {

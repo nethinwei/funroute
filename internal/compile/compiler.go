@@ -67,6 +67,7 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	if err := validateForms(expr, registry); err != nil {
 		return nil, nil, compileError(err)
 	}
+	options.hints = options.argTypes()
 	if err := options.validate(expr); err != nil {
 		return nil, nil, err
 	}

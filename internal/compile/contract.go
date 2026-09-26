@@ -51,14 +51,17 @@ type CompileOptions struct {
 	// plain compiles every call as written: no aggregate fused, no source
 	// hoisted — for the tests that hold the two to one answer.
 	plain bool
+	// hints is argTypes worked out once, read-only: by Bind for every
+	// compile of the binding, and by build for the steps of one compile.
+	hints map[string]machine.Type
 	// unsealed leaves the digest out, for a Binding that loads the artifact
 	// at once and computes the digest only when asked (Program.Artifact).
 	unsealed bool
 }
 
 func (o CompileOptions) argTypes() map[string]machine.Type {
-	if len(o.Args) == 0 {
-		return nil
+	if o.hints != nil || len(o.Args) == 0 {
+		return o.hints
 	}
 	types := make(map[string]machine.Type, len(o.Args))
 	for _, arg := range o.Args {

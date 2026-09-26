@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"unicode/utf8"
 
 	"github.com/nethinwei/funroute/internal/kit"
 )
@@ -124,6 +126,15 @@ func ConstantOf(value Value, typ Type) (Constant, bool) {
 
 // value reads the constant back as a value of its type.
 func (c Constant) value() (Value, error) {
+	if value, ok := c.scalar(); ok {
+		return value, nil
+	}
+	return c.decoded()
+}
+
+// decoded reads the constant through the decoder and coerce, as a host's
+// JSON argument is read.
+func (c Constant) decoded() (Value, error) {
 	decoder := kit.NumberDecoder(c.Value)
 	var input any
 	if err := decoder.Decode(&input); err != nil {
@@ -133,6 +144,92 @@ func (c Constant) value() (Value, error) {
 		return Value{}, errors.New("constant is missing its type")
 	}
 	return coerce(input, c.Type)
+}
+
+// scalar reads a bool, int, float or string constant straight from its
+// JSON text, as the decoder and coerce would read it; false for any other,
+// and for text the decoder alone can say what to make of — an escape in a
+// string, a number that does not parse — which value then reads the slow
+// way, with the words it always had.
+func (c Constant) scalar() (Value, bool) {
+	text := c.Value
+	switch c.Type.kind {
+	case BoolKind:
+		switch string(text) {
+		case "true":
+			return Bool(true), true
+		case "false":
+			return Bool(false), true
+		}
+	case IntKind:
+		if jsonNumber(text, true) {
+			if n, err := strconv.ParseInt(string(text), 10, 64); err == nil {
+				return Int(n), true
+			}
+		}
+	case FloatKind:
+		if jsonNumber(text, false) {
+			if f, err := strconv.ParseFloat(string(text), 64); err == nil {
+				return Float(f), true
+			}
+		}
+	case StringKind:
+		if n := len(text); n >= 2 && text[0] == '"' && text[n-1] == '"' && plainJSONString(text[1:n-1]) {
+			return String(string(text[1 : n-1])), true
+		}
+	}
+	return Value{}, false
+}
+
+// jsonNumber reports text that is a JSON number — -?(0|[1-9][0-9]*), then
+// a fraction and an exponent unless integer is set — so that ParseInt and
+// ParseFloat read nothing JSON would not: no +1, no 01, no NaN, no hex.
+func jsonNumber(text []byte, integer bool) bool {
+	i := 0
+	if i < len(text) && text[i] == '-' {
+		i++
+	}
+	switch {
+	case i < len(text) && text[i] == '0':
+		i++
+	case i < len(text) && text[i] >= '1' && text[i] <= '9':
+		i = digitsFrom(text, i)
+	default:
+		return false
+	}
+	if integer {
+		return i == len(text)
+	}
+	if i < len(text) && text[i] == '.' {
+		if i = digitsFrom(text, i+1); text[i-1] == '.' {
+			return false
+		}
+	}
+	if i < len(text) && (text[i] == 'e' || text[i] == 'E') {
+		i++
+		if i < len(text) && (text[i] == '+' || text[i] == '-') {
+			i++
+		}
+		start := i
+		if i = digitsFrom(text, i); i == start {
+			return false
+		}
+	}
+	return i == len(text)
+}
+
+// digitsFrom is where the run of digits from i ends.
+func digitsFrom(text []byte, i int) int {
+	for i < len(text) && text[i] >= '0' && text[i] <= '9' {
+		i++
+	}
+	return i
+}
+
+// plainJSONString reports the inside of a JSON string that means itself: no
+// escape, no control character, valid UTF-8.
+func plainJSONString(text []byte) bool {
+	return utf8.Valid(text) && !slices.ContainsFunc(text, func(b byte) bool { return b == '\\' || b == '"' || b < 0x20 })
 }
 
 // Instruction operands: A is a jump target or an index, B a local slot or an

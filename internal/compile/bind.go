@@ -21,6 +21,7 @@ func Bind[In, Out any](registry *machine.Registry) (*Binding[In, Out], error) {
 	}
 	result := codec.Result()
 	options := CompileOptions{Args: argSpecs(codec.Parameters()), Result: &result}
+	options.hints = options.argTypes()
 	if err := ValidateContract(options); err != nil {
 		return nil, err
 	}

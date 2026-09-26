@@ -142,3 +142,34 @@ func TestAConstantThatIsNotItsTypeIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// quickly are texts the quick way reads.
+var quickly = map[string]bool{"true": true, "7": true, "-9223372036854775808": true, "1.5": true, "1e308": true, `"adyen"`: true, `"银行卡😀"`: true}
+
+// A bool, int, float or string constant read straight from its JSON text is
+// what the decoder and coerce read of it; what the quick way does not read,
+// the decoder reads, with its own words.
+func TestAScalarConstantReadsAsTheDecoderReadsIt(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		typ   machine.Type
+		texts []string
+	}{
+		{machine.BoolType, []string{"true", "false", " true", "1"}},
+		{machine.IntType, []string{"0", "-0", "7", "-9223372036854775808", "9223372036854775807", "9223372036854775808", "1e3", "1.0", "+1", "01", "-", "--1", "1-"}},
+		{machine.FloatType, []string{"0", "-0", "1.5", "-2.25e-3", "1e308", "1e999", "5e-324", "NaN", "0x1p3", "1_0", "3", "1.", ".5", "1e", "1e+", "01.5", "-0.0e-0", "1E+2"}},
+		{machine.StringType, []string{`""`, `"adyen"`, `"银行卡😀"`, `"a\"b"`, `"a\u0041"`, "\"\xff\"", "\"\t\""}},
+	} {
+		typ := test.typ
+		for _, text := range test.texts {
+			constant := machine.Constant{Type: typ, Value: json.RawMessage(text)}
+			quick, ok, decoded, err := machine.ConstantBothWays(constant)
+			if ok && (err != nil || !machine.Identical(quick, decoded)) {
+				t.Errorf("%s %s: read quick as %v, the decoder %v, %v", typ, text, quick.Any(), decoded.Any(), err)
+			}
+			if quickly[text] && !ok {
+				t.Errorf("%s %s: read the slow way, want the quick one", typ, text)
+			}
+		}
+	}
+}

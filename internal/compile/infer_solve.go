@@ -40,12 +40,12 @@ type deferred struct {
 }
 
 func (s *inferState) setOpen(c *choice, open []*machine.RegisteredFunction) {
-	s.trail = append(s.trail, undo{op: undoChoice, choice: c, open: c.open})
+	s.trail, s.oldChoices = append(s.trail, undo{op: undoChoice}), append(s.oldChoices, openChoice{choice: c, open: c.open})
 	c.open = open
 }
 
 func (s *inferState) finish(d *deferred) {
-	s.trail = append(s.trail, undo{op: undoDeferred, deferred: d})
+	s.trail, s.oldDeferred = append(s.trail, undo{op: undoDeferred}), append(s.oldDeferred, d)
 	d.done = true
 }
 
@@ -68,18 +68,21 @@ func (s *inferState) apply(c *choice, function *machine.RegisteredFunction) erro
 // fits reports whether the candidate still unifies with the call, leaving
 // the state as it was.
 func (s *inferState) fits(c *choice, function *machine.RegisteredFunction) bool {
-	defer s.trial()()
+	defer s.endTrial(s.trial())
 	return s.apply(c, function) == nil
 }
 
-// trial starts a change to be taken back, and returns what takes it back.
-func (s *inferState) trial() func() {
-	mark := s.mark()
+// trial starts a change to be taken back, and is where endTrial takes it
+// back to.
+func (s *inferState) trial() int {
 	s.probing++
-	return func() {
-		s.undoTo(mark)
-		s.probing--
-	}
+	return s.mark()
+}
+
+// endTrial takes back every change since mark, and ends the trial.
+func (s *inferState) endTrial(mark int) {
+	s.undoTo(mark)
+	s.probing--
 }
 
 func (s *inferState) commit(c *choice, function *machine.RegisteredFunction) error {
@@ -247,7 +250,7 @@ func (s *inferState) cheapest(c *choice) (*machine.RegisteredFunction, bool) {
 // literal it reads as another kind, a promotion, then the types it leaves
 // the call.
 func (s *inferState) cost(c *choice, function *machine.RegisteredFunction) int {
-	defer s.trial()()
+	defer s.endTrial(s.trial())
 	before := s.converted
 	if s.apply(c, function) != nil {
 		return int(^uint(0) >> 1)
