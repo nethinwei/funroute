@@ -18,6 +18,7 @@ func loopGroup() group {
 		boolean(in, "!any([x < 0 for x in xs])", "none(xs, # < 0)"),
 		boolean(in, "len([x for x in xs if x == 250]) == 1", "one(xs, # == 250)"),
 		integer(in, "first([x for x in xs if x > 400])", "find(xs, # > 400)"),
+		integer(in, "first([x for x in xs if x == 499])", "find(xs, # == 499)"),
 		ints(in, "[y + z for y in ys for z in zs]", "flatten(map(ys, let y = #; map(zs, y + #)))"),
 		on[listIn, map[string]int64](in, "{string(x): x for x in xs}", "fromPairs(map(xs, [string(#), #]))"),
 		on[listIn, map[string][]int64](in, "group_by(xs, [string(x % 3) for x in xs])", "groupBy(xs, string(# % 3))"),

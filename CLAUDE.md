@@ -27,6 +27,7 @@ examples/            可运行的 Go 宿主程序，只用公开包；只放宿�
 tests/api/           公开面的测试与 Example*，按主题组织（宿主侧）
 tests/conformance/   web/funroute-examples.json 的每个示例经公开 API 跑完整条流水线
 tests/limits/        生成 docs/limits.md 的表格并守着它们（make limits）
+tests/golden/        行为金库：随机程序在固定输入上经 Program 与 RunValues 的答案与失败，逐字节比对（make golden）
 tests/perf/          性能报告程序，写进 docs/perf.md（make perf），不进 CI 的判定
 tests/perf/expr/     与 expr 的对照：单独的 module，只有它依赖 expr，根 go.mod 保持为空
 web/src/ web/wasm/   工作台前端（TS）与浏览器里的语言服务（js/wasm）
@@ -122,6 +123,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 新增原生 backing | `machine/container.go` 的 `natives` 一行与 `host_plan.go` 的 `native` 常量；`TestEveryBackingIsHandledEverywhere` 指出每个还要补的 switch |
 | `reflectType`/`fromGo` 新增非容器的 Go 类型 | `machine/host_plan.go` 的 `newCodecFor` 与 `host_access.go` |
 | 新增公开 API | `funroute.go` 对应的一节；新类型进 `tests/api/value_test.go` 的断言块，并在 `tests/api` 以宿主视角用一次。能不加就不加 |
+| 有意改变了某个答案或失败 | `make golden` 重写 `tests/golden/testdata/outcomes.jsonl`，逐条读 diff；只改执行方式时金库必须一字不差 |
 | 改了 docs/limits.md 表格里的行为 | `make limits` 重新生成，读一遍 diff；新增边界就在 `tests/limits` 的用例表加一行，说明写在用例里 |
 | 新增例子 | 只改 `web/funroute-examples.json`（源码 + 契约 + 入参 + 期望值）；示例合起来要覆盖演示注册表的全部函数、形式、运算符与节点 |
 | 新增语言服务能力 | `lsp/`：标准方法优先，专有的用 `funroute/*` 或 `workspace/executeCommand`；`web/wasm` 只是传输 |
@@ -139,6 +141,7 @@ make wasm      # web/dist/funroute.wasm
 make web       # web/dist/*.js（先在 web/ 里 npm install；产物不提交）
 make run       # 构建并在 http://127.0.0.1:8080 服务工作台
 make limits    # 重新生成 docs/limits.md 的表格（go test ./tests/limits -update）
+make golden    # 重写行为金库（go test ./tests/golden -update），只在有意改变答案时
 make perf      # 性能报告写进 docs/perf.md，需要时再提交
 go run ./examples/routing                                          # 宿主程序示例：routing、money、batch
 go test ./internal/compile -run TestIfIsLazy -v                    # 单个测试
@@ -164,6 +167,6 @@ go run ./cmd/funroute run -expr 'let(bps = 250, amount * bps / 10000)' -types 'a
 - 不睡：依赖定时器的测试跑在 `testing/synctest` 上。
 - 基准写 `for b.Loop()`。
 - 测试辅助函数第一句 `t.Helper()`。
-- **`foo_test.go` 对应同目录的 `foo.go`**。例外：`example_test.go`、`export_test.go`，以及只有 `doc.go` 的测试套件目录（`tests/` 下的 `api`、`conformance`、`limits`）。没有 `helpers_test.go`。测 machine 行为又要先编译的测试写成 `package machine_test`，内部件经 `export_test.go` 暴露。
+- **`foo_test.go` 对应同目录的 `foo.go`**。例外：`example_test.go`、`export_test.go`，以及只有 `doc.go` 的测试套件目录（`tests/` 下的 `api`、`conformance`、`limits`、`golden`）。没有 `helpers_test.go`。测 machine 行为又要先编译的测试写成 `package machine_test`，内部件经 `export_test.go` 暴露。
 
 其余靠评审：表驱动测试每个用例一个 `t.Run`；独立的测试第一句 `t.Parallel()`（`testing.AllocsPerRun`、synctest、共享状态、计时敏感的除外）；失败信息写出输入、实际与期望。

@@ -1,7 +1,7 @@
 GO ?= go
 NODE ?= node
 
-.PHONY: ci build test test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits perf
+.PHONY: ci build test test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden perf
 
 # ci must pass before any commit.
 ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize golangci deadcode lint build wasm test test-js
@@ -104,6 +104,11 @@ test-js:
 # never enters go.mod; its section goes at the end of the report.
 limits:
 	$(GO) test ./tests/limits -update
+
+# golden writes the record of every answer anew: only for a change meant to
+# change one, whose diff is then read line by line.
+golden:
+	$(GO) test ./tests/golden -update
 
 perf: wasm
 	$(GO) run ./tests/perf > docs/perf.md

@@ -159,3 +159,29 @@ func randomRegistry(t *testing.T) *machine.Registry {
 	}
 	return registry
 }
+
+// A program of the kernel's alone never panics, whatever it is given: a run
+// of one sets up no recover (a host's function is where a panic comes from),
+// so a panic here would take the host's process with it.
+func FuzzProgramsNeverPanic(f *testing.F) {
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.SwitchForm, machine.ForForm, machine.ReduceForm); err != nil {
+		f.Fatal(err)
+	}
+	for seed := range uint64(8) {
+		f.Add(seed, seed*3)
+	}
+	f.Fuzz(func(t *testing.T, program, input uint64) {
+		g := &generator{rand: rand.New(rand.NewPCG(program, 7)), ints: []string{"a", "b"}, arrays: []string{"xs"}}
+		source := g.of("int", 4)
+		runtime, err := load(source, registry, randomContract)
+		if err != nil {
+			return // a host's function, or a rule the generator does not know
+		}
+		g.rand = rand.New(rand.NewPCG(input, 9))
+		args := g.args()
+		if _, err := runtime.Run(t.Context(), args); err != nil && strings.Contains(err.Error(), "panicked") {
+			t.Fatalf("%s with %v: %v", source, args, err)
+		}
+	})
+}
