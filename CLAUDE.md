@@ -50,7 +50,8 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 
 **值的边界：零拷贝、零分配**
 - 容器的 backing 就是原生 Go 值（`[]float64`、`map[string]int64`、`[]Money`），交给 `Value` 与从 `Value` 取出的都不复制，从那一刻起**只读**。新增取值入口必须保持"交出 backing、注释写明只读"。唯一的 backing 表是 `machine/container.go` 的 `natives`；读 backing 的 switch（容器操作、`fromGo`、`host_access.go`）为了热路径不改成间接调用，由 `TestEveryBackingIsHandledEverywhere` 逐项对照。
-- 不变量在值诞生处确立（NaN/Inf、币种已声明），使用处不复查；深度扫描会让大向量每次多花微秒级时间。金额容器在边界上做一次只读 O(n) 扫描，这是唯一的例外。
+- float 按 IEEE 754（与 Go 一致）：NaN、±Inf 是合法的值，float 运算从不失败；`==`/`<` 与成员判断（`in`、`index_of`、`unique`）按 IEEE，排序按 Go 的全序 `cmp.Compare`（NaN 最前），`min`/`max` 与 `arg_min`/`arg_max` 遇 NaN 得 NaN 或它的下标；边界上不扫 float。int 照旧检查溢出。
+- 不变量在值诞生处确立（币种已声明），使用处不复查；深度扫描会让大向量每次多花微秒级时间。金额容器在边界上做一次只读 O(n) 扫描，这是唯一的例外。
 - 边界上不许分配：`TestArgumentChecksDoNotAllocate`、`TestProgramScalarsDoNotAllocate`、`BenchmarkVectorPassThrough`（耗时与长度无关）守着。`machine/host_access.go` 是唯一用 `unsafe` 的文件。
 
 **金额**（规则见 README「金额」，取舍见 roadmap）

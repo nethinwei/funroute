@@ -98,14 +98,15 @@ func deviationOf[T int64 | float64](items []T) (float64, error) {
 		diff := float64(item) - mean
 		total += diff * diff
 	}
-	return finiteIn("stddev", math.Sqrt(total/float64(len(items))))
+	return math.Sqrt(total / float64(len(items))), nil
 }
 
 func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) {
 	if len(items) == 0 {
 		return 0, fmt.Errorf("%w: percentile of an empty array", funroute.ErrDomain)
 	}
-	if ratio < 0 || ratio > 1 {
+	// Written so that a NaN ratio is refused too.
+	if !(0 <= ratio && ratio <= 1) {
 		return 0, fmt.Errorf("%w: a percentile is a ratio between 0 and 1, got %v", funroute.ErrArithmetic, ratio)
 	}
 	sorted := append([]T(nil), items...)
@@ -117,7 +118,7 @@ func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) 
 		return float64(sorted[lower]), nil
 	}
 	weight := position - float64(lower)
-	return finiteIn("percentile", float64(sorted[lower])*(1-weight)+float64(sorted[upper])*weight)
+	return float64(sorted[lower])*(1-weight) + float64(sorted[upper])*weight, nil
 }
 
 // pairwiseSpecs are min and max on two values rather than on a list: a fee
@@ -151,7 +152,7 @@ func averageOf[T int64 | float64](items []T) (float64, error) {
 	for _, item := range items {
 		total += float64(item)
 	}
-	return finiteIn("avg", total/float64(len(items)))
+	return total / float64(len(items)), nil
 }
 
 func medianOf[T int64 | float64](items []T) (float64, error) {
@@ -164,15 +165,16 @@ func medianOf[T int64 | float64](items []T) (float64, error) {
 	if len(sorted)%2 == 1 {
 		return float64(sorted[middle]), nil
 	}
-	return finiteIn("median", (float64(sorted[middle-1])+float64(sorted[middle]))/2)
+	return (float64(sorted[middle-1]) + float64(sorted[middle])) / 2, nil
 }
 
+// pairwise is Go's min or max: a NaN of either is the answer.
 func pairwise[T int64 | float64 | string](smallest bool) func(T, T) (T, error) {
 	return func(left, right T) (T, error) {
-		if (smallest && right < left) || (!smallest && right > left) {
-			return right, nil
+		if smallest {
+			return min(left, right), nil
 		}
-		return left, nil
+		return max(left, right), nil
 	}
 }
 
@@ -186,11 +188,7 @@ func powerSpecs() []funroute.FunctionSpec {
 		Params:      []string{"底数", "指数"}, Result: "幂",
 	}
 	return eachType("pow", doc, powInt, func(base, exponent float64) (float64, error) {
-		result := math.Pow(base, exponent)
-		if math.IsNaN(result) || math.IsInf(result, 0) {
-			return 0, fmt.Errorf("%w: pow(%v, %v) is not a finite number", funroute.ErrArithmetic, base, exponent)
-		}
-		return result, nil
+		return math.Pow(base, exponent), nil
 	})
 }
 

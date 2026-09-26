@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strconv"
 
 	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
@@ -32,19 +33,15 @@ func fromGo(input any) (Value, error) {
 	case int64:
 		return Int(x), nil
 	case float64:
-		return CheckedFloat(x)
+		return Float(x), nil
 	case string:
 		return String(x), nil
-	case []bool, []int64, []string:
+	case []bool, []int64, []float64, []string:
 		return Value{kind: ArrayKind, box: x}, nil
-	case []float64:
-		return Value{kind: ArrayKind, box: x}, checkFloats(x)
 	case [][]float64:
-		return nestedFloats(x)
-	case map[string]bool, map[string]int64, map[string]string:
+		return nestedFloats(x), nil
+	case map[string]bool, map[string]int64, map[string]float64, map[string]string:
 		return Value{kind: DictKind, box: x}, nil
-	case map[string]float64:
-		return Value{kind: DictKind, box: x}, checkFloatMap(x)
 	case money.Money:
 		return MoneyValue(x.Minor(), x.Currency()), nil
 	case money.Ratio:
@@ -81,17 +78,6 @@ func structFromGo(input any) (Value, error) {
 	return structValue(value)
 }
 
-// checkFloats is the one pass a float slice gets: a read, not a copy, and it
-// keeps the invariant that no NaN or infinity is ever inside the VM.
-func checkFloats(values []float64) error {
-	for i, value := range values {
-		if !finite(value) {
-			return fmt.Errorf("item %d: non-finite floats are not supported", i)
-		}
-	}
-	return nil
-}
-
 // checkFxRates refuses the zero FxRate in a host's slice: it is no rate.
 func checkFxRates(rates []money.FxRate) error {
 	for i, rate := range rates {
@@ -102,27 +88,14 @@ func checkFxRates(rates []money.FxRate) error {
 	return nil
 }
 
-// checkFloatMap is checkFloats for a dictionary's backing.
-func checkFloatMap(entries map[string]float64) error {
-	for key, value := range entries {
-		if !finite(value) {
-			return fmt.Errorf("entry %q: non-finite floats are not supported", key)
-		}
-	}
-	return nil
-}
-
 // nestedFloats wraps a matrix. Each row is wrapped, not copied; the outer
 // slice of Values is the only allocation.
-func nestedFloats(rows [][]float64) (Value, error) {
+func nestedFloats(rows [][]float64) Value {
 	items := make([]Value, len(rows))
 	for i, row := range rows {
-		if err := checkFloats(row); err != nil {
-			return Value{}, fmt.Errorf("row %d: %w", i, err)
-		}
 		items[i] = Value{kind: ArrayKind, box: row}
 	}
-	return Value{kind: ArrayKind, box: &nestedArray{elem: ArrayOf(FloatType), items: items}}, nil
+	return Value{kind: ArrayKind, box: &nestedArray{elem: ArrayOf(FloatType), items: items}}
 }
 
 // ToValue wraps a Go value for RunValues or for an extension's result. The
@@ -138,7 +111,7 @@ func ToValue[T any](input T) (Value, error) {
 	case *int64:
 		return Int(*scalar), nil
 	case *float64:
-		return CheckedFloat(*scalar)
+		return Float(*scalar), nil
 	case *string:
 		return String(*scalar), nil
 	case *money.Money:
@@ -381,15 +354,16 @@ func unsignedInt(value uint64) (Value, error) {
 func coerceFloat(input any) (Value, error) {
 	switch value := input.(type) {
 	case float32:
-		return CheckedFloat(float64(value))
+		return Float(float64(value)), nil
 	case float64:
-		return CheckedFloat(value)
+		return Float(value), nil
 	case json.Number:
+		// Past the range of a float is an infinity, as float("1e999") is.
 		parsed, err := value.Float64()
-		if err != nil {
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
 			return Value{}, fmt.Errorf("%q is not a float", value)
 		}
-		return CheckedFloat(parsed)
+		return Float(parsed), nil
 	default:
 		// A whole number is a float with nothing lost, which is what a host
 		// means by passing 1 where a rate is wanted — the same thing the JSON
@@ -399,7 +373,7 @@ func coerceFloat(input any) (Value, error) {
 			if whole < -maxExactFloatInt || whole > maxExactFloatInt {
 				return Value{}, fmt.Errorf("%d cannot be represented exactly as float", whole)
 			}
-			return CheckedFloat(float64(whole))
+			return Float(float64(whole)), nil
 		}
 		return Value{}, fmt.Errorf("got %T, want float", input)
 	}

@@ -1,7 +1,6 @@
 package machine_test
 
 import (
-	"errors"
 	"math"
 	"testing"
 
@@ -75,8 +74,8 @@ func TestPromotedFieldsAnswerAsTheRecord(t *testing.T) {
 	}
 }
 
-// A promoted float that is not finite is refused as loading the record
-// refused it: the same class, the same words.
+// A promoted float that is not finite is read as loading the record reads
+// it: a NaN in is a NaN out, either way.
 func TestAPromotedFieldIsHeldAsTheRecordIs(t *testing.T) {
 	t.Parallel()
 	binding, err := compile.Bind[promotedIn, float64](machine.CoreRegistry())
@@ -92,9 +91,9 @@ func TestAPromotedFieldIsHeldAsTheRecordIs(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := &promotedIn{Order: promotedOrder{Risk: math.NaN()}}
-	_, got := promoted.Run(t.Context(), in)
-	_, want := whole.Run(t.Context(), in)
-	if got == nil || want == nil || got.Error() != want.Error() || !errors.Is(got, machine.ErrContract) {
-		t.Errorf("promoted: %v; whole: %v; want the same ErrContract", got, want)
+	got, gotErr := promoted.Run(t.Context(), in)
+	want, wantErr := whole.Run(t.Context(), in)
+	if gotErr != nil || wantErr != nil || !math.IsNaN(got) || !math.IsNaN(want) {
+		t.Errorf("promoted: %v, %v; whole: %v, %v; want NaN from both", got, gotErr, want, wantErr)
 	}
 }

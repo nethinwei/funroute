@@ -24,7 +24,6 @@ var (
 	errNoAbsolute      = fmt.Errorf("%w: the smallest int has no absolute value", funroute.ErrArithmetic)
 	errDivideByZero    = fmt.Errorf("%w: division by zero", funroute.ErrArithmetic)
 	errIntegerOverflow = fmt.Errorf("%w: integer overflow in sum", funroute.ErrArithmetic)
-	errNotFinite       = fmt.Errorf("%w: non-finite float result in sum", funroute.ErrArithmetic)
 )
 
 // maxRangeLength caps one range call. The compiler already requires constant
@@ -74,9 +73,8 @@ func sumSpecs() []funroute.FunctionSpec {
 		Params:      []string{"数组"},
 		Result:      "总和",
 	}, sumInts, sumFloats)
-	zero, _ := funroute.Float(0) // 0 is finite
 	specs[0].Fold = &funroute.Fold{Step: "add", Init: funroute.Int(0)}
-	specs[1].Fold = &funroute.Fold{Step: "add", Init: zero}
+	specs[1].Fold = &funroute.Fold{Step: "add", Init: funroute.Float(0)}
 	return specs
 }
 
@@ -216,22 +214,12 @@ func sumInts(items []int64) (int64, error) {
 	return total, nil
 }
 
-// finiteIn is a float result of the named function, or ErrArithmetic when
-// it is not a finite number: an overflow the float could not hold.
-func finiteIn(name string, value float64) (float64, error) {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0, fmt.Errorf("%w: non-finite float result in %s", funroute.ErrArithmetic, name)
-	}
-	return value, nil
-}
-
+// sumFloats adds as IEEE 754 does: past the range of a float is an
+// infinity, and a NaN makes the sum NaN.
 func sumFloats(items []float64) (float64, error) {
 	total := 0.0
 	for _, item := range items {
 		total += item
-	}
-	if math.IsNaN(total) || math.IsInf(total, 0) {
-		return 0, errNotFinite
 	}
 	return total, nil
 }
@@ -252,13 +240,16 @@ func extremeOf[T cmp.Ordered](name string, smallest bool) func([]T) (T, error) {
 // equal ones; false when there are none. min, max, arg_min, arg_max and the
 // pairs are all this one comparison.
 func best[T cmp.Ordered](items []T, smallest bool) (int, bool) {
-	at := 0
-	for i, item := range items {
-		if smallest && item < items[at] || !smallest && item > items[at] {
-			at = i
-		}
+	if len(items) == 0 {
+		return 0, false
 	}
-	return at, len(items) > 0
+	// slices.Min and Max answer a NaN when there is one, as Go's min and max
+	// do; cmp.Compare, unlike ==, finds a NaN equal to itself.
+	extreme := slices.Max(items)
+	if smallest {
+		extreme = slices.Min(items)
+	}
+	return slices.IndexFunc(items, func(item T) bool { return cmp.Compare(item, extreme) == 0 }), true
 }
 
 func anyTrue(items []bool) (bool, error) {

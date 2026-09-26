@@ -24,9 +24,9 @@ var (
 	// arguments disagree with each other it is also ErrContract. It is
 	// money's own error.
 	ErrCurrency = money.ErrCurrency
-	// ErrArithmetic is arithmetic with no answer: an overflow, a division by
-	// zero, a float that is not finite, an exchange rate that is not
-	// positive. It is the rule's or the data's, wherever it happens — in the
+	// ErrArithmetic is arithmetic with no answer: an int overflow, an int
+	// division by zero, an exchange rate that is not positive; a float has
+	// an answer for everything, as IEEE 754 has it. It is the rule's or the data's, wherever it happens — in the
 	// kernel, in a host function, in a Go method — and when an argument
 	// brings it, it is also ErrContract. Money's arithmetic reports it too.
 	ErrArithmetic = money.ErrArithmetic

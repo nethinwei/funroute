@@ -106,34 +106,33 @@ func (read argRead) load(p unsafe.Pointer, f *frame) (Value, error) {
 		return read.codec.loadRecordInto(p, &f.records[read.index])
 	case read.view:
 		f.borrows = append(f.borrows, read.index)
-		return viewIn(&f.views[read.index], read.codec.native, p)
+		return viewIn(&f.views[read.index], read.codec.native, p), nil
 	case read.records:
 		f.borrows = append(f.borrows, read.index)
-		return viewRecords(&f.recordViews[read.index], read.codec, p)
+		return viewRecords(&f.recordViews[read.index], read.codec, p), nil
 	}
 	return read.codec.load(p)
 }
 
-// viewIn copies the host's slice at p into slot and is the array there; a
-// float slice is held to being finite, as loading it is.
-func viewIn(slot *arenaSlot, kind native, p unsafe.Pointer) (Value, error) {
+// viewIn copies the host's slice at p into slot and is the array there.
+func viewIn(slot *arenaSlot, kind native, p unsafe.Pointer) Value {
 	switch kind {
 	case nativeBools:
 		slot.bools = *(*[]bool)(p)
-		return Value{kind: ArrayKind, box: &slot.bools}, nil
+		return Value{kind: ArrayKind, box: &slot.bools}
 	case nativeInts:
 		slot.ints = *(*[]int64)(p)
-		return Value{kind: ArrayKind, box: &slot.ints}, nil
+		return Value{kind: ArrayKind, box: &slot.ints}
 	case nativeFloats:
 		slot.floats = *(*[]float64)(p)
-		return Value{kind: ArrayKind, box: &slot.floats}, checkFloats(slot.floats)
+		return Value{kind: ArrayKind, box: &slot.floats}
 	}
 	slot.strings = *(*[]string)(p)
-	return Value{kind: ArrayKind, box: &slot.strings}, nil
+	return Value{kind: ArrayKind, box: &slot.strings}
 }
 
 // loadPlain loads a plain field of kind at p into slot, and reports whether
-// it did: a float that is not finite is left to the codec, which refuses it.
+// it did.
 func loadPlain(kind reflect.Kind, p unsafe.Pointer, slot *Value) bool {
 	switch kind {
 	case reflect.Int64:
@@ -145,11 +144,7 @@ func loadPlain(kind reflect.Kind, p unsafe.Pointer, slot *Value) bool {
 	case reflect.String:
 		*slot = Value{kind: StringKind, s: *(*string)(p)}
 	case reflect.Float64:
-		f := *(*float64)(p)
-		if !finite(f) {
-			return false
-		}
-		*slot = Value{kind: FloatKind, f: f}
+		*slot = Value{kind: FloatKind, f: *(*float64)(p)}
 	default:
 		return false
 	}
@@ -238,9 +233,9 @@ func loadScalar(kind reflect.Kind, p unsafe.Pointer) (Value, error) {
 	case reflect.String:
 		return String(*(*string)(p)), nil
 	case reflect.Float64:
-		return CheckedFloat(*(*float64)(p))
+		return Float(*(*float64)(p)), nil
 	case reflect.Float32:
-		return CheckedFloat(float64(*(*float32)(p)))
+		return Float(float64(*(*float32)(p))), nil
 	default:
 		return loadInt(kind, p)
 	}
@@ -271,7 +266,7 @@ func loadInt(kind reflect.Kind, p unsafe.Pointer) (Value, error) {
 
 // loadNative wraps a slice or map that already is a Value backing. Boxing its
 // header is the one allocation; the elements are neither copied nor read,
-// except that floats are checked.
+// except that exchange rates are checked.
 func loadNative(kind native, p unsafe.Pointer) (Value, error) {
 	switch kind {
 	case nativeBools:
@@ -279,7 +274,7 @@ func loadNative(kind native, p unsafe.Pointer) (Value, error) {
 	case nativeInts:
 		return loadBacking[[]int64](ArrayKind, p), nil
 	case nativeFloats:
-		return loadBacking[[]float64](ArrayKind, p), checkFloats(*(*[]float64)(p))
+		return loadBacking[[]float64](ArrayKind, p), nil
 	case nativeStrings:
 		return loadBacking[[]string](ArrayKind, p), nil
 	case nativeMonies:
@@ -293,7 +288,7 @@ func loadNative(kind native, p unsafe.Pointer) (Value, error) {
 	case nativeIntMap:
 		return loadBacking[map[string]int64](DictKind, p), nil
 	case nativeFloatMap:
-		return loadBacking[map[string]float64](DictKind, p), checkFloatMap(*(*map[string]float64)(p))
+		return loadBacking[map[string]float64](DictKind, p), nil
 	case nativeStringMap:
 		return loadBacking[map[string]string](DictKind, p), nil
 	}

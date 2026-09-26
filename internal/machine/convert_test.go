@@ -43,17 +43,14 @@ func TestNativeContainersAreWrappedNotCopied(t *testing.T) {
 	}
 }
 
-// The boundary keeps the language's invariants: no NaN gets in, and a native
-// slice of the wrong element type is refused rather than converted.
-//
-// This is the whole defence, not the first half of one. RunValues does not
-// re-check the values it is handed, because a Value holding a NaN cannot be
-// built in the first place — so a new public constructor that skips the check
-// would open the hole here, and this test is what stops it.
+// The boundary keeps the language's invariants: a native slice of the wrong
+// element type is refused rather than converted. A float slice goes in as
+// it is, NaN and all: it is neither read nor copied.
 func TestBoundaryKeepsTheInvariants(t *testing.T) {
 	t.Parallel()
-	if _, err := ToValue([]float64{1, nan()}); err == nil || !strings.Contains(err.Error(), "item 1") {
-		t.Fatalf("ToValue([1 NaN]) error = %v, want one naming %q", err, "item 1")
+	floats := []float64{1, nan()}
+	if value, err := ToValue(floats); err != nil || !sameBacking(floats, backing[float64](&value)) {
+		t.Fatalf("ToValue([1 NaN]) = %v, %v; want the slice itself", value.Any(), err)
 	}
 	if _, err := coerce([]float64{1}, ArrayOf(IntType)); err == nil || !strings.Contains(err.Error(), "want array<int>") {
 		t.Fatalf("coerce([1], array<int>) error = %v, want one containing %q", err, "want array<int>")

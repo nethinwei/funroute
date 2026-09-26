@@ -394,14 +394,8 @@ func (r *Runtime) RunValues(ctx context.Context, args []Value) (Value, error) {
 
 // runValues is RunValues with a Batch's answers for the program's calls.
 func (r *Runtime) runValues(ctx context.Context, args []Value, prefetched []Prefetched) (Value, error) {
-	// No invariant re-check here. A Value cannot hold a NaN in the first
-	// place: every public constructor rejects one where it enters —
-	// funroute.Float is CheckedFloat, ToValue goes through checkFloats, and
-	// Array/Dict/Record validate what they pack. Scanning again on every
-	// call made a 65536-element vector cost 16µs instead of 200ns, and it
-	// never protected the one case it could not see anyway — a host that
-	// mutates a backing it promised to treat as read-only can do that just
-	// as well after this line.
+	// Nothing in a value is looked at again here: a float may be any float
+	// IEEE 754 has, so the only thing to hold arguments to is their kinds.
 	if err := r.checkKinds(args, false); err != nil {
 		return Value{}, err
 	}
@@ -509,7 +503,7 @@ func plainScalar(raw any, kind Kind) (Value, bool) {
 	case bool:
 		return Bool(raw), kind == BoolKind
 	case float64:
-		return Float(raw), kind == FloatKind && finite(raw)
+		return Float(raw), kind == FloatKind
 	}
 	return Value{}, false
 }

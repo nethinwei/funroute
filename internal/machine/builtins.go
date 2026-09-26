@@ -3,7 +3,7 @@ package machine
 import (
 	"cmp"
 	"context"
-	"fmt"
+	"errors"
 	"math"
 	"strconv"
 	"strings"
@@ -138,12 +138,12 @@ var arithmetic = []struct {
 	mixed                    func(a, b float64) (Value, error)
 }{
 	{"add", "加法 / 拼接", "数值相加或字符串拼接，具体类型由上下文自动推导。", evalIntAdd, evalFloatAdd,
-		func(a, b float64) (Value, error) { return finiteResult(a+b, "add") }},
+		func(a, b float64) (Value, error) { return Float(a + b), nil }},
 	{"sub", "减法", "两个同类型数值相减，具体类型由上下文自动推导。", evalIntSub, evalFloatSub,
-		func(a, b float64) (Value, error) { return finiteResult(a-b, "sub") }},
+		func(a, b float64) (Value, error) { return Float(a - b), nil }},
 	{"mul", "乘法", "两个同类型数值相乘，具体类型由上下文自动推导。", evalIntMul, evalFloatMul,
-		func(a, b float64) (Value, error) { return finiteResult(a*b, "mul") }},
-	{"div", "除法", "两个同类型数值相除；除数不能为零。", evalIntDiv, evalFloatDiv, floatDiv},
+		func(a, b float64) (Value, error) { return Float(a * b), nil }},
+	{"div", "除法", "两个同类型数值相除；整数除数不能为零，浮点数按 IEEE 754：除以零得到无穷大，0.0 / 0.0 得到 NaN。", evalIntDiv, evalFloatDiv, floatDiv},
 }
 
 func registerArithmetic(registry *Registry) {
@@ -233,12 +233,12 @@ func registerFloatConversions(registry *Registry) {
 		}
 		return Float(value), nil
 	})
-	registerConversion(registry, "float", StringType, FloatType, "转为浮点数", "解析有限浮点数字符串。", func(_ context.Context, args []Value) (Value, error) {
+	registerConversion(registry, "float", StringType, FloatType, "转为浮点数", "解析浮点数字符串；NaN、Inf 照常读出，超出范围的得到无穷大。", func(_ context.Context, args []Value) (Value, error) {
 		value, err := strconv.ParseFloat(strings.TrimSpace(args[0].s), 64)
-		if err != nil {
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
 			return Value{}, kit.Errorf(ErrArithmetic, "cannot convert %q to float", args[0].s)
 		}
-		return CheckedFloat(value)
+		return Float(value), nil
 	})
 }
 
@@ -352,29 +352,19 @@ func evalIntDiv(_ context.Context, args []Value) (Value, error) {
 }
 
 func evalFloatAdd(_ context.Context, args []Value) (Value, error) {
-	return finiteResult(args[0].f+args[1].f, "add")
+	return Float(args[0].f + args[1].f), nil
 }
 func evalFloatSub(_ context.Context, args []Value) (Value, error) {
-	return finiteResult(args[0].f-args[1].f, "sub")
+	return Float(args[0].f - args[1].f), nil
 }
 func evalFloatMul(_ context.Context, args []Value) (Value, error) {
-	return finiteResult(args[0].f*args[1].f, "mul")
+	return Float(args[0].f * args[1].f), nil
 }
 
 func evalFloatDiv(_ context.Context, args []Value) (Value, error) {
 	return floatDiv(args[0].f, args[1].f)
 }
 
-func floatDiv(a, b float64) (Value, error) {
-	if b == 0 {
-		return Value{}, errDivisionByZero
-	}
-	return finiteResult(a/b, "div")
-}
-
-func finiteResult(value float64, operation string) (Value, error) {
-	if !finite(value) {
-		return Value{}, fmt.Errorf("%w: non-finite float result in %s", ErrArithmetic, operation)
-	}
-	return Float(value), nil
-}
+// floatDiv is a/b as IEEE 754 has it: a division by zero is an infinity,
+// or NaN for 0/0.
+func floatDiv(a, b float64) (Value, error) { return Float(a / b), nil }

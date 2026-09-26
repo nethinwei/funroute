@@ -37,24 +37,18 @@ func intOp(op rop, a, b int64) (int64, bool) {
 	return 0, false
 }
 
-// floatOp is the float operation op of a and b, refusing a result that is
-// not finite — tested, as setFloat tests it, with no arithmetic on it.
-func floatOp(op rop, a, b float64) (float64, bool) {
-	var value float64
+// floatOp is the float operation op of a and b, which always answers, as
+// setFloat does.
+func floatOp(op rop, a, b float64) float64 {
 	switch op {
 	case rAddF:
-		value = a + b
+		return a + b
 	case rSubF:
-		value = a - b
+		return a - b
 	case rMulF:
-		value = a * b
-	case rDivF:
-		if b == 0 {
-			return 0, false
-		}
-		value = a / b
+		return a * b
 	}
-	return value, math.Abs(value) <= math.MaxFloat64
+	return a / b
 }
 
 // eval runs the operation over the first limit items, those alive, and is
@@ -73,7 +67,7 @@ func (o *vecOp) eval(limit int, alive []bool) int {
 		case rIntToF:
 			return o.toFloats(limit, alive)
 		}
-		return o.floats(limit, alive)
+		return o.floats(limit)
 	}
 	return o.bools(limit)
 }
@@ -134,14 +128,11 @@ func (o *vecOp) mods(limit int, alive []bool) int {
 	return limit
 }
 
-func (o *vecOp) floats(limit int, alive []bool) int {
+// floats runs a float operation, which never fails.
+func (o *vecOp) floats(limit int) int {
 	a, b, dst := o.a, o.b, o.dst.floats
 	for i := range limit {
-		value, ok := floatOp(o.op, a.float(i), b.float(i))
-		if !ok && alive[i] {
-			return i
-		}
-		dst[i] = value
+		dst[i] = floatOp(o.op, a.float(i), b.float(i))
 	}
 	return limit
 }

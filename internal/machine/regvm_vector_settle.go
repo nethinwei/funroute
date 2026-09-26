@@ -70,31 +70,22 @@ func (r *vecRun) foldItems(n int) int {
 		if alive != nil && !alive[i] {
 			continue
 		}
-		var ok bool
-		if r.acc.kind == vecInt {
-			r.acc.i, ok = foldInt(run.foldOp, r.acc.i, run.fold.int(i))
-		} else {
-			r.acc.f, ok = foldFloat(run.foldOp, r.acc.f, run.fold.float(i))
+		if r.acc.kind != vecInt {
+			r.acc.f = floatOp(run.foldOp, r.acc.f, run.fold.float(i))
+			continue
 		}
-		if !ok {
+		var ok bool
+		if r.acc.i, ok = foldInt(run.foldOp, r.acc.i, run.fold.int(i)); !ok {
 			return i
 		}
 	}
 	return n
 }
 
-// foldInt and foldFloat are the fold's step: the answer as it was when the
-// step fails.
+// foldInt is an int fold's step: the answer as it was when the step fails.
+// A float's step never fails.
 func foldInt(op rop, answer, value int64) (int64, bool) {
 	next, ok := intOp(op, answer, value)
-	if !ok {
-		return answer, false
-	}
-	return next, true
-}
-
-func foldFloat(op rop, answer, value float64) (float64, bool) {
-	next, ok := floatOp(op, answer, value)
 	if !ok {
 		return answer, false
 	}

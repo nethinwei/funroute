@@ -17,7 +17,7 @@ func TestManifestJSONShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "f39f0fd022cb11732826f953b4aa7b49ed53ee4e1207946bcebebba3b240d68d"
+	const want = "a5d731c0eb21ef4bd46a2d3e64d48b6a7ac66265877d9e7bbe26bcec1388ee83"
 	if got := fmt.Sprintf("%x", sha256.Sum256(encoded)); got != want {
 		t.Fatalf("sha256(json.Marshal(manifest)) = %s, want %s", got, want)
 	}

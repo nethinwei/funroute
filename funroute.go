@@ -40,19 +40,17 @@ type (
 )
 
 // Value constructors. Array and Dict check and pack a slice of values; a host
-// that already holds a Go container uses ToValue and keeps its backing.
+// that already holds a Go container uses ToValue and keeps its backing. A
+// float is any float IEEE 754 has, NaN and the infinities included.
 var (
 	Int    = machine.Int
+	Float  = machine.Float
 	String = machine.String
 	Bool   = machine.Bool
 	Array  = machine.Array
 	Record = machine.Record
 	Dict   = machine.Dict
 )
-
-// Float rejects NaN and infinities at the public boundary. Returning an error
-// keeps invalid host data from entering a Runtime through RunValues.
-func Float(value float64) (Value, error) { return machine.CheckedFloat(value) }
 
 // ToValue wraps a Go value — a []float64 becomes an array<float> holding that
 // very slice — and FromValue hands the backing back out: the host boundary is
@@ -409,9 +407,10 @@ var (
 	// ErrNoFxRate is a conversion whose using has no quote between the two
 	// currencies, either way. It is data not at hand, so fallback takes it.
 	ErrNoFxRate = machine.ErrNoFxRate
-	// ErrArithmetic is arithmetic with no answer: an overflow, a division by
-	// zero, a float that is not finite, an exchange rate that is not
-	// positive. fallback does not take it.
+	// ErrArithmetic is arithmetic with no answer: an int overflow, an int
+	// division by zero, an exchange rate that is not positive; a float has
+	// an answer for everything, as IEEE 754 has it. fallback does not take
+	// it.
 	ErrArithmetic = machine.ErrArithmetic
 	// ErrDomain is data an operation has no answer for: an index past the
 	// end, a missing key, the first of an empty array, two arrays that were

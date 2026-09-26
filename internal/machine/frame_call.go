@@ -111,7 +111,7 @@ func (f *frame) invoke(call int, function *RegisteredFunction, callArgs []Value,
 }
 
 // hostResult holds a host function's result to the call's type: declared
-// currencies, the type and the invariants.
+// currencies and the type.
 func (f *frame) hostResult(function *RegisteredFunction, value Value, typ *Type) error {
 	if table := f.runtime.money.table; table != nil {
 		if err := declaredValue(table, value, true); err != nil {
@@ -120,9 +120,6 @@ func (f *frame) hostResult(function *RegisteredFunction, value Value, typ *Type)
 	}
 	if !value.hasType(*typ) {
 		return f.resultTypeError(function, value, *typ)
-	}
-	if err := value.validateInvariant(); err != nil {
-		return fmt.Errorf("%s: %w", function.Name, f.functionError(function, fmt.Errorf("invalid result: %w", err)))
 	}
 	return nil
 }

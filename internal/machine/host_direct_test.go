@@ -113,7 +113,7 @@ func sameOutcome(got Value, gotErr error, want Value, wantErr error) bool {
 	if gotErr != nil || wantErr != nil {
 		return gotErr != nil && wantErr != nil && gotErr.Error() == wantErr.Error()
 	}
-	return got.Equal(want)
+	return identical(got, want)
 }
 
 // argumentsFor is a few calls' arguments of the parameters' types, the
@@ -177,7 +177,7 @@ func TestDirectBatchesAnswerAsReflection(t *testing.T) {
 		for _, calls := range [][][]Value{{}, argumentsFor(single.params)} {
 			want, wantErr := reflected.callBatch(t.Context(), calls)
 			got, gotErr := direct(t.Context(), calls)
-			if (gotErr == nil) != (wantErr == nil) || gotErr != nil && gotErr.Error() != wantErr.Error() || !slices.EqualFunc(got, want, Value.Equal) {
+			if (gotErr == nil) != (wantErr == nil) || gotErr != nil && gotErr.Error() != wantErr.Error() || !slices.EqualFunc(got, want, identical) {
 				t.Errorf("%T on %d calls: directly %v, %v; by reflection %v, %v", pair.batch, len(calls), got, gotErr, want, wantErr)
 			}
 		}

@@ -102,16 +102,11 @@ func pureBinary(fn any) pureCall {
 	return nil
 }
 
-// floatInto writes a float answer, refused when it is not finite as the
-// ordinary call refuses it.
+// floatInto writes a float answer.
 func floatInto(regs []Value, dst int32, r float64, err error) error {
 	if err != nil {
 		return err
 	}
-	value, err := CheckedFloat(r)
-	if err != nil {
-		return err
-	}
-	regs[dst] = value
+	regs[dst] = Float(r)
 	return nil
 }

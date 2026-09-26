@@ -127,17 +127,15 @@ func TestPackRefusesWhatHasNoAnswer(t *testing.T) {
 	}
 }
 
-// Arithmetic with no answer — an overflow, a float past its range, an int no
-// float fits — is ErrArithmetic wherever it happens, so fallback does not
-// take it: the arguments make each one fail at run time, not while compiling.
+// Arithmetic with no answer — an int overflow, an int no float fits, a
+// float no int fits — is ErrArithmetic wherever it happens, so fallback does
+// not take it: the arguments make each one fail at run time, not while
+// compiling.
 func TestArithmeticWithNoAnswerIsNotTakenByFallback(t *testing.T) {
 	t.Parallel()
 	ints := funroute.ArgSpec{Name: "xs", Type: funroute.ArrayOf(funroute.IntType)}
-	floats := funroute.ArgSpec{Name: "fs", Type: funroute.ArrayOf(funroute.FloatType)}
 	x := funroute.ArgSpec{Name: "x", Type: funroute.IntType}
 	f := funroute.ArgSpec{Name: "f", Type: funroute.FloatType}
-	huge := map[string]any{"fs": []float64{1e308, 1e308}}
-	apart := map[string]any{"fs": []float64{1e308, -1e308}}
 	for _, test := range []struct {
 		source string
 		args   map[string]any
@@ -145,12 +143,7 @@ func TestArithmeticWithNoAnswerIsNotTakenByFallback(t *testing.T) {
 	}{
 		{`fallback(abs(x), 7)`, map[string]any{"x": int64(math.MinInt64)}, x},
 		{`fallback(pow(x, 0 - 1), 7)`, map[string]any{"x": 2}, x},
-		{`fallback(pow(f, 2.0), 7.0)`, map[string]any{"f": 1e200}, f},
 		{`fallback(round(f), 7)`, map[string]any{"f": 1e300}, f},
-		{`fallback(avg(fs), 7.0)`, huge, floats},
-		{`fallback(median(fs), 7.0)`, huge, floats},
-		{`fallback(stddev(fs), 7.0)`, apart, floats},
-		{`fallback(deltas(fs), [7.0])`, apart, floats},
 		{`fallback(deltas(xs), [7])`, map[string]any{"xs": []int64{math.MaxInt64, -2}}, ints},
 		{`fallback(bool(s), false)`, map[string]any{"s": "yes"}, funroute.ArgSpec{Name: "s", Type: funroute.StringType}},
 	} {
@@ -159,6 +152,59 @@ func TestArithmeticWithNoAnswerIsNotTakenByFallback(t *testing.T) {
 			value, err := run(t, test.source, test.args, test.spec)
 			if !errors.Is(err, funroute.ErrArithmetic) {
 				t.Fatalf("%s with %v = %v, %v, want ErrArithmetic", test.source, test.args, value, err)
+			}
+		})
+	}
+}
+
+// A float past its range is an infinity, as IEEE 754 has it, in std as in
+// the kernel: nothing fails.
+func TestFloatsPastTheirRangeAreInfinities(t *testing.T) {
+	t.Parallel()
+	floats := funroute.ArgSpec{Name: "fs", Type: funroute.ArrayOf(funroute.FloatType)}
+	huge := map[string]any{"fs": []float64{1e308, 1e308}}
+	apart := map[string]any{"fs": []float64{1e308, -1e308}}
+	for _, test := range []struct {
+		source string
+		args   map[string]any
+		want   float64
+	}{
+		{`pow(fs[0], 2.0)`, huge, math.Inf(1)},
+		{`avg(fs)`, huge, math.Inf(1)},
+		{`median(fs)`, huge, math.Inf(1)},
+		{`sum(fs)`, huge, math.Inf(1)},
+		{`stddev(fs)`, apart, math.Inf(1)},
+		{`deltas(fs)[0]`, apart, math.Inf(-1)},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			value, err := run(t, test.source, test.args, floats)
+			if got, _ := value.(float64); err != nil || got != test.want {
+				t.Fatalf("%s with %v = %v, %v; want %v", test.source, test.args, value, err, test.want)
+			}
+		})
+	}
+}
+
+// A NaN is what Go makes of it: min and max answer it and arg_min and
+// arg_max its position, sorting puts it first, and no comparison — in,
+// index_of, unique — finds it equal to anything, itself included.
+func TestNaNIsAsGoHasIt(t *testing.T) {
+	t.Parallel()
+	floats := funroute.ArgSpec{Name: "fs", Type: funroute.ArrayOf(funroute.FloatType)}
+	args := map[string]any{"fs": []float64{1, math.NaN(), -1}}
+	nan := func(v any) bool { f, ok := v.(float64); return ok && math.IsNaN(f) }
+	is := func(want any) func(any) bool { return func(v any) bool { return v == want } }
+	for source, holds := range map[string]func(any) bool{
+		`min(fs)`: nan, `max(fs)`: nan, `min(fs[1], 2.0)`: nan,
+		`arg_min(fs)`: is(int64(1)), `arg_max(fs)`: is(int64(1)),
+		`sort(fs)[0]`: nan, `sort(fs)[1]`: is(-1.0),
+		`fs[1] in fs`: is(false), `len(unique(fs))`: is(int64(3)), `fs[1] != fs[1]`: is(true),
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if value, err := run(t, source, args, floats); err != nil || !holds(value) {
+				t.Fatalf("%s with fs = [1 NaN -1] = %v, %v", source, value, err)
 			}
 		})
 	}

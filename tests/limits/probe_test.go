@@ -2,6 +2,8 @@ package limits
 
 import (
 	"encoding/json"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -48,6 +50,9 @@ func result(t *testing.T, registry *funroute.Registry, source, contract, args st
 	value, err := run(t, registry, artifact, args)
 	if err != nil {
 		return "运行时 `" + errorName(err) + "`", false
+	}
+	if f, ok := value.Float(); ok && (math.IsNaN(f) || math.IsInf(f, 0)) {
+		return "`" + strconv.FormatFloat(f, 'g', -1, 64) + "`（JSON 写不出）", true
 	}
 	encoded, err := registry.EncodeJSON(value)
 	if err != nil {

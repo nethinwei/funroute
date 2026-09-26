@@ -116,9 +116,6 @@ func Array(elem Type, values []Value) (Value, error) {
 		if !value.hasType(elem) {
 			return Value{}, fmt.Errorf("array item %d has type %s, want %s", i, value.Type().Summary(), elem.Summary())
 		}
-		if err := value.validateInvariant(); err != nil {
-			return Value{}, fmt.Errorf("array item %d: %w", i, err)
-		}
 		builder.add(value)
 	}
 	return builder.finish(), nil
@@ -137,9 +134,6 @@ func Record(typ Type, fields []Value) (Value, error) {
 		if !field.hasType(typ.fields[i].typ) {
 			return Value{}, fmt.Errorf("field %q has type %s, want %s",
 				typ.fields[i].name, field.Type().Summary(), typ.fields[i].typ.Summary())
-		}
-		if err := field.validateInvariant(); err != nil {
-			return Value{}, fmt.Errorf("field %q: %w", typ.fields[i].name, err)
 		}
 		record.fields[i] = field
 	}
@@ -164,9 +158,6 @@ func Dict(elem Type, entries map[string]Value) (Value, error) {
 	for key, value := range entries {
 		if !value.hasType(elem) {
 			return Value{}, fmt.Errorf("dictionary entry %q has type %s, want %s", key, value.Type(), elem)
-		}
-		if err := value.validateInvariant(); err != nil {
-			return Value{}, fmt.Errorf("dictionary entry %q: %w", key, err)
 		}
 	}
 	return packDict(elem, entries), nil
@@ -541,9 +532,9 @@ func compareEqual(left, right Value) (Value, error) {
 	return Bool(left.Equal(right)), nil
 }
 
-// CheckedFloat builds a float value, refusing the non-finite ones: a routing
-// decision has no meaning for NaN or infinity, so they are rejected where they
-// enter rather than checked at every use.
+// CheckedFloat builds a float value, refusing the non-finite ones: what a
+// float literal reads as, which a literal past the range of a float is not.
+// Every other float may be NaN or an infinity, as IEEE 754 has them.
 func CheckedFloat(value float64) (Value, error) {
 	if !finite(value) {
 		return Value{}, errors.New("non-finite floats are not supported")
@@ -553,21 +544,6 @@ func CheckedFloat(value float64) (Value, error) {
 
 // finite reports a float that is neither NaN nor an infinity.
 func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
-
-func (v Value) validateInvariant() error {
-	switch box := v.box.(type) {
-	case []float64:
-		return checkFloats(box)
-	case map[string]float64:
-		return checkFloatMap(box)
-	case *recordValue, *nestedArray, *nestedDict:
-		return v.eachPart(false, Value.validateInvariant)
-	}
-	if v.kind == FloatKind && !finite(v.f) {
-		return errors.New("non-finite floats are not supported")
-	}
-	return nil
-}
 
 // nativeEqual compares two containers of one native backing of scalars —
 // no units to hold to, and a type that is the backing's — as Go compares

@@ -26,14 +26,14 @@ func TestVectorOpsAnswerAsTheKernel(t *testing.T) {
 				got, applies = Int(value), true
 			case rAddF, rSubF, rMulF, rDivF:
 				var value float64
-				value, ok = floatOp(kernel.op, args[0].f, args[1].f)
+				value, ok = floatOp(kernel.op, args[0].f, args[1].f), true
 				got, applies = Float(value), true
 			case rIntToF:
 				var value float64
 				value, ok = intFloat(args[0].i)
 				got, applies = Float(value), true
 			}
-			if applies && (ok != (wantErr == nil) || ok && !got.Equal(want)) {
+			if applies && (ok != (wantErr == nil) || ok && !identical(got, want)) {
 				t.Errorf("%s%v: the vector gives %v, %v; the function %v, %v", key, args, got.Any(), ok, want.Any(), wantErr)
 			}
 		}

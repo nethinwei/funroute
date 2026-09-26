@@ -24,8 +24,12 @@ var probeTables = map[string][]probe{
 	"float": {
 		{shown: "`0.1 + 0.2`", source: "0.1 + 0.2", note: "二进制近似"},
 		{shown: "`0.1 + 0.2 == 0.3`", source: "0.1 + 0.2 == 0.3", note: "`==` 是精确比较"},
-		{shown: "`1e308 * 10.0`", source: "a * 10.0", contract: "a: float", args: `{"a": 1e308}`, note: "非有限：NaN 与 Infinity 进不来也出不去"},
+		{shown: "`1e308 * 10.0`", source: "a * 10.0", contract: "a: float", args: `{"a": 1e308}`, note: "IEEE 754：溢出是无穷大，不报错"},
 		{shown: "`1.0 / 0.0`", source: "a / 0.0", contract: "a: float", args: `{"a": 1.0}`},
+		{shown: "`0.0 / 0.0`", source: "a / 0.0", contract: "a: float", args: `{"a": 0.0}`},
+		{shown: "`NaN == NaN`", source: "a / 0.0 == a / 0.0", contract: "a: float", args: `{"a": 0.0}`, note: "NaN 不等于任何值，包括它自己"},
+		{shown: "`int(NaN)`", source: "int(a / 0.0)", contract: "a: float", args: `{"a": 0.0}`, note: "没有这个 int"},
+		{shown: "`sort([2.0, NaN, 1.0])`", source: "sort([2.0, a / 0.0, 1.0])[0]", contract: "a: float", args: `{"a": 0.0}`, note: "排序按全序，NaN 排在最前"},
 		{shown: "字面量 `1e309`", source: "1e309", note: "超出 float64"},
 		{shown: "字面量 `1e-400`", source: "1e-400", note: "写下的数不是一个 float64，错误里给出最近的那个"},
 		{shown: "字面量 `0.1000000000000000055511151231257827`", source: "0.1000000000000000055511151231257827", note: "同上：它离 0.1 最近，但不是 0.1"},

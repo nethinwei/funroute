@@ -80,22 +80,22 @@ func TestProgramPassesVectorsThrough(t *testing.T) {
 }
 
 type mixedIn struct {
-	Amount int64     `funroute:"amount"`
-	Scores []float64 `funroute:"scores"`
+	Amount int64 `funroute:"amount"`
+	Count  uint  `funroute:"count"`
 }
 
-// Only what the program reads is converted — and a NaN that is read is still
-// refused where it enters.
+// Only what the program reads is converted — and a count no int holds that
+// is read is still refused where it enters.
 func TestProgramConvertsOnlyWhatItReads(t *testing.T) {
 	t.Parallel()
-	in := mixedIn{Amount: 1, Scores: []float64{math.NaN()}}
+	in := mixedIn{Amount: 1, Count: math.MaxUint64}
 	ignores := bindProgram[mixedIn, int64](t, machine.CoreRegistry(), `amount + 1`)
 	if out, err := ignores.Run(t.Context(), &in); err != nil || out != 2 {
 		t.Fatalf("amount + 1 on %+v = %d, %v, want 2", in, out, err)
 	}
-	reads := bindProgram[mixedIn, float64](t, machine.CoreRegistry(), `scores[0]`)
+	reads := bindProgram[mixedIn, int64](t, machine.CoreRegistry(), `count + 1`)
 	if _, err := reads.Run(t.Context(), &in); !errors.Is(err, machine.ErrContract) {
-		t.Fatalf("a NaN entered the program: %v, want ErrContract", err)
+		t.Fatalf("a count past int64 entered the program: %v, want ErrContract", err)
 	}
 }
 

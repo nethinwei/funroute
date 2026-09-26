@@ -1,7 +1,6 @@
 package machine
 
 import (
-	"fmt"
 	"reflect"
 	"slices"
 	"unsafe"
@@ -39,32 +38,11 @@ func viewable(plan *codec) bool {
 	return true
 }
 
-// viewRecords makes view the host's slice at p, and is the array there. A
-// float that is not finite is refused here, before the program runs, in the
-// words loading the slice would have used.
-func viewRecords(view *recordsView, plan *codec, p unsafe.Pointer) (Value, error) {
+// viewRecords makes view the host's slice at p, and is the array there.
+func viewRecords(view *recordsView, plan *codec, p unsafe.Pointer) Value {
 	header := (*sliceHeader)(p)
-	if slices.ContainsFunc(plan.elem.fields, func(field fieldCodec) bool { return field.plain == reflect.Float64 }) {
-		for i := range header.len {
-			if item := unsafe.Add(header.data, uintptr(i)*plan.stride); !finiteFields(plan.elem, item) {
-				_, err := plan.elem.load(item)
-				return Value{}, fmt.Errorf("item %d: %w", i, err)
-			}
-		}
-	}
 	*view = recordsView{data: header.data, length: header.len, plan: plan}
-	return Value{kind: ArrayKind, box: view}, nil
-}
-
-// finiteFields reports whether every float field of the record at p is
-// finite.
-func finiteFields(plan *codec, p unsafe.Pointer) bool {
-	for _, field := range plan.fields {
-		if field.plain == reflect.Float64 && !finite(*(*float64)(unsafe.Add(p, field.offset))) {
-			return false
-		}
-	}
-	return true
+	return Value{kind: ArrayKind, box: view}
 }
 
 // load loads item index into record, the loop's own.
@@ -74,7 +52,7 @@ func (v *recordsView) load(index int, record *recordValue) {
 	record.typ = &plan.typ
 	record.fields = slices.Grow(record.fields[:0], len(plan.fields))[:len(plan.fields)]
 	for i, field := range plan.fields {
-		// Every field is plain, and every float was found finite.
+		// Every field is plain.
 		loadPlain(field.plain, unsafe.Add(item, field.offset), &record.fields[i])
 	}
 }

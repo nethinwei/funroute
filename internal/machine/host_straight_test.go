@@ -2,7 +2,6 @@ package machine_test
 
 import (
 	"context"
-	"errors"
 	"math"
 	"testing"
 
@@ -96,7 +95,7 @@ func assertStraightRun[Out any](t *testing.T, source string, program *machine.Pr
 	want, wantErr := program.Runtime().RunValues(t.Context(), args)
 	if (gotErr == nil) != (wantErr == nil) || gotErr != nil && gotErr.Error() != wantErr.Error() {
 		t.Errorf("%s on %+v: fails with %v; by the ordinary run %v", source, *in, gotErr, wantErr)
-	} else if gotErr == nil && must(machine.ToValue(got)).Any() != want.Any() {
+	} else if gotErr == nil && !machine.Identical(must(machine.ToValue(got)), want) {
 		t.Errorf("%s on %+v: %v; by the ordinary run %v", source, *in, got, want.Any())
 	}
 	if machine.IdleFrameHoldsPointers(program.Runtime()) {
@@ -104,8 +103,8 @@ func assertStraightRun[Out any](t *testing.T, source string, program *machine.Pr
 	}
 }
 
-// A float that is not finite is refused as the ordinary run refuses it, and
-// the rule runs straight with no allocation.
+// A float that is not finite runs straight as it runs the ordinary way — a
+// NaN in is a NaN out — and the rule runs straight with no allocation.
 func TestAStraightProgramIsHeldAsTheOrdinaryRun(t *testing.T) {
 	binding, err := compile.Bind[straightIn, float64](machine.CoreRegistry())
 	if err != nil {
@@ -119,10 +118,10 @@ func TestAStraightProgramIsHeldAsTheOrdinaryRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, got := straight.Run(t.Context(), &straightIn{X: math.NaN()})
-	_, want := ordinary.Run(t.Context(), &straightIn{X: math.NaN()})
-	if got == nil || want == nil || got.Error() != want.Error() || !errors.Is(got, machine.ErrContract) {
-		t.Errorf("straight: %v; ordinary: %v; want the same ErrContract", got, want)
+	got, gotErr := straight.Run(t.Context(), &straightIn{X: math.NaN()})
+	want, wantErr := ordinary.Run(t.Context(), &straightIn{X: math.NaN()})
+	if gotErr != nil || wantErr != nil || !math.IsNaN(got) || !math.IsNaN(want) {
+		t.Errorf("straight: %v, %v; ordinary: %v, %v; want NaN from both", got, gotErr, want, wantErr)
 	}
 	in, ctx := &straightIn{X: 2}, t.Context()
 	if allocs := testing.AllocsPerRun(100, func() {

@@ -107,9 +107,9 @@ func valueOf(in *request, param funroute.Parameter) (funroute.Value, error) {
 	case "b":
 		return funroute.Int(in.B), nil
 	case "f":
-		return funroute.Float(in.F)
+		return funroute.Float(in.F), nil
 	case "g":
-		return funroute.Float(in.G)
+		return funroute.Float(in.G), nil
 	case "s":
 		return funroute.String(in.S), nil
 	case "t":
@@ -146,11 +146,7 @@ func channelsValue(typ funroute.Type, chans []channel) (funroute.Value, error) {
 	elem, _ := typ.Elem()
 	items := make([]funroute.Value, len(chans))
 	for i, c := range chans {
-		risk, err := funroute.Float(c.Risk)
-		if err != nil {
-			return funroute.Value{}, fmt.Errorf("item %d: %w", i, err)
-		}
-		item, err := funroute.Record(elem, []funroute.Value{funroute.String(c.Name), funroute.Int(c.Fee), funroute.Bool(c.OK), risk})
+		item, err := funroute.Record(elem, []funroute.Value{funroute.String(c.Name), funroute.Int(c.Fee), funroute.Bool(c.OK), funroute.Float(c.Risk)})
 		if err != nil {
 			return funroute.Value{}, err
 		}

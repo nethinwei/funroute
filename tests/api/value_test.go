@@ -61,7 +61,7 @@ func TestHostNamesTheValueTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	weights, err := funroute.Dict(funroute.FloatType, map[string]funroute.Value{"adyen": mustFloat(t, 0.6)})
+	weights, err := funroute.Dict(funroute.FloatType, map[string]funroute.Value{"adyen": funroute.Float(0.6)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,15 +93,6 @@ func TestHostNamesTheValueTypes(t *testing.T) {
 	}
 }
 
-func mustFloat(t *testing.T, value float64) funroute.Value {
-	t.Helper()
-	out, err := funroute.Float(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
 func mustParseType(t *testing.T, text string) funroute.Type {
 	t.Helper()
 	typ, err := funroute.ParseType(text)
@@ -122,15 +113,15 @@ func consoleRegistry(t *testing.T) *funroute.Registry {
 	return registry
 }
 
-func TestPublicFloatRejectsNonFiniteValues(t *testing.T) {
+// A float is any float IEEE 754 has: NaN and the infinities go in and come
+// out as they are.
+func TestPublicFloatHoldsEveryFloat(t *testing.T) {
 	t.Parallel()
-	if _, err := funroute.Float(math.NaN()); err == nil {
-		t.Fatal("Float(NaN) error = nil, want an error")
-	}
-	if value, err := funroute.Float(0.75); err != nil {
-		t.Fatal(err)
-	} else if number, _ := value.Float(); number != 0.75 {
-		t.Fatalf("Float(0.75).Float() = %v, want 0.75", number)
+	for _, want := range []float64{0.75, math.Copysign(0, -1), math.Inf(1), math.Inf(-1), math.NaN()} {
+		got, ok := funroute.Float(want).Float()
+		if !ok || math.Float64bits(got) != math.Float64bits(want) {
+			t.Errorf("Float(%v).Float() = %v, %v; want %v, true", want, got, ok, want)
+		}
 	}
 }
 

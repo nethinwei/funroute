@@ -176,7 +176,7 @@ func outOfGo(registry *Registry, value reflect.Value, typ Type) (Value, error) {
 	case IntKind:
 		return outOfInt(value)
 	case FloatKind:
-		return CheckedFloat(value.Float())
+		return Float(value.Float()), nil
 	case StringKind:
 		return String(value.String()), nil
 	case EnumKind:

@@ -170,7 +170,7 @@ func subtractInts(left, right int64) (int64, error) {
 }
 
 func subtractFloats(left, right float64) (float64, error) {
-	return finiteIn("deltas", left-right)
+	return left - right, nil
 }
 
 // shapeSpecs are the array functions that are about the shape of a list

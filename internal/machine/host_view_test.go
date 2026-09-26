@@ -122,27 +122,27 @@ func TestAViewedArrayAllocatesNothing(t *testing.T) {
 	}
 }
 
-// A float that is not finite in a viewed array is refused before the program
-// runs, in the words loading the whole array uses.
+// A float that is not finite in a viewed array is read as loading the whole
+// array reads it: an infinity in the risks sums to one either way.
 func TestAViewedArrayIsHeldAsLoadingIt(t *testing.T) {
 	t.Parallel()
-	binding, err := compile.Bind[viewedIn, int64](viewedRegistry(t))
+	binding, err := compile.Bind[viewedIn, float64](viewedRegistry(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	viewed, err := binding.Compile(`reduce(c in channels, t = 0, t + c.fee)`)
+	viewed, err := binding.Compile(`reduce(c in channels, t = 0.0, t + c.risk)`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := binding.Compile(`len([[c] for c in channels])`)
+	loaded, err := binding.Compile(`reduce(c in [d for d in channels], t = 0.0, t + c.risk)`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	in := viewedInput()
 	in.Channels[5].Risk = math.Inf(1)
-	_, got := viewed.Run(t.Context(), in)
-	_, want := loaded.Run(t.Context(), in)
-	if got == nil || want == nil || got.Error() != want.Error() {
-		t.Errorf("viewed: %v; loaded: %v; want the same failure", got, want)
+	got, gotErr := viewed.Run(t.Context(), in)
+	want, wantErr := loaded.Run(t.Context(), in)
+	if gotErr != nil || wantErr != nil || !math.IsInf(got, 1) || !math.IsInf(want, 1) {
+		t.Errorf("viewed: %v, %v; loaded: %v, %v; want +Inf from both", got, gotErr, want, wantErr)
 	}
 }

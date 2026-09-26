@@ -162,3 +162,7 @@ func Promotions(r *Runtime) int { return len(r.reg.promotions) }
 
 // Straight reports whether p runs the shorter way (host_straight.go).
 func Straight[In, Out any](p *Program[In, Out]) bool { return p.straight }
+
+// Identical reports two values that are one value, NaN included
+// (identical).
+var Identical = identical

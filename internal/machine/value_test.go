@@ -2,9 +2,20 @@ package machine
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"testing"
 )
+
+// identical reports two values that are one value, as two ways of computing
+// it must agree: Equal, except that a NaN is the NaN it is — Equal, as ==,
+// holds no float equal to a NaN — and 0 and -0 are told apart.
+func identical(a, b Value) bool {
+	if a.kind == FloatKind && b.kind == FloatKind {
+		return math.Float64bits(a.f) == math.Float64bits(b.f) || a.f != a.f && b.f != b.f
+	}
+	return a.Equal(b) || a.kind == b.kind && fmt.Sprint(a.Any()) == fmt.Sprint(b.Any())
+}
 
 // What the VM builds has the same backing as what a host supplies, so an
 // extension sees a []float64 whichever way the array was made.
@@ -40,13 +51,17 @@ func TestBuiltArraysUseTheNativeBacking(t *testing.T) {
 	}
 }
 
-func TestValueConstructorsRejectNestedNonFiniteFloats(t *testing.T) {
+// A float that is not finite is a float like any other: the constructors
+// pack it as they pack the rest.
+func TestValueConstructorsHoldNonFiniteFloats(t *testing.T) {
 	t.Parallel()
-	if _, err := Array(FloatType, []Value{Float(math.Inf(1))}); err == nil {
-		t.Fatal("array accepted infinity")
+	array, err := Array(FloatType, []Value{Float(math.Inf(1))})
+	if items, _ := FromValue[[]float64](array); err != nil || len(items) != 1 || !math.IsInf(items[0], 1) {
+		t.Fatalf("Array([+Inf]) = %v, %v; want [+Inf]", items, err)
 	}
-	if _, err := Dict(FloatType, map[string]Value{"risk": Float(math.NaN())}); err == nil {
-		t.Fatal("dictionary accepted NaN")
+	dict, err := Dict(FloatType, map[string]Value{"risk": Float(math.NaN())})
+	if entries, _ := FromValue[map[string]float64](dict); err != nil || !math.IsNaN(entries["risk"]) {
+		t.Fatalf("Dict({risk: NaN}) = %v, %v; want {risk: NaN}", entries, err)
 	}
 }
 

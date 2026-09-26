@@ -94,7 +94,7 @@ CLI 一共六个子命令：
 |---|---|---|
 | `bool` | `true` | |
 | `int` | `42`、`1_000_000` | 有符号 64 位，溢出报错 |
-| `float` | `0.25` | float64，拒绝 NaN / Infinity |
+| `float` | `0.25` | float64，按 IEEE 754，NaN 与 ±Infinity 是合法的值 |
 | `string` | `"SGD"` | 必须是合法 UTF-8（原文与转义结果都查），JSON 风格转义 |
 | `array<T>` | `[1, 2, 3]` | 元素同型 |
 | `dict<T>` | `{"primary": 1}` | 键是字符串，值同型 |
@@ -630,14 +630,14 @@ decision, _ := program.Run(ctx, &request)
 
 `binding.Options()` 给出推出的 `CompileOptions`，控制台展示契约、语言服务检查程序都用它；`program.Artifact()` 交出编译好的 artifact，用来存库和发布。
 
-**为什么快**：`Program.Run` 不查名字、不反射、不拼 map 或 `[]Value`，参数按绑定时算好的偏移直接从 struct 读出，结果按下标写回 `Out`。程序**没读的参数不做任何转换**，所以一个宿主 struct 可以服务多条规则。代价是没读的参数也不检查（enum 成员资格、NaN 只对读到的参数检查）；只读几个 bool、int、float、string 字段的 record 参数也一样，只读那几个字段，其余字段不检查。规则看不到没读的值，结果不受影响。
+**为什么快**：`Program.Run` 不查名字、不反射、不拼 map 或 `[]Value`，参数按绑定时算好的偏移直接从 struct 读出，结果按下标写回 `Out`。程序**没读的参数不做任何转换**，所以一个宿主 struct 可以服务多条规则。代价是没读的参数也不检查（enum 成员资格只对读到的参数检查）；只读几个 bool、int、float、string 字段的 record 参数也一样，只读那几个字段，其余字段不检查。规则看不到没读的值，结果不受影响。
 
 剩下的分配都有名目。装载时的值流分析知道每个参数、每个数组去了哪里：只在程序里被读的，就地读、不分配；会交给宿主函数或放进结果的，才要自己的内存。
 
 | 参数 | 分配 |
 |---|---|
 | 标量、字符串 | 0 次 |
-| 程序只遍历、取长度或下标的原生切片（`[]int64`、`[]float64`、`[]string`、`[]bool`） | 0 次（切片头拷进帧，元素不复制；`[]float64` 仍做一遍 NaN 检查） |
+| 程序只遍历、取长度或下标的原生切片（`[]int64`、`[]float64`、`[]string`、`[]bool`） | 0 次（切片头拷进帧，元素不复制也不读） |
 | 只被遍历或取长度、循环里只读元素字段的 struct 切片（字段都是 bool、int、float、string） | 0 次（切片头拷进帧，每一轮把元素读进循环自带的 record） |
 | 其他切片或映射 | 1 次（装箱它的头，元素不复制） |
 | 程序只读字段的 record | 0 次（读进帧自带的 record；每次读都是一个 bool、int、float、string 字段时不建 record，只把读到的字段读进寄存器） |
@@ -656,7 +656,7 @@ decision, _ := program.Run(ctx, &request)
 
 **三条运行路径怎么选**：表单与 JSON 用 `Run(map)`；向量预先检查好、要反复复用的用 `RunValues`；服务的热路径用 `Program`。
 
-`Program` 每次运行都把读到的 `[]float64` 与 `map[string]float64` 检查一遍，拒绝 NaN 与 Infinity：值在进入语言时确立不变量，而宿主 struct 里的切片每次运行都是新进来的。这一遍只读、不复制，受内存带宽限制（65536 个元素约 16 µs）。同一个大向量要跨很多次运行复用，就用 `funroute.ToValue` 构造一次（在这里检查），再经 `RunValues` 传入，此后不再检查。没有"宿主担保、跳过检查"的开关：担保错了，`score > 0.8` 遇到 NaN 得 false，规则静默地走错分支。
+`[]float64` 与 `map[string]float64` 原样交给程序，不读也不复制：float 按 IEEE 754，NaN 与 ±Infinity 照常参与运算，所以边界上没有要检查的东西，长向量的开销与长度无关。规则要区分 NaN，就写 `x != x`（只有 NaN 不等于自己）。
 
 **载入别处编译的 artifact**：`Load` 按名字匹配，规则与 `Run(map)` 的边界相同。
 
@@ -845,7 +845,7 @@ fallback(primary.quote_v1(order), secondary.quote_v1(order), 0.0)
 | `ErrArithmetic` | 算术没有答案，见下 | 不接 |
 | `ErrDomain` | 数据上没有答案，见下 | 不接 |
 
-`ErrArithmetic` 包括：溢出、除零、float 非有限、汇率不为正或同币种汇率不是 1、比例或汇率的分子分母放不进 int64，转换没有答案（`int("x")`、`int(2.5)`、`bool("yes")`、`ratio("abc")`、float 表示不了的 int），以及数值参数超出它的取值范围（`range` 的步长与长度、`percentile` 的比例、`pad_left` 的宽度、`allocate` 的份数与权重、`pow` 的负整数指数）。
+`ErrArithmetic` 包括：整数溢出、整数除零、汇率不为正或同币种汇率不是 1、比例或汇率的分子分母放不进 int64，转换没有答案（`int("x")`、`int(2.5)`、`bool("yes")`、`ratio("abc")`、float 表示不了的 int），以及数值参数超出它的取值范围（`range` 的步长与长度、`percentile` 的比例、`pad_left` 的宽度、`allocate` 的份数与权重、`pow` 的负整数指数）。
 
 `ErrDomain` 包括：下标越界、字典没有这个键、空数组的 `first`/`last`/`avg`/`median`/极值、要逐项对齐的两个数组长度不同（`sort_by`、`group_by`）、字典推导产生重复的键、数组里没有要找的元素。要兜底就先判断（`len(xs) > 0`、`"k" in d`）或写 `get(d, "k", 默认值)`，`fallback` 不接它。
 
@@ -1165,7 +1165,7 @@ quote          = expression                         // 一个 fxrate 或 array<f
 |---|---|---|---|
 | `bool` | `true` / `false` | — | — |
 | `int` | −9,223,372,036,854,775,808 ~ 9,223,372,036,854,775,807（约 ±9.22×10¹⁸） | 精确 | 溢出、除零是 `ErrArithmetic`；整数除法向零截断 |
-| `float` | IEEE 754 float64，约 ±1.8×10³⁰⁸，15–17 位有效数字 | 不精确：`0.1 + 0.2` 是 `0.30000000000000004` | NaN / Infinity 进不来，算出来也报错 |
+| `float` | IEEE 754 float64，约 ±1.8×10³⁰⁸，15–17 位有效数字 | 不精确：`0.1 + 0.2` 是 `0.30000000000000004` | IEEE 754：溢出是 ±Infinity，`0.0 / 0.0` 是 NaN，都不报错；NaN 不等于任何值（包括自己）；排序按全序，NaN 排最前；`min`/`max` 遇到 NaN 得 NaN；JSON 写不出非有限值 |
 | `string` | 任意长度的合法 UTF-8 | 精确 | 下标与 `len` 按码点数 |
 | `array<T>` / `dict<T>` | 长度只受内存限制；字典的键是字符串 | — | 越界、缺键报错 |
 | `record{…}` | 字段固定，按声明顺序存放 | — | 缺字段是另一个类型 |

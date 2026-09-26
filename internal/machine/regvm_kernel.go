@@ -76,14 +76,9 @@ func modI(regs []Value, in *rinstr) bool {
 	return true
 }
 
-// setFloat writes a float result, refusing one that is not finite. The test
-// does no arithmetic with the value: x-x would do, but the compiler may fuse
-// the product before it into one instruction that does not round, and x*y -
-// x*y is then the rounding error, not zero.
+// setFloat writes a float result. A float operation always answers, as
+// IEEE 754 does: an overflow is an infinity, 0/0 is NaN.
 func setFloat(regs []Value, c int32, value float64) bool {
-	if math.Abs(value) > math.MaxFloat64 || value != value {
-		return false
-	}
 	regs[c] = Value{kind: FloatKind, f: value}
 	return true
 }
@@ -101,9 +96,6 @@ func mulF(regs []Value, in *rinstr) bool {
 }
 
 func divF(regs []Value, in *rinstr) bool {
-	if regs[in.b].f == 0 {
-		return false
-	}
 	return setFloat(regs, in.c, regs[in.a].f/regs[in.b].f)
 }
 

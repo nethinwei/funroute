@@ -226,20 +226,12 @@ func backing[T any](v *Value) []T {
 	return []T{}
 }
 
-// floatResult refuses a result that is not finite, as reflection's does.
-func floatResult(r float64) (Value, error) { return CheckedFloat(r) }
+func floatResult(r float64) (Value, error) { return Float(r), nil }
 
-// A vector result is wrapped as its backing, as fromGo wraps it; a float
-// vector with an item that is not finite is refused with reflection's words.
+// A vector result is wrapped as its backing, as fromGo wraps it.
 func intsResult(r []int64) (Value, error)     { return Value{kind: ArrayKind, box: r}, nil }
+func floatsResult(r []float64) (Value, error) { return Value{kind: ArrayKind, box: r}, nil }
 func stringsResult(r []string) (Value, error) { return Value{kind: ArrayKind, box: r}, nil }
-
-func floatsResult(r []float64) (Value, error) {
-	if err := checkFloats(r); err != nil {
-		return Value{}, err
-	}
-	return Value{kind: ArrayKind, box: r}, nil
-}
 
 // directBatch is the EvalBatch of a GoBatch of one parameter, of the shapes
 // directEval calls a single call of.

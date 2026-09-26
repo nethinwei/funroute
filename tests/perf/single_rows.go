@@ -170,10 +170,7 @@ func batchRows(registry *funroute.Registry) ([]row, error) {
 	if err != nil {
 		return nil, err
 	}
-	one, err := funroute.Float(1)
-	if err != nil {
-		return nil, err
-	}
+	one := funroute.Float(1)
 	perBatch := benchNative(func() { keep(many(make([]float64, 64))) })
 	perBatch.nanoseconds /= 64
 	return []row{

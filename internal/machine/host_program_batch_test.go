@@ -39,16 +39,21 @@ func failures() (map[int]error, func(int, error)) {
 }
 
 // scoreIn carries an argument the program never reads, so the batch has to
-// run arguments with an empty slot.
+// run arguments with an empty slot, and one it does that no int holds past
+// math.MaxInt64: a request with bad data.
 type scoreIn struct {
 	Features []float64 `funroute:"features"`
 	Amount   int64     `funroute:"amount"`
+	Weight   uint      `funroute:"weight"`
 }
+
+// badData is a weight the program cannot read.
+const badData = math.MaxUint64
 
 func scoreProgram(t *testing.T, single, batched *atomic.Int64) *machine.Program[scoreIn, float64] {
 	t.Helper()
 	return bindProgram[scoreIn, float64](t, modelRegistry(t, single, batched),
-		`let(e = model.embed_v1(features), model.fraud_v1(e) * 2.0)`)
+		`let(e = model.embed_v1(features), model.fraud_v1(e) * 2.0 + float(weight))`)
 }
 
 // The host's N requests share one call of each batchable model, and a request
@@ -61,7 +66,7 @@ func TestRunBatchCallsEachModelOnce(t *testing.T) {
 	for i := range requests {
 		requests[i] = scoreIn{Features: []float64{float64(i)}, Amount: int64(i)}
 	}
-	requests[3].Features = []float64{math.NaN()}
+	requests[3].Weight = badData
 	errs, failed := failures()
 	outs := runSlice(t.Context(), program, requests, failed)
 	if len(errs) != 1 || !errors.Is(errs[3], machine.ErrContract) {
@@ -170,7 +175,7 @@ func TestRunBatchLetsTheCallbackPanicThrough(t *testing.T) {
 	t.Parallel()
 	var single, batched atomic.Int64
 	program := scoreProgram(t, &single, &batched)
-	requests := []scoreIn{{Features: []float64{math.NaN()}}, {Features: []float64{1}}}
+	requests := []scoreIn{{Features: []float64{0}, Weight: badData}, {Features: []float64{1}}}
 	func() {
 		defer func() {
 			if recover() != "host bug" {
@@ -200,7 +205,7 @@ func TestRunBatchWritesWhereTheHostSays(t *testing.T) {
 		sentinel := 99.0
 		out[i] = &sentinel
 	}
-	in[1].Features = []float64{math.NaN()}
+	in[1].Weight = badData
 	out[2] = nil
 	errs, failed := failures()
 	runInto(t.Context(), program, in, out, failed)
