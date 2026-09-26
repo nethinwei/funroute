@@ -84,13 +84,16 @@ type FlowFacts struct {
 	Answer    string
 	FieldOnly []bool
 	ViewOnly  []bool
+	// ItemsInPlace is how many loops load their items into the frame's own
+	// record.
+	ItemsInPlace int
 }
 
 // Flow is the value-flow analysis of the runtime's program.
 func Flow(r *Runtime) FlowFacts {
 	found := flowOf(&r.artifact.parts, r.functions)
 	name := func(pc int) string { return fmt.Sprintf("%s@%d", r.artifact.parts.Instructions[pc].Op, pc) }
-	facts := FlowFacts{Dest: map[string]int{}, FieldOnly: found.fieldOnly, ViewOnly: found.viewOnly}
+	facts := FlowFacts{Dest: map[string]int{}, FieldOnly: found.fieldOnly, ViewOnly: found.viewOnly, ItemsInPlace: len(found.itemsInPlace)}
 	for _, pc := range slices.Sorted(maps.Keys(found.arena)) {
 		facts.Arena = append(facts.Arena, name(pc))
 	}

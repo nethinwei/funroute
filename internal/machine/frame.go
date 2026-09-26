@@ -69,9 +69,10 @@ type frame struct {
 	recordViews []recordsView
 	items       []recordValue
 	// borrows is the arguments this run loaded into records, views or
-	// recordViews: only those, and the items of loops over a recordViews,
-	// are cleared when the frame goes back.
+	// recordViews, and walked whether a loop loaded its items into items:
+	// only those are cleared when the frame goes back.
 	borrows []int
+	walked  bool
 	// onlyReads says a Program loaded the arguments: only the slots of the
 	// ones the program reads were written.
 	onlyReads bool
@@ -213,7 +214,7 @@ func (f *frame) returnMemory() {
 	for i := range f.arena {
 		f.arena[i].release()
 	}
-	if len(f.borrows) == 0 {
+	if len(f.borrows) == 0 && !f.walked {
 		return
 	}
 	for _, i := range f.borrows {
@@ -224,6 +225,7 @@ func (f *frame) returnMemory() {
 	for i := range f.items {
 		clear(f.items[i].fields)
 	}
+	f.walked = false
 }
 
 // slotFor is the slot an array is built in, or nil for memory of its own:

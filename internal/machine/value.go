@@ -183,6 +183,8 @@ func (v Value) elemType() Type {
 		return FxRateType
 	case *nestedArray:
 		return box.elem
+	case *recordsView:
+		return *box.plan.typ.elem
 	case *nestedDict:
 		return box.elem
 	default:
@@ -275,8 +277,11 @@ func (v Value) Array() ([]Value, bool) {
 	if v.kind != ArrayKind {
 		return nil, false
 	}
-	if nested, ok := v.box.(*nestedArray); ok {
-		return nested.items, true
+	switch box := v.box.(type) {
+	case *nestedArray:
+		return box.items, true
+	case *recordsView:
+		return box.items(), true
 	}
 	out := make([]Value, v.length())
 	for i := range out {
@@ -353,6 +358,8 @@ func (v Value) containerAny() any {
 	switch box := v.box.(type) {
 	case *nestedArray:
 		return kit.Map(box.items, Value.Any)
+	case *recordsView:
+		return kit.Map(box.items(), Value.Any)
 	case *nestedDict:
 		out := make(map[string]any, len(box.entries))
 		for key, value := range box.entries {

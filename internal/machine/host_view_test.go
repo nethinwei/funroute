@@ -37,6 +37,32 @@ func viewedInput() *viewedIn {
 	return in
 }
 
+// viewedSources read an array of plain records: walked, measured, indexed,
+// and as a view the library sorts, cuts, joins or compares.
+var viewedSources = []string{
+	`string(reduce(c in channels, t = 0, t + c.fee))`,
+	`string(len([c.name for c in channels if c.ok && c.fee < limit]))`,
+	`string(reduce(c in channels if c.risk > 0.5, t = 0.0, t + c.risk))`,
+	`string(len([c.fee for c in channels for d in channels if d.fee > c.fee]))`,
+	`string(len(channels)) + reduce(c in channels, s = "", s + c.name)`,
+	`string(len([[c] for c in channels]))`,
+	`string(channels[3].fee)`,
+	// A view the library sorts, cuts, joins or compares.
+	`sort_by(channels, [c.fee for c in channels])[0].name`,
+	`take(sort_by(channels, [c.risk for c in channels]), 3)[2].name`,
+	`top_k(channels, [c.fee for c in channels], 4)[3].name`,
+	`bottom_k(channels, [c.name for c in channels], 9)[8].name`,
+	`reverse(channels)[0].name`,
+	`concat(channels, take(channels, 2))[41].name`,
+	`slice(channels, 3, 9)[5].name`,
+	`last(channels).name + first(sort_by_desc(channels, [c.fee for c in channels])).name`,
+	`string(index_of(channels, channels[7]))`,
+	`string(channels == reverse(reverse(channels)))`,
+	`string(len(unique(concat(channels, channels))))`,
+	`reduce(c in sort_by(channels, [c.fee for c in channels]), s = "", s + c.name)`,
+	`string(len([c for c in slice(channels, 2, 30) if c.ok]))`,
+}
+
 // A loop over an array of plain records in the host's struct answers as the
 // same loop over the records does, and allocates nothing for its items.
 func TestAViewedArrayAnswersAsItsRecords(t *testing.T) {
@@ -47,15 +73,7 @@ func TestAViewedArrayAnswersAsItsRecords(t *testing.T) {
 	}
 	in := viewedInput()
 	records := viewedRecords(t, in.Channels)
-	for _, source := range []string{
-		`string(reduce(c in channels, t = 0, t + c.fee))`,
-		`string(len([c.name for c in channels if c.ok && c.fee < limit]))`,
-		`string(reduce(c in channels if c.risk > 0.5, t = 0.0, t + c.risk))`,
-		`string(len([c.fee for c in channels for d in channels if d.fee > c.fee]))`,
-		`string(len(channels)) + reduce(c in channels, s = "", s + c.name)`,
-		`string(len([[c] for c in channels]))`,
-		`string(channels[3].fee)`,
-	} {
+	for _, source := range viewedSources {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			program, err := binding.Compile(source)
@@ -144,5 +162,74 @@ func TestAViewedArrayIsHeldAsLoadingIt(t *testing.T) {
 	want, wantErr := loaded.Run(t.Context(), in)
 	if gotErr != nil || wantErr != nil || !math.IsInf(got, 1) || !math.IsInf(want, 1) {
 		t.Errorf("viewed: %v, %v; loaded: %v, %v; want +Inf from both", got, gotErr, want, wantErr)
+	}
+}
+
+type channelOut struct {
+	Name string  `funroute:"name"`
+	Fee  int64   `funroute:"fee"`
+	Risk float64 `funroute:"risk"`
+	OK   bool    `funroute:"ok"`
+}
+
+// A view answered into a slice of records is copied field by field: into a
+// slice of the host's own struct, or of another with the same fields, the
+// same as the records it holds are written.
+func TestAViewIsAnsweredAsItsRecords(t *testing.T) {
+	t.Parallel()
+	source := `sort_by(channels, [c.fee for c in channels])`
+	in := viewedInput()
+	same := answerOf[[]viewedChannel](t, source, in)
+	other := answerOf[[]channelOut](t, source, in)
+	if len(same) != len(in.Channels) || len(other) != len(same) {
+		t.Fatalf("answered %d and %d items, want %d", len(same), len(other), len(in.Channels))
+	}
+	for i := range same {
+		if same[i] != viewedChannel(other[i]) || i > 0 && same[i-1].Fee > same[i].Fee {
+			t.Fatalf("item %d: %+v and %+v, want the same, in order of fee", i, same[i], other[i])
+		}
+	}
+}
+
+// answerOf is source's answer on in, as an Out.
+func answerOf[Out any](t *testing.T, source string, in *viewedIn) Out {
+	t.Helper()
+	binding, err := compile.Bind[viewedIn, Out](viewedRegistry(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := program.Run(t.Context(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// Sorting a view costs the same allocations for ten records as for a
+// thousand: the keys, the order, the answer — no record per item.
+func TestSortingAViewAllocatesByTheArray(t *testing.T) {
+	binding, err := compile.Bind[viewedIn, []viewedChannel](viewedRegistry(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(`sort_by(channels, [c.fee for c in channels])`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocs := func(n int) float64 {
+		in := &viewedIn{Channels: make([]viewedChannel, n)}
+		ctx := t.Context()
+		return testing.AllocsPerRun(50, func() {
+			if _, err := program.Run(ctx, in); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if few, many := allocs(10), allocs(1000); few != many {
+		t.Errorf("a run allocated %v times for 10 records and %v for 1000, want the same", few, many)
 	}
 }

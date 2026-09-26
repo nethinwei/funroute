@@ -45,8 +45,9 @@ type argRead struct {
 	codec     *codec
 	fieldOnly bool
 	view      bool
-	// records is an array of plain records handed over as a recordsView.
-	records bool
+	// records is an array of plain records handed over as a recordsView,
+	// in the frame's own slot when inPlace: the program only walks it.
+	records, inPlace bool
 	// promoted is the record's promoted fields, which a run with a frame
 	// loads into their registers in place of the record.
 	promoted []promotion
@@ -61,7 +62,8 @@ func newArgRead(index int, plan *argsCodec, fieldOnly, viewOnly bool) argRead {
 			read.view = true
 		}
 	}
-	read.records = viewOnly && viewable(field.codec)
+	read.records = viewable(field.codec)
+	read.inPlace = viewOnly && read.records
 	return read
 }
 
@@ -107,9 +109,11 @@ func (read argRead) load(p unsafe.Pointer, f *frame) (Value, error) {
 	case read.view:
 		f.borrows = append(f.borrows, read.index)
 		return viewIn(&f.views[read.index], read.codec.native, p), nil
-	case read.records:
+	case read.inPlace:
 		f.borrows = append(f.borrows, read.index)
-		return viewRecords(&f.recordViews[read.index], read.codec, p), nil
+		return viewRecords(&f.recordViews[read.index], read.codec, p, true), nil
+	case read.records:
+		return viewRecords(nil, read.codec, p, false), nil
 	}
 	return read.codec.load(p)
 }
@@ -520,6 +524,9 @@ func (c *codec) storeRecord(p unsafe.Pointer, v Value) error {
 func (c *codec) storeSlice(p unsafe.Pointer, v Value) error {
 	if v.kind != ArrayKind {
 		return fmt.Errorf("value is %s, want an array", v.Type().Summary())
+	}
+	if view, ok := v.box.(*recordsView); ok && storeView(c, p, view) {
+		return nil
 	}
 	n := v.length()
 	items := reflect.MakeSlice(c.goType, n, n)

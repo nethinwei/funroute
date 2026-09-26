@@ -46,8 +46,10 @@ func (f *frame) regLoopInit(pc int, in *rinstr) (int, error) {
 		f.regs[site.dst] = f.emptyResult(site, in)
 		return int(site.exit), nil
 	}
-	if loop.view != nil {
-		loop.item = &f.items[in.c]
+	// A view is walked into the frame's own record when the value flow
+	// proved the loop's items are only read.
+	if loop.view != nil && site.itemsInPlace {
+		loop.item, f.walked = &f.items[in.c], true
 	}
 	f.startOutput(loop, in)
 	switch {
@@ -181,9 +183,11 @@ func (f *frame) bindRegs(loop *regLoop, index int) {
 		f.regs[loop.site.item] = Value{kind: StringKind, s: loop.strings[index]}
 	case loop.bools != nil:
 		f.regs[loop.site.item] = Value{kind: BoolKind, b: loop.bools[index]}
-	case loop.view != nil:
+	case loop.item != nil:
 		loop.view.load(index, loop.item)
 		f.regs[loop.site.item] = Value{kind: RecordKind, box: loop.item}
+	case loop.view != nil:
+		f.regs[loop.site.item] = loop.view.record(index)
 	case loop.keys != nil:
 		value, _ := loop.source.lookup(loop.keys[index])
 		f.regs[loop.site.item] = value

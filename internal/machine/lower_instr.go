@@ -99,7 +99,8 @@ func (l *lowerer) build(in Instruction) {
 	case OpRecordWith:
 		op, count = rRecordWith, len(in.Keys)+1
 	}
-	made := rmake{typ: in.Type, keys: in.Keys, built: built{arena: -1, dest: -1}, answer: in.Op == OpMakeRecord && l.flow.answer == l.pc}
+	answers := in.Op == OpMakeRecord || in.Op == OpRecordWith
+	made := rmake{typ: in.Type, keys: in.Keys, built: built{arena: -1, dest: -1}, answer: answers && l.flow.answer == l.pc}
 	if in.Op == OpMakeArray {
 		made.built = l.builtFor(l.pc)
 	}
@@ -204,7 +205,8 @@ func (l *lowerer) loopInit(in Instruction) {
 	}
 	source := l.pop()
 	l.flush(0)
-	loop := rloop{typ: in.Type, item: l.localBase + int32(in.B), key: -1, acc: -1, dst: l.top(), exit: int32(in.A), built: l.builtFor(l.pc)}
+	loop := rloop{typ: in.Type, item: l.localBase + int32(in.B), key: -1, acc: -1, dst: l.top(), exit: int32(in.A), built: l.builtFor(l.pc),
+		itemsInPlace: l.flow.itemsInPlace[l.pc]}
 	if in.D != NoKey {
 		loop.key = l.localBase + int32(in.D)
 	}

@@ -177,6 +177,9 @@ type rloop struct {
 	dst            int32
 	exit           int32
 	spread         bool
+	// itemsInPlace is set for a loop over an array of plain records whose
+	// item is only read field by field (lower_escape.go).
+	itemsInPlace bool
 	built
 	// vec is the plan a vector runs the loop's body by, when it can.
 	vec *vecPlan

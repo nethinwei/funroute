@@ -75,11 +75,13 @@ func destOps(dest map[string]int) string {
 	return strings.Join(out, " ")
 }
 
-// An array of plain records is handed over in place when the program only
-// walks or measures it and reads each item's fields: through let, in nested
-// loops, under a filter — or never reads an item, as a count does. An item that goes anywhere else — collected,
-// compared, answered, handed to a function — or an index into the array,
-// which would make a record of an item, lets the array out.
+// An array of plain records is handed over in the frame's own slot when the
+// program only walks or measures it — through let, in nested loops, under a
+// filter; an index into it, or the array itself answered or handed on, lets
+// it out. Apart from that, a loop loads its items into the frame's own
+// record when it only reads their fields; an item that goes anywhere else —
+// collected, compared, put in a record — is made a record of its own, and
+// the loop's items do not stay put.
 func TestAnArrayOfRecordsIsViewedWhileItsItemsStayPut(t *testing.T) {
 	t.Parallel()
 	registry := randomRegistry(t)
@@ -88,18 +90,21 @@ func TestAnArrayOfRecordsIsViewedWhileItsItemsStayPut(t *testing.T) {
 	for _, test := range []struct {
 		source string
 		viewed bool
+		items  int
 	}{
-		{`len([c.name for c in cs if c.ok])`, true},
-		{`len(cs)`, true},
-		{`let(d = cs, len([x.fee for x in d]))`, true},
-		{`len([c.fee for c in cs for d in cs if d.fee > c.fee])`, true},
-		{`len([let(n = c, n.fee) for c in cs])`, true},
-		{`len([c for c in cs])`, true},
-		{`len([[c] for c in cs])`, false},
-		{`cs[0].fee`, false},
-		{`len([c == c for c in cs])`, false},
-		{`cs`, false},
-		{`len([{name: c.name, fee: c.fee, ok: c.ok} == c for c in cs])`, false},
+		{`len([c.name for c in cs if c.ok])`, true, 1},
+		{`len(cs)`, true, 0},
+		{`let(d = cs, len([x.fee for x in d]))`, true, 1},
+		{`len([c.fee for c in cs for d in cs if d.fee > c.fee])`, true, 2},
+		{`len([let(n = c, n.fee) for c in cs])`, true, 1},
+		{`len([c for c in cs])`, true, 1}, // a count: the items are never collected
+		{`[c for c in cs]`, true, 0},
+		{`len([[c] for c in cs])`, true, 0},
+		{`cs[0].fee`, false, 0},
+		{`len([c == c for c in cs])`, true, 0},
+		{`cs`, false, 0},
+		{`len([{name: c.name, fee: c.fee, ok: c.ok} == c for c in cs])`, true, 0},
+		{`len([c.fee for c in cs if c.ok]) + len([[c] for c in cs])`, true, 1},
 	} {
 		artifact, err := compile.CompileExpr(test.source, registry, options)
 		if err != nil {
@@ -109,8 +114,49 @@ func TestAnArrayOfRecordsIsViewedWhileItsItemsStayPut(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := machine.Flow(runtime).ViewOnly[0]; got != test.viewed {
-			t.Errorf("%s: viewed %v, want %v", test.source, got, test.viewed)
+		facts := machine.Flow(runtime)
+		if facts.ViewOnly[0] != test.viewed || facts.ItemsInPlace != test.items {
+			t.Errorf("%s: viewed %v with %d loops' items in place, want %v and %d", test.source, facts.ViewOnly[0], facts.ItemsInPlace, test.viewed, test.items)
 		}
+	}
+}
+
+type updateIn struct {
+	Order promotedOrder `funroute:"order"`
+	Fee   int64         `funroute:"fee"`
+}
+
+// A record argument updated by with is only read — its fields are copied
+// into the update — so a Program reads it where it is, and an update the
+// program answers is built in the frame's own record: none is made.
+func TestAnUpdatedRecordIsReadInPlace(t *testing.T) {
+	binding, err := compile.Bind[updateIn, promotedOrder](randomRegistry(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(`order with {amount: order.amount + fee, flagged: true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := machine.Flow(program.Runtime())
+	if !facts.FieldOnly[0] || !strings.HasPrefix(facts.Answer, "record_with@") {
+		t.Fatalf("the record is read in place %v, the answer %q; want true and the update", facts.FieldOnly[0], facts.Answer)
+	}
+	in, ctx := &updateIn{Order: promotedOrder{Amount: 100, Currency: "sg", Risk: 0.5}, Fee: 7}, t.Context()
+	var out promotedOrder
+	if allocs := testing.AllocsPerRun(100, func() {
+		if err := program.RunInto(ctx, in, &out); err != nil {
+			t.Fatal(err)
+		}
+	}); allocs != 0 || out != (promotedOrder{Amount: 107, Currency: "sg", Risk: 0.5, Flagged: true}) {
+		t.Errorf("a run answered %+v and allocated %v times, want the update and 0", out, allocs)
+	}
+	// An update that is not the answer is a record of its own.
+	nested, err := binding.Compile(`(order with {risk: 0.0}) with {amount: 1}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := nested.Run(ctx, in); err != nil || got.Amount != 1 || got.Currency != "sg" {
+		t.Errorf("an update of an update = %+v, %v; want amount 1 of the order", got, err)
 	}
 }

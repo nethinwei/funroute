@@ -153,9 +153,15 @@ func (f *frame) build(in *rinstr) (Value, error) {
 	if !ok {
 		return Value{}, errNotARecord
 	}
-	// The copy shares the base's type: an update does not change it.
-	record := newRecord(base.typ, len(base.fields))
-	copy(record.fields, base.fields)
+	// The copy shares the base's type: an update does not change it. The
+	// answer is built in the frame's own record, as make_record's is.
+	record := &f.answer
+	if made.answer && f.lending {
+		f.answer.typ, f.answer.fields = base.typ, append(f.answer.fields[:0], base.fields...)
+	} else {
+		record = newRecord(base.typ, len(base.fields))
+		copy(record.fields, base.fields)
+	}
 	for i, index := range made.fields {
 		record.fields[index] = items[1+i]
 	}

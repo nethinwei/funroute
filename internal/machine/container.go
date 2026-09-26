@@ -59,6 +59,8 @@ func (v Value) length() int {
 		return len(box)
 	case *nestedArray:
 		return len(box.items)
+	case *recordsView:
+		return box.length
 	case map[string]bool:
 		return len(box)
 	case map[string]int64:
@@ -94,6 +96,8 @@ func (v Value) at(i int) Value {
 		return FxRateValue(box[i])
 	case *nestedArray:
 		return box.items[i]
+	case *recordsView:
+		return box.record(i)
 	default:
 		return Value{}
 	}
@@ -234,6 +238,8 @@ func (v Value) Slice(from, to int) (Value, bool) {
 		return Value{kind: ArrayKind, box: box[from:to:to]}, true
 	case *nestedArray:
 		return Value{kind: ArrayKind, box: &nestedArray{elem: box.elem, items: box.items[from:to:to]}}, true
+	case *recordsView:
+		return Value{kind: ArrayKind, box: box.slice(from, to)}, true
 	}
 	return Value{}, false
 }

@@ -114,6 +114,8 @@ func rearranged(array Value, n int, at func(int) int) Value {
 		return nativeArray(picked(box, n, at))
 	case *nestedArray:
 		return Value{kind: ArrayKind, box: &nestedArray{elem: box.elem, items: picked(box.items, n, at)}}
+	case *recordsView:
+		return Value{kind: ArrayKind, box: box.arranged(n, at)}
 	}
 	return array
 }
@@ -144,11 +146,11 @@ func concatItems(_ context.Context, args []Value) (Value, error) {
 		return joined(left, args[1].box), nil
 	case []money.FxRate:
 		return joined(left, args[1].box), nil
-	case *nestedArray:
-		right, _ := args[1].box.(*nestedArray)
-		return Value{kind: ArrayKind, box: &nestedArray{elem: left.elem, items: appended(left.items, right.items)}}, nil
 	}
-	return Value{}, fmt.Errorf("internal error: concat of %s", args[0].Type())
+	// Arrays of anything else — nested, or records in the host's memory —
+	// join as their items.
+	items := appended(valuesOf(args[0]), valuesOf(args[1]))
+	return Value{kind: ArrayKind, box: &nestedArray{elem: args[0].elemType(), items: items}}, nil
 }
 
 // appended is left and then right in a slice of its own, never nil: two

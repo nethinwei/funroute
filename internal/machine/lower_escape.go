@@ -21,17 +21,25 @@ package machine
 // is given one.
 
 // origin is where a value came from: a producer's pc when it is 0 or more,
-// and otherwise one of the markers below, or a record argument (argOrigin).
+// and otherwise one of the markers below, an argument (argOrigin), or the
+// item of a loop over an array of plain records (itemOrigin).
 type origin int32
 
 const (
 	fromElsewhere origin = -1
 	unbound       origin = -2
+	// itemBase is below every argument's origin: items are counted from it.
+	itemBase origin = -1 << 24
 )
 
 func argOrigin(i int) origin { return origin(-3 - i) }
 
-func (o origin) arg() (int, bool) { return int(-3 - o), o <= -3 }
+func (o origin) arg() (int, bool) { return int(-3 - o), o <= -3 && o > itemBase }
+
+// itemOrigin is the item of the loop that starts at pc.
+func itemOrigin(pc int) origin { return itemBase - origin(pc) }
+
+func (o origin) item() (int, bool) { return int(itemBase - o), o <= itemBase }
 
 // flow is what the analysis found.
 type flow struct {
@@ -46,9 +54,13 @@ type flow struct {
 	answer int
 	// fieldOnly is, by argument, a record that is only read field by field,
 	// and viewOnly an array of natives that is only walked, measured or
-	// indexed, or an array of plain records only walked or measured, its
-	// items only read field by field: a Program hands either over in place.
+	// indexed, or an array of plain records only walked or measured: a
+	// Program hands either over in place.
 	fieldOnly, viewOnly []bool
+	// itemsInPlace is each loop over an array of plain records, by pc,
+	// whose item is only read field by field: it loads each item into the
+	// frame's own record.
+	itemsInPlace map[int]bool
 }
 
 // fstate is what the walk knows on entering an instruction.
@@ -81,18 +93,18 @@ type flower struct {
 	// out; usedAt is where each producer is used — a set, since the walk
 	// may pass an instruction more than once — and fields the origins of
 	// each make_record's fields.
-	escaped, argEscaped map[int]bool
-	usedAt              map[int]map[int]bool
-	fields              map[int][]origin
-	consumers           map[int]origin
-	answer              origin
+	escaped, argEscaped, itemEscaped map[int]bool
+	usedAt                           map[int]map[int]bool
+	fields                           map[int][]origin
+	consumers                        map[int]origin
+	answer                           origin
 }
 
 // flowOf analyzes a verified program.
 func flowOf(parts *ArtifactParts, functions []*RegisteredFunction) flow {
 	w := &flower{
 		code: parts.Instructions, args: parts.Args, functions: functions, joins: joinsOf(parts.Instructions),
-		states: make([]*fstate, len(parts.Instructions)+1), escaped: map[int]bool{}, argEscaped: map[int]bool{},
+		states: make([]*fstate, len(parts.Instructions)+1), escaped: map[int]bool{}, argEscaped: map[int]bool{}, itemEscaped: map[int]bool{},
 		usedAt: map[int]map[int]bool{}, fields: map[int][]origin{}, consumers: map[int]origin{}, answer: fromElsewhere,
 	}
 	start := &fstate{locals: make([]origin, parts.Locals)}
@@ -168,10 +180,13 @@ func mergeOrigins(w *flower, known, next []origin) bool {
 	return changed
 }
 
-// escape lets a value out: its producer or its argument has no one place.
+// escape lets a value out: its producer, its argument or its loop's item
+// has no one place.
 func (w *flower) escape(o origin) {
 	if i, ok := o.arg(); ok {
 		w.argEscaped[i] = true
+	} else if pc, ok := o.item(); ok {
+		w.itemEscaped[pc] = true
 	} else if o >= 0 {
 		w.escaped[int(o)] = true
 	}
@@ -245,11 +260,12 @@ func (w *flower) straight(pc int, in Instruction, s *fstate) {
 	case OpMakeArray, OpMakeDict, OpMakeRecord:
 		w.build(pc, in, s)
 	case OpField:
-		// A field read keeps a record argument where it is, and an item of
-		// an array of records, whose name holds the array's origin.
+		// A field read keeps a record argument where it is, and the item of
+		// a loop over an array of plain records.
 		record := s.pop(1)[0]
 		i, argument := record.arg()
-		w.use(pc, record, argument && (w.args[i].typ.kind == RecordKind || plainRecords(w.args[i].typ)))
+		_, item := record.item()
+		w.use(pc, record, item || argument && w.args[i].typ.kind == RecordKind)
 		s.push(fromElsewhere)
 	case OpCall:
 		w.call(pc, in, s)
@@ -342,8 +358,12 @@ func (w *flower) consume(pc int, in Instruction, s *fstate) {
 		w.useAll(pc, s.pop(2))
 		s.push(fromElsewhere)
 	case OpRecordWith:
-		w.useAll(pc, s.pop(len(in.Keys)+1))
-		s.push(fromElsewhere)
+		// The base is read, its fields copied: a record argument stays.
+		values := s.pop(len(in.Keys) + 1)
+		i, argument := values[0].arg()
+		w.use(pc, values[0], argument && w.args[i].typ.kind == RecordKind)
+		w.useAll(pc, values[1:])
+		s.push(origin(pc))
 	}
 }
 
@@ -366,7 +386,7 @@ func (w *flower) loopInit(pc int, in Instruction, s *fstate) []fedge {
 		}
 	}
 	if walks && w.recordsArg(source) {
-		s.locals[in.B] = source
+		s.locals[in.B] = itemOrigin(pc)
 	}
 	s.loops = append(s.loops, pc)
 	return []fedge{{pc + 1, s}, {in.A, past}}
@@ -400,7 +420,7 @@ func (w *flower) arrayProducer(pc int) bool {
 func (w *flower) result(parts *ArtifactParts) flow {
 	f := flow{
 		arena: map[int]bool{}, uses: map[int]bool{}, dest: map[int]int{}, answer: -1,
-		fieldOnly: make([]bool, len(parts.Args)), viewOnly: make([]bool, len(parts.Args)),
+		fieldOnly: make([]bool, len(parts.Args)), viewOnly: make([]bool, len(parts.Args)), itemsInPlace: map[int]bool{},
 	}
 	for pc := range w.code {
 		if w.arrayProducer(pc) && !w.escaped[pc] {
@@ -414,6 +434,9 @@ func (w *flower) result(parts *ArtifactParts) flow {
 	for pc, o := range w.consumers {
 		i, argument := o.arg()
 		f.uses[pc] = o >= 0 && f.arena[int(o)] || argument && f.viewOnly[i]
+		if w.code[pc].Op == OpLoopInit && w.recordsArg(o) && !w.itemEscaped[pc] {
+			f.itemsInPlace[pc] = true
+		}
 	}
 	if answer := int(w.answer); w.answer >= 0 && w.usedOnce(answer) {
 		w.answerDest(&f, answer)
@@ -428,7 +451,7 @@ func (w *flower) answerDest(f *flow, answer int) {
 		f.dest[answer] = 0
 		return
 	}
-	if w.code[answer].Op != OpMakeRecord {
+	if op := w.code[answer].Op; op != OpMakeRecord && op != OpRecordWith {
 		return
 	}
 	f.answer = answer
