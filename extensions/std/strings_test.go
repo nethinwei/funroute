@@ -46,6 +46,27 @@ func TestStringsAndArrays(t *testing.T) {
 	}
 }
 
+// Padding fills a fixed-width field: on the left or the right, one
+// character at a time, and a text already as long is left as it is.
+func TestPaddingFillsAField(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		`pad_left("1234", 8, "0")`:   "00001234",
+		`pad_right("adyen", 7, ".")`: "adyen..",
+		`pad_left("123456", 3, "0")`: "123456",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if got, err := run(t, source, nil); err != nil || got != want {
+				t.Fatalf("%s = %v, %v, want %q", source, got, err, want)
+			}
+		})
+	}
+	if _, err := run(t, `pad_left("1", 4, "ab")`, nil); err == nil {
+		t.Fatal(`pad_left("1", 4, "ab") must fail: the padding is one character`)
+	}
+}
+
 // A padding width is 0 to 10000 characters: a width written as 4000000000
 // is refused, not allocated — in a run and when the compiler folds it.
 func TestPaddingWidthIsBounded(t *testing.T) {

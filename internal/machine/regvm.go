@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"context"
 	"fmt"
 )
 
@@ -10,8 +11,9 @@ import (
 
 // exec is the hot loop: the operations most programs spend their time in,
 // and cold for the rest. An operation that cannot answer on its fast path
-// clears ok, and fault says why.
-func (f *frame) exec() (Value, error) {
+// clears ok, and fault says why. It answers the register the program's
+// answer is in, so the answer is copied once, where it is taken.
+func (f *frame) exec() (int32, error) {
 	code, regs := f.runtime.reg.code, f.regs
 	for pc := 0; ; {
 		in := &code[pc]
@@ -47,13 +49,13 @@ func (f *frame) exec() (Value, error) {
 		case rCall:
 			err = f.callSite(in.a)
 		case rHalt:
-			return regs[in.a], nil
+			return in.a, nil
 		default:
 			pc, ok, err = f.cold(pc, in)
 		}
 		if !ok || err != nil {
 			if pc, err = f.failed(pc, ok, err); err != nil {
-				return Value{}, err
+				return 0, err
 			}
 		}
 	}
@@ -105,7 +107,12 @@ func (f *frame) fault(pc int) error {
 	}
 	function := f.runtime.functions[source.A]
 	args := []Value{left, right}[:len(function.Params)]
-	if _, err := function.Eval(f.ctx, args); err != nil {
+	// A run with no call never had a context to keep.
+	ctx := f.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, err := function.Eval(ctx, args); err != nil {
 		return fmt.Errorf("%s: %w", function.Name, err)
 	}
 	return fmt.Errorf("internal error: %s refused what %s accepts", in.op, function.key)

@@ -162,7 +162,9 @@ func TestAnUndeclaredRegistryHasNoMoney(t *testing.T) {
 	if none.currencies() != nil {
 		t.Fatal("a nil registry reported a currency table")
 	}
-	if len(registry.Overloads("allocate")) != 0 || len(registry.Overloads("round")) != 0 {
+	// round rounds a float to an int without money; with money it is a
+	// rounding scope too.
+	if len(registry.Overloads("allocate")) != 0 || slices.ContainsFunc(registry.Overloads("round"), (*RegisteredFunction).IsRoundingScope) {
 		t.Fatal("an undeclared registry has the money kernel's functions")
 	}
 }

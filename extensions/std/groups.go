@@ -94,10 +94,5 @@ func cumulativeFloats(items []float64) ([]float64, error) {
 		total += item
 		out[i] = total
 	}
-	if len(out) > 0 {
-		if _, err := sumFloats(out[len(out)-1:]); err != nil {
-			return nil, err
-		}
-	}
 	return out, nil
 }

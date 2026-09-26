@@ -3,43 +3,12 @@ package std
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"sort"
 
 	"github.com/nethinwei/funroute"
 )
-
-// Picking one out of a list of candidates is what a routing rule does, and
-// doing it needs two lists side by side: the candidates and the key each is
-// judged by. There are no lambdas here, so that is the shape everything takes
-// — sort_by(channels, fees) rather than sort_by(channels, c => c.fee).
-//
-// The lists must be the same length. Nothing here invents an answer for a
-// candidate it has no key for.
-func selectSpecs() []funroute.FunctionSpec {
-	item := funroute.TypeVar("T")
-	list := funroute.ArrayOf(item)
-	return []funroute.FunctionSpec{
-		{
-			Name: "indices", Params: []funroute.Type{list}, Result: funroute.ArrayOf(funroute.IntType), Eval: indicesOf,
-			Doc: funroute.Doc{
-				Label: "下标序列", Category: "选择",
-				Description: "这个数组的下标，0 到长度减一。配推导式就能按位置把两个数组对起来：[names[i] for i in indices(fees) if fees[i] < cap]。",
-				Params:      []string{"数组"}, Result: "下标数组",
-			},
-		},
-		{
-			Name: "index_of", Params: []funroute.Type{list, item}, Result: funroute.IntType, Eval: indexOfItem,
-			Doc: funroute.Doc{
-				Label: "元素位置", Category: "选择",
-				Description: "元素第一次出现的下标；不在里面是错误，先用 x in xs 判断。",
-				Params:      []string{"数组", "元素"}, Result: "下标",
-			},
-		},
-	}
-}
 
 // keyedSpecs are the keyed sorts, both ways, and the keyed cuts: sort_by
 // with a direction and a count, because "the three cheapest" and "the three
@@ -157,67 +126,6 @@ func pickRanked(args []funroute.Value, ascending bool) (funroute.Value, error) {
 	return takeFirst(sorted, count, "a count of candidates cannot be negative, got %d")
 }
 
-// positionSpecs are the ones a routing rule reaches for most: which
-// candidate, not which value. channels[arg_min(fees)] is the cheapest channel.
-func positionSpecs() []funroute.FunctionSpec {
-	specs := make([]funroute.FunctionSpec, 0, 6) // two names, three types each
-	for _, extreme := range []struct {
-		name, label, description string
-		smallest                 bool
-	}{
-		{"arg_min", "最小值的位置", "最小元素的下标；并列取第一个，空数组报错。channels[arg_min(fees)] 就是最便宜的那个。", true},
-		{"arg_max", "最大值的位置", "最大元素的下标；并列取第一个，空数组报错。", false},
-	} {
-		doc := funroute.Doc{
-			Label: extreme.label, Category: "选择",
-			Description: extreme.description, Params: []string{"键"}, Result: "下标",
-		}
-		smallest := extreme.smallest
-		specs = append(specs, eachType(extreme.name, doc,
-			extremeIndex[int64](smallest), extremeIndex[float64](smallest), extremeIndex[string](smallest))...)
-	}
-	return specs
-}
-
-func indicesOf(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	length, ok := args[0].Length()
-	if !ok {
-		return funroute.Value{}, errors.New("indices needs an array")
-	}
-	out := make([]int64, length)
-	for i := range out {
-		out[i] = int64(i)
-	}
-	return funroute.ToValue(out)
-}
-
-func indexOfItem(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-	switch items := backing(args[0]).(type) {
-	case []int64:
-		return indexNative(items, args[1])
-	case []float64:
-		return indexNative(items, args[1])
-	case []string:
-		return indexNative(items, args[1])
-	case []bool:
-		return indexNative(items, args[1])
-	}
-	for i, item := range itemsOf(args[0]) {
-		if item.Equal(args[1]) {
-			return funroute.Int(int64(i)), nil
-		}
-	}
-	return funroute.Value{}, fmt.Errorf("%w: the array does not contain that item", funroute.ErrDomain)
-}
-
-func indexNative[T comparable](items []T, wanted funroute.Value) (funroute.Value, error) {
-	item, _ := wanted.Any().(T)
-	if i := slices.Index(items, item); i >= 0 {
-		return funroute.Int(int64(i)), nil
-	}
-	return funroute.Value{}, fmt.Errorf("%w: the array does not contain that item", funroute.ErrDomain)
-}
-
 func sortedBy(args []funroute.Value, ascending bool) (funroute.Value, error) {
 	itemCount, _ := args[0].Length()
 	keyCount, _ := args[1].Length()
@@ -318,14 +226,3 @@ func valueLess(left, right funroute.Value) bool {
 
 // errNoExtreme is an arg_min or arg_max, or a money min or max, of nothing.
 var errNoExtreme = fmt.Errorf("%w: an empty array has no extreme", funroute.ErrDomain)
-
-// extremeIndex builds the arg_min / arg_max body for one key type.
-func extremeIndex[T cmp.Ordered](smallest bool) func([]T) (int64, error) {
-	return func(keys []T) (int64, error) {
-		at, ok := best(keys, smallest)
-		if !ok {
-			return 0, errNoExtreme
-		}
-		return int64(at), nil
-	}
-}

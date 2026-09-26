@@ -258,7 +258,7 @@
 <!-- limits:catalog -->
 | 注册表 | 函数名 | 重载 | 形式 |
 |---|---|---|---|
-| 内核（`CoreRegistry`） | 19 | 63 | 7 |
+| 内核（`CoreRegistry`） | 63 | 144 | 7 |
 | 内核 + 金额 + std | 87 | 230 | 8 |
 <!-- /limits:catalog -->
 

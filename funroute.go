@@ -237,11 +237,14 @@ var NewBatch = machine.NewBatch
 // enum. Program.RunBatch runs requests the host already holds, sharing each
 // model call, reading and writing them wherever they live; one index names a
 // request, its result and its failure. Program.Batch does the same for
-// requests from many goroutines.
+// requests from many goroutines. Program.Session is a Program for one
+// goroutine at a time, with a frame of its own: the fastest way to run it
+// many times over.
 type (
 	Binding[In, Out any]      = compile.Binding[In, Out]
 	Program[In, Out any]      = machine.Program[In, Out]
 	ProgramBatch[In, Out any] = machine.ProgramBatch[In, Out]
+	Session[In, Out any]      = machine.Session[In, Out]
 )
 
 func Bind[In, Out any](registry *Registry) (*Binding[In, Out], error) {

@@ -89,7 +89,8 @@ func (r *Registry) reflectSpec(spec *FunctionSpec) error {
 	if direct, ok := directEval(spec.Go); ok {
 		spec.Eval, spec.madeResult = direct, true
 	}
-	if spec.Doc.Constexpr && spec.Doc.Timeout == 0 && !spec.Doc.Detached && spec.GoBatch == nil {
+	// A kernel function is pure without saying so (IsConstexpr).
+	if (spec.Doc.Constexpr || spec.builtin) && spec.Doc.Timeout == 0 && !spec.Doc.Detached && spec.GoBatch == nil {
 		spec.pure = pureOf(spec.Go)
 	}
 	if spec.GoBatch == nil {

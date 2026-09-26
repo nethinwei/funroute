@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nethinwei/funroute"
@@ -72,6 +73,63 @@ func TestBindingRunsOnHostTypes(t *testing.T) {
 	want := RouteOut{Channel: "HKD", Net: 970, Score: 0.7, SKUs: []string{"a", "b"}}
 	if out.Channel != want.Channel || out.Net != want.Net || out.Score != want.Score || !slices.Equal(out.SKUs, want.SKUs) {
 		t.Fatalf("out = %+v, want %+v", out, want)
+	}
+}
+
+// A Session answers as its Program does, run after run; each goroutine takes
+// a session of its own.
+func TestASessionRunsAsItsProgram(t *testing.T) {
+	t.Parallel()
+	program, err := routeBinding(t).Compile(routeSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wait sync.WaitGroup
+	for worker := range 4 {
+		wait.Go(func() { assertSessionAsProgram(t, program, worker) })
+	}
+	wait.Wait()
+}
+
+// assertSessionAsProgram runs a session of its own on worker's requests, and
+// holds each answer to the program's.
+func assertSessionAsProgram(t *testing.T, program *funroute.Program[RouteIn, RouteOut], worker int) {
+	t.Helper()
+	session := program.Session()
+	for i := range 50 {
+		in := RouteIn{Country: "HK", Amount: int64(worker*100 + i), Order: Order{Amount: 1000, CurrencyCode: "HKD"},
+			Scores: []float64{0, float64(i)}, Lines: []Line{{SKU: "a"}}}
+		got, gotErr := session.Run(t.Context(), &in)
+		want, wantErr := program.Run(t.Context(), &in)
+		if gotErr != nil || wantErr != nil || got.Net != want.Net || got.Score != want.Score || !slices.Equal(got.SKUs, want.SKUs) {
+			t.Errorf("session %+v, %v; program %+v, %v", got, gotErr, want, wantErr)
+			return
+		}
+	}
+}
+
+type SumIn struct {
+	A int64 `funroute:"a"`
+	B int64 `funroute:"b"`
+}
+
+// A session's run of a rule of scalars allocates nothing, RunInto's neither.
+func TestASessionRunAllocatesNothing(t *testing.T) {
+	binding, err := funroute.Bind[SumIn, int64](funroute.CoreRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile("a * b - a % b + 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, in, out, ctx := program.Session(), &SumIn{A: 7, B: 3}, int64(0), t.Context()
+	if allocs := testing.AllocsPerRun(100, func() {
+		if err := session.RunInto(ctx, in, &out); err != nil {
+			t.Fatal(err)
+		}
+	}); allocs != 0 || out != 21 {
+		t.Errorf("a run answered %d and allocated %v times, want 21 and 0", out, allocs)
 	}
 }
 

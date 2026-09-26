@@ -140,6 +140,7 @@ func (l *lowerer) call(in Instruction) {
 	first := l.window(in.B)
 	// A pure function's call needs no deadline: only a host's other calls do.
 	l.out.hosts = l.out.hosts || !function.builtin && function.pure == nil
+	l.out.foreign = l.out.foreign || !function.builtin
 	l.out.calls = append(l.out.calls, rcall{
 		fn: function, typ: in.Type, args: first, argc: int32(in.B), dst: first, pc: int32(l.pc),
 		kernel: function.builtin && !function.readsRun && function.Doc.Timeout == 0 && !function.Doc.Detached,

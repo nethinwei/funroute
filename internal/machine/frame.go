@@ -75,6 +75,8 @@ type frame struct {
 	// onlyReads says a Program loaded the arguments: only the slots of the
 	// ones the program reads were written.
 	onlyReads bool
+	// owned is set for a Session's frame, which never goes to the pool.
+	owned bool
 	// vector is the vector's columns and run, kept from run to run
 	// (regvm_vector.go); made the first time a loop is run by it.
 	vector *vectorState
@@ -110,15 +112,35 @@ func (f *frame) argSpace(n int) []Value { return f.regs[f.argBase : f.argBase+n]
 // and gives the frame back. A Batch hands the answers it has for the
 // program's calls (prefetched). A Program's run delivers the answer into the
 // host's Out first (sink), and may lend the answer's slots.
-func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, prefetched []Prefetched, sink resultSink) (value Value, err error) {
+//
+// A panic comes from a host's function, the one code a run runs that is not
+// the language's: a program that calls one is run under a recover, and one
+// that calls none is not, as the JVM catches what a native call throws and
+// nothing else.
+func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, prefetched []Prefetched, sink resultSink) (Value, error) {
+	if r.reg.foreign {
+		return r.runGuarded(ctx, f, args, prefetched, sink)
+	}
+	value, err := r.start(ctx, f, args, prefetched, sink)
+	r.finish(f, &value, &err, sink)
+	return value, err
+}
+
+// runGuarded is runFrame under a recover.
+func (r *Runtime) runGuarded(ctx context.Context, f *frame, args []Value, prefetched []Prefetched, sink resultSink) (value Value, err error) {
+	defer r.finishGuarded(f, &value, &err, sink)
+	return r.start(ctx, f, args, prefetched, sink)
+}
+
+// start readies the frame for the run and runs it.
+func (r *Runtime) start(ctx context.Context, f *frame, args []Value, prefetched []Prefetched, sink resultSink) (Value, error) {
 	f.watch(r, ctx)
 	f.prefetched = prefetched
-	defer r.finish(f, &value, &err, sink)
 	if f.lending = sink.plan != nil; f.lending && sink.reuse {
 		sink.lend(f, args)
 	}
 	if r.money.any {
-		if err = r.checkUnits(args); err != nil {
+		if err := r.checkUnits(args); err != nil {
 			return Value{}, err
 		}
 	}
@@ -126,16 +148,26 @@ func (r *Runtime) runFrame(ctx context.Context, f *frame, args []Value, prefetch
 	if len(r.reg.promotions) > 0 && !f.onlyReads {
 		f.promote(args)
 	}
-	return f.exec()
+	answer, err := f.exec()
+	if err != nil {
+		return Value{}, err
+	}
+	return f.regs[answer], nil
 }
 
-// finish ends a run: an extension that panicked is its failure — the recover
-// is here, once a run, not around each call — and the frame goes back for
-// the next run.
-func (r *Runtime) finish(f *frame, value *Value, err *error, sink resultSink) {
+// finishGuarded ends a guarded run: an extension that panicked is its
+// failure — the recover is here, once a run, not around each call — and the
+// run then ends as any does.
+func (r *Runtime) finishGuarded(f *frame, value *Value, err *error, sink resultSink) {
 	if recovered := recover(); recovered != nil {
 		*err = fmt.Errorf("%w: extension panicked: %v", ErrExtension, recovered)
 	}
+	r.finish(f, value, err, sink)
+}
+
+// finish ends a run: the answer goes into the host's Out, and the frame goes
+// back for the next run.
+func (r *Runtime) finish(f *frame, value *Value, err *error, sink resultSink) {
 	if sink.plan != nil && *err == nil {
 		*err = sink.deliver(*value)
 		*value = Value{}

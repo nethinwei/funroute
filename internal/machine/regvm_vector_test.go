@@ -1,11 +1,9 @@
 package machine_test
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
-	"slices"
 	"strings"
 	"testing"
 
@@ -16,7 +14,7 @@ import (
 // The shapes most comprehensions and aggregates take are run by the vector.
 func TestTheVectorRunsTheCommonShapes(t *testing.T) {
 	t.Parallel()
-	registry := aggregates(t)
+	registry := randomRegistry(t) // the kernel's sum, any, all and first carry their folds
 	for _, source := range vectorShapes {
 		runtime := loadVector(t, source, registry)
 		if machine.Vectors(runtime) == 0 {
@@ -42,48 +40,6 @@ var vectorShapes = []string{
 	`any([x > 15 for x in xs if x % 2 == 0])`,
 }
 
-// aggregates is the random registry with the standard aggregates' folds.
-func aggregates(t *testing.T) *machine.Registry {
-	t.Helper()
-	registry := randomRegistry(t)
-	sum := func(xs []int64) int64 {
-		total := int64(0)
-		for _, x := range xs {
-			total += x
-		}
-		return total
-	}
-	sumFloats := func(xs []float64) float64 {
-		total := 0.0
-		for _, x := range xs {
-			total += x
-		}
-		return total
-	}
-	quantifier := func(stop bool) func([]bool) bool {
-		return func(items []bool) bool { return slices.Contains(items, stop) == stop }
-	}
-	first := func(xs []int64) (int64, error) {
-		if len(xs) == 0 {
-			return 0, errors.New("first of an empty array")
-		}
-		return xs[0], nil
-	}
-	zero := machine.Float(0)
-	for _, spec := range []machine.FunctionSpec{
-		{Name: "sum", Go: sum, Fold: &machine.Fold{Step: "add", Init: machine.Int(0)}},
-		{Name: "sum", Go: sumFloats, Fold: &machine.Fold{Step: "add", Init: zero}},
-		{Name: "any", Go: quantifier(true), Fold: &machine.Fold{Init: machine.Bool(false), Stops: true, Stop: true}},
-		{Name: "all", Go: quantifier(false), Fold: &machine.Fold{Init: machine.Bool(true), Stops: true, Stop: false}},
-		{Name: "first", Go: first, Fold: &machine.Fold{First: true}},
-	} {
-		if err := registry.Register(spec); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return registry
-}
-
 func loadVector(t *testing.T, source string, registry *machine.Registry) *machine.Runtime {
 	t.Helper()
 	artifact, err := compile.CompileExpr(source, registry, randomContract)
@@ -102,7 +58,7 @@ func loadVector(t *testing.T, source string, registry *machine.Registry) *machin
 // a block of columns.
 func TestTheVectorAnswersAsTheBody(t *testing.T) {
 	t.Parallel()
-	registry := aggregates(t)
+	registry := randomRegistry(t) // the kernel's sum, any, all and first carry their folds
 	for _, source := range vectorShapes {
 		vector, body := loadVector(t, source, registry), loadVector(t, source, registry)
 		machine.WithoutVectors(body)
@@ -161,7 +117,7 @@ func describe(args map[string]any) string {
 // Random programs answer as they do without the vector.
 func TestTheVectorAnswersRandomProgramsAsTheBody(t *testing.T) {
 	t.Parallel()
-	registry := aggregates(t)
+	registry := randomRegistry(t) // the kernel's sum, any, all and first carry their folds
 	vectorized := 0
 	for seed := range uint64(240) {
 		g := &generator{rand: rand.New(rand.NewPCG(seed, 11)), ints: []string{"a", "b"}, arrays: []string{"xs"}}

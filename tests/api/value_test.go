@@ -40,6 +40,7 @@ var (
 	_ *funroute.Binding[RouteIn, RouteOut]
 	_ *funroute.Program[RouteIn, RouteOut]
 	_ *funroute.ProgramBatch[RouteIn, RouteOut]
+	_ *funroute.Session[RouteIn, RouteOut]
 	_ funroute.Money
 	_ funroute.ExactMoney
 	_ funroute.Ratio

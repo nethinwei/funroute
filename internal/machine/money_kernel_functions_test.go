@@ -3,6 +3,7 @@ package machine_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -229,9 +230,9 @@ func TestACurrencyIsADictionaryKey(t *testing.T) {
 func TestRoundRoundsWhatItsStepsMake(t *testing.T) {
 	t.Parallel()
 	registry := moneyRegistry(t)
-	overloads := registry.Overloads("round")
-	if len(overloads) != 1 || !overloads[0].IsRoundingScope() {
-		t.Fatalf("Overloads(round) = %v, want one rounding scope", overloads)
+	overloads := slices.DeleteFunc(registry.Overloads("round"), func(f *machine.RegisteredFunction) bool { return !f.IsRoundingScope() })
+	if len(overloads) != 1 {
+		t.Fatalf("Overloads(round) = %v, want one rounding scope", registry.Overloads("round"))
 	}
 	money := machine.MoneyValue(5, "USD")
 	value, err := overloads[0].Eval(t.Context(), []machine.Value{money, machine.String("half_up")})

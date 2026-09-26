@@ -517,5 +517,12 @@ func (r *Runtime) acquireFrame() *frame {
 
 func (r *Runtime) releaseFrame(f *frame) {
 	f.release()
-	r.frames.Put(f)
+	r.putFrame(f)
+}
+
+// putFrame gives a frame back to the pool, unless a Session owns it.
+func (r *Runtime) putFrame(f *frame) {
+	if !f.owned {
+		r.frames.Put(f)
+	}
 }

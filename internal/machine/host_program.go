@@ -90,10 +90,14 @@ func (c *Codec[In, Out]) bind(runtime *Runtime) (*Program[In, Out], error) {
 		return nil, kit.Classify(ErrContract, "result: ", err)
 	}
 	reads := argumentReads(declared, args, &runtime.reg)
-	return &Program[In, Out]{
+	program := &Program[In, Out]{
 		args: args, result: result, runtime: runtime, reads: reads, straight: straightProgram(runtime, result),
 		hoisted: NewBatch(runtime, BatchOptions{}),
-	}, nil
+	}
+	if program.straight {
+		program.plain = plainLoadsOf(reads, runtime.reg.args)
+	}
+	return program, nil
 }
 
 // argumentReads lists the arguments the bytecode loads. An argument the
@@ -131,8 +135,10 @@ type Program[In, Out any] struct {
 	runtime *Runtime
 	reads   []argRead
 	// straight is set for a program that runs the shorter way
-	// (host_straight.go).
+	// (host_straight.go), and plain, for one of those, when every argument it
+	// reads is a plain field.
 	straight bool
+	plain    *plainLoads
 	// hoisted is the program's batchable calls, found once. RunBatch executes
 	// through it directly; it never queues and never starts a timer.
 	hoisted *Batch
@@ -190,11 +196,15 @@ func (p *Program[In, Out]) run(ctx context.Context, in *In, out *Out, reuse bool
 	if in == nil {
 		return fmt.Errorf("%w: arguments are nil", ErrContract)
 	}
+	return p.runIn(ctx, p.runtime.acquireFrame(), in, out, reuse)
+}
+
+// runIn runs the program in f, a frame of the pool's or a Session's.
+func (p *Program[In, Out]) runIn(ctx context.Context, f *frame, in *In, out *Out, reuse bool) error {
 	if p.straight {
-		return p.runStraight(ctx, in, out)
+		return p.runStraight(ctx, f, in, out)
 	}
 	r := p.runtime
-	f := r.acquireFrame()
 	args := f.argSpace(len(p.args.params))
 	f.onlyReads = true
 	if err := encodeArgs(p.args, p.reads, args, in, f); err != nil {
@@ -215,4 +225,46 @@ func decodeInto[Out any](plan *codec, value Value) (Out, error) {
 		return zero, kit.Classify(ErrContract, "result: ", err)
 	}
 	return out, nil
+}
+
+// A Session runs a Program on one goroutine at a time, in a frame of its own:
+// what the pool of frames costs every run of Program.Run — taking a frame and
+// giving it back — it pays once, as a Lua state or a V8 isolate is one
+// thread's. Program.Run may be called from any number of goroutines at once;
+// a Session may not, so each goroutine that wants one takes its own.
+type Session[In, Out any] struct {
+	program *Program[In, Out]
+	frame   *frame
+}
+
+// Session is a new Session of the program.
+func (p *Program[In, Out]) Session() *Session[In, Out] {
+	f := p.runtime.newFrame()
+	f.owned = true
+	return &Session[In, Out]{program: p, frame: f}
+}
+
+// Run is Program.Run in the session's frame.
+func (s *Session[In, Out]) Run(ctx context.Context, in *In) (Out, error) {
+	var out Out
+	if err := s.run(ctx, in, &out, false); err != nil {
+		var zero Out
+		return zero, err
+	}
+	return out, nil
+}
+
+// RunInto is Program.RunInto in the session's frame.
+func (s *Session[In, Out]) RunInto(ctx context.Context, in *In, out *Out) error {
+	if out == nil {
+		return fmt.Errorf("%w: the result's place is nil", ErrContract)
+	}
+	return s.run(ctx, in, out, true)
+}
+
+func (s *Session[In, Out]) run(ctx context.Context, in *In, out *Out, reuse bool) error {
+	if in == nil {
+		return fmt.Errorf("%w: arguments are nil", ErrContract)
+	}
+	return s.program.runIn(ctx, s.frame, in, out, reuse)
 }

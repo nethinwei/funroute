@@ -19,7 +19,7 @@ lsp/                 语言服务（LSP + stdio）
 extensions/std/      标准库，只用公开 API
 internal/kit/        多个包共用的同一段逻辑：错误分类、名字与数字字符、切片投影与查重、JSON 数字 ← 只依赖标准库
 internal/money/      金额、比例、汇率、币种表、舍入与分摊的 Go 运算   ← 只依赖 kit
-internal/machine/    值、类型、字节码、VM、注册表、目录、清单        ← 只依赖 money
+internal/machine/    值、类型、字节码、VM、注册表、目录、清单、内核库  ← 只依赖 money
 internal/syntax/     词法、语法、AST、ExprJSON、格式化、语法树       ← 只依赖 machine
 internal/compile/    推导、编译、常量折叠、契约、Analyze             ← 依赖 syntax + machine
 internal/demo/       演示控制台：宿主组装注册表的范例，工作台用它（宿主侧）
@@ -37,7 +37,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 - 依赖严格单向（`go list -deps` 验证）；kit 在最底层，所有实现包与 `lsp/` 都可以用它，表里不再逐一写。
 - **同一段逻辑只写一处**：两个包以上都要的放进 `internal/kit`，只有一个包要的留在那个包（奥卡姆剃刀：kit 不收"将来可能用到"的东西）。kit 不懂语言，不放任何带 FunRoute 语义的代码。
 - **导入规则由 `tools/lint/imports.go` 强制**：实现包只有 `funroute.go` 与 `lsp/` 可以导入；`tests/`、`examples/` 与宿主侧包 `internal/demo` 只能用公开包，谁都可以导入 `internal/demo`。Go 的 internal 规则挡不住本模块自己的 `extensions/`、`examples/`、`tests/`、`cmd/`、`web/wasm`，所以需要这条检查。
-- machine 的文件按领域加前缀：`money_*.go` 是金额，`host_*.go` 是宿主绑定。
+- machine 的文件按领域加前缀：`money_*.go` 是金额，`host_*.go` 是宿主绑定，`lib_*.go` 是内核库（常用的聚合、数组、选择、字典、字符串、数值函数；低频的与金额重载在 std）。
 - value/container/convert/vm/frame 必须同包：VM 直接操作 `Value` 的私有 backing，拆开就只能走公开 accessor。
 - 跨层要用内部件时，导出一个**语义明确的入口**（如 `EvaluateClosed`、`Resolve`），不导出零件。
 
@@ -63,6 +63,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 - 不用金额的程序 digest 逐字节不变（`TestMoneyCapabilityKeepsDigests`）。
 
 **终止性与运行时长**
+- 只有调用了宿主函数（含纯函数，`regProgram.foreign`）的运行才设 `recover`：内核与内核库的代码不许 panic，`FuzzProgramsNeverPanic` 守着。新增内核函数时，所有失败都要走 error 返回。
 - 语言不图灵完备：没有递归、没有无界循环，每次 `Run` 只有一个帧。任何能重入程序的构造都会推翻 `docs/termination.md` 的定理 A 与 B。
 - 没有 fuel：运行多久由宿主的 `ctx` 决定，宿主调用前与循环每 `checkEvery` 轮（`machine/limit.go`，约 1 ms）查一次。新增会循环的执行路径（新的循环指令、向量的新走法）必须经 `turn` 计数，否则长循环停不下来。编译期折叠只按轮数（`foldTurns`）限制，不看时钟：同一份源码在哪台机器上都编出同一个 artifact。
 - 凭空造容器的函数标 `Doc.BoundedArgs`，整数实参必须由输入规模界定；扩展函数的计算量只能随输入**规模**增长，不能随参数**数值**增长（设上限或换算法，如 `range`/`pad`/`allocate` 的 10000、`pow` 的平方求幂）。
@@ -89,6 +90,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 - 改了翻译器、`rinstr` 或 `frame.exec`，与改动前交替跑 `BenchmarkDispatch`/`BenchmarkCall`/`BenchmarkRunPaths` 对照，再 `make perf`。
 - 值流分析（`lower_escape.go`）决定数组建在哪：不逃出运行的建在帧的 arena 槽里，box 是指向槽的指针（`*[]T`），只有翻译器为它选的指令（循环、`len_a`、`at_a`）见得到；答案建在宿主借出的槽里（`RunInto`）。**指针形式的 box 绝不能流到宿主函数、结果或容器里**——新增会读或放出数组的指令，先在值流分析里给它规则。帧里不存指向宿主 struct 的指针（它可能在宿主的栈上），只拷切片头。
 - 帧的 `release` 只清这次运行写过的部分：清含指针的内存要走写屏障——多清三个空槽就让固定开销从 30 ns 变成 60 ns。
+- `Session` 独占一个帧（`frame.owned`，不回池），给单个 goroutine 反复运行；还帧一律经 `putFrame`。`exec` 只交回答案所在的寄存器，调用方在收尾前取值一次。
 - 帧池只用 `sync.Pool`，热路径上不许有跨 goroutine 共享的可写状态：一个用原子操作取还的共享空闲帧，曾让 10 核并行比单核还慢（`BenchmarkRunParallel` 用 `-cpu 1,10` 看扩展）。
 - 向量（`lower_vector.go`、`regvm_vector*.go`）只跑逐列运算与折叠、收集、停止；遇到失败或停止，就把循环交回标量循环体，由它重跑那一项。所以向量只写快路径，`intOp`/`floatOp` 与内核指令必须逐项同义（`TestVectorOpsAnswerAsTheKernel`、`TestTheVectorAnswersAsTheBody` 守着）。
 - 类型在装载时由 `machine/verify.go` 证明一次，执行路径不再检查内核运算的结果、容器的元素、循环收集的值与局部槽是否绑定；只检查宿主函数的回答。新增会产生值的执行路径，先让验证器能证明它的类型。
@@ -112,7 +114,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 新增 ExprJSON 节点 | `syntax/ast.go`（嵌入 `Node` 并写 `kind` tag，字段带 tag，加进 `nodeTypes`）；语义在 `compile/infer_expr.go`、`compiler.go`；打印在 `syntax/print.go`、`format.go`；按节点分派的还有 `compile/enum.go`、`fold.go`；示例要用到它（`lsp/funroute_test.go` 检查） |
 | 改语法 | README 附录 A 的文法；跑 `go test ./internal/syntax -run XXX -fuzz FuzzFormatRoundTrip -fuzztime 60s` |
 | 新增函数 | 只经 `Registry.Register` 注册 `FunctionSpec`（手写 `Params`/`Result`/`Eval`，或填 `Go`/`GoBatch` 按 Go 签名反射），目录与 LSP 自动生效；`Doc` 是唯一的函数元数据结构；ABI 版本写进名字（`route.score_v1`） |
-| 新增官方函数或重载 | 补案例（内核 `machine/examples.go`，std `extensions/std/examples.go`），测试要求案例选中每个重载；一个名字服务多种元素类型用 std 的 `eachType` 并在 `TestNamesCoverEveryElementTypeTheyClaim` 加一行 |
+| 新增官方函数或重载 | 常用的进内核库（`lib_*.go`，经 `librarySpecs` 注册，直接操作 backing），其余进 std；补案例（内核 `machine/examples.go`，std `extensions/std/examples.go`），同名的内核重载与 std 金额重载各挂各的案例，测试要求合起来选中每个重载；一个名字服务多种元素类型用 `libEach`/std 的 `eachType`，std 的在 `TestNamesCoverEveryElementTypeTheyClaim` 加一行 |
 | 新增纯函数 | 标 `Doc.Constexpr` |
 | 新增聚合函数 | 能用一个内核函数一步步折叠、或遇到某个 bool 就停的，声明 `FunctionSpec.Fold`；融合后的答案与失败与按原样编译的一致（`internal/compile/aggregate_test.go` 对照） |
 | 按 Go 签名注册的新常见形状 | `host_direct.go` 一个 case，在 `TestDirectCallsAnswerAsReflection`（std 用的形状在 `TestTheStandardShapesAreCalledDirectly`）加一个该形状的函数 |

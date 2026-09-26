@@ -11,8 +11,8 @@ import (
 	"github.com/nethinwei/funroute/internal/kit"
 )
 
-// CoreRegistry is the minimal computational kernel: operator-facing functions
-// plus the lazy if and fallback calls. Optional structural forms are turned on
+// CoreRegistry is the computational kernel: operator-facing functions, the
+// lazy if and fallback calls, and the library (lib.go). Optional structural forms are turned on
 // with EnableForm, list primitives with RegisterArrayPrimitives, and everything
 // domain specific is registered by the host.
 func CoreRegistry() *Registry {
@@ -22,6 +22,7 @@ func CoreRegistry() *Registry {
 	registerComparisons(r)
 	registerConversions(r)
 	registerContainers(r)
+	registerLibrary(r)
 	return r
 }
 

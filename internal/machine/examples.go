@@ -56,6 +56,8 @@ var kernelExamples = map[string][]Example{
 	"mod": {
 		{"7 % 3", "1"},
 		{"-7 % 3", "-1"},
+		{"7.5 % 2.0", "1.5"},
+		{"mod(-7.5, 2.0)", "-1.5"},
 	},
 	"eq": {
 		{"1 == 1", "true"},
@@ -128,6 +130,8 @@ var kernelExamples = map[string][]Example{
 		{"round_to(CHF 1.03, CHF 0.05, @down)", `"CHF 1.00"`},
 	},
 	"round": {
+		{"round(2.5)", "3"},
+		{"round(-2.5)", "-3"},
 		{"round(USD 0.25 * 50%, @half_even)", `"USD 0.12"`},
 		{"round(USD 0.25 * 50%, @half_up)", `"USD 0.13"`},
 		{"round(USD 0.05 * 50% * 50%, @half_up)", `"USD 0.01"`},
@@ -144,6 +148,50 @@ var kernelExamples = map[string][]Example{
 		{"using(150 JPY / USD, fx(JPY, USD))", `{"base":"JPY","quote":"USD","rate":"1/150"}`},
 		{"using(150 JPY / USD, using(fx(USD, JPY) * 102%, round(USD 1 -> JPY, @half_even)))", `"JPY 153"`},
 	},
+	// The library (lib.go); the standard pack shows its money overloads.
+	"sum":          {{"sum([1, 2, 3])", "6"}, {"sum([0.5, 0.25])", "0.75"}, {"sum([x * 2 for x in [1, 2]])", "6"}},
+	"min":          libExtremes("min", "1", "0.5", `"adyen"`),
+	"max":          libExtremes("max", "5", "1.5", `"stripe"`),
+	"any":          {{"any([false, 2 > 1])", "true"}, {"any([])", "false"}},
+	"all":          {{"all([true, 2 > 1])", "true"}, {"all([])", "true"}},
+	"range":        {{"range(3)", "[0,1,2]"}, {"range(1, 4)", "[1,2,3]"}, {"range(0, 10, 3)", "[0,3,6,9]"}},
+	"upper":        {{`upper("adyen")`, `"ADYEN"`}},
+	"lower":        {{`lower("SGD")`, `"sgd"`}},
+	"trim":         {{`trim("  adyen ")`, `"adyen"`}},
+	"contains":     {{`contains("adyen-sg", "sg")`, "true"}},
+	"starts_with":  {{`starts_with("411111", "4111")`, "true"}},
+	"ends_with":    {{`ends_with("adyen-sg", "-sg")`, "true"}},
+	"split":        {{`split("a,b,c", ",")`, `["a","b","c"]`}},
+	"join":         {{`join(["R01", "R07"], "|")`, `"R01|R07"`}},
+	"replace":      {{`replace("a-b-c", "-", "_")`, `"a_b_c"`}},
+	"slice":        {{"slice([1, 2, 3, 4], 1, 3)", "[2,3]"}, {`slice("adyen", 0, 2)`, `"ad"`}},
+	"first":        {{"first([3, 4])", "3"}},
+	"last":         {{"last([3, 4])", "4"}},
+	"take":         {{"take([1, 2, 3], 2)", "[1,2]"}, {"take([1], 5)", "[1]"}},
+	"reverse":      {{"reverse([1, 2, 3])", "[3,2,1]"}},
+	"concat":       {{"concat([1, 2], [3])", "[1,2,3]"}},
+	"flatten":      {{"flatten([[1], [2, 3]])", "[1,2,3]"}},
+	"unique":       {{"unique([1, 2, 1, 3])", "[1,2,3]"}},
+	"sort":         {{"sort([2, 3, 1])", "[1,2,3]"}, {"sort([1.5, 2.5, 0.5])", "[0.5,1.5,2.5]"}, {`sort(["b", "c", "a"])`, `["a","b","c"]`}},
+	"sort_desc":    {{"sort_desc([2, 3, 1])", "[3,2,1]"}, {"sort_desc([1.5, 2.5, 0.5])", "[2.5,1.5,0.5]"}, {`sort_desc(["b", "c", "a"])`, `["c","b","a"]`}},
+	"abs":          {{"abs(-3)", "3"}, {"abs(-2.5)", "2.5"}},
+	"ceil":         {{"ceil(1.2)", "2"}, {"ceil(-1.2)", "-1"}},
+	"floor":        {{"floor(1.8)", "1"}, {"floor(-1.2)", "-2"}},
+	"pow":          {{"pow(2, 10)", "1024"}, {"pow(2.0, 0.5)", "1.4142135623730951"}},
+	"avg":          {{"avg([1, 2])", "1.5"}, {"avg([1.0, 2.0, 4.5])", "2.5"}},
+	"median":       {{"median([1, 2, 3, 4])", "2.5"}, {"median([1.0, 5.0, 2.0])", "2"}},
+	"stddev":       {{"stddev([2, 4, 4, 4, 5, 5, 7, 9])", "2"}, {"stddev([1.0, 3.0])", "1"}},
+	"percentile":   {{"percentile([1, 2, 3, 4], 0.5)", "2.5"}, {"percentile([10.0, 20.0], 0.95)", "19.5"}},
+	"arg_min":      libPositions("arg_min", "3"),
+	"arg_max":      libPositions("arg_max", "1"),
+	"top_k":        libByKey("top_k", ", 2)", `["b","a"]`),
+	"bottom_k":     libByKey("bottom_k", ", 2)", `["c","a"]`),
+	"sort_by":      libByKey("sort_by", ")", `["c","a","b"]`),
+	"sort_by_desc": libByKey("sort_by_desc", ")", `["b","a","c"]`),
+	"indices":      {{`indices(["a", "b", "c"])`, "[0,1,2]"}},
+	"index_of":     {{`index_of(["adyen", "stripe"], "stripe")`, "1"}},
+	"get":          {{`get({"adyen": 1}, "stripe", 0)`, "0"}, {`get({"adyen": 1}, "adyen", 0)`, "1"}},
+	"merge":        {{`merge({"a": 1, "b": 2}, {"b": 3})`, `{"a":1,"b":3}`}},
 }
 
 // orderings shows a comparison on every type it orders. larger writes each
@@ -193,4 +241,38 @@ var formExamples = map[string][]Example{
 		{"using(150 JPY / USD, using(fx(USD, JPY) * 102%, round(USD 1 -> JPY, @half_even)))", `"JPY 153"`},
 		{"using(150 JPY / USD, using(0.9 EUR / USD, fallback(round(USD 1 -> JPY, @half_even), JPY 0)))", `"JPY 0"`},
 	},
+}
+
+// libExtremes shows min or max over an array of every element type and
+// between two values of each.
+func libExtremes(name, integer, float, text string) []Example {
+	return []Example{
+		{name + "([1, 5, 3])", integer},
+		{name + "([0.5, 1.5])", float},
+		{name + `(["adyen", "stripe"])`, text},
+		{name + "(1, 5)", integer},
+		{name + "(0.5, 1.5)", float},
+		{name + `("adyen", "stripe")`, text},
+	}
+}
+
+// libPositions shows arg_min or arg_max over [4, 9, 9, 1] and its likes;
+// ties take the first.
+func libPositions(name, integer string) []Example {
+	return []Example{
+		{name + "([4, 9, 9, 1])", integer},
+		{name + "([4.5, 9.5, 9.5, 1.5])", integer},
+		{name + `(["d", "i", "i", "a"])`, integer},
+	}
+}
+
+// libByKey shows a function that orders ["a", "b", "c"] by keys of every
+// type, the keys ranking them b, a, c from the largest down.
+func libByKey(name, tail, result string) []Example {
+	keys := []string{"[2, 3, 1]", "[0.2, 0.3, 0.1]", `["m", "z", "a"]`}
+	out := make([]Example, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, Example{name + `(["a", "b", "c"], ` + key + tail, result})
+	}
+	return out
 }

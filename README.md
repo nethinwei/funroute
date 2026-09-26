@@ -198,9 +198,9 @@ let(
 {k: v * 2 for k, v in rates}
 ```
 
-### 聚合：标准库与 `reduce`
+### 聚合：内核库与 `reduce`
 
-求和、计数、取最值这些日常操作，直接用标准库 `extensions/std` 的函数：
+求和、计数、取最值这些日常操作，直接用内核库的函数，`funroute.CoreRegistry()` 自带，不用另外注册：
 
 ```text
 sum([price for price in prices if price >= minimum])
@@ -216,16 +216,16 @@ reduce(name, weight in weights, total = 0.0, total + weight)            // 遍�
 
 累加器写成 `total = 0`，和 `let` 的绑定同一个写法。
 
-标准库的主要内容（完整清单见工作台的「函数说明」，或在编辑器里悬停查看；每个函数都附有可以直接运行的案例）：
+内核库与标准库的主要内容（完整清单见工作台的「函数说明」，或在编辑器里悬停查看；每个函数都附有可以直接运行的案例）。常用的在内核里，调用就是内核调用：不查截止时间、不再检查结果类型，直接操作数组与字典自己的 backing；低频的与金额的重载在标准库 `extensions/std`（`std.Register(registry)`）：
 
-| 类别 | 函数 |
-|---|---|
-| 聚合 | `sum` `min` `max` `any` `all` `avg` `median` `stddev` `percentile` |
-| 序列 | `range` `indices` `first` `last` `take` `slice` `reverse` `concat` `unique` `flatten` `sort` `sort_desc` `top_k` `bottom_k` `take_while` `drop_while` `windows` `chunk` `deltas` `cumsum` |
-| 选择与分组 | `index_of` `arg_min` `arg_max` `sort_by` `sort_by_desc` `group_by` `rank` `intersect` `except` |
-| 字典 | `get` `merge` |
-| 字符串 | `upper` `lower` `trim` `contains` `starts_with` `ends_with` `split` `join` `replace` `pad_left` `pad_right`（宽度至多 10000） |
-| 数值 | `abs` `ceil` `floor` `round` `pow` |
+| 类别 | 内核库 | 标准库 |
+|---|---|---|
+| 聚合 | `sum` `min` `max` `any` `all` `avg` `median` `stddev` `percentile` | 它们的金额重载 |
+| 序列 | `range` `indices` `first` `last` `take` `slice` `reverse` `concat` `unique` `flatten` `sort` `sort_desc` `top_k` `bottom_k` | `take_while` `drop_while` `windows` `chunk` `deltas` `cumsum` |
+| 选择与分组 | `index_of` `arg_min` `arg_max` `sort_by` `sort_by_desc` | `group_by` `rank` `intersect` `except` |
+| 字典 | `get` `merge` | |
+| 字符串 | `upper` `lower` `trim` `contains` `starts_with` `ends_with` `split` `join` `replace` | `pad_left` `pad_right`（宽度至多 10000） |
+| 数值 | `abs` `ceil` `floor` `round` `pow` `mod`（float） | |
 
 `sum`、`any`、`all` 与内核的 `len` 套推导式时边算边折叠，不建中间数组；`any`/`all` 在决定答案的元素处停下，后面的元素不再计算——`any([10 / x > 2 for x in xs])` 在第一个为真的元素之后不会再除零，和 `||` 一样。
 
@@ -650,11 +650,22 @@ decision, _ := program.Run(ctx, &request)
 
 程序里的中间数组——只被遍历、取长度或下标的推导式与数组字面量——建在帧自己的内存里，帧跨运行复用，稳定之后 0 次分配。
 
-`program.RunInto(ctx, &request, &out, opts)` 把结果写进 `out`，并在 `out` 已有的切片里建数组结果，宿主拿同一个 `out` 反复运行就不再为结果分配。`out` 里的切片若与参数共用内存，就不在上面建（避免边读边写）；出错时 `out` 的内容不确定。
+`program.RunInto(ctx, &request, &out)` 把结果写进 `out`，并在 `out` 已有的切片里建数组结果，宿主拿同一个 `out` 反复运行就不再为结果分配。`out` 里的切片若与参数共用内存，就不在上面建（避免边读边写）；出错时 `out` 的内容不确定。
+
+`Program.Run` 可以在任意多个 goroutine 里同时调用，每次从池里取一个帧、用完还回去。同一个 goroutine 要反复跑同一条规则时，用 `program.Session()`：会话自己持有一个帧，省掉每次取还的开销（`a + b` 从约 19 ns 到约 12 ns）。会话不能并发使用，每个 goroutine 各取一个：
+
+```go
+session := program.Session()
+for _, request := range requests {
+    if err := session.RunInto(ctx, &request, &out); err != nil { … }
+}
+```
+
+规则不调用宿主函数时（只用内核与内核库），运行不设 `recover`：宿主函数是唯一可能 panic 的外来代码，调用它的规则照常把 panic 变成 `ErrExtension`。
 
 结果里的容器是程序的 backing，只读。
 
-**三条运行路径怎么选**：表单与 JSON 用 `Run(map)`；向量预先检查好、要反复复用的用 `RunValues`；服务的热路径用 `Program`。
+**运行路径怎么选**：表单与 JSON 用 `Run(map)`；值预先构造好、要反复复用的用 `RunValues`；服务的热路径用 `Program`，一个 goroutine 反复跑同一条规则用它的 `Session`。
 
 `[]float64` 与 `map[string]float64` 原样交给程序，不读也不复制：float 按 IEEE 754，NaN 与 ±Infinity 照常参与运算，所以边界上没有要检查的东西，长向量的开销与长度无关。规则要区分 NaN，就写 `x != x`（只有 NaN 不等于自己）。
 
@@ -867,7 +878,7 @@ minimal.EnableForm(funroute.SwitchForm)   // 只给多分支，不给遍历
 
 用了未启用的形式会在编译期报错（`reduce is not enabled in this registry`）。这条检查对源码和 ExprJSON 都生效，直接提交 JSON 也绕不过去。
 
-内核（`funroute.CoreRegistry()`）只有 19 个函数名：
+内核（`funroute.CoreRegistry()`）是 19 个运算与转换，加上上面「聚合」一节的内核库：
 
 - 控制：`if`、`fallback`、`eq`
 - 比较：`lt`、`le`、`gt`、`ge`

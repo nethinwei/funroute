@@ -166,3 +166,14 @@ func Straight[In, Out any](p *Program[In, Out]) bool { return p.straight }
 // Identical reports two values that are one value, NaN included
 // (identical).
 var Identical = identical
+
+// LibraryNames are the names of the library's functions (lib.go), each once.
+func LibraryNames() []string {
+	var names []string
+	for _, spec := range librarySpecs() {
+		if !slices.Contains(names, spec.Name) {
+			names = append(names, spec.Name)
+		}
+	}
+	return names
+}

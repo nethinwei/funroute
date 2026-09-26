@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,17 +46,20 @@ func TestCoreCatalogIsMinimalAndCarriesDisplayMetadata(t *testing.T) {
 			t.Fatalf("parameter display mismatch: %#v", function)
 		}
 	}
+	// The core is the operators and the conversions, and the library.
+	want := map[string]bool{}
 	for _, name := range []string{
 		"if", "fallback", "eq", "lt", "le", "gt", "ge",
 		"add", "sub", "mul", "div", "mod", "int", "float", "string", "bool",
 		"at", "member", "len",
 	} {
-		if !names[name] {
-			t.Fatalf("core function %q is missing", name)
-		}
+		want[name] = true
 	}
-	if len(names) != 19 {
-		t.Fatalf("core registry is not minimal: %#v, want 19 names", names)
+	for _, name := range machine.LibraryNames() {
+		want[name] = true
+	}
+	if !maps.Equal(names, want) {
+		t.Fatalf("core registry = %v, want %v", slices.Sorted(maps.Keys(names)), slices.Sorted(maps.Keys(want)))
 	}
 	if !fallback.Variadic() || fallback.Signature() != "fallback(T,T,...)->T" || len(fallback.Params()) != 2 {
 		t.Fatalf("fallback catalog = %#v, want variadic fallback(T,T,...)->T", fallback)
@@ -182,7 +187,7 @@ func TestCatalogJSONShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "a3c7663276f5b2877375b604f14a3aee2edd4af687139c256f4bbf1ffac72c41"
+	const want = "38af839c24f915d55a40025f90d22b31d2de3dd25363ae8868201f0511bff132"
 	if got := fmt.Sprintf("%x", sha256.Sum256(encoded)); got != want {
 		t.Fatalf("sha256(json.Marshal(catalog)) = %s, want %s", got, want)
 	}

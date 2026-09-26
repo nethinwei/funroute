@@ -130,8 +130,9 @@ type regProgram struct {
 	// scalar is set when no register ever holds a pointer, and scalarReads
 	// when none does but the slots of arguments the program never reads,
 	// which a Program leaves unwritten; hosts is set when the program calls
-	// a host's function.
-	scalar, scalarReads, hosts bool
+	// a host's function that is not pure, whose call looks at the deadline,
+	// and foreign when it calls a host's function at all, which may panic.
+	scalar, scalarReads, hosts, foreign bool
 	// nesting is how many loops deep the program goes; arenas and dests
 	// how many arena and answer slots it builds in.
 	nesting       int
