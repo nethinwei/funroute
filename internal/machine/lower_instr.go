@@ -18,7 +18,7 @@ func (l *lowerer) instruction(in Instruction) {
 	case OpField:
 		l.field(in.A)
 	case OpEqual:
-		l.binary(rEq, false)
+		l.binary(eqOp(l.stack[len(l.stack)-1].kind), false)
 	case OpCall:
 		l.call(in)
 	case OpJumpIfFalse:
@@ -43,7 +43,7 @@ func (l *lowerer) scoped(in Instruction) {
 		// A spread after the inner clause that put its items in place
 		// already is nothing to do.
 		if value := l.pop(); !l.spread {
-			l.emit(rSpread, value, 0, 0)
+			l.emit(rSpread, value.reg, 0, 0)
 		}
 		l.spread = false
 	case OpLoopNext:
@@ -52,8 +52,10 @@ func (l *lowerer) scoped(in Instruction) {
 		l.flush(0)
 		l.emit(rBeginFallback, 0, 0, 0)
 		l.jumpTo(operandA, in.A)
+		l.candidates++
 	case OpEndFallback:
 		l.emit(rEndFallback, 0, 0, 0)
+		l.candidates--
 	case OpFxPush:
 		l.emit(rFxPush, l.window(in.B), int32(in.B), 0)
 	case OpFxPop:
@@ -63,7 +65,7 @@ func (l *lowerer) scoped(in Instruction) {
 	case OpLoopBreak:
 		answer := l.pop()
 		l.flush(0)
-		l.emit(rLoopBreak, answer, 0, l.open[len(l.open)-1])
+		l.emitOn(rLoopBreak, answer.reg, 0, l.open[len(l.open)-1], opKinds{a: answer.kind})
 		l.jumpTo(operandB, in.A)
 	default:
 		l.err = fmt.Errorf("internal error: no lowering of opcode %q", in.Op)
@@ -73,7 +75,7 @@ func (l *lowerer) scoped(in Instruction) {
 // unary replaces the top value with op of it.
 func (l *lowerer) unary(op rop, b int32) {
 	value := l.pop()
-	l.emit(op, value, b, l.top())
+	l.emitOn(op, value.reg, b, l.top(), opKinds{a: value.kind})
 	l.push(l.top())
 }
 
@@ -84,8 +86,63 @@ func (l *lowerer) binary(op rop, swap bool) {
 	if swap {
 		left, right = right, left
 	}
-	l.emit(op, left, right, l.top())
+	l.emitOn(op, left.reg, right.reg, l.top(), opKinds{a: left.kind, b: right.kind})
 	l.push(l.top())
+}
+
+// boxes is which of the top n values, as window(n) puts them in their stack
+// registers, are ints, bools or floats: what a call that takes values
+// makes values of.
+func (l *lowerer) boxes(n int) []scalarArg {
+	var out []scalarArg
+	for k := len(l.stack) - n; k < len(l.stack); k++ {
+		if kind := l.stack[k].kind; bankOf(kind) != valueBank {
+			out = append(out, scalarArg{reg: l.stackBase + int32(k), kind: kind})
+		}
+	}
+	return out
+}
+
+// entryOp is the read of a dictionary's entry of kind: an int's, a float's
+// or a bool's into its file, and otherwise as a value.
+func entryOp(kind Kind) rop {
+	switch kind {
+	case IntKind:
+		return rAtDI
+	case FloatKind:
+		return rAtDF
+	case BoolKind:
+		return rAtDB
+	}
+	return rAtD
+}
+
+// eqOp is the equality of two values of kind: of the ints, of the floats,
+// or of the values.
+func eqOp(kind Kind) rop {
+	switch bankOf(kind) {
+	case intBank:
+		return rEqI
+	case floatBank:
+		return rEqF
+	}
+	return rEq
+}
+
+// atOp is the read of an item of kind: out of an array of ints or floats
+// into its file, and otherwise as a value — in an arena slot, when arena.
+func atOp(kind Kind, arena bool) rop {
+	switch {
+	case kind == IntKind:
+		return rAtI
+	case kind == FloatKind:
+		return rAtF
+	case kind == BoolKind:
+		return rAtB
+	case arena:
+		return rAtA
+	}
+	return rAt
 }
 
 // build lowers the instructions that take a run of values and make one.
@@ -107,6 +164,7 @@ func (l *lowerer) build(in Instruction) {
 	if in.Op == OpRecordWith {
 		made.keys, made.fields = nil, fieldIndexes(in)
 	}
+	made.boxes = l.boxes(count)
 	l.out.makes = append(l.out.makes, made)
 	first := l.window(count)
 	l.emit(op, first, int32(count), int32(len(l.out.makes)-1))
@@ -127,29 +185,52 @@ func fieldIndexes(in Instruction) []int {
 func (l *lowerer) call(in Instruction) {
 	function := l.functions[in.A]
 	if kernel, ok := kernelOps[function.key]; ok && function.builtin {
-		// An array in an arena slot is read there.
-		if l.flow.at[l.pc].uses && kernel.op == rAt {
-			kernel.op = rAtA
-		}
-		if kernel.unary {
-			l.unary(kernel.op, 0)
-		} else {
-			l.binary(kernel.op, kernel.swap)
-		}
+		l.kernel(kernel)
 		return
 	}
+	// A Go function of a common shape is called straight from the files,
+	// but in a fallback's candidate, where a call is made the ordinary way,
+	// off the values.
+	banked := function.banked
+	if l.candidates > 0 {
+		banked = nil
+	}
+	boxes := l.boxes(in.B)
 	first := l.window(in.B)
+	if banked != nil {
+		boxes = nil
+	}
 	// A pure function's call needs no deadline: only a host's other calls do.
 	l.out.hosts = l.out.hosts || !function.builtin && function.pure == nil
 	l.out.foreign = l.out.foreign || !function.builtin
 	l.out.calls = append(l.out.calls, rcall{
-		fn: function, typ: in.Type, args: first, argc: int32(in.B), dst: first, pc: int32(l.pc),
+		fn: function, typ: in.Type, kind: in.Type.kind, args: first, argc: int32(in.B), dst: first, pc: int32(l.pc),
 		kernel: function.builtin && !function.readsRun && function.Doc.Timeout == 0 && !function.Doc.Detached,
 		direct: !function.builtin && function.EvalBatch == nil && function.Doc.Timeout == 0 && !function.Doc.Detached,
-		pure:   function.pure,
+		banked: banked, deadline: !function.builtin && function.pure == nil, boxes: boxes,
 	})
 	l.emit(rCall, int32(len(l.out.calls)-1), 0, 0)
 	l.push(first)
+}
+
+// kernel lowers a kernel function's call into its own operation, of the
+// files its operands' and its answer's kinds say.
+func (l *lowerer) kernel(kernel kernelOp) {
+	op := kernel.op
+	switch op {
+	case rEq:
+		op = eqOp(l.stack[len(l.stack)-1].kind)
+	case rAt:
+		// An array in an arena slot is read there.
+		op = atOp(l.pushedKind(), l.flow.at[l.pc].uses)
+	case rAtD:
+		op = entryOp(l.pushedKind())
+	}
+	if kernel.unary {
+		l.unary(op, 0)
+	} else {
+		l.binary(op, kernel.swap)
+	}
 }
 
 // fusedBranch is the branch the operation at last makes one with, when it is
@@ -165,14 +246,14 @@ func (l *lowerer) fusedBranch(last int, condition int32) (rop, bool) {
 // branch lowers jump_if_false. A condition an ordering just made becomes one
 // operation with the jump; a constant one, a jump or nothing.
 func (l *lowerer) branch(target int) {
-	condition := l.pop()
+	condition := l.pop().reg
 	last := len(l.out.code) - 1
 	// Only an operation of this block fuses — there may be none yet.
 	if fused, ok := l.fusedBranch(last, condition); ok {
-		ordering, origin := l.out.code[last], l.out.origins[last]
-		l.out.code, l.out.origins = l.out.code[:last], l.out.origins[:last]
+		ordering, origin, kinds := l.out.code[last], l.out.origins[last], l.out.kinds[last]
+		l.out.code, l.out.origins, l.out.kinds = l.out.code[:last], l.out.origins[:last], l.out.kinds[:last]
 		l.flush(0)
-		l.emit(fused, ordering.a, ordering.b, 0)
+		l.emitOn(fused, ordering.a, ordering.b, 0, kinds)
 		// A comparison that can fail fails as the one it was.
 		l.out.origins[len(l.out.origins)-1] = origin
 		l.jumpTo(operandC, target)
@@ -195,11 +276,12 @@ func (l *lowerer) branch(target int) {
 // branchOps is the branch each ordering makes with the jump after it.
 var branchOps = map[rop]rop{
 	rLtI: rBranchLtI, rLeI: rBranchLeI, rLtF: rBranchLtF, rLeF: rBranchLeF, rLtS: rBranchLtS, rLeS: rBranchLeS, rEq: rBranchEq,
+	rEqI: rBranchEqI, rEqF: rBranchEqF,
 }
 
 // loopInit lowers the start of a loop: the source, and a fold's seed.
 func (l *lowerer) loopInit(in Instruction) {
-	seed := int32(-1)
+	seed := slot{reg: -1}
 	if in.C != NoAccumulator {
 		seed = l.pop()
 	}
@@ -217,31 +299,42 @@ func (l *lowerer) loopInit(in Instruction) {
 	index := int32(len(l.out.loops) - 1)
 	l.open = append(l.open, index)
 	l.out.nesting = max(l.out.nesting, len(l.open))
-	l.emit(rLoopInit, source, seed, index)
+	l.emitOn(rLoopInit, source.reg, seed.reg, index, opKinds{a: source.kind, b: seed.kind})
 }
 
 // fold lowers an item folded into its loop's answer: into the step's own
 // operation when the kernel has one, and otherwise into a call of the answer
 // and the item, moved into two registers of their own.
 func (l *lowerer) fold(in Instruction) {
-	acc := l.out.loops[l.open[len(l.open)-1]].acc
+	loop := l.out.loops[l.open[len(l.open)-1]]
+	acc := slot{reg: loop.acc, kind: loop.typ.kind}
 	item := l.pop()
-	l.clobber(acc)
+	l.clobber(acc.reg)
 	step := l.functions[in.A]
 	if kernel, ok := kernelOps[step.key]; ok && step.builtin && !kernel.unary {
 		left, right := acc, item
 		if kernel.swap {
 			left, right = right, left
 		}
-		l.emit(kernel.op, left, right, acc)
+		op := kernel.op
+		if op == rEq {
+			op = eqOp(left.kind)
+		}
+		l.emitOn(op, left.reg, right.reg, acc.reg, opKinds{a: left.kind, b: right.kind})
 		return
 	}
 	scratch := l.scratch()
-	l.emit(rMove, acc, 0, scratch)
-	l.emit(rMove, item, 0, scratch+1)
+	l.move(acc.kind, acc.reg, scratch)
+	l.move(item.kind, item.reg, scratch+1)
+	var boxes []scalarArg
+	for i, value := range []slot{acc, item} {
+		if bankOf(value.kind) != valueBank {
+			boxes = append(boxes, scalarArg{reg: scratch + int32(i), kind: value.kind})
+		}
+	}
 	l.out.calls = append(l.out.calls, rcall{
-		fn: step, typ: in.Type, args: scratch, argc: 2, dst: acc, pc: int32(l.pc),
-		kernel: !step.readsRun,
+		fn: step, typ: in.Type, kind: acc.kind, args: scratch, argc: 2, dst: acc.reg, pc: int32(l.pc),
+		kernel: !step.readsRun, boxes: boxes,
 	})
 	l.emit(rCall, int32(len(l.out.calls)-1), 0, 0)
 }
@@ -262,12 +355,31 @@ func (l *lowerer) collect(in Instruction) {
 		l.store(loop.acc)
 		return
 	}
-	value, key := l.pop(), int32(-1)
+	value := l.pop()
 	if in.A == 1 {
-		key = l.pop()
+		// A dictionary's entry is read out of the file its kind says, c.
+		key := l.pop()
+		l.emitOn(rCollect, value.reg, key.reg, int32(value.kind), opKinds{a: value.kind})
+		return
 	}
-	l.emit(rCollect, value, key, 0)
+	l.emitOn(collectOp(value.kind), value.reg, -1, 0, opKinds{a: value.kind})
 }
+
+// collectOp is what adds an item of kind to an array: an int or a bool, or
+// a float, out of its file, and anything else as a value.
+func collectOp(kind Kind) rop {
+	switch bankOf(kind) {
+	case intBank:
+		return rCollectI
+	case floatBank:
+		return rCollectF
+	}
+	return rCollect
+}
+
+// collectNext is the collect of an item that the loop's next makes one
+// operation with.
+var collectNext = map[rop]rop{rCollect: rCollectNext, rCollectI: rCollectNextI, rCollectF: rCollectNextF}
 
 // loopNext lowers the end of a loop's body. An unkeyed collect just before
 // it becomes one operation with it.
@@ -278,10 +390,23 @@ func (l *lowerer) loopNext(in Instruction) {
 	if l.pc+1 < len(l.code) && l.code[l.pc+1].Op == OpLoopSpread {
 		l.out.loops[loop].spread, l.spread = true, true
 	}
-	if last := &l.out.code[len(l.out.code)-1]; last.op == rCollect && last.b < 0 && int32(len(l.out.code)-1) >= l.blockStart {
-		last.op, last.c = rCollectNext, loop
+	collect := len(l.out.code) - 1
+	last := &l.out.code[collect]
+	switch fuses := collectNext[last.op] != rInvalid && last.b < 0; {
+	case fuses && int32(collect) >= l.blockStart:
+		// The collect goes on by itself; after the loop is what comes next.
+		last.op, last.c = collectNext[last.op], int32(collect+1)
 		l.jumpTo(operandB, in.A)
-	} else {
+	case fuses:
+		// A branch skips the collect to this next: the collect goes on by
+		// itself all the same, the next stays for the items the branch
+		// sends it, and after the loop is past both.
+		last.op = collectNext[last.op]
+		l.fixups = append(l.fixups, fixup{at: collect, operand: operandB, target: in.A})
+		l.emit(rLoopNext, 0, 0, loop)
+		l.jumpTo(operandA, in.A)
+		l.out.code[collect].c = int32(len(l.out.code))
+	default:
 		l.emit(rLoopNext, 0, 0, loop)
 		l.jumpTo(operandA, in.A)
 	}

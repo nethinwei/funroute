@@ -68,7 +68,7 @@ func (p *Program[In, Out]) runStraight(ctx context.Context, f *frame, in *In, ou
 	}
 	answer, err := f.exec()
 	if err == nil {
-		storePlain(p.result.goKind, placeOf(out), &f.regs[answer])
+		storePlain(p.result.goKind, placeOf(out), &f.banks, answer)
 	}
 	r.finishStraight(f)
 	return err
@@ -80,7 +80,7 @@ func (p *Program[In, Out]) runStraightGuarded(f *frame, out *Out) (err error) {
 	defer p.runtime.recoverStraight(f, &err)
 	answer, err := f.exec()
 	if err == nil {
-		storePlain(p.result.goKind, placeOf(out), &f.regs[answer])
+		storePlain(p.result.goKind, placeOf(out), &f.banks, answer)
 	}
 	return err
 }
@@ -90,20 +90,28 @@ func (p *Program[In, Out]) runStraightGuarded(f *frame, out *Out) (err error) {
 // way otherwise.
 func (p *Program[In, Out]) loadStraight(f *frame, in *In) error {
 	if p.plain == nil {
-		return encodeArgs(p.args, p.reads, f.argSpace(len(p.args.params)), in, f)
+		if err := encodeArgs(p.args, p.reads, f.argSpace(len(p.args.params)), in, f); err != nil {
+			return err
+		}
+		if args := p.runtime.reg.scalarArgs; len(args) > 0 {
+			f.bankArgs(args)
+		}
+		return nil
 	}
-	base, regs := unsafe.Pointer(in), f.regs
+	// Each straight into its file: an int's, a float's and a bool's are
+	// eight bytes, and no value is made of them.
+	base := unsafe.Pointer(in)
 	for _, at := range p.plain.ints {
-		regs[at.reg] = Value{kind: IntKind, i: *(*int64)(unsafe.Add(base, at.offset))}
+		f.ints[at.reg] = *(*int64)(unsafe.Add(base, at.offset))
 	}
 	for _, at := range p.plain.floats {
-		regs[at.reg] = Value{kind: FloatKind, f: *(*float64)(unsafe.Add(base, at.offset))}
+		f.floats[at.reg] = *(*float64)(unsafe.Add(base, at.offset))
 	}
 	for _, at := range p.plain.bools {
-		regs[at.reg] = Value{kind: BoolKind, b: *(*bool)(unsafe.Add(base, at.offset))}
+		f.ints[at.reg] = word(*(*bool)(unsafe.Add(base, at.offset)))
 	}
 	for _, at := range p.plain.strings {
-		regs[at.reg] = Value{kind: StringKind, s: *(*string)(unsafe.Add(base, at.offset))}
+		f.regs[at.reg] = Value{kind: StringKind, s: *(*string)(unsafe.Add(base, at.offset))}
 	}
 	return nil
 }
@@ -166,16 +174,17 @@ func (r *Runtime) finishStraight(f *frame) {
 	r.putFrame(f)
 }
 
-// storePlain writes a plain answer of kind at p.
-func storePlain(kind reflect.Kind, p unsafe.Pointer, v *Value) {
+// storePlain writes a plain answer of kind at p, out of register answer's
+// file.
+func storePlain(kind reflect.Kind, p unsafe.Pointer, b *banks, answer int32) {
 	switch kind {
 	case reflect.Bool:
-		*(*bool)(p) = v.b
+		*(*bool)(p) = b.ints[answer] != 0
 	case reflect.Int64:
-		*(*int64)(p) = v.i
+		*(*int64)(p) = b.ints[answer]
 	case reflect.Float64:
-		*(*float64)(p) = v.f
+		*(*float64)(p) = b.floats[answer]
 	default:
-		*(*string)(p) = v.s
+		*(*string)(p) = b.regs[answer].s
 	}
 }

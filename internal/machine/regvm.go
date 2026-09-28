@@ -14,53 +14,59 @@ import (
 // clears ok, and fault says why. It answers the register the program's
 // answer is in, so the answer is copied once, where it is taken.
 func (f *frame) exec() (int32, error) {
-	code, regs := f.runtime.reg.code, f.regs
+	code, b := f.runtime.reg.code, &f.banks
 	for pc := 0; ; {
 		in := &code[pc]
 		pc++
 		ok, err := true, error(nil)
 		switch in.op {
+		case rMoveI:
+			b.ints[in.c] = b.ints[in.a]
 		case rMove:
-			regs[in.c] = regs[in.a]
+			b.regs[in.c] = b.regs[in.a]
 		case rJump:
 			pc = int(in.a)
 		case rBranch:
-			pc = branchUnless(regs[in.a].b, pc, in.b)
+			pc = branchUnless(b.ints[in.a] != 0, pc, in.b)
 		case rAddI:
-			ok = addI(regs, in)
+			ok = addI(b.ints, in)
 		case rSubI:
-			ok = subI(regs, in)
+			ok = subI(b.ints, in)
 		case rMulI:
-			ok = mulI(regs, in)
-		case rDivI:
-			ok = divI(regs, in)
-		case rAddF:
-			ok = addF(regs, in)
+			ok = mulI(b.ints, in)
+		case rField, rFieldI, rFieldF, rFieldB:
+			err = f.readField(in)
 		case rBranchLtI:
-			pc = branchUnless(regs[in.a].i < regs[in.b].i, pc, in.c)
+			pc = branchUnless(b.ints[in.a] < b.ints[in.b], pc, in.c)
 		case rBranchLeI:
-			pc = branchUnless(regs[in.a].i <= regs[in.b].i, pc, in.c)
+			pc = branchUnless(b.ints[in.a] <= b.ints[in.b], pc, in.c)
 		case rLoopNext:
 			pc, err = f.regLoopNext(pc, in.a)
-		case rCollect:
-			f.collect(in.a, in.b)
+		case rCollectNextI:
+			f.collectInt(in.a)
+			pc, err = f.regLoopNext(int(in.c), in.b)
 		case rCollectNext:
-			pc, err = f.collectNext(pc, in)
+			pc, err = f.collectNext(in)
 		case rCall:
 			err = f.callSite(in.a)
-		case rLen:
-			lengthOp(regs, in)
+		case rCollect:
+			f.collect(in.a, in.b, Kind(in.c))
 		case rHalt:
 			return in.a, nil
 		default:
 			pc, ok, err = f.cold(pc, in)
 		}
-		if !ok || err != nil {
-			if pc, err = f.failed(pc, ok, err); err != nil {
-				return 0, err
-			}
+		if (!ok || err != nil) && f.stops(&pc, ok, &err) {
+			return 0, err
 		}
 	}
+}
+
+// stops takes the failure of the operation before pc to where the run goes
+// on, and reports whether that is nowhere: no fallback takes it.
+func (f *frame) stops(pc *int, ok bool, err *error) bool {
+	*pc, *err = f.failed(*pc, ok, *err)
+	return *err != nil
 }
 
 // failed is where a run goes on after the operation before pc failed: to
@@ -99,10 +105,11 @@ func (f *frame) caught(err error) (int, error) {
 // fault is why the operation at pc could not answer: the kernel function's
 // own failure, which asking it gives.
 func (f *frame) fault(pc int) error {
-	in := &f.runtime.reg.code[pc]
+	in, kinds := &f.runtime.reg.code[pc], f.runtime.reg.kinds[pc]
 	origin := int(f.runtime.reg.origins[pc])
 	source := f.runtime.artifact.parts.Instructions[origin]
-	left, right := unarena(f.regs[in.a]), f.regs[in.b]
+	// The operands as the function takes them: values, out of their files.
+	left, right := unarena(f.valueAt(in.a, kinds.a)), f.valueAt(in.b, kinds.b)
 	if source.Op == OpEqual {
 		_, err := compareEqual(left, right)
 		return err

@@ -11,20 +11,23 @@ import (
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
-// The shapes most rules are made of lower to the few operations they need:
-// a value that is only read is read where it is, a result is made where it
-// goes, a comparison is one with its branch, a comprehension's collect is
-// one with its next, and a nested one's inner clause fills the outer's array.
+// The shapes most rules are made of lower to the few operations they need,
+// each in its file: a value that is only read is read where it is, a result
+// is made where it goes, a comparison is one with its branch, a
+// comprehension's collect is one with its next — a filtered one's too, the
+// next staying for the items the filter skips — and a nested one's inner
+// clause fills the outer's array.
 func TestLoweringFusesTheCommonShapes(t *testing.T) {
 	t.Parallel()
 	registry := randomRegistry(t)
 	for _, test := range []struct{ source, ops string }{
 		{`a * b / 10000 + a`, "mul_i div_i add_i halt"},
-		{`if(a < b, a, b)`, "branch_lt_i move jump move halt"},
+		{`if(a < b, a, b)`, "branch_lt_i move_i jump move_i halt"},
 		{`let(c = a * b, c + a)`, "mul_i add_i halt"},
 		{`reduce(x in xs, t = 0, t + x)`, "loop_init add_i loop_next halt"},
-		{`[x + 1 for x in xs]`, "loop_init add_i collect_next halt"},
-		{`[x * y for x in xs for y in xs]`, "loop_init loop_init mul_i collect_next loop_next halt"},
+		{`[x + 1 for x in xs]`, "loop_init add_i collect_next_i halt"},
+		{`[x for x in xs if x > 0]`, "loop_init branch_lt_i collect_next_i loop_next halt"},
+		{`[x * y for x in xs for y in xs]`, "loop_init loop_init mul_i collect_next_i loop_next halt"},
 	} {
 		artifact, err := compile.CompileExpr(test.source, registry, randomContract)
 		if err != nil {

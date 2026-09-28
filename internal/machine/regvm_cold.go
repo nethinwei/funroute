@@ -7,85 +7,161 @@ import (
 
 // cold runs the operations the hot loop does not hold, and returns where the
 // run goes on, and whether the fast path answered. It is small enough to be
-// inlined, so a kernel operation costs one call.
+// inlined, so a kernel operation costs one call: its row of coldKernels.
 func (f *frame) cold(pc int, in *rinstr) (int, bool, error) {
 	if in.op < rCall {
-		pc, ok := coldKernel(f.regs, pc, in)
+		pc, ok := coldKernels[in.op](&f.banks, pc, in)
 		return pc, ok, nil
 	}
 	return f.structure(pc, in)
 }
 
-// coldKernel runs a kernel operation the hot loop does not hold, and is where
-// the run goes on — past it, or where the branch it makes goes — and whether
-// the fast path answered.
-func coldKernel(regs []Value, pc int, in *rinstr) (int, bool) {
-	switch in.op {
-	case rBranchLtF:
-		return branchUnless(regs[in.a].f < regs[in.b].f, pc, in.c), true
-	case rBranchLeF:
-		return branchUnless(regs[in.a].f <= regs[in.b].f, pc, in.c), true
-	case rBranchLtS:
-		return branchUnless(regs[in.a].s < regs[in.b].s, pc, in.c), true
-	case rBranchLeS:
-		return branchUnless(regs[in.a].s <= regs[in.b].s, pc, in.c), true
-	case rBranchEq:
-		return branchEq(regs, pc, in)
-	case rModI:
-		return pc, modI(regs, in)
-	case rSubF:
-		return pc, subF(regs, in)
-	case rMulF:
-		return pc, mulF(regs, in)
-	case rDivF:
-		return pc, divF(regs, in)
-	case rEq:
-		return pc, eq(regs, in)
-	case rAt:
-		return pc, at(regs, in)
-	case rAtA:
-		return pc, arenaAt(regs, in)
-	case rTake:
-		return pc, takeOp(regs, in)
-	case rIntToF:
-		return pc, intToFloat(regs, in)
-	}
-	return pc, compare(regs, in)
-}
+// kernelStep runs a kernel operation, and is where the run goes on — past
+// it, or where the branch it makes goes — and whether the fast path
+// answered.
+type kernelStep func(b *banks, pc int, in *rinstr) (int, bool)
 
-// compare runs the kernel operations that cannot fail: the orderings, a
-// concatenation, a length.
-func compare(regs []Value, in *rinstr) bool {
-	a, b := &regs[in.a], &regs[in.b]
-	switch in.op {
-	case rConcat:
-		regs[in.c] = String(a.s + b.s)
-	case rLtI:
-		regs[in.c] = Bool(a.i < b.i)
-	case rLeI:
-		regs[in.c] = Bool(a.i <= b.i)
-	case rLtF:
-		regs[in.c] = Bool(a.f < b.f)
-	case rLeF:
-		regs[in.c] = Bool(a.f <= b.f)
-	case rLtS:
-		regs[in.c] = Bool(a.s < b.s)
-	case rLeS:
-		regs[in.c] = Bool(a.s <= b.s)
-	}
-	return true
+// coldKernels is, by operation, the kernel operations the hot loop does not
+// hold: a table, not a switch in a switch, so each is one call away. A row
+// the hot loop holds runs as it would there. TestEveryKernelOpHasAColdStep
+// holds every operation before rCall to one.
+var coldKernels = [rCall]kernelStep{
+	rInvalid: func(_ *banks, pc int, _ *rinstr) (int, bool) { return pc, true },
+	rMove:    func(b *banks, pc int, in *rinstr) (int, bool) { b.regs[in.c] = b.regs[in.a]; return pc, true },
+	rMoveI:   func(b *banks, pc int, in *rinstr) (int, bool) { b.ints[in.c] = b.ints[in.a]; return pc, true },
+	rMoveF:   func(b *banks, pc int, in *rinstr) (int, bool) { b.floats[in.c] = b.floats[in.a]; return pc, true },
+	rJump:    func(_ *banks, _ int, in *rinstr) (int, bool) { return int(in.a), true },
+	rBranch:  func(b *banks, pc int, in *rinstr) (int, bool) { return branchUnless(b.ints[in.a] != 0, pc, in.b), true },
+	rAddI:    func(b *banks, pc int, in *rinstr) (int, bool) { return pc, addI(b.ints, in) },
+	rSubI:    func(b *banks, pc int, in *rinstr) (int, bool) { return pc, subI(b.ints, in) },
+	rMulI:    func(b *banks, pc int, in *rinstr) (int, bool) { return pc, mulI(b.ints, in) },
+	rDivI:    func(b *banks, pc int, in *rinstr) (int, bool) { return pc, divI(b.ints, in) },
+	rModI:    func(b *banks, pc int, in *rinstr) (int, bool) { return pc, modI(b.ints, in) },
+	rAddF:    func(b *banks, pc int, in *rinstr) (int, bool) { addF(b.floats, in); return pc, true },
+	rSubF:    func(b *banks, pc int, in *rinstr) (int, bool) { subF(b.floats, in); return pc, true },
+	rMulF:    func(b *banks, pc int, in *rinstr) (int, bool) { mulF(b.floats, in); return pc, true },
+	rDivF:    func(b *banks, pc int, in *rinstr) (int, bool) { divF(b.floats, in); return pc, true },
+	rConcat: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.regs[in.c] = String(b.regs[in.a].s + b.regs[in.b].s)
+		return pc, true
+	},
+	rLtI: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.ints[in.c] = word(b.ints[in.a] < b.ints[in.b])
+		return pc, true
+	},
+	rLeI: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.ints[in.c] = word(b.ints[in.a] <= b.ints[in.b])
+		return pc, true
+	},
+	rLtF: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.ints[in.c] = word(b.floats[in.a] < b.floats[in.b])
+		return pc, true
+	},
+	rLeF: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.ints[in.c] = word(b.floats[in.a] <= b.floats[in.b])
+		return pc, true
+	},
+	rLtS: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.ints[in.c] = word(b.regs[in.a].s < b.regs[in.b].s)
+		return pc, true
+	},
+	rLeS: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.ints[in.c] = word(b.regs[in.a].s <= b.regs[in.b].s)
+		return pc, true
+	},
+	rBranchLtI: func(b *banks, pc int, in *rinstr) (int, bool) {
+		return branchUnless(b.ints[in.a] < b.ints[in.b], pc, in.c), true
+	},
+	rBranchLeI: func(b *banks, pc int, in *rinstr) (int, bool) {
+		return branchUnless(b.ints[in.a] <= b.ints[in.b], pc, in.c), true
+	},
+	rBranchLtF: func(b *banks, pc int, in *rinstr) (int, bool) {
+		return branchUnless(b.floats[in.a] < b.floats[in.b], pc, in.c), true
+	},
+	rBranchLeF: func(b *banks, pc int, in *rinstr) (int, bool) {
+		return branchUnless(b.floats[in.a] <= b.floats[in.b], pc, in.c), true
+	},
+	rBranchLtS: func(b *banks, pc int, in *rinstr) (int, bool) {
+		return branchUnless(b.regs[in.a].s < b.regs[in.b].s, pc, in.c), true
+	},
+	rBranchLeS: func(b *banks, pc int, in *rinstr) (int, bool) {
+		return branchUnless(b.regs[in.a].s <= b.regs[in.b].s, pc, in.c), true
+	},
+	rBranchEq: branchEq,
+	rBranchEqI: func(b *banks, pc int, in *rinstr) (int, bool) {
+		return branchUnless(b.ints[in.a] == b.ints[in.b], pc, in.c), true
+	},
+	rBranchEqF: func(b *banks, pc int, in *rinstr) (int, bool) {
+		return branchUnless(b.floats[in.a] == b.floats[in.b], pc, in.c), true
+	},
+	rEq: func(b *banks, pc int, in *rinstr) (int, bool) { return pc, eq(b, in) },
+	rEqI: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.ints[in.c] = word(b.ints[in.a] == b.ints[in.b])
+		return pc, true
+	},
+	rEqF: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.ints[in.c] = word(b.floats[in.a] == b.floats[in.b])
+		return pc, true
+	},
+	rLen:      func(b *banks, pc int, in *rinstr) (int, bool) { lengthOp(b, in); return pc, true },
+	rAt:       func(b *banks, pc int, in *rinstr) (int, bool) { return pc, at(b, in) },
+	rAtI:      func(b *banks, pc int, in *rinstr) (int, bool) { return pc, atI(b, in) },
+	rAtF:      func(b *banks, pc int, in *rinstr) (int, bool) { return pc, atF(b, in) },
+	rAtB:      func(b *banks, pc int, in *rinstr) (int, bool) { return pc, atB(b, in) },
+	rAtD:      func(b *banks, pc int, in *rinstr) (int, bool) { return pc, entry(b, in) },
+	rAtDI:     func(b *banks, pc int, in *rinstr) (int, bool) { return pc, entryI(b, in) },
+	rAtDF:     func(b *banks, pc int, in *rinstr) (int, bool) { return pc, entryF(b, in) },
+	rAtDB:     func(b *banks, pc int, in *rinstr) (int, bool) { return pc, entryB(b, in) },
+	rIntToF:   func(b *banks, pc int, in *rinstr) (int, bool) { return pc, intToFloat(b, in) },
+	rFloatToI: func(b *banks, pc int, in *rinstr) (int, bool) { return pc, floatToInt(b, in) },
+	rAtA:      func(b *banks, pc int, in *rinstr) (int, bool) { return pc, arenaAt(b, in) },
+	rTake:     func(b *banks, pc int, in *rinstr) (int, bool) { return pc, takeOp(b, in) },
 }
 
 // structure runs what builds values and what opens and closes a loop, a
 // fallback or a using.
 func (f *frame) structure(pc int, in *rinstr) (int, bool, error) {
+	// What a loop's body does most after a field read — add an item — is
+	// here, a call from the hot loop, and the rest one more away.
 	switch in.op {
-	case rField:
-		record, ok := f.regs[in.a].box.(*recordValue)
-		if !ok {
-			return pc, true, errNotARecord
-		}
-		f.regs[in.c] = record.fields[in.b]
+	case rCollectI:
+		f.collectInt(in.a)
+	case rCollectF:
+		f.collectFloat(in.a)
+	case rCollectNextF:
+		f.collectFloat(in.a)
+		pc, err := f.regLoopNext(int(in.c), in.b)
+		return pc, true, err
+	default:
+		return f.scoped(pc, in)
+	}
+	return pc, true, nil
+}
+
+// readField reads field b of the record in a into register c, in the file
+// of its kind.
+func (f *frame) readField(in *rinstr) error {
+	record, ok := f.regs[in.a].box.(*recordValue)
+	if !ok {
+		return errNotARecord
+	}
+	switch field := &record.fields[in.b]; in.op {
+	case rFieldI:
+		f.ints[in.c] = field.i
+	case rFieldF:
+		f.floats[in.c] = field.f
+	case rFieldB:
+		f.ints[in.c] = word(field.b)
+	default:
+		f.regs[in.c] = *field
+	}
+	return nil
+}
+
+// scoped runs what builds values and what opens and closes a loop, a
+// fallback or a using.
+func (f *frame) scoped(pc int, in *rinstr) (int, bool, error) {
+	switch in.op {
 	case rMakeArray, rMakeDict, rMakeRecord, rRecordWith:
 		built, err := f.build(in)
 		f.regs[in.a] = built
@@ -120,6 +196,9 @@ var errNotARecord = errors.New("internal error: not a record")
 // registers. Loading proved each of the type it goes in as.
 func (f *frame) build(in *rinstr) (Value, error) {
 	made := &f.runtime.reg.makes[in.c]
+	if len(made.boxes) > 0 {
+		f.boxArgs(made.boxes)
+	}
 	items := f.regs[in.a : in.a+in.b]
 	switch in.op {
 	case rMakeArray:

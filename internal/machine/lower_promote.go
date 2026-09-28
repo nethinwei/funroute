@@ -10,9 +10,10 @@ package machine
 // of beyond what loading it does. Lowering does not change the artifact.
 
 // promotion is one promoted field: argument arg's field field, in register
-// reg.
+// reg — in the file of the field's kind.
 type promotion struct {
 	arg, field, reg int32
+	kind            Kind
 }
 
 // promotionsOf finds the promoted fields of parts, in registers from base
@@ -34,7 +35,10 @@ func promotionsOf(parts *ArtifactParts, leaders []bool, base int32) []promotion 
 		if in.Op != OpLoadArg || !eligible[in.A] || promoted(promotions, int32(in.A), int32(code[pc+1].A)) >= 0 {
 			continue
 		}
-		promotions = append(promotions, promotion{arg: int32(in.A), field: int32(code[pc+1].A), reg: base + int32(len(promotions))})
+		field := code[pc+1].A
+		promotions = append(promotions, promotion{
+			arg: int32(in.A), field: int32(field), reg: base + int32(len(promotions)), kind: parts.Args[in.A].typ.fields[field].typ.kind,
+		})
 	}
 	return promotions
 }
@@ -66,20 +70,29 @@ func promoted(promotions []promotion, arg, field int32) int32 {
 // field lowers a field read: of a promoted field, the read of its register.
 func (l *lowerer) field(index int) {
 	// An argument's register is between the constants and the stack.
-	if held := l.stack[len(l.stack)-1]; held >= l.out.args && held < l.stackBase {
+	if held := l.stack[len(l.stack)-1].reg; held >= l.out.args && held < l.stackBase {
 		if reg := promoted(l.out.promotions, held-l.out.args, int32(index)); reg >= 0 {
 			l.pop()
 			l.push(reg)
 			return
 		}
 	}
-	l.unary(rField, int32(index))
+	op := rField
+	switch l.pushedKind() {
+	case IntKind:
+		op = rFieldI
+	case FloatKind:
+		op = rFieldF
+	case BoolKind:
+		op = rFieldB
+	}
+	l.unary(op, int32(index))
 }
 
 // promote loads each promoted field out of the record argument a run was
 // given whole.
 func (f *frame) promote(args []Value) {
 	for _, p := range f.runtime.reg.promotions {
-		f.regs[p.reg] = args[p.arg].Field(int(p.field))
+		f.setValue(p.reg, args[p.arg].Field(int(p.field)))
 	}
 }

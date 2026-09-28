@@ -81,8 +81,8 @@ func unarena(v Value) Value {
 }
 
 // arenaAt is item b of the array in a slot, refusing an index outside it.
-func arenaAt(regs []Value, in *rinstr) bool {
-	index := regs[in.b].i
+func arenaAt(b *banks, in *rinstr) bool {
+	regs, index := b.regs, b.ints[in.b]
 	if index < 0 || index >= regs[in.a].i {
 		return false
 	}

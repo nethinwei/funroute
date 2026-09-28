@@ -107,9 +107,11 @@ type FunctionSpec struct {
 	// right type, invariants kept — a Go function called as itself, of a
 	// scalar result — so a call does not look at it again.
 	madeResult bool
-	// pure is how a pure host function of a common shape is called straight
-	// from the registers (host_pure.go); nil for any other.
-	pure pureCall
+	// banked is how a Go function of a common shape, with no Timeout, not
+	// Detached and with no batch form, is called straight from the registers
+	// (host_pure.go), and pure the same for a pure one, which needs no look
+	// at the deadline; nil for any other.
+	banked, pure pureCall
 }
 
 func (s FunctionSpec) Signature() string {

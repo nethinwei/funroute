@@ -78,7 +78,7 @@ func (r *vecRun) resolveAnswer() bool {
 	if r.plan.acc < 0 {
 		return true
 	}
-	value, ok := scalarOf(r.f.regs[r.plan.acc])
+	value, ok := scalarOf(r.f.valueAt(r.plan.acc, r.plan.accKind))
 	r.acc = value
 	return ok && value.kind != vecBool
 }
@@ -96,16 +96,17 @@ func scalarOf(v Value) (vecValue, bool) {
 	return vecValue{}, false
 }
 
-// operand is register reg as the run reads it: the items, a column the body
-// wrote, or the value the register holds throughout the loop.
-func (r *vecRun) operand(reg int32) (*vecValue, bool) {
+// operand is register reg, holding a value of kind, as the run reads it: the
+// items, a column the body wrote, or the value the register holds
+// throughout the loop.
+func (r *vecRun) operand(reg int32, kind Kind) (*vecValue, bool) {
 	if reg == r.plan.item {
 		return &r.item, true
 	}
 	if c, ok := r.plan.columns[reg]; ok {
 		return &r.cols[c], true
 	}
-	value, ok := scalarOf(r.f.regs[reg])
+	value, ok := scalarOf(r.f.valueAt(reg, kind))
 	if !ok {
 		return nil, false
 	}
@@ -117,8 +118,8 @@ func (r *vecRun) operand(reg int32) (*vecValue, bool) {
 // run, whose operations' memory is kept from run to run.
 func (r *vecRun) resolveBlock(run *vecBlockRun, block vecBlock) bool {
 	run.ops, run.fold, run.collect, run.cond = run.ops[:0], nil, nil, nil
-	for _, in := range block.ops {
-		op, ok := r.resolveOp(in)
+	for i, in := range block.ops {
+		op, ok := r.resolveOp(in, block.kinds[i])
 		if !ok {
 			return false
 		}
@@ -127,29 +128,29 @@ func (r *vecRun) resolveBlock(run *vecBlockRun, block vecBlock) bool {
 	ok := true
 	if block.folds {
 		run.foldOp = block.fold.op
-		run.fold, ok = r.operand(block.fold.b)
+		run.fold, ok = r.operand(block.fold.b, block.foldKind)
 		ok = ok && run.fold.kind == r.acc.kind && foldKind(block.fold.op) == r.acc.kind
 	}
 	if ok && block.collect != -1 {
-		run.collect, ok = r.operand(block.collect)
+		run.collect, ok = r.operand(block.collect, block.collectKind)
 		ok = ok && run.collect.kind == r.out.vecKind()
 	}
 	if ok && block.cond != -1 {
-		run.cond, ok = r.operand(block.cond)
+		run.cond, ok = r.operand(block.cond, BoolKind)
 		ok = ok && run.cond.kind == vecBool
 	}
 	return ok
 }
 
 // resolveOp reads one operation, and gives the column it writes its kind.
-func (r *vecRun) resolveOp(in rinstr) (vecOp, bool) {
-	a, ok := r.operand(in.a)
+func (r *vecRun) resolveOp(in rinstr, kinds opKinds) (vecOp, bool) {
+	a, ok := r.operand(in.a, kinds.a)
 	if !ok {
 		return vecOp{}, false
 	}
 	b := a
 	if in.op != rMove && in.op != rIntToF {
-		if b, ok = r.operand(in.b); !ok {
+		if b, ok = r.operand(in.b, kinds.b); !ok {
 			return vecOp{}, false
 		}
 	}
@@ -277,8 +278,8 @@ func (r *vecRun) finish() {
 	switch {
 	case r.plan.acc < 0:
 	case r.acc.kind == vecInt:
-		r.f.regs[r.plan.acc] = Value{kind: IntKind, i: r.acc.i}
+		r.f.ints[r.plan.acc] = r.acc.i
 	default:
-		r.f.regs[r.plan.acc] = Value{kind: FloatKind, f: r.acc.f}
+		r.f.floats[r.plan.acc] = r.acc.f
 	}
 }

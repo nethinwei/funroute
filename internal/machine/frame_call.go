@@ -21,20 +21,30 @@ import (
 // function's result is of its signature's type, which loading proved.
 func (f *frame) callSite(call int32) error {
 	site := &f.runtime.reg.calls[call]
-	if site.pure != nil && len(f.fallbacks) == 0 {
-		if err := site.pure(f.regs, site.args, site.dst); err != nil {
+	// Lowering gave a banked call only to a site outside every fallback's
+	// candidate: its arguments and its answer are in their files.
+	if site.banked != nil {
+		if site.deadline && f.deadline {
+			if err := f.expired(); err != nil {
+				return fmt.Errorf("%s: %w", site.fn.Name, err)
+			}
+		}
+		if err := site.banked(&f.banks, site.args, site.dst); err != nil {
 			return fmt.Errorf("%s: %w", site.fn.Name, f.classify(err))
 		}
 		return nil
 	}
 	function := site.fn
+	if len(site.boxes) > 0 {
+		f.boxArgs(site.boxes)
+	}
 	args := f.regs[site.args : site.args+site.argc : site.args+site.argc]
 	if site.kernel && len(f.fallbacks) == 0 {
 		value, err := function.Eval(f.ctx, args)
 		if err != nil {
 			return fmt.Errorf("%s: %w", function.Name, err)
 		}
-		f.regs[site.dst] = value
+		f.put(site.dst, site.kind, value)
 		return nil
 	}
 	if !function.IsBuiltin() && f.deadline {
@@ -49,7 +59,7 @@ func (f *frame) callSite(call int32) error {
 	if err != nil {
 		return err
 	}
-	f.regs[site.dst] = value
+	f.put(site.dst, site.kind, value)
 	return nil
 }
 
@@ -72,7 +82,7 @@ func (f *frame) callHost(site *rcall, args []Value) error {
 			return err
 		}
 	}
-	f.regs[site.dst] = value
+	f.put(site.dst, site.kind, value)
 	return nil
 }
 

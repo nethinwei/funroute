@@ -87,7 +87,9 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 **执行性能**
 - 执行的是装载时翻译出的寄存器形式（`lower*.go` → `regvm*.go`），栈字节码只是 Artifact 的格式：翻译不改 Artifact、不改 digest。
 - 寄存器操作 `rinstr` 保持 16 字节、按指针读：操作数放进 a/b/c，放不下的进 `regProgram` 的旁表（`calls`/`loops`/`makes`），需要换算的在翻译时算好。
-- `frame.exec` 只放最常用的操作（50 行的上限也是它的上限），其余进 `cold`。专用内核指令只写快路径，答不出就返回 false，由 `fault` 问函数本身要错误，文案一字不差。
+- **寄存器分三组、共用一套编号**（`regvm_banks.go`）：int 与 bool（0/1）在 `ints`，float 在 `floats`，其余在 `regs`（`Value`），由验证器证明的种类决定（`proof.kinds`）。翻译器的栈是 `slot{寄存器, 种类}`，按种类选操作（`move_i`/`add_i`/`field_b`/`at_d_i`/`collect_next_i`…），运行时不看 kind。`Value` 只在要值的地方就地做出：非直调的调用（`rcall.boxes`）、构造（`rmake.boxes`）、字典的条目、答案（`regProgram.result`），**不为此发操作**。新增操作要说清操作数与结果在哪组，并记下 `opKinds`：`fault` 与向量按它从各组取值。
+- `frame.exec` 只放最常用的操作（50 行的上限也是它的上限），其余进 `cold`：`rCall` 之前的内核操作查 `coldKernels` 表（`TestEveryKernelOpHasAColdStep`），之后的进 `structure`。**热路径的操作码排在最前、连成一段**：取值范围超过 case 数的四倍，switch 就不再是跳转表。专用内核指令只写快路径，答不出就返回 false，由 `fault` 问函数本身要错误，文案一字不差。
+- 形状常见的 Go 函数（`pureOf`）在候选分支外直接从各组调用（`rcall.banked`），纯的不看截止时间，宿主的照旧先看；在 fallback 的候选里一律按值调用，由翻译器静态决定。
 - 改了翻译器、`rinstr` 或 `frame.exec`，与改动前交替跑 `BenchmarkDispatch`/`BenchmarkCall`/`BenchmarkRunPaths` 对照，再 `make perf`。
 - 值流分析（`lower_escape.go`）决定数组建在哪：不逃出运行的建在帧的 arena 槽里，box 是指向槽的指针（`*[]T`），只有翻译器为它选的指令（循环、`at_a`）见得到；答案建在宿主借出的槽里（`RunInto`）。**指针形式的 box 绝不能流到宿主函数、结果或容器里**——新增会读或放出数组的指令，先在值流分析里给它规则。帧里不存指向宿主 struct 的指针（它可能在宿主的栈上），只拷切片头。
 - 纯标量字段的 record 数组以视图（`recordsView`）为 backing：新增读数组的路径（`length`、`at`、`Slice`、`Array`、`elemType`、写回）都要认得它，派生视图（`perm`、子视图）不指向帧；只有 `rloop.itemsInPlace` 的循环复用 `f.items`，并置 `frame.walked` 让收尾清掉。
@@ -111,7 +113,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 新增 opcode | `machine/opcode.go` 表一行 + `verify.go` 的类型规则 + `lower_instr.go` 的翻译规则（`TestEveryOpcodeIsExecutableAndNamed` 兜底）；要新的寄存器操作就在 `regvm_ops.go` 加一行、在 `exec` 或 `cold` 里执行；会跳转的在 `leadersOf` 里另起一块 |
 | 新增会产生、读或放出数组的栈指令 | `lower_escape.go` 的规则：它让数组留在运行里还是逃出（`TestValueFlowFindsWhereEachArrayGoes` 加一行） |
 | 向量要跑新的运算 | `lower_vector.go` 的 `elementwise`、`regvm_vector_run.go` 的 `resultKind`、`regvm_vector_ops.go` 的列运算；失败条件与内核指令一字不差 |
-| 内核函数要专用指令 | `lower_kernel.go` 的 `kernelOps` 一行 + `regvm_ops.go` 的操作 + `regvm_kernel.go` 的快路径（`TestKernelOpsAnswerAsTheirFunctions` 在边界值上对照函数） |
+| 内核函数要专用指令 | `lower_kernel.go` 的 `kernelOps` 一行（结果按种类分组的在 `lower_instr.go` 的 `kernel` 里选变体）+ `regvm_ops.go` 的操作（排在 `rCall` 之前）+ `regvm_kernel.go` 的快路径 + `regvm_cold.go` 的 `coldKernels` 一行（`TestKernelOpsAnswerAsTheirFunctions` 在边界值上对照函数） |
 | 新增形式 | `machine/catalog.go` 的 `languageForms` 一行（可开关的写 `optional`，能包进表达式的写 `wrap` 模板）；节点的 kind tag 写 `,form`（可开关的再写 `,optional`，`TestTheOptionalFormsAreTheMachines` 对照）；termination.md |
 | 新增 ExprJSON 节点 | `syntax/ast.go`（嵌入 `Node` 并写 `kind` tag，字段带 tag，加进 `nodeTypes`）；语义在 `compile/infer_expr.go`、`compiler.go`；打印在 `syntax/print.go`、`format.go`；按节点分派的还有 `compile/enum.go`、`fold.go`；示例要用到它（`lsp/funroute_test.go` 检查） |
 | 改语法 | README 附录 A 的文法；跑 `go test ./internal/syntax -run XXX -fuzz FuzzFormatRoundTrip -fuzztime 60s` |
@@ -119,7 +121,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 新增官方函数或重载 | 常用的进内核库（`lib_*.go`，经 `librarySpecs` 注册，直接操作 backing），其余进 std；补案例（内核 `machine/examples.go`，std `extensions/std/examples.go`），同名的内核重载与 std 金额重载各挂各的案例，测试要求合起来选中每个重载；一个名字服务多种元素类型用 `libEach`/std 的 `eachType`，std 的在 `TestNamesCoverEveryElementTypeTheyClaim` 加一行 |
 | 新增纯函数 | 标 `Doc.Constexpr` |
 | 新增聚合函数 | 能用一个内核函数一步步折叠、或遇到某个 bool 就停的，声明 `FunctionSpec.Fold`；融合后的答案与失败与按原样编译的一致（`internal/compile/aggregate_test.go` 对照） |
-| 按 Go 签名注册的新常见形状 | `host_direct.go` 一个 case，在 `TestDirectCallsAnswerAsReflection`（std 用的形状在 `TestTheStandardShapesAreCalledDirectly`）加一个该形状的函数 |
+| 按 Go 签名注册的新常见形状 | `host_direct.go` 一个 case，在 `TestDirectCallsAnswerAsReflection`（std 用的形状在 `TestTheStandardShapesAreCalledDirectly`）加一个该形状的函数；标量形状再在 `host_pure.go` 的 `pureOf` 加一个直接读写各组的，`TestPureCallsAnswerAsTheirEval` 加一个 |
 | 新增凭空造容器的函数 | 标 `Doc.BoundedArgs`，理由写进 termination.md 定理 B 之后 |
 | 新增读运行状态的内核函数 | `FunctionSpec.readsRun`（不折叠，要求写在 `using` 里） |
 | 新增金额函数 | 先在 `internal/money` 的 Go 方法上实现；会舍入的内核运算用 `registerRounded`；非内核函数自己检查容器里币种一致（std 的 `amountsOf`）；宿主先 `DeclareMoney` 再注册 std |

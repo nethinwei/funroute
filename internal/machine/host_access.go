@@ -83,7 +83,7 @@ func encodeArgs[In any](plan *argsCodec, reads []argRead, args []Value, in *In, 
 			continue
 		}
 		if f != nil && read.promoted != nil {
-			if err := read.codec.loadPromoted(p, read.promoted, f.regs); err != nil {
+			if err := read.codec.loadPromoted(p, read.promoted, &f.banks); err != nil {
 				return fmt.Errorf("argument %q: %w", plan.params[read.index].name, err)
 			}
 			continue
@@ -717,13 +717,39 @@ func (c *codec) loadRecordInto(p unsafe.Pointer, record *recordValue) (Value, er
 
 // loadPromoted loads the promoted fields of the record at p into their
 // registers.
-func (c *codec) loadPromoted(p unsafe.Pointer, promoted []promotion, regs []Value) error {
+func (c *codec) loadPromoted(p unsafe.Pointer, promoted []promotion, b *banks) error {
 	for _, field := range promoted {
-		if err := c.loadField(p, int(field.field), &regs[field.reg]); err != nil {
+		plan := c.fields[field.field]
+		if loadPlainInto(plan.plain, unsafe.Add(p, plan.offset), b, field.reg) {
+			continue
+		}
+		var value Value
+		if err := c.loadField(p, int(field.field), &value); err != nil {
 			return err
 		}
+		b.setValue(field.reg, value)
 	}
 	return nil
+}
+
+// loadPlainInto loads a plain field of kind at p into register reg, in the
+// file of its kind, and reports whether it did.
+func loadPlainInto(kind reflect.Kind, p unsafe.Pointer, b *banks, reg int32) bool {
+	switch kind {
+	case reflect.Int64:
+		b.ints[reg] = *(*int64)(p)
+	case reflect.Int:
+		b.ints[reg] = int64(*(*int)(p))
+	case reflect.Bool:
+		b.ints[reg] = word(*(*bool)(p))
+	case reflect.Float64:
+		b.floats[reg] = *(*float64)(p)
+	case reflect.String:
+		b.regs[reg] = Value{kind: StringKind, s: *(*string)(p)}
+	default:
+		return false
+	}
+	return true
 }
 
 // loadField loads the record's field i, of the struct at p, into slot.

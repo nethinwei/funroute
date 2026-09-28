@@ -27,13 +27,19 @@ const (
 // item that reaches it, the fold into the answer or the item it collects,
 // and the branch out of it — to target when cond is false.
 type vecBlock struct {
-	ops     []rinstr
-	fold    rinstr
-	folds   bool
-	collect int32
-	cond    int32
-	target  int
-	end     vecEnd
+	ops []rinstr
+	// kinds is each operation's operands' kinds, foldKind the kind the
+	// fold folds and collectKind the item's: an operand the body does not
+	// write is read out of the file they say.
+	kinds       []opKinds
+	fold        rinstr
+	folds       bool
+	foldKind    Kind
+	collect     int32
+	collectKind Kind
+	cond        int32
+	target      int
+	end         vecEnd
 }
 
 // vecPlan is a loop body the vector runs: its blocks in order — the first is
@@ -43,6 +49,7 @@ type vecPlan struct {
 	blocks    []vecBlock
 	columns   map[int32]int
 	item, acc int32
+	accKind   Kind
 	// body is where the body starts, past a prelude that runs once before
 	// the first item and only jumps there — all's, which lays its stop out
 	// ahead of the body.
@@ -64,15 +71,33 @@ const maxVecBlocks = 8
 
 // elementwise are the operations a vector runs a column at a time.
 var elementwise = map[rop]bool{
-	rMove: true, rAddI: true, rSubI: true, rMulI: true, rDivI: true, rModI: true,
+	rMoveI: true, rMoveF: true, rAddI: true, rSubI: true, rMulI: true, rDivI: true, rModI: true,
 	rAddF: true, rSubF: true, rMulF: true, rDivF: true,
-	rLtI: true, rLeI: true, rLtF: true, rLeF: true, rEq: true, rIntToF: true,
+	rLtI: true, rLeI: true, rLtF: true, rLeF: true, rEqI: true, rEqF: true, rIntToF: true,
+}
+
+// vectorOp is an operation as a column computes it: a move and an equality
+// of any file are one, the column's kind saying which.
+func vectorOp(op rop) rop {
+	switch op {
+	case rMoveI, rMoveF:
+		return rMove
+	case rEqI, rEqF:
+		return rEq
+	}
+	return op
 }
 
 // branchCompare is the comparison each fused branch makes.
 var branchCompare = map[rop]rop{
-	rBranchLtI: rLtI, rBranchLeI: rLeI, rBranchLtF: rLtF, rBranchLeF: rLeF, rBranchEq: rEq,
+	rBranchLtI: rLtI, rBranchLeI: rLeI, rBranchLtF: rLtF, rBranchLeF: rLeF, rBranchEqI: rEq, rBranchEqF: rEq,
 }
+
+// collects is the collect of an item a vector takes: an int, a bool or a
+// float, out of its file; and after it, the loop's next.
+var collects = map[rop]bool{rCollectI: true, rCollectF: true}
+
+var collectsNext = map[rop]bool{rCollectNextI: true, rCollectNextF: true}
 
 // vectorize gives each array loop of the register form whose body a vector
 // can run its plan.
@@ -82,9 +107,9 @@ func (l *lowerer) vectorize() {
 			continue
 		}
 		body := bodyOf(l.out.code, init)
-		planner := &vecPlanner{code: l.out.code, starts: l.out.starts, body: body, byPC: map[int]int{}, hidden: -2}
+		planner := &vecPlanner{code: l.out.code, kinds: l.out.kinds, starts: l.out.starts, body: body, byPC: map[int]int{}, hidden: -2}
 		loop := &l.out.loops[in.c]
-		planner.plan = &vecPlan{columns: map[int32]int{}, item: loop.item, acc: loop.acc, body: int32(body)}
+		planner.plan = &vecPlan{columns: map[int32]int{}, item: loop.item, acc: loop.acc, accKind: loop.typ.kind, body: int32(body)}
 		if planner.walk() && planner.check() {
 			loop.vec = planner.plan
 		}
@@ -103,6 +128,7 @@ func bodyOf(code []rinstr, init int) int {
 // vecPlanner reads a loop body into a plan.
 type vecPlanner struct {
 	code   []rinstr
+	kinds  []opKinds
 	starts []bool
 	body   int
 	byPC   map[int]int
@@ -181,15 +207,17 @@ func (p *vecPlanner) add(block vecBlock, next int) (int, bool) {
 // read takes one operation into the block, and says whether it ends it and
 // where the block goes on.
 func (p *vecPlanner) read(block *vecBlock, in rinstr, pc int) (int, bool, bool) {
+	kinds := p.kinds[pc]
 	switch {
 	case p.folding(in):
-		block.fold, block.folds = in, true
+		block.fold, block.folds, block.foldKind = in, true, kinds.b
 	case elementwise[in.op]:
-		block.ops = append(block.ops, in)
-	case in.op == rCollect && in.b < 0:
-		block.collect = in.a
-	case in.op == rCollectNext && int(in.b) == p.body:
-		block.collect, block.end = in.a, vecDone
+		in.op = vectorOp(in.op)
+		block.ops, block.kinds = append(block.ops, in), append(block.kinds, kinds)
+	case collects[in.op] && in.b < 0:
+		block.collect, block.collectKind = in.a, kinds.a
+	case collectsNext[in.op] && int(in.b) == p.body:
+		block.collect, block.collectKind, block.end = in.a, kinds.a, vecDone
 		return -1, true, true
 	case in.op == rLoopNext && int(in.a) == p.body:
 		block.end = vecDone
@@ -202,6 +230,7 @@ func (p *vecPlanner) read(block *vecBlock, in rinstr, pc int) (int, bool, bool) 
 		return pc + 1, true, true
 	case branchCompare[in.op] != rInvalid:
 		block.ops = append(block.ops, rinstr{op: branchCompare[in.op], a: in.a, b: in.b, c: p.hidden})
+		block.kinds = append(block.kinds, kinds)
 		block.cond, block.target = p.hidden, int(in.c)
 		p.hidden--
 		return pc + 1, true, true

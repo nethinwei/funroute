@@ -43,7 +43,11 @@ func (f *frame) regLoopInit(pc int, in *rinstr) (int, error) {
 	if loop.walk(site.key >= 0) == 0 {
 		f.loops[last] = regLoop{}
 		f.loops = f.loops[:last]
-		f.regs[site.dst] = f.emptyResult(site, in)
+		if site.acc >= 0 {
+			f.copyReg(site.dst, in.b, site.typ.kind)
+		} else {
+			f.regs[site.dst] = f.emptyResult(site)
+		}
 		return int(site.exit), nil
 	}
 	// A view is walked into the frame's own record when the value flow
@@ -119,7 +123,7 @@ func (f *frame) startOutput(loop *regLoop, in *rinstr) {
 	site := loop.site
 	switch {
 	case site.acc >= 0:
-		f.regs[site.acc] = f.regs[in.b]
+		f.copyReg(site.acc, in.b, site.typ.kind)
 	case site.spread:
 		outer := &f.loops[len(f.loops)-2]
 		loop.out = outer.out
@@ -149,14 +153,10 @@ func expected(outer, inner int) int {
 // grows as it fills.
 const maxGrow = 1 << 20
 
-// emptyResult is what a loop over nothing gives: the seed of a fold, and
-// otherwise an empty array or dictionary — nothing for a clause whose items
-// go to the clause outside it.
-func (f *frame) emptyResult(site *rloop, in *rinstr) Value {
-	switch {
-	case site.acc >= 0:
-		return f.regs[in.b]
-	case site.spread:
+// emptyResult is what a mapping loop over nothing gives: an empty array or
+// dictionary — nothing for a clause whose items go to the clause outside it.
+func (f *frame) emptyResult(site *rloop) Value {
+	if site.spread {
 		return Value{}
 	}
 	if slot := f.slotFor(site.built); slot != nil {
@@ -172,37 +172,39 @@ func (f *frame) emptyResult(site *rloop, in *rinstr) Value {
 	return empty
 }
 
-// bindRegs binds the loop's names to the item at index.
+// bindRegs binds the loop's names to the item at index, each in the file
+// of its kind.
 func (f *frame) bindRegs(loop *regLoop, index int) {
-	switch {
+	switch item := loop.site.item; {
 	case loop.ints != nil:
-		f.regs[loop.site.item] = Value{kind: IntKind, i: loop.ints[index]}
+		f.ints[item] = loop.ints[index]
 	case loop.floats != nil:
-		f.regs[loop.site.item] = Value{kind: FloatKind, f: loop.floats[index]}
+		f.floats[item] = loop.floats[index]
 	case loop.strings != nil:
-		f.regs[loop.site.item] = Value{kind: StringKind, s: loop.strings[index]}
+		f.regs[item] = Value{kind: StringKind, s: loop.strings[index]}
 	case loop.bools != nil:
-		f.regs[loop.site.item] = Value{kind: BoolKind, b: loop.bools[index]}
+		f.ints[item] = word(loop.bools[index])
 	case loop.item != nil:
 		loop.view.load(index, loop.item)
-		f.regs[loop.site.item] = Value{kind: RecordKind, box: loop.item}
+		f.regs[item] = Value{kind: RecordKind, box: loop.item}
 	case loop.view != nil:
-		f.regs[loop.site.item] = loop.view.record(index)
+		f.regs[item] = loop.view.record(index)
 	case loop.keys != nil:
 		value, _ := loop.source.lookup(loop.keys[index])
-		f.regs[loop.site.item] = value
+		f.setValue(item, value)
 		f.regs[loop.site.key] = String(loop.keys[index])
 	default:
-		f.regs[loop.site.item] = loop.source.at(index)
+		f.setValue(item, loop.source.at(index))
 	}
 }
 
 // collect adds register value to what the comprehension builds, under the
-// key in register key unless it is -1.
-func (f *frame) collect(value, key int32) {
+// key in register key unless it is -1: a dictionary's entry, of kind, out
+// of its file.
+func (f *frame) collect(value, key int32, kind Kind) {
 	loop := &f.loops[len(f.loops)-1]
 	if key >= 0 {
-		loop.dict.add(f.regs[key].s, f.regs[value])
+		loop.dict.add(f.regs[key].s, f.valueAt(value, kind))
 		return
 	}
 	// An array of ints or floats is appended to as it is, not through add.
@@ -216,10 +218,27 @@ func (f *frame) collect(value, key int32) {
 	}
 }
 
+// collectInt adds the int or the bool in register value to the array the
+// comprehension builds.
+func (f *frame) collectInt(value int32) {
+	out := f.loops[len(f.loops)-1].out
+	if out.elem.kind == BoolKind {
+		out.bools = append(out.bools, f.ints[value] != 0)
+		return
+	}
+	out.ints = append(out.ints, f.ints[value])
+}
+
+// collectFloat adds the float in register value.
+func (f *frame) collectFloat(value int32) {
+	out := f.loops[len(f.loops)-1].out
+	out.floats = append(out.floats, f.floats[value])
+}
+
 // collectNext is rCollectNext: the value, and the next iteration.
-func (f *frame) collectNext(pc int, in *rinstr) (int, error) {
-	f.collect(in.a, -1)
-	return f.regLoopNext(pc, in.b)
+func (f *frame) collectNext(in *rinstr) (int, error) {
+	f.collect(in.a, -1, InvalidKind)
+	return f.regLoopNext(int(in.c), in.b)
 }
 
 // regLoopNext goes back to the body while items are left, counting the turn
@@ -247,11 +266,15 @@ func (f *frame) regLoopNext(pc int, body int32) (int, error) {
 // at pc.
 func (f *frame) endLoop(pc int) (int, error) {
 	last := len(f.loops) - 1
-	result, err := f.loopValue(&f.loops[last])
-	if err != nil {
-		return pc, err
+	if site := f.loops[last].site; site.acc >= 0 {
+		f.copyReg(site.dst, site.acc, site.typ.kind)
+	} else {
+		result, err := f.loopValue(&f.loops[last])
+		if err != nil {
+			return pc, err
+		}
+		f.regs[site.dst] = result
 	}
-	f.regs[f.loops[last].site.dst] = result
 	f.loops[last] = regLoop{}
 	f.loops = f.loops[:last]
 	return pc, nil
@@ -262,18 +285,16 @@ func (f *frame) endLoop(pc int) (int, error) {
 func (f *frame) loopBreak(in *rinstr) int {
 	last := len(f.loops) - 1
 	site := f.loops[last].site
-	f.regs[site.dst] = f.regs[in.a]
+	f.copyReg(site.dst, in.a, site.typ.kind)
 	f.loops[last] = regLoop{}
 	f.loops = f.loops[:last]
 	return int(in.b)
 }
 
-// loopValue is a finished loop's value: the accumulator, the array or the
+// loopValue is a finished mapping loop's value: the array or the
 // dictionary — nothing for a clause whose items went to the clause outside.
 func (f *frame) loopValue(loop *regLoop) (Value, error) {
 	switch {
-	case loop.site.acc >= 0:
-		return f.regs[loop.site.acc], nil
 	case loop.site.spread:
 		return Value{}, nil
 	case loop.site.typ.kind == DictKind:

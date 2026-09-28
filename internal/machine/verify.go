@@ -119,7 +119,11 @@ type verifier struct {
 	deepest int
 	// depths is how deep the stack is on entering each instruction, and -1
 	// for one no path reaches: what the register form is laid out by.
-	depths []int32
+	// kinds is the kind of each value on it then, those of instruction pc
+	// from kindsAt[pc]: what register file each value goes in.
+	depths  []int32
+	kinds   []Kind
+	kindsAt []int32
 	// out holds the paths out of the instruction last stepped, which walk
 	// is done with before it steps again.
 	out []edge
@@ -132,17 +136,24 @@ func (v *verifier) to(edges ...edge) []edge {
 }
 
 // proof is what the walk establishes about a program beyond its being typed:
-// how deep its stack gets, overall and on entering each instruction.
+// how deep its stack gets, overall and on entering each instruction, and
+// the kind of each value on it then.
 type proof struct {
-	depth  int
-	depths []int32
+	depth   int
+	depths  []int32
+	kinds   []Kind
+	kindsAt []int32
 }
+
+// kindAt is the kind of the value at stack position k on entering pc.
+func (p proof) kindAt(pc, k int) Kind { return p.kinds[int(p.kindsAt[pc])+k] }
 
 // verify walks the artifact's bytecode, calling functions.
 func verify(artifact *Artifact, functions []*RegisteredFunction) (proof, error) {
 	instructions := artifact.parts.Instructions
 	v := &verifier{artifact: artifact, functions: functions, joins: joinsOf(instructions), states: make([]*vstate, len(instructions)+1)}
-	v.depths = make([]int32, len(instructions)+1)
+	v.depths, v.kindsAt = make([]int32, len(instructions)+1), make([]int32, len(instructions)+1)
+	v.kinds = make([]Kind, 0, 2*len(instructions)+2)
 	for pc := range v.depths {
 		v.depths[pc] = -1
 	}
@@ -155,7 +166,7 @@ func verify(artifact *Artifact, functions []*RegisteredFunction) (proof, error) 
 			return proof{}, err
 		}
 	}
-	return proof{depth: max(v.deepest, 1), depths: v.depths}, nil
+	return proof{depth: max(v.deepest, 1), depths: v.depths, kinds: v.kinds, kindsAt: v.kindsAt}, nil
 }
 
 // joinsOf marks the start and every instruction a jump lands on.
@@ -180,7 +191,10 @@ func joinsOf(instructions []Instruction) []bool {
 // carried on is no other path's.
 func (v *verifier) walk(pc int, s *vstate) error {
 	for {
-		v.depths[pc] = int32(len(s.stack))
+		v.depths[pc], v.kindsAt[pc] = int32(len(s.stack)), int32(len(v.kinds))
+		for _, typ := range s.stack {
+			v.kinds = append(v.kinds, typ.kind)
+		}
 		edges, err := v.step(pc, s)
 		if err != nil {
 			return fmt.Errorf("invalid bytecode at %d: %w", pc, err)

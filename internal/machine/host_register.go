@@ -89,9 +89,14 @@ func (r *Registry) reflectSpec(spec *FunctionSpec) error {
 	if direct, ok := directEval(spec.Go); ok {
 		spec.Eval, spec.madeResult = direct, true
 	}
-	// A kernel function is pure without saying so (IsConstexpr).
-	if (spec.Doc.Constexpr || spec.builtin) && spec.Doc.Timeout == 0 && !spec.Doc.Detached && spec.GoBatch == nil {
-		spec.pure = pureOf(spec.Go)
+	// A Go function called as itself is called straight from the registers
+	// when it is of a common shape; a pure one — a kernel function is pure
+	// without saying so (IsConstexpr) — without a look at the deadline.
+	if spec.Doc.Timeout == 0 && !spec.Doc.Detached && spec.GoBatch == nil {
+		spec.banked = pureOf(spec.Go)
+		if spec.Doc.Constexpr || spec.builtin {
+			spec.pure = spec.banked
+		}
 	}
 	if spec.GoBatch == nil {
 		return nil

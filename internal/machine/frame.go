@@ -28,9 +28,9 @@ type fallbackFrame struct {
 // time; the runtime keeps them between runs.
 type frame struct {
 	runtime *Runtime
-	// regs is the registers, the constants first, and argBase where the
+	// banks is the registers, the constants first, and argBase where the
 	// arguments start.
-	regs      []Value
+	banks
 	argBase   int
 	loops     []regLoop
 	fallbacks []fallbackFrame
@@ -94,13 +94,12 @@ type vectorState struct {
 // change.
 func (r *Runtime) newFrame() *frame {
 	f := &frame{
-		runtime: r, regs: make([]Value, r.reg.size), argBase: int(r.reg.args), loops: make([]regLoop, 0, r.reg.nesting),
+		runtime: r, banks: newBanks(r.reg.size, r.constants), argBase: int(r.reg.args), loops: make([]regLoop, 0, r.reg.nesting),
 		arena: make([]arenaSlot, r.reg.arenas), dest: make([]arenaSlot, r.reg.dests),
 		records: make([]recordValue, len(r.reg.fieldOnly)), views: make([]arenaSlot, len(r.reg.viewOnly)),
 		recordViews: make([]recordsView, len(r.reg.viewOnly)), items: make([]recordValue, len(r.reg.loops)),
 		borrows: make([]int, 0, len(r.reg.viewOnly)),
 	}
-	copy(f.regs, r.constants)
 	f.fxQuotes, f.fxMarks = f.fxQuotesArray[:0], f.fxMarksArray[:0]
 	f.fxCtx.frame = f
 	return f
@@ -145,6 +144,9 @@ func (r *Runtime) start(ctx context.Context, f *frame, args []Value, prefetched 
 			return Value{}, err
 		}
 	}
+	if len(r.reg.scalarArgs) > 0 {
+		f.bankArgs(r.reg.scalarArgs)
+	}
 	// A Program loaded the promoted fields out of the host's struct.
 	if len(r.reg.promotions) > 0 && !f.onlyReads {
 		f.promote(args)
@@ -153,7 +155,7 @@ func (r *Runtime) start(ctx context.Context, f *frame, args []Value, prefetched 
 	if err != nil {
 		return Value{}, err
 	}
-	return f.regs[answer], nil
+	return f.valueAt(answer, r.reg.result), nil
 }
 
 // finishGuarded ends a guarded run: an extension that panicked is its

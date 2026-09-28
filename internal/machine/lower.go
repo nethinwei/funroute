@@ -16,17 +16,22 @@ import (
 // an operation reads it there. It is written to its stack register only where
 // paths meet or leave, where a builder or a call takes a run of registers, or
 // before the local it lives in is written.
+//
+// The verifier proved each value's kind too, and the lowering keeps it with
+// the register: it says the file the value is in (regvm_banks.go), and so
+// which operation reads it — an int is added by add_i on the ints, moved by
+// move_i — and where a value must be made of it, a box.
 
 // lowerer is the state of one lowering.
 type lowerer struct {
 	code      []Instruction
 	constants []Value
 	functions []*RegisteredFunction
-	depths    []int32
+	proof     proof
 	leaders   []bool
 	out       regProgram
-	// stack is the register holding each stack position's value.
-	stack []int32
+	// stack is each stack position's value: its register and its kind.
+	stack []slot
 	// at is the operation each leader starts at; fixups the operands that
 	// name a stack instruction until every leader has one.
 	at     []int32
@@ -42,10 +47,20 @@ type lowerer struct {
 	blockStart int32
 	pc         int
 	err        error
+	// candidates is how many fallback candidates the lowering is inside:
+	// a call in one is made the ordinary way, off the values.
+	candidates int
 	// flow is where the program's arrays go, and slots the arena slot each
 	// producer builds in.
 	flow  flow
 	slots map[int]int32
+}
+
+// slot is a value on the lowering's stack: the register it is in, and its
+// kind, which says the file.
+type slot struct {
+	reg  int32
+	kind Kind
 }
 
 // fixup is an operand of an operation that names the stack instruction
@@ -69,12 +84,14 @@ func lower(artifact *Artifact, constants []Value, functions []*RegisteredFunctio
 	parts := &artifact.parts
 	nconst, args := int32(len(parts.Constants)), int32(len(parts.Args))
 	l := &lowerer{
-		code: parts.Instructions, constants: constants, functions: functions, depths: proof.depths, leaders: leadersOf(parts.Instructions, functions),
+		code: parts.Instructions, constants: constants, functions: functions, proof: proof, leaders: leadersOf(parts.Instructions, functions),
 		at: make([]int32, len(parts.Instructions)+1), stackBase: nconst + args,
 	}
 	// A stack instruction lowers to one operation or none, mostly: room
 	// for as many, and the halt.
 	l.out.code, l.out.origins = make([]rinstr, 0, len(parts.Instructions)+1), make([]int32, 0, len(parts.Instructions)+1)
+	l.out.kinds = make([]opKinds, 0, len(parts.Instructions)+1)
+	l.out.scalarArgs, l.out.result = scalarArgsOf(parts, nconst), parts.Result.kind
 	l.localBase = l.stackBase + int32(proof.depth)
 	l.locals = int32(parts.Locals)
 	l.out.promotions = promotionsOf(parts, l.leaders, l.localBase+l.locals)
@@ -86,7 +103,7 @@ func lower(artifact *Artifact, constants []Value, functions []*RegisteredFunctio
 		l.at[pc] = -1
 	}
 	for pc := 0; pc <= len(l.code); pc++ {
-		if l.depths[pc] < 0 {
+		if l.proof.depths[pc] < 0 {
 			continue
 		}
 		l.pc = pc
@@ -94,7 +111,7 @@ func lower(artifact *Artifact, constants []Value, functions []*RegisteredFunctio
 			l.startBlock(pc)
 		}
 		if pc == len(l.code) {
-			l.emit(rHalt, l.stack[0], 0, 0)
+			l.halt()
 			break
 		}
 		l.instruction(l.code[pc])
@@ -213,17 +230,42 @@ func (l *lowerer) patch() error {
 	return nil
 }
 
-// startBlock begins the block at pc: every value is in its stack register.
-// Where it starts in the register form is marked, for the vector, which
-// reads a loop body a block at a time.
+// startBlock begins the block at pc: every value is in its stack register,
+// in its kind's file. Where it starts in the register form is marked, for
+// the vector, which reads a loop body a block at a time.
 func (l *lowerer) startBlock(pc int) {
 	l.at[pc] = int32(len(l.out.code))
 	l.blockStart = l.at[pc]
 	l.markStart(len(l.out.code))
 	l.stack = l.stack[:0]
-	for k := range l.depths[pc] {
-		l.stack = append(l.stack, l.stackBase+k)
+	for k := range l.proof.depths[pc] {
+		l.stack = append(l.stack, slot{reg: l.stackBase + k, kind: l.proof.kindAt(pc, int(k))})
 	}
+}
+
+// scalarArgsOf is the arguments of an int, a bool or a float the program
+// reads, from register base: one it never loads is never looked for in a
+// file, and a wide struct pays only for the fields a rule uses.
+func scalarArgsOf(parts *ArtifactParts, base int32) []scalarArg {
+	read := make([]bool, len(parts.Args))
+	for _, in := range parts.Instructions {
+		if in.Op == OpLoadArg {
+			read[in.A] = true
+		}
+	}
+	var out []scalarArg
+	for i, param := range parts.Args {
+		if read[i] && bankOf(param.typ.kind) != valueBank {
+			out = append(out, scalarArg{reg: base + int32(i), kind: param.typ.kind})
+		}
+	}
+	return out
+}
+
+// halt ends the program, its answer in the register it is in: in the file
+// of the program's result kind (regProgram.result), where it is taken.
+func (l *lowerer) halt() {
+	l.emit(rHalt, l.stack[0].reg, 0, 0)
 }
 
 // markStart marks the operation at at as one a block starts at.
@@ -234,9 +276,13 @@ func (l *lowerer) markStart(at int) {
 	l.out.starts[at] = true
 }
 
-func (l *lowerer) emit(op rop, a, b, c int32) {
+func (l *lowerer) emit(op rop, a, b, c int32) { l.emitOn(op, a, b, c, opKinds{}) }
+
+// emitOn emits an operation whose operands a and b are of kinds.
+func (l *lowerer) emitOn(op rop, a, b, c int32, kinds opKinds) {
 	l.out.code = append(l.out.code, rinstr{op: op, a: a, b: b, c: c})
 	l.out.origins = append(l.out.origins, int32(l.pc))
+	l.out.kinds = append(l.out.kinds, kinds)
 }
 
 // jumpTo makes an operand of the last operation name the stack instruction
@@ -245,12 +291,37 @@ func (l *lowerer) jumpTo(op operand, target int) {
 	l.fixups = append(l.fixups, fixup{at: len(l.out.code) - 1, operand: op, target: target})
 }
 
-func (l *lowerer) push(reg int32) { l.stack = append(l.stack, reg) }
+// push puts the value in reg on the stack, of the kind the verifier proved
+// of what the instruction pushes.
+func (l *lowerer) push(reg int32) { l.stack = append(l.stack, slot{reg: reg, kind: l.pushedKind()}) }
 
-func (l *lowerer) pop() int32 {
-	reg := l.stack[len(l.stack)-1]
+// pushedKind is the kind of what the instruction being lowered pushes: the
+// top of the stack after it.
+func (l *lowerer) pushedKind() Kind {
+	next := l.pc + 1
+	return l.proof.kindAt(next, int(l.proof.depths[next])-1)
+}
+
+func (l *lowerer) pop() slot {
+	value := l.stack[len(l.stack)-1]
 	l.stack = l.stack[:len(l.stack)-1]
-	return reg
+	return value
+}
+
+// move emits the move of a value of kind from register from to to.
+func (l *lowerer) move(kind Kind, from, to int32) {
+	l.emitOn(moveOp(kind), from, 0, to, opKinds{a: kind})
+}
+
+// moveOp is the move of a value of kind, in its file.
+func moveOp(kind Kind) rop {
+	switch bankOf(kind) {
+	case intBank:
+		return rMoveI
+	case floatBank:
+		return rMoveF
+	}
+	return rMove
 }
 
 // top is the register the next push goes in.
@@ -259,9 +330,9 @@ func (l *lowerer) top() int32 { return l.stackBase + int32(len(l.stack)) }
 // flush puts every value from stack position from up in its stack register.
 func (l *lowerer) flush(from int) {
 	for k := from; k < len(l.stack); k++ {
-		if home := l.stackBase + int32(k); l.stack[k] != home {
-			l.emit(rMove, l.stack[k], 0, home)
-			l.stack[k] = home
+		if home := l.stackBase + int32(k); l.stack[k].reg != home {
+			l.move(l.stack[k].kind, l.stack[k].reg, home)
+			l.stack[k].reg = home
 		}
 	}
 }
@@ -278,10 +349,10 @@ func (l *lowerer) window(n int) int32 {
 // moves to its stack register first.
 func (l *lowerer) clobber(reg int32) {
 	for k, held := range l.stack {
-		if held == reg {
+		if held.reg == reg {
 			home := l.stackBase + int32(k)
-			l.emit(rMove, reg, 0, home)
-			l.stack[k] = home
+			l.move(held.kind, reg, home)
+			l.stack[k].reg = home
 		}
 	}
 }
@@ -290,12 +361,12 @@ func (l *lowerer) clobber(reg int32) {
 // there instead, when nothing else reads reg.
 func (l *lowerer) store(reg int32) {
 	value := l.pop()
-	if l.retarget(value, reg) {
+	if l.retarget(value.reg, reg) {
 		return
 	}
 	l.clobber(reg)
-	if value != reg {
-		l.emit(rMove, value, 0, reg)
+	if value.reg != reg {
+		l.move(value.kind, value.reg, reg)
 	}
 }
 
@@ -304,7 +375,7 @@ func (l *lowerer) store(reg int32) {
 // in, when no value on the stack is read from reg.
 func (l *lowerer) retarget(value, reg int32) bool {
 	last := int32(len(l.out.code) - 1)
-	if last < l.blockStart || value != l.top() || slices.Contains(l.stack, reg) {
+	if last < l.blockStart || value != l.top() || slices.ContainsFunc(l.stack, func(held slot) bool { return held.reg == reg }) {
 		return false
 	}
 	in := &l.out.code[last]
@@ -323,8 +394,9 @@ func (l *lowerer) retarget(value, reg int32) bool {
 // nothing else.
 func writesC(op rop) bool {
 	switch op {
-	case rMove, rAddI, rSubI, rMulI, rDivI, rModI, rAddF, rSubF, rMulF, rDivF, rConcat,
-		rLtI, rLeI, rLtF, rLeF, rLtS, rLeS, rEq, rLen, rAt, rTake, rField:
+	case rMove, rMoveI, rMoveF,
+		rAddI, rSubI, rMulI, rDivI, rModI, rAddF, rSubF, rMulF, rDivF, rConcat, rIntToF, rFloatToI,
+		rLtI, rLeI, rLtF, rLeF, rLtS, rLeS, rEq, rEqI, rEqF, rLen, rAt, rAtI, rAtF, rAtB, rAtD, rAtDI, rAtDF, rAtDB, rTake, rField, rFieldI, rFieldF, rFieldB:
 		return true
 	}
 	return false
