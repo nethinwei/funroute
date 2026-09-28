@@ -3,7 +3,7 @@
 本文回答"FunRoute 最多能做到哪里"：每种数值能表示到哪里，每种运算在哪里停下，一个程序能多大、多深、多快，以及语言能表达什么、不能表达什么。每一条都是实测的，不是从常量抄来的。
 
 - 带 `<!-- limits:… -->` 标记的表格由 `tests/limits` 经公开包实际运行生成，`go test` 保证它们与实现一致，`make limits` 重新生成；标记之外的说明是手写的。耗时类的数字在 [perf.md](perf.md)，由 `make perf` 生成。
-- 取值范围的简表在 README [附录 B](../README.md#附录-b取值范围)；终止性与最坏成本的证明在 [termination.md](termination.md)；为什么是这些边界、否决过什么，见 [roadmap](roadmap.md) 的「关键设计决策」。
+- 取值范围的简表在 [grammar.md 的「取值范围」](grammar.md#取值范围)；终止性与最坏成本的证明在 [termination.md](termination.md)；为什么是这些边界、否决过什么，见 [roadmap](roadmap.md) 的「关键设计决策」。
 
 **一条总原则**：越过边界一律是错误，从不回绕、截断或悄悄舍入。能在编译期算出来的在编译期报；运行时的错误都有类别，宿主用 `errors.Is` 区分。
 
@@ -68,6 +68,11 @@
 | `int(9.3e18)` | 运行时 `ErrArithmetic` | 超出 int |
 | `round(1e19)` | 运行时 `ErrArithmetic` | 超出 int |
 <!-- /limits:float -->
+
+**同一个 float 程序在哪台机器上都得出同一个答案**，只有一个例外。
+
+- 语言自己的每一步都按 IEEE 754 单独舍入：Go 在 arm64 上会把 `x * y + z` 融合成一条 FMA，少舍入一次；内核与标准库里先乘后加的地方（`stddev` 的平方和、`percentile` 的插值）都用显式的 `float64(…)` 先舍入乘积，按 Go 的规范这就阻止了融合；VM 的每条运算单独写回寄存器，本来就不融合。行为金库在 arm64 上生成、在 amd64 上核对。
+- 例外是 `pow(float, float)` 的指数不是整数时：它就是 Go 的 `math.Pow`，经 `math.Exp` 与 `math.Log` 计算，amd64 上 `math.Exp` 在有 FMA 的 CPU 上走另一条路径，末位可能不同。指数是整数时只做乘法，处处相同。为了让 Artifact 与编译它的机器无关，浮点的 `pow` 不参与编译期折叠（与读时区规则的日历函数一样），运行时的末位由运行它的 CPU 决定。
 
 ### string
 

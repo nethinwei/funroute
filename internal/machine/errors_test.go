@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// The README's table of errors is errorClasses: every class, and whether
-// fallback takes it.
-func TestTheReadmeTableIsTheErrorClasses(t *testing.T) {
+// The table of errors in docs/go.md is errorClasses: every class, and
+// whether fallback takes it.
+func TestTheErrorTableIsTheErrorClasses(t *testing.T) {
 	t.Parallel()
-	readme, err := os.ReadFile("../../README.md")
+	doc, err := os.ReadFile("../../docs/go.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,17 +20,17 @@ func TestTheReadmeTableIsTheErrorClasses(t *testing.T) {
 		"ErrNoFxRate": ErrNoFxRate, "ErrCurrency": ErrCurrency, "ErrArithmetic": ErrArithmetic,
 		"ErrUnavailable": ErrUnavailable, "ErrDomain": ErrDomain,
 	}
-	rows := regexp.MustCompile("(?m)^\\| `(Err[A-Za-z]+)` \\| [^|]+ \\| ([^|]+) \\|$").FindAllStringSubmatch(string(readme), -1)
+	rows := regexp.MustCompile("(?m)^\\| `(Err[A-Za-z]+)` \\| [^|]+ \\| ([^|]+) \\|$").FindAllStringSubmatch(string(doc), -1)
 	if len(rows) != len(errorClasses) {
-		t.Fatalf("the README lists %d errors, errorClasses %d", len(rows), len(errorClasses))
+		t.Fatalf("docs/go.md lists %d errors, errorClasses %d", len(rows), len(errorClasses))
 	}
 	for _, row := range rows {
 		class, ok := classOf(sentinels[row[1]])
 		if !ok || !errors.Is(class.err, sentinels[row[1]]) {
-			t.Fatalf("the README's %s is not a class of its own", row[1])
+			t.Fatalf("docs/go.md's %s is not a class of its own", row[1])
 		}
 		if caught := row[2] == "接"; caught != class.fallback {
-			t.Errorf("the README says fallback %q %s; errorClasses says %v", row[2], row[1], class.fallback)
+			t.Errorf("docs/go.md says fallback %q %s; errorClasses says %v", row[2], row[1], class.fallback)
 		}
 	}
 }

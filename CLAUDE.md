@@ -6,7 +6,7 @@ FunRoute：面向支付路由的强类型、纯表达式、必然终止的语言
 
 本文件只写**读代码看不出来、违反了会出事**的约束。其余去这些地方找：
 
-- 语言用法与文法：`README.md`（文法在附录 A）。改语义前先读，改完同步。
+- 语言用法与文法：`docs/language.md`、`docs/money.md`、`docs/contracts.md`、`docs/go.md`，文法在 `docs/grammar.md`；README 只是首页。改语义前先读，改完同步。
 - 设计取舍与**否决过的方案**：`docs/roadmap.md` 的「关键设计决策」。改设计前先看，不要把否决过的东西加回来；新决策也记在那里。
 - 终止性论证：`docs/termination.md`。新增形式或能凭空造容器的函数时同步它。
 - 机制细节：代码与注释。本文件里的名字都是定位用的入口。
@@ -55,7 +55,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 - 边界上不许分配：`TestArgumentChecksDoNotAllocate`、`TestProgramScalarsDoNotAllocate`、`BenchmarkVectorPassThrough`（耗时与长度无关）守着。`unsafe` 只在 `container.go`（原生数组的指针与长度）与 `host_*.go`（宿主内存）里用。
 - 原生数组在 `Value` 里是首元素指针加长度：box 是 `*T`、`i` 是长度，切片装进接口要分配切片头，指针不用。只经 `container.go` 的 `arrayOf` 装入、`nativeItems`/`itemsAt` 取出，不再把切片本身放进 box。**每个数组 `Value` 的 `i` 都是它的长度**（嵌套数组用 `nestedOf`、视图用 `viewed`、arena 形式在建成时写入），`length()` 与 `len` 只读它。
 
-**金额**（规则见 README「金额」，取舍见 roadmap）
+**金额**（规则见 `docs/money.md`，取舍见 roadmap）
 - 金额运算只写在 `internal/money` 的 Go 方法里，内核与 std 只做 Value 转换，所以宿主与规则永远同一个答案。语言能做而 Go 做不到的运算就是缺口。
 - 一律 int64（比例、汇率、精确金额都是约分的分子/分母，中间积 128 位），不用 `math/big`；放不下是 `ErrArithmetic`，从不悄悄舍入。
 - 金额类永不经过 float：小数字面量是 `money.Decimal`（`LiteralExpr.Decimal`），读作比例用 `Decimal.Ratio()`，读作 float 用 `LiteralExpr.Float()`（不精确就报错）；边界上 float64 进不了金额类（`money_coerce.go` 的 `exactInput`）。
@@ -116,7 +116,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 内核函数要专用指令 | `lower_kernel.go` 的 `kernelOps` 一行（结果按种类分组的在 `lower_instr.go` 的 `kernel` 里选变体）+ `regvm_ops.go` 的操作（排在 `rCall` 之前）+ `regvm_kernel.go` 的快路径 + `regvm_cold.go` 的 `coldKernels` 一行（`TestKernelOpsAnswerAsTheirFunctions` 在边界值上对照函数） |
 | 新增形式 | `machine/catalog.go` 的 `languageForms` 一行（可开关的写 `optional`，能包进表达式的写 `wrap` 模板）；节点的 kind tag 写 `,form`（可开关的再写 `,optional`，`TestTheOptionalFormsAreTheMachines` 对照）；termination.md |
 | 新增 ExprJSON 节点 | `syntax/ast.go`（嵌入 `Node` 并写 `kind` tag，字段带 tag，加进 `nodeTypes`）；语义在 `compile/infer_expr.go`、`compiler.go`；打印在 `syntax/print.go`、`format.go`；按节点分派的还有 `compile/enum.go`、`fold.go`；示例要用到它（`lsp/funroute_test.go` 检查） |
-| 改语法 | README 附录 A 的文法；跑 `go test ./internal/syntax -run XXX -fuzz FuzzFormatRoundTrip -fuzztime 60s` |
+| 改语法 | `docs/grammar.md` 的文法；跑 `go test ./internal/syntax -run XXX -fuzz FuzzFormatRoundTrip -fuzztime 60s` |
 | 新增函数 | 只经 `Registry.Register` 注册 `FunctionSpec`（手写 `Params`/`Result`/`Eval`，或填 `Go`/`GoBatch` 按 Go 签名反射），目录与 LSP 自动生效；`Doc` 是唯一的函数元数据结构；ABI 版本写进名字（`route.score_v1`） |
 | 新增官方函数或重载 | 常用的进内核库（`lib_*.go`，经 `librarySpecs` 注册，直接操作 backing），其余进 std；补案例（内核 `machine/examples.go`，std `extensions/std/examples.go`），同名的内核重载与 std 金额重载各挂各的案例，测试要求合起来选中每个重载；一个名字服务多种元素类型用 `libEach`/std 的 `eachType`，std 的在 `TestNamesCoverEveryElementTypeTheyClaim` 加一行 |
 | 新增纯函数 | 标 `Doc.Constexpr` |
@@ -136,7 +136,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 新增语言服务能力 | `lsp/`：标准方法优先，专有的用 `funroute/*` 或 `workspace/executeCommand`；`web/wasm` 只是传输 |
 | 新增颜色 | 只在 `web/tokens.css`，用 `light-dark(浅, 深)`；组件只消费 token |
 | 新增前端代码 | `web/src/*.ts`；组件经 `ui.ts` 的 `define` 注册并加进 `package.json` 入口；位置一律按 UTF-16 数（`projection.ts` 的 `offsetAt`）；运行时依赖只加实际导入的包 |
-| 新增错误类别 | `machine/errors.go` 的 `errorClasses` 一行（最具体的在前，写明 `fallback` 接不接）与 README 的错误表（`TestTheReadmeTableIsTheErrorClasses` 对照） |
+| 新增错误类别 | `machine/errors.go` 的 `errorClasses` 一行（最具体的在前，写明 `fallback` 接不接）与 `docs/go.md` 的错误表（`TestTheErrorTableIsTheErrorClasses` 对照） |
 | 新的设计决策 | `docs/roadmap.md` 的「关键设计决策」 |
 
 ## 命令

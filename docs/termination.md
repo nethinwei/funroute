@@ -24,7 +24,7 @@
 
 ### 1.1 语法
 
-下面是与证明相关的抽象语法。它覆盖了 ExprJSON 的全部节点种类（`internal/syntax/ast.go` 的 `nodeTypes`）；运算符都是函数调用的简写（`a + b` 就是 `add(a, b)`，`a && b` 就是 `if(a, b, false)`，`amount -> JPY` 就是 `convert(amount, JPY)`），所以不单独列出。完整的具体语法见 `README.md`。
+下面是与证明相关的抽象语法。它覆盖了 ExprJSON 的全部节点种类（`internal/syntax/ast.go` 的 `nodeTypes`）；运算符都是函数调用的简写（`a + b` 就是 `add(a, b)`，`a && b` 就是 `if(a, b, false)`，`amount -> JPY` 就是 `convert(amount, JPY)`），所以不单独列出。完整的具体语法见 [`grammar.md`](grammar.md)。
 
 ```text
 e ::= c                              字面量：bool、int、float、string、金额、比例、汇率、币种、枚举成员

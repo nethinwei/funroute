@@ -235,7 +235,7 @@ func TestContainerHintsHoldForMoney(t *testing.T) {
 	}
 }
 
-// The README promises money × money a pointer too; it has none.
+// docs/money.md promises money × money a pointer too; it has none.
 func TestMoneyTimesMoneyIsExplained(t *testing.T) {
 	t.Parallel()
 	got := hintOf(t, "amount * amount")

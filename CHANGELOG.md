@@ -2,6 +2,19 @@
 
 版本号按[语义化版本](https://semver.org/lang/zh-CN/)。v0.x 期间，公开 API、语法、ExprJSON、Artifact 与签名清单的形状在两个次版本之间都可能不兼容地改变；每次改变写在这里。
 
+## v0.1.1（2026-09-28）
+
+### 修正
+
+- **float 的答案与机器无关**：Go 在 arm64 上会把 `x * y + z` 融合成 FMA，`stddev` 与 `percentile` 的末位因此与 amd64 不同；两处先乘后加都改为先用 `float64(…)` 舍入乘积，处处同一个答案。arm64 上这两个函数的结果可能在最后一位与 v0.1.0 不同。
+- **浮点 `pow` 不再在编译期算好**：指数不是整数时它就是 Go 的 `math.Pow`，amd64 上 `math.Exp` 按 CPU 是否有 FMA 走不同路径，末位随 CPU 而异；与读时区规则的日历函数一样不参与折叠，Artifact 因此与编译它的机器无关。整数版 `pow` 照旧折叠。
+- 行为金库在 arm64 上生成、CI 在 amd64 上核对。
+
+### 文档
+
+- README 精简为首页：在线工作台的入口、一个可运行的 Go 示例、文档索引。原来的章节拆到 `docs/`：`language.md`、`money.md`、`contracts.md`、`go.md`、`tooling.md`（含命令行）、`grammar.md`、`development.md`。
+- 在线工作台发布在 <https://nethinwei.github.io/funroute/>。
+
 ## v0.1.0（2026-09-28）
 
 第一个对外发布的版本。相对 v0.0.2，语言、金额、SDK、执行层与工具都是重做或新增的；v0.0.2 编出的 Artifact 与 ExprJSON 不再能装载，用源码重新编译即可。
