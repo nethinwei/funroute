@@ -42,6 +42,11 @@ type Doc struct {
 	// polynomial bound in docs/termination.md. Requiring a *constant* would be
 	// stronger than that bound needs: range(len(fees)) is as safe as range(3).
 	BoundedArgs bool `json:"-"`
+	// ConstArgs are the positions of the arguments a call must fix at compile
+	// time: a literal, or what folds to one. It is for an argument that is a
+	// program of its own — matches' pattern — which is then checked and
+	// prepared where the rule is compiled, and never comes from the data.
+	ConstArgs []int `json:"-"`
 	// Timeout and Detached are operational, so neither reaches a front end.
 	// Timeout caps one call of this function: the deadline it receives is the
 	// earlier of the request's and now+Timeout. Zero means the request's alone.

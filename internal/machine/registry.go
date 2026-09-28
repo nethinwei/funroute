@@ -44,6 +44,7 @@ func (f specialForm) wrap() string {
 func cloneDoc(doc Doc) Doc {
 	doc.Params = append([]string(nil), doc.Params...)
 	doc.Examples = append([]Example(nil), doc.Examples...)
+	doc.ConstArgs = slices.Clone(doc.ConstArgs)
 	return doc
 }
 
@@ -96,6 +97,9 @@ type FunctionSpec struct {
 	// the host's tzdata, so folding must not call it: an artifact would then
 	// depend on the machine that compiled it.
 	zoned bool
+	// checkConstant checks a value a call fixes for one of its ConstArgs, at
+	// compile time: a pattern that is none fails there, where it is written.
+	checkConstant func(Value) error
 	// roundingScope marks round(expr, mode): the scope a step that lands
 	// between minor units is written in. Not a special form — nothing about
 	// it is lazy, and a front end draws it as a call.
@@ -401,7 +405,21 @@ func (r *Registry) admitsMoneyType(name string, typ Type) error {
 	return nil
 }
 
+// CheckConstantArg is whether function takes value for one of its ConstArgs,
+// for the compiler to ask where a call fixes it.
+func CheckConstantArg(function *RegisteredFunction, value Value) error {
+	if function.checkConstant == nil {
+		return nil
+	}
+	return function.checkConstant(value)
+}
+
 func validateSignature(spec FunctionSpec) error {
+	for _, at := range spec.Doc.ConstArgs {
+		if at < 0 || at >= len(spec.Params) {
+			return fmt.Errorf("function %s: ConstArgs names argument %d of %d", spec.Name, at, len(spec.Params))
+		}
+	}
 	paramsVars := map[string]bool{}
 	for _, param := range spec.Params {
 		if err := validateTypePattern(param, paramsVars); err != nil {

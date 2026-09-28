@@ -1,5 +1,7 @@
 package limits
 
+import "strings"
+
 // probeTables are the tables docs/limits.md shows as a case, what a run
 // gives and a note, by region.
 var probeTables = map[string][]probe{
@@ -92,6 +94,11 @@ var probeTables = map[string][]probe{
 		{shown: "`allocate(m, 10001)`", source: "len(allocate(m, 10001))", contract: "m: money", args: `{"m": "USD 1.00"}`},
 		{shown: "`pad_left(\"1\", 10000, \"0\")`", source: `len(pad_left("1", 10000, "0"))`},
 		{shown: "`pad_left(\"1\", w, \"0\")`，w = 10001", source: `len(pad_left("1", w, "0"))`, contract: "w: int", args: `{"w": 10001}`},
+		{shown: "`repeat(\"ab\", 5000)`", source: `len(repeat("ab", 5000))`, note: "结果至多 10000 个字符"},
+		{shown: "`repeat(\"ab\", n)`，n = 5001", source: `len(repeat("ab", n))`, contract: "n: int", args: `{"n": 5001}`},
+		{shown: "`matches(s, \"^a\")`，s 是 10000 字节", source: `matches(s, "^a")`, contract: "s: string", args: `{"s": "` + strings.Repeat("a", 10000) + `"}`, note: "文本至多 10000 字节"},
+		{shown: "`matches(s, \"^a\")`，s 是 10001 字节", source: `matches(s, "^a")`, contract: "s: string", args: `{"s": "` + strings.Repeat("a", 10001) + `"}`},
+		{shown: "`matches(s, p)`，p 是参数", source: `matches(s, p)`, contract: "s: string; p: string", args: `{"s": "a", "p": "a"}`, note: "模式必须在编译时定下"},
 		{shown: "`pow(2, 62)`", source: "pow(2, 62)", note: "按平方求幂，指数再大也只算几十步"},
 		{shown: "`pow(2, 63)`", source: "pow(2, 63)"},
 		{shown: "`percentile(xs, 1.5)`", source: "percentile([1, 2], f)", contract: "f: float", args: `{"f": 1.5}`, note: "比例是 0–1"},

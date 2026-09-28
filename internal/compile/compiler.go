@@ -340,6 +340,9 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 			return err
 		}
 	}
+	if err := c.requireConstantArgs(node, function); err != nil {
+		return err
+	}
 	if err := c.exactStep(node, function); err != nil {
 		return err
 	}
@@ -434,6 +437,30 @@ func (c *bytecodeCompiler) requireBoundedArgs(node *syntax.CallExpr) error {
 		return syntax.Around(arg,
 			"%s needs arguments whose size the inputs already bound: a literal, len(...) of a container, or those combined by arithmetic — argument %d is neither",
 			node.Name, i+1)
+	}
+	return nil
+}
+
+// requireConstantArgs holds a call to the arguments its function wants
+// fixed at compile time (Doc.ConstArgs): each must be a constant expression,
+// and the function must take its value. A nested compiler, folding, leaves
+// the check to the compile it folds for.
+func (c *bytecodeCompiler) requireConstantArgs(node *syntax.CallExpr, function *machine.RegisteredFunction) error {
+	for _, at := range function.Doc.ConstArgs {
+		if c.folding {
+			return nil
+		}
+		arg := node.Args[at]
+		if !c.constantExpr(arg) {
+			return syntax.Around(arg, "%s needs argument %d fixed when the rule is compiled: a literal, or what folds to one", node.Name, at+1)
+		}
+		value, ok, err := c.evaluate(arg)
+		if err != nil {
+			return err
+		}
+		if err := machine.CheckConstantArg(function, value); ok && err != nil {
+			return syntax.AroundError(arg, err)
+		}
 	}
 	return nil
 }

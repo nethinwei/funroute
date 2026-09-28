@@ -30,6 +30,7 @@ var examples = map[string][]funroute.Example{
 	// The pack's own.
 	"pad_left":  {{Source: `pad_left("7", 3, "0")`, Result: `"007"`}, {Source: `pad_left("1234", 3, "0")`, Result: `"1234"`}},
 	"pad_right": {{Source: `pad_right("ab", 4, ".")`, Result: `"ab.."`}},
+	"repeat":    {{Source: `repeat("ab", 3)`, Result: `"ababab"`}, {Source: `repeat("-", 0)`, Result: `""`}},
 	"intersect": {{Source: "intersect([1, 2, 3, 2], [2, 3, 4])", Result: "[2,3]"}},
 	"except":    {{Source: "except([1, 2, 3, 2], [2])", Result: "[1,3]"}},
 	"chunk":     {{Source: "chunk([1, 2, 3, 4, 5], 2)", Result: "[[1,2],[3,4],[5]]"}},

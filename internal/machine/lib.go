@@ -21,7 +21,7 @@ func registerLibrary(registry *Registry) {
 func librarySpecs() []FunctionSpec {
 	return slices.Concat(
 		sumSpecs(), extremeSpecs(), quantifierSpecs(), rangeSpecs(),
-		caseSpecs(), testSpecs(), partSpecs(),
+		caseSpecs(), testSpecs(), partSpecs(), searchSpecs(),
 		shapeSpecs(), sortSpecs(), numericSpecs(),
 		selectSpecs(), keyedSpecs(), positionSpecs(), extremeBySpecs(), dictSpecs(),
 		timeSpecs(),

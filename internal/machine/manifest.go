@@ -55,8 +55,8 @@ type manifestParts struct {
 	Money *money.MoneySpec `json:"money,omitempty"`
 }
 
-// ManifestFunction is one registered signature. BoundedArgs is written out
-// because it changes what compiles, and Apply keeps it. Constexpr records how
+// ManifestFunction is one registered signature. BoundedArgs and ConstArgs
+// are written out because they change what compiles, and Apply keeps them. Constexpr records how
 // the host folds the function; a signature has nothing to fold with, so Apply
 // leaves it off — which is why an artifact to deploy is compiled by the host.
 type ManifestFunction struct {
@@ -67,6 +67,7 @@ type ManifestFunction struct {
 	Doc         Doc    `json:"doc"`
 	Constexpr   bool   `json:"constexpr,omitempty"`
 	BoundedArgs bool   `json:"bounded_args,omitempty"`
+	ConstArgs   []int  `json:"const_args,omitempty"`
 }
 
 // ErrUnavailable is what a function known only by its signature returns when
@@ -91,6 +92,7 @@ func manifestFunction(function *RegisteredFunction) ManifestFunction {
 	return ManifestFunction{
 		Name: function.Name, Params: function.Params, Result: function.Result, Special: function.special.String(),
 		Doc: cloneDoc(function.Doc), Constexpr: function.IsConstexpr(), BoundedArgs: function.Doc.BoundedArgs,
+		ConstArgs: slices.Clone(function.Doc.ConstArgs),
 	}
 }
 
@@ -143,7 +145,7 @@ func (r *Registry) applyMoney(spec *money.MoneySpec) error {
 
 func (r *Registry) applyFunction(function ManifestFunction) error {
 	spec := FunctionSpec{Name: function.Name, Params: function.Params, Result: function.Result, Doc: function.Doc}
-	spec.Doc.BoundedArgs = function.BoundedArgs
+	spec.Doc.BoundedArgs, spec.Doc.ConstArgs = function.BoundedArgs, function.ConstArgs
 	if _, ok := r.Resolve(spec.Signature()); ok {
 		return nil
 	}

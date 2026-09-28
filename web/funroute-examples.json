@@ -2675,6 +2675,57 @@
       ]
     },
     {
+      "label": "卡号与单号",
+      "category": "基础语法",
+      "description": "matches 按 RE2 正则检查文本，模式必须写成常量，写错在编译时报；trim_prefix/trim_suffix 去掉已知的前后缀，last_index_of 找分隔符，repeat 造掩码",
+      "source": "{\n  visa: matches(card, \"^4[0-9]{15}$\"),\n  masked: repeat(\"*\", 12) + slice(card, 12, 16),\n  channel: trim_prefix(trim_suffix(ref, \".sg\"), \"ch_\"),\n  batch: slice(order_no, 0, last_index_of(order_no, \"-\"))\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "card",
+            "type": "string",
+            "doc": "卡号"
+          },
+          {
+            "name": "ref",
+            "type": "string",
+            "doc": "渠道引用"
+          },
+          {
+            "name": "order_no",
+            "type": "string",
+            "doc": "订单号"
+          }
+        ],
+        "result": {
+          "type": "record{visa: bool, masked: string, channel: string, batch: string}",
+          "doc": "是否 Visa、掩码后的卡号、渠道与批次"
+        }
+      },
+      "args": {
+        "card": "4111111111111111",
+        "ref": "ch_adyen.sg",
+        "order_no": "ORD-2026-0928-17"
+      },
+      "expected": {
+        "visa": true,
+        "masked": "************1111",
+        "channel": "adyen",
+        "batch": "ORD-2026-0928"
+      },
+      "covers": [
+        "matches",
+        "repeat",
+        "slice",
+        "trim_prefix",
+        "trim_suffix",
+        "last_index_of"
+      ],
+      "operators": [
+        "infix:+"
+      ]
+    },
+    {
       "label": "稳定调用契约",
       "category": "契约治理",
       "description": "调用方仍传旧字段时，表达式可以不读取它，保持 ABI 稳定",

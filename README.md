@@ -244,7 +244,7 @@ reduce(name, weight in weights, total = 0.0, total + weight)            // 遍�
 | 选择与分组 | `index_of` `arg_min` `arg_max` `min_by` `max_by` `sort_by` `sort_by_desc` | `group_by` `rank` `intersect` `except` |
 | 字典 | `get` `merge` | |
 | 时间 | `time` `hour` `weekday` `day` `month` `start_of_day` `add_days` | |
-| 字符串 | `upper` `lower` `trim` `contains` `starts_with` `ends_with` `split` `join` `replace` | `pad_left` `pad_right`（宽度至多 10000） |
+| 字符串 | `upper` `lower` `trim` `trim_prefix` `trim_suffix` `contains` `starts_with` `ends_with` `index_of` `last_index_of` `matches` `split` `join` `replace` | `pad_left` `pad_right` `repeat`（结果至多 10000 个字符） |
 | 数值 | `abs` `ceil` `floor` `round` `pow` `mod`（float） | |
 
 `sum`、`any`、`all` 与内核的 `len` 套推导式时边算边折叠，不建中间数组；`any`/`all` 在决定答案的元素处停下，后面的元素不再计算——`any([10 / x > 2 for x in xs])` 在第一个为真的元素之后不会再除零，和 `||` 一样。

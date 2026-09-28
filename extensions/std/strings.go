@@ -1,6 +1,7 @@
 package std
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -9,9 +10,10 @@ import (
 )
 
 // paddingSpecs are for the places a payment file or an order number has a
-// fixed width: 00001234, a 20-character reconciliation column.
+// fixed width: 00001234, a 20-character reconciliation column; repeat builds
+// a filler under the same cap.
 func paddingSpecs() []funroute.FunctionSpec {
-	specs := make([]funroute.FunctionSpec, 0, 2)
+	specs := make([]funroute.FunctionSpec, 0, 3)
 	for _, side := range []struct {
 		name, label, side string
 		left              bool
@@ -29,7 +31,14 @@ func paddingSpecs() []funroute.FunctionSpec {
 			return padTo(text, width, fill, left)
 		}))
 	}
-	return specs
+	return append(specs, funroute.FunctionSpec{
+		Name: "repeat", Params: []funroute.Type{funroute.StringType, funroute.IntType}, Result: funroute.StringType, Eval: repeatText,
+		Doc: funroute.Doc{
+			Label: "重复", Category: "字符串",
+			Description: "把文本重复 n 次连起来，结果至多 10000 个字符，和补齐同一个上限。",
+			Params:      []string{"文本", "次数"}, Result: "文本",
+		},
+	})
 }
 
 // maxPadWidth caps the width a padding call builds. A fixed-width field in a
@@ -37,6 +46,15 @@ func paddingSpecs() []funroute.FunctionSpec {
 // as 4000000000 from allocating gigabytes — in a run, and in the compiler,
 // which folds a constant call.
 const maxPadWidth = 10_000
+
+func repeatText(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+	text, _ := args[0].String()
+	count, _ := args[1].Int()
+	if count < 0 || count > maxPadWidth || count*int64(utf8.RuneCountInString(text)) > maxPadWidth {
+		return funroute.Value{}, fmt.Errorf("%w: repeat builds 0 to %d characters, %d times %q is not", funroute.ErrArithmetic, maxPadWidth, count, text)
+	}
+	return funroute.String(strings.Repeat(text, int(count))), nil
+}
 
 func padTo(text string, width int64, fill string, left bool) (string, error) {
 	if utf8.RuneCountInString(fill) != 1 {
