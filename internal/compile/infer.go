@@ -541,10 +541,11 @@ func (s *inferState) describe(term typeTerm) string {
 }
 
 type inference struct {
-	Params     []machine.Parameter
-	Result     machine.Type
-	ResultDoc  string
-	NodeTypes  map[int]machine.Type
+	Params    []machine.Parameter
+	Result    machine.Type
+	ResultDoc string
+	// nodeTypes is every node's type by node id: an open one's is none.
+	nodeTypes  []machine.Type
 	Selections map[int]string
 }
 
@@ -670,11 +671,23 @@ func (s *inferState) inference(names []string, args namedTerms, result typeTerm)
 	if !ok {
 		return nil, errors.New("cannot infer a concrete type for result; provide a compile-time type hint")
 	}
-	nodeTypes := make(map[int]machine.Type, len(s.nodeTypes))
+	nodeTypes := make([]machine.Type, len(s.nodeTypes))
 	for id, term := range s.nodeTypes {
-		if typ, ok := s.publicType(term); ok {
-			nodeTypes[id] = typ
-		}
+		nodeTypes[id], _ = s.publicType(term)
 	}
-	return &inference{Params: params, Result: resultType, NodeTypes: nodeTypes, Selections: s.selections}, nil
+	return &inference{Params: params, Result: resultType, nodeTypes: nodeTypes, Selections: s.selections}, nil
+}
+
+// nodeType is the type of node id, and false when inference left it open.
+func (i *inference) nodeType(id int) (machine.Type, bool) {
+	if id < 0 || id >= len(i.nodeTypes) || i.nodeTypes[id].Kind() == machine.InvalidKind {
+		return machine.Type{}, false
+	}
+	return i.nodeTypes[id], true
+}
+
+// typeOf is the type of node id, the zero type when inference left it open.
+func (i *inference) typeOf(id int) machine.Type {
+	typ, _ := i.nodeType(id)
+	return typ
 }

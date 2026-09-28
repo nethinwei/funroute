@@ -39,7 +39,8 @@ func (b *Binding[In, Out]) Options() CompileOptions {
 }
 
 func (b *Binding[In, Out]) Compile(source string) (*machine.Program[In, Out], error) {
-	options := b.Options()
+	// The compile only reads the contract, so it needs no copy of its own.
+	options := b.options
 	options.unsealed = true
 	artifact, err := CompileExpr(source, b.registry, options)
 	if err != nil {
@@ -49,7 +50,8 @@ func (b *Binding[In, Out]) Compile(source string) (*machine.Program[In, Out], er
 }
 
 func (b *Binding[In, Out]) CompileJSON(exprJSON []byte) (*machine.Program[In, Out], error) {
-	options := b.Options()
+	// The compile only reads the contract, so it needs no copy of its own.
+	options := b.options
 	options.unsealed = true
 	artifact, err := CompileJSON(exprJSON, b.registry, options)
 	if err != nil {

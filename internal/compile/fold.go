@@ -38,7 +38,7 @@ func (c *bytecodeCompiler) tryFold(expr syntax.Expr) (bool, error) {
 	}
 	// A value with no constant form — exact money inside a round — is left
 	// for the caller to emit as the work that computes it.
-	index, ok := c.addConstant(value, c.inferred.NodeTypes[expr.NodeID()])
+	index, ok := c.addConstant(value, c.inferred.typeOf(expr.NodeID()))
 	if ok {
 		c.emit(machine.Instruction{Op: machine.OpConstant, A: index})
 		c.folded++
@@ -93,7 +93,7 @@ func (c *bytecodeCompiler) foldBinding(value syntax.Expr) (int, bool, error) {
 	if err != nil || !ok {
 		return 0, false, err
 	}
-	index, ok := c.addConstant(folded, c.inferred.NodeTypes[value.NodeID()])
+	index, ok := c.addConstant(folded, c.inferred.typeOf(value.NodeID()))
 	return index, ok, nil
 }
 
@@ -150,7 +150,7 @@ func (c *bytecodeCompiler) constantExpr(expr syntax.Expr) bool {
 func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (machine.Value, bool, error) {
 	// The runtime checks the value it produced against the declared result
 	// type, so a node whose type inference left open is not folded.
-	result, ok := c.inferred.NodeTypes[expr.NodeID()]
+	result, ok := c.inferred.nodeType(expr.NodeID())
 	if !ok {
 		return machine.Value{}, false, nil
 	}

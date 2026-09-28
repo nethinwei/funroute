@@ -90,6 +90,8 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	}
 	compiler := newBytecodeCompiler(registry, inferred)
 	compiler.readsArgument = surveyed.readers
+	// A node compiles to an instruction or so; a switch or a loop to a few.
+	compiler.instructions = make([]machine.Instruction, 0, surveyed.nodes+surveyed.nodes/2)
 	compiler.plain, compiler.unsealed = options.plain, options.unsealed
 	if err := compiler.compile(expr); err != nil {
 		return inferred, nil, compileError(err)
@@ -182,7 +184,7 @@ func (c *bytecodeCompiler) compile(expr syntax.Expr) error {
 		if err != nil {
 			return err
 		}
-		return c.emitConstant(value, c.inferred.NodeTypes[node.NodeID()])
+		return c.emitConstant(value, c.inferred.typeOf(node.NodeID()))
 	case *syntax.VariableExpr:
 		return c.compileVariable(node)
 	case *syntax.ArrayExpr:
@@ -288,7 +290,7 @@ func (c *bytecodeCompiler) compileMake(id int, kind machine.Kind, values []synta
 	if err := c.compileAll(values); err != nil {
 		return err
 	}
-	typ, ok := c.inferred.NodeTypes[id]
+	typ, ok := c.inferred.nodeType(id)
 	if !ok || typ.Kind() != kind || (kind != machine.RecordKind && !hasElem(typ)) {
 		return errors.New(unresolved)
 	}
@@ -300,7 +302,7 @@ func (c *bytecodeCompiler) compileMake(id int, kind machine.Kind, values []synta
 func (c *bytecodeCompiler) compileField(node *syntax.FieldExpr) error {
 	// Inference reports a read of a field the record lacks, with its place,
 	// so a field that does not resolve here is the compiler's own mistake.
-	sourceType, ok := c.inferred.NodeTypes[node.Value.NodeID()]
+	sourceType, ok := c.inferred.nodeType(node.Value.NodeID())
 	index := sourceType.FieldIndex(node.Field)
 	if !ok || sourceType.Kind() != machine.RecordKind || index < 0 {
 		return fmt.Errorf("internal error: field %q was not resolved by inference", node.Field)
@@ -308,7 +310,7 @@ func (c *bytecodeCompiler) compileField(node *syntax.FieldExpr) error {
 	if err := c.compile(node.Value); err != nil {
 		return err
 	}
-	resultType := c.inferred.NodeTypes[node.ID]
+	resultType := c.inferred.typeOf(node.ID)
 	c.emit(machine.Instruction{Op: machine.OpField, A: index, Type: &resultType})
 	return nil
 }
@@ -349,7 +351,7 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	} else if err := c.compileAll(node.Args); err != nil {
 		return err
 	}
-	c.emitCall(function, len(node.Args), c.inferred.NodeTypes[node.ID])
+	c.emitCall(function, len(node.Args), c.inferred.typeOf(node.ID))
 	return nil
 }
 
@@ -421,7 +423,7 @@ func (c *bytecodeCompiler) requireBoundedArgs(node *syntax.CallExpr) error {
 	for i, arg := range node.Args {
 		// Only an integer can stand for a length; the amount allocate splits
 		// or anything else of another type says nothing about the size.
-		if typ, ok := c.inferred.NodeTypes[arg.NodeID()]; ok && typ.Kind() != machine.IntKind {
+		if typ, ok := c.inferred.nodeType(arg.NodeID()); ok && typ.Kind() != machine.IntKind {
 			continue
 		}
 		if c.boundedExpr(arg) {
@@ -532,7 +534,7 @@ func (c *bytecodeCompiler) compileFor(node *syntax.ForExpr) error {
 	if err := c.compile(node.Source); err != nil {
 		return err
 	}
-	resultType, ok := c.inferred.NodeTypes[node.ID]
+	resultType, ok := c.inferred.nodeType(node.ID)
 	if !ok || !hasElem(resultType) ||
 		(resultType.Kind() != machine.ArrayKind && resultType.Kind() != machine.DictKind) {
 		return errors.New("cannot compile for with unresolved result type")
@@ -643,7 +645,7 @@ func (c *bytecodeCompiler) unbindLocal(name string) {
 // accumulator slot in C is what makes it a fold instead of a mapping, and a
 // filtered item jumps straight to loop_next, leaving the accumulator alone.
 func (c *bytecodeCompiler) compileReduce(node *syntax.ReduceExpr) error {
-	resultType, ok := c.inferred.NodeTypes[node.ID]
+	resultType, ok := c.inferred.nodeType(node.ID)
 	if !ok || !resultType.IsConcrete() {
 		return errors.New("cannot compile reduce with unresolved result type")
 	}

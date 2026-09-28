@@ -19,7 +19,7 @@ import (
 func (c *bytecodeCompiler) literalValue(node *syntax.LiteralExpr) (machine.Value, error) {
 	written := node.Value.Kind()
 	kind := written
-	if typ, ok := c.inferred.NodeTypes[node.ID]; ok {
+	if typ, ok := c.inferred.nodeType(node.ID); ok {
 		kind = typ.Kind()
 	}
 	switch {
@@ -111,13 +111,14 @@ func EnumNamespace(options CompileOptions, registry *machine.Registry) map[strin
 // result must be bound by an argument — or the run could not say which
 // currency the result is in.
 func validateMoneyContract(options CompileOptions, registry *machine.Registry) error {
-	types := kit.Map(options.Args, func(arg ArgSpec) machine.Type { return arg.Type })
-	if options.Result != nil {
-		types = append(types, *options.Result)
-	}
 	_, declared := registry.Money()
-	for _, typ := range types {
-		if err := validateMoneyType(typ, declared); err != nil {
+	for _, arg := range options.Args {
+		if err := validateMoneyType(arg.Type, declared); err != nil {
+			return kit.Errorf(machine.ErrContract, "%v", err)
+		}
+	}
+	if options.Result != nil {
+		if err := validateMoneyType(*options.Result, declared); err != nil {
 			return kit.Errorf(machine.ErrContract, "%v", err)
 		}
 	}

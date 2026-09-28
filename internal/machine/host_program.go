@@ -102,7 +102,6 @@ func (c *Codec[In, Out]) bind(runtime *Runtime) (*Program[In, Out], error) {
 	reads := argumentReads(declared, args, &runtime.reg)
 	program := &Program[In, Out]{
 		args: args, result: result, runtime: runtime, reads: reads, straight: straightProgram(runtime, result),
-		hoisted: NewBatch(runtime, BatchOptions{}),
 	}
 	if program.straight {
 		program.plain = plainLoadsOf(reads, runtime.reg.args)
@@ -177,9 +176,17 @@ type Program[In, Out any] struct {
 	// reads is a plain field.
 	straight bool
 	plain    *plainLoads
-	// hoisted is the program's batchable calls, found once. RunBatch executes
-	// through it directly; it never queues and never starts a timer.
-	hoisted *Batch
+	// hoisted is the program's batchable calls, found the first time
+	// RunBatch asks: most programs are never run in a batch. RunBatch
+	// executes through it directly; it never queues and never starts a timer.
+	hoistOnce sync.Once
+	hoisted   *Batch
+}
+
+// batch is the program's batchable calls.
+func (p *Program[In, Out]) batch() *Batch {
+	p.hoistOnce.Do(func() { p.hoisted = NewBatch(p.runtime, BatchOptions{}) })
+	return p.hoisted
 }
 
 // Runtime is the untyped runtime underneath, for what a Program does not do

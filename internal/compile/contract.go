@@ -125,11 +125,12 @@ func (o CompileOptions) validate(program programSurvey) error {
 }
 
 // programSurvey is what one walk of a program finds before it is typed:
-// where each free variable is first read, in that order, and every node whose
-// subtree reads one.
+// where each free variable is first read, in that order, every node whose
+// subtree reads one, and how many nodes there are.
 type programSurvey struct {
 	first   []*syntax.VariableExpr
 	readers map[int]bool
+	nodes   int
 }
 
 // survey walks the program once, and rejects one that uses a special form its
@@ -140,7 +141,9 @@ type programSurvey struct {
 // the walk is the generic one, so a new form needs nothing here.
 func survey(expr syntax.Expr, registry *machine.Registry) (programSurvey, error) {
 	var disabled syntax.Expr
+	nodes := 0
 	first, readers := syntax.Survey(expr, func(node syntax.Expr) {
+		nodes++
 		if form, ok := syntax.FormOf(node); disabled == nil && ok && !registry.FormEnabled(form) {
 			disabled = node
 		}
@@ -149,7 +152,7 @@ func survey(expr syntax.Expr, registry *machine.Registry) (programSurvey, error)
 		form, _ := syntax.FormOf(disabled)
 		return programSurvey{}, syntax.Around(disabled, "%s is not enabled in this registry", string(form))
 	}
-	return programSurvey{first: first, readers: readers}, nil
+	return programSurvey{first: first, readers: readers, nodes: nodes}, nil
 }
 
 // names is the free variables, in the order they are first read: the

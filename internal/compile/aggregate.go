@@ -32,7 +32,7 @@ func (c *bytecodeCompiler) compileAggregate(node *syntax.CallExpr, function *mac
 	if fold.First {
 		return c.compileFirst(node, function, comprehension)
 	}
-	answer, item := c.inferred.NodeTypes[node.ID], elemOf(c.inferred.NodeTypes[comprehension.ID])
+	answer, item := c.inferred.typeOf(node.ID), elemOf(c.inferred.typeOf(comprehension.ID))
 	init := fold.Init
 	if fold.Counts {
 		init = machine.Int(0)
@@ -60,7 +60,7 @@ func (c *bytecodeCompiler) compileAggregate(node *syntax.CallExpr, function *mac
 // the call on the array built would have. It reports false, compiling
 // nothing, for an item type with no seed to stand for the answer until then.
 func (c *bytecodeCompiler) compileFirst(node *syntax.CallExpr, function *machine.RegisteredFunction, comprehension *syntax.ForExpr) (bool, error) {
-	answer := c.inferred.NodeTypes[node.ID]
+	answer := c.inferred.typeOf(node.ID)
 	seed, ok := seedOf(answer)
 	if !ok {
 		return false, nil

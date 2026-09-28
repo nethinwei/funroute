@@ -24,7 +24,7 @@ func Analyze(source string, registry *machine.Registry, options CompileOptions) 
 	locals := syntax.LocalReferences(expr)
 	for node := range syntax.Nodes(expr) {
 		fact := NodeFact{Span: node.Extent(), Signature: inferred.Selections[node.NodeID()]}
-		if typ, ok := inferred.NodeTypes[node.NodeID()]; ok {
+		if typ, ok := inferred.nodeType(node.NodeID()); ok {
 			fact.Type = &typ
 		}
 		if local, isVariable := locals[node.NodeID()]; isVariable {
