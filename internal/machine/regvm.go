@@ -34,8 +34,8 @@ func (f *frame) exec() (int32, error) {
 			ok = subI(b.ints, in)
 		case rMulI:
 			ok = mulI(b.ints, in)
-		case rField, rFieldI, rFieldF, rFieldB:
-			err = f.readField(in)
+		case rField, rFieldI, rFieldF, rFieldB, rBranchField:
+			pc, err = f.readField(pc, in)
 		case rBranchLtI:
 			pc = branchUnless(b.ints[in.a] < b.ints[in.b], pc, in.c)
 		case rBranchLeI:

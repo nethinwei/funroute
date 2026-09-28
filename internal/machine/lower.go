@@ -396,7 +396,7 @@ func writesC(op rop) bool {
 	switch op {
 	case rMove, rMoveI, rMoveF,
 		rAddI, rSubI, rMulI, rDivI, rModI, rAddF, rSubF, rMulF, rDivF, rConcat, rIntToF, rFloatToI,
-		rLtI, rLeI, rLtF, rLeF, rLtS, rLeS, rEq, rEqI, rEqF, rLen, rAt, rAtI, rAtF, rAtB, rAtD, rAtDI, rAtDF, rAtDB, rTake, rField, rFieldI, rFieldF, rFieldB:
+		rLtI, rLeI, rLtF, rLeF, rLtS, rLeS, rEq, rEqI, rEqF, rLen, rAt, rAtI, rAtF, rAtB, rAtD, rAtDI, rAtDF, rAtDB, rTake, rHasKey, rField, rFieldI, rFieldF, rFieldB:
 		return true
 	}
 	return false

@@ -40,14 +40,24 @@ type vecBlock struct {
 	cond        int32
 	target      int
 	end         vecEnd
+	// cols is where each operation's operands and result are among the
+	// plan's columns, and foldCol, collectCol and condCol the fold's, the
+	// item's and the branch's: -1 for a register the body does not write,
+	// read as it is throughout the loop.
+	cols                         []vecCols
+	foldCol, collectCol, condCol int32
 }
+
+// vecCols is the columns of one operation's a, b and c.
+type vecCols struct{ a, b, c int32 }
 
 // vecPlan is a loop body the vector runs: its blocks in order — the first is
 // the body's start, each falls into the next — the registers it computes
 // columns of, and the loop's item and answer.
 type vecPlan struct {
-	blocks    []vecBlock
-	columns   map[int32]int
+	blocks []vecBlock
+	// columns is how many registers the body writes, each a column.
+	columns   int
 	item, acc int32
 	accKind   Kind
 	// body is where the body starts, past a prelude that runs once before
@@ -109,7 +119,7 @@ func (l *lowerer) vectorize() {
 		body := bodyOf(l.out.code, init)
 		planner := &vecPlanner{code: l.out.code, kinds: l.out.kinds, starts: l.out.starts, body: body, byPC: map[int]int{}, hidden: -2}
 		loop := &l.out.loops[in.c]
-		planner.plan = &vecPlan{columns: map[int32]int{}, item: loop.item, acc: loop.acc, accKind: loop.typ.kind, body: int32(body)}
+		planner.plan = &vecPlan{item: loop.item, acc: loop.acc, accKind: loop.typ.kind, body: int32(body)}
 		if planner.walk() && planner.check() {
 			loop.vec = planner.plan
 		}
@@ -266,21 +276,43 @@ func (p *vecPlanner) check() bool {
 	if !plan.shape() {
 		return false
 	}
+	columns := map[int32]int32{}
 	for _, block := range plan.blocks {
 		for _, in := range block.ops {
 			if !readable(in.a) || in.op != rMove && in.op != rIntToF && !readable(in.b) || in.c == plan.item || in.c == plan.acc {
 				return false
 			}
 			written[in.c] = true
-			if _, ok := plan.columns[in.c]; !ok {
-				plan.columns[in.c] = len(plan.columns)
+			if _, ok := columns[in.c]; !ok {
+				columns[in.c] = int32(len(columns))
 			}
 		}
 		if block.folds && !readable(block.fold.b) || block.collect != -1 && !readable(block.collect) || block.cond >= 0 && !readable(block.cond) {
 			return false
 		}
 	}
+	plan.columns = len(columns)
+	plan.placeColumns(columns)
 	return true
+}
+
+// placeColumns writes down where each block's operands are among the
+// columns, so a run reads them by index.
+func (plan *vecPlan) placeColumns(columns map[int32]int32) {
+	col := func(reg int32) int32 {
+		if c, ok := columns[reg]; ok {
+			return c
+		}
+		return -1
+	}
+	for k := range plan.blocks {
+		block := &plan.blocks[k]
+		block.cols = make([]vecCols, len(block.ops))
+		for i, in := range block.ops {
+			block.cols[i] = vecCols{a: col(in.a), b: col(in.b), c: col(in.c)}
+		}
+		block.foldCol, block.collectCol, block.condCol = col(block.fold.b), col(block.collect), col(block.cond)
+	}
 }
 
 // shape finds the chain, the blocks that fold and collect, and whether the

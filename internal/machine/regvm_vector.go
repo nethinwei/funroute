@@ -23,6 +23,11 @@ const firstStopChunk = 16
 // as a hundred ns of items, and an item near the start often decides.
 const scalarFirst = 8
 
+// vecShortest is the fewest items the vector takes a loop that does not stop
+// for: starting it costs about what the body saves on fifteen items, and a
+// routing rule's lists — channels, quotes — are often shorter.
+const vecShortest = 16
+
 // vecKind is what a column holds.
 type vecKind uint8
 

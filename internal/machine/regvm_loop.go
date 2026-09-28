@@ -54,6 +54,8 @@ func (f *frame) regLoopInit(pc int, in *rinstr) (int, error) {
 	// proved the loop's items are only read.
 	if loop.view != nil && site.itemsInPlace {
 		loop.item, f.walked = &f.items[in.c], true
+		loop.view.shape(loop.item)
+		f.regs[site.item] = Value{kind: RecordKind, box: loop.item}
 	}
 	f.startOutput(loop, in)
 	switch {
@@ -61,6 +63,8 @@ func (f *frame) regLoopInit(pc int, in *rinstr) (int, error) {
 	case site.vec.stops:
 		// A loop of scalarFirst items or fewer never gets there.
 		loop.vecAt = scalarFirst
+	case loop.length < vecShortest:
+		// Starting the vector costs more than the body saves on so few.
 	default:
 		return f.vectorFrom(loop, pc)
 	}
@@ -176,6 +180,8 @@ func (f *frame) emptyResult(site *rloop) Value {
 // of its kind.
 func (f *frame) bindRegs(loop *regLoop, index int) {
 	switch item := loop.site.item; {
+	case loop.item != nil:
+		loop.view.load(index, loop.item, loop.site.fields)
 	case loop.ints != nil:
 		f.ints[item] = loop.ints[index]
 	case loop.floats != nil:
@@ -184,9 +190,6 @@ func (f *frame) bindRegs(loop *regLoop, index int) {
 		f.regs[item] = Value{kind: StringKind, s: loop.strings[index]}
 	case loop.bools != nil:
 		f.ints[item] = word(loop.bools[index])
-	case loop.item != nil:
-		loop.view.load(index, loop.item)
-		f.regs[item] = Value{kind: RecordKind, box: loop.item}
 	case loop.view != nil:
 		f.regs[item] = loop.view.record(index)
 	case loop.keys != nil:

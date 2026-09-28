@@ -204,6 +204,12 @@ func entry(b *banks, in *rinstr) bool {
 	return ok
 }
 
+// hasKey is member(string, dict<T>): whether the dictionary has the key.
+func hasKey(b *banks, in *rinstr) {
+	_, ok := b.regs[in.b].lookup(b.regs[in.a].s)
+	b.ints[in.c] = word(ok)
+}
+
 // entryI is an int dictionary's entry, out of its map into the ints.
 func entryI(b *banks, in *rinstr) bool {
 	entries, _ := b.regs[in.a].box.(map[string]int64)

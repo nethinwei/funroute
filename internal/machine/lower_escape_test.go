@@ -160,3 +160,50 @@ func TestAnUpdatedRecordIsReadInPlace(t *testing.T) {
 		t.Errorf("an update of an update = %+v, %v; want amount 1 of the order", got, err)
 	}
 }
+
+type fieldsChannel struct {
+	Name string `funroute:"name"`
+	Fee  int64  `funroute:"fee"`
+	OK   bool   `funroute:"ok"`
+}
+
+type fieldsIn struct {
+	Channels []fieldsChannel `funroute:"cs"`
+}
+
+// A loop whose items are read in place loads only the fields its body reads,
+// through a let or an inner loop too, and answers as the same program over
+// the records themselves.
+func TestAnItemReadInPlaceLoadsTheFieldsItsBodyReads(t *testing.T) {
+	t.Parallel()
+	registry := randomRegistry(t)
+	binding, err := compile.Bind[fieldsIn, int64](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := &fieldsIn{Channels: []fieldsChannel{{"a", 30, true}, {"bb", 10, false}, {"ccc", 20, true}}}
+	records := make([]any, len(in.Channels))
+	for i, c := range in.Channels {
+		records[i] = map[string]any{"name": c.Name, "fee": c.Fee, "ok": c.OK}
+	}
+	for _, source := range []string{
+		`sum([c.fee for c in cs if c.ok])`,
+		`sum([let(n = c, n.fee + len(n.name)) for c in cs])`,
+		`len([c for c in cs if c.ok && c.fee < 25])`,
+		`len([c.name for c in cs for d in cs if d.fee > c.fee && d.ok])`,
+		`sum([len(c.name) for c in cs if !c.ok || c.fee > 25])`,
+	} {
+		program, err := binding.Compile(source)
+		if err != nil {
+			t.Fatalf("%s: %v", source, err)
+		}
+		if machine.Flow(program.Runtime()).ItemsInPlace == 0 {
+			t.Errorf("%s reads no loop's items in place", source)
+		}
+		got, err := program.Run(t.Context(), in)
+		want, wantErr := program.Runtime().Run(t.Context(), map[string]any{"cs": records})
+		if err != nil || wantErr != nil || want.Any() != got {
+			t.Errorf("%s = %v, %v; over the records %v, %v", source, got, err, want.Any(), wantErr)
+		}
+	}
+}

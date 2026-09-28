@@ -525,32 +525,34 @@ func (c *bytecodeCompiler) compileFallback(node *syntax.CallExpr) error {
 // compared with eq; without one the matches are conditions. Any match selects
 // the branch, so all but the last jump forward on true.
 func (c *bytecodeCompiler) compileBranchTest(subjectSlot int, matches []syntax.Expr) ([]int, []int, error) {
-	var hits, misses []int
+	var hits []int
 	for i, match := range matches {
-		if err := c.compileMatch(subjectSlot, match); err != nil {
+		tryNext, err := c.compileMatch(subjectSlot, match)
+		if err != nil {
 			return nil, nil, err
 		}
 		if i == len(matches)-1 {
-			misses = append(misses, c.emit(machine.Instruction{Op: machine.OpJumpIfFalse}))
-			break
+			return hits, tryNext, nil
 		}
-		tryNext := c.emit(machine.Instruction{Op: machine.OpJumpIfFalse})
 		hits = append(hits, c.emit(machine.Instruction{Op: machine.OpJump}))
-		c.instructions[tryNext].A = len(c.instructions)
+		c.patch(tryNext, len(c.instructions))
 	}
-	return hits, misses, nil
+	return hits, nil, nil
 }
 
-func (c *bytecodeCompiler) compileMatch(subjectSlot int, match syntax.Expr) error {
+// compileMatch tests one match, going on past it when it holds and jumping
+// to the misses when it does not: a condition, or the subject's equality to
+// a value.
+func (c *bytecodeCompiler) compileMatch(subjectSlot int, match syntax.Expr) ([]int, error) {
 	if subjectSlot < 0 {
-		return c.compile(match)
+		return c.compileCondition(match)
 	}
 	c.emit(machine.Instruction{Op: machine.OpLoadLocal, A: subjectSlot})
 	if err := c.compile(match); err != nil {
-		return err
+		return nil, err
 	}
 	c.emit(machine.Instruction{Op: machine.OpEqual})
-	return nil
+	return []int{c.emit(machine.Instruction{Op: machine.OpJumpIfFalse})}, nil
 }
 
 func (c *bytecodeCompiler) patch(jumps []int, target int) {
@@ -604,20 +606,19 @@ func (c *bytecodeCompiler) compileLoop(shape loopShape) error {
 		}
 	}
 	loopStart := len(c.instructions)
-	jumpFiltered := -1
+	var filtered []int
 	if shape.where != nil {
-		if err := c.compile(shape.where); err != nil {
+		misses, err := c.compileCondition(shape.where)
+		if err != nil {
 			return err
 		}
-		jumpFiltered = c.emit(machine.Instruction{Op: machine.OpJumpIfFalse})
+		filtered = misses
 	}
 	if err := shape.body(); err != nil {
 		return err
 	}
 	next := c.emit(machine.Instruction{Op: machine.OpLoopNext, A: loopStart, Type: shape.result})
-	if jumpFiltered >= 0 {
-		c.instructions[jumpFiltered].A = next
-	}
+	c.patch(filtered, next)
 	c.instructions[init].A = len(c.instructions)
 	return nil
 }

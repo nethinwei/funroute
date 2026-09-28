@@ -68,6 +68,7 @@ const (
 	rFloatToI // c = int(a), refusing a float that is not a whole int
 	rAtA      // rAt of an array in an arena slot
 	rTake     // c = the first b items of the array in a
+	rHasKey   // c = whether the dictionary in b has the key in a
 	// rCall is a call: calls[a] says of what, from which registers, into
 	// which.
 	rCall
@@ -85,6 +86,9 @@ const (
 	rFieldI
 	rFieldF
 	rFieldB
+	// rBranchField is rFieldB and the branch after it: to c unless field b
+	// of the record in a is true.
+	rBranchField
 	// The builders take b registers from a, and put what they build in a;
 	// makes[c] has the type and the names.
 	rMakeArray
@@ -119,7 +123,7 @@ var ropNames = [ropCount]string{
 	rBranchEqI: "branch_eq_i", rBranchEqF: "branch_eq_f", rEq: "eq", rEqI: "eq_i", rEqF: "eq_f",
 	rLen: "len", rAt: "at", rAtI: "at_i", rAtF: "at_f", rAtB: "at_b",
 	rAtD: "at_d", rAtDI: "at_d_i", rAtDF: "at_d_f", rAtDB: "at_d_b", rIntToF: "int_to_f", rFloatToI: "float_to_i", rAtA: "at_a", rTake: "take", rCall: "call",
-	rField: "field", rFieldI: "field_i", rFieldF: "field_f", rFieldB: "field_b",
+	rField: "field", rFieldI: "field_i", rFieldF: "field_f", rFieldB: "field_b", rBranchField: "branch_field", rHasKey: "has_key",
 	rMakeArray: "make_array", rMakeDict: "make_dict", rMakeRecord: "make_record", rRecordWith: "record_with",
 	rLoopInit: "loop_init", rCollect: "collect", rSpread: "spread", rLoopNext: "loop_next", rLoopBreak: "loop_break", rCollectNext: "collect_next",
 	rCollectI: "collect_i", rCollectF: "collect_f", rCollectNextI: "collect_next_i", rCollectNextF: "collect_next_f",
@@ -225,8 +229,10 @@ type rloop struct {
 	exit           int32
 	spread         bool
 	// itemsInPlace is set for a loop over an array of plain records whose
-	// item is only read field by field (lower_escape.go).
+	// item is only read field by field (lower_escape.go), and fields is the
+	// fields the body reads: each item loads those alone.
 	itemsInPlace bool
+	fields       []int32
 	built
 	// vec is the plan a vector runs the loop's body by, when it can.
 	vec *vecPlan

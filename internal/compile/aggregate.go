@@ -143,11 +143,11 @@ func (c *bytecodeCompiler) foldBody(shape *loopShape, yield syntax.Expr, fold *m
 	case fold.Stops && fold.Stop:
 		// any: a false item goes on, a true one is the answer.
 		shape.body = func() error {
-			if err := c.compile(yield); err != nil {
+			onward, err := c.compileCondition(yield)
+			if err != nil {
 				return err
 			}
-			onward := c.emit(machine.Instruction{Op: machine.OpJumpIfFalse})
-			defer func() { c.patch([]int{onward}, len(c.instructions)) }()
+			defer func() { c.patch(onward, len(c.instructions)) }()
 			return stop()
 		}
 	case fold.Stops:
@@ -161,11 +161,9 @@ func (c *bytecodeCompiler) foldBody(shape *loopShape, yield syntax.Expr, fold *m
 			return stop()
 		}
 		shape.body = func() error {
-			if err := c.compile(yield); err != nil {
-				return err
-			}
-			c.emit(machine.Instruction{Op: machine.OpJumpIfFalse, A: stopAt})
-			return nil
+			misses, err := c.compileCondition(yield)
+			c.patch(misses, stopAt)
+			return err
 		}
 	default:
 		shape.body = func() error { return c.foldItem(yield, fold, answer, item) }

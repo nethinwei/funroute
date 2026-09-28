@@ -68,16 +68,22 @@ func (v *recordsView) item(i int) unsafe.Pointer {
 	return unsafe.Add(v.data, uintptr(i)*v.plan.stride)
 }
 
-// load loads item index into record, the loop's own.
-func (v *recordsView) load(index int, record *recordValue) {
-	plan := v.plan.elem
-	item := v.item(index)
-	record.typ = &plan.typ
-	record.fields = slices.Grow(record.fields[:0], len(plan.fields))[:len(plan.fields)]
-	for i, field := range plan.fields {
+// load loads the fields of item index a loop reads into record, the
+// loop's own, which shape made one of the view's items.
+func (v *recordsView) load(index int, record *recordValue, fields []int32) {
+	plan, item := v.plan.elem, v.item(index)
+	for _, i := range fields {
 		// Every field is plain.
+		field := &plan.fields[i]
 		loadPlain(field.plain, unsafe.Add(item, field.offset), &record.fields[i])
 	}
+}
+
+// shape makes record one of the view's items, for load to fill.
+func (v *recordsView) shape(record *recordValue) {
+	plan := v.plan.elem
+	record.typ = &plan.typ
+	record.fields = slices.Grow(record.fields[:0], len(plan.fields))[:len(plan.fields)]
 }
 
 // record is item i as a record of its own.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,8 +29,12 @@ func TestLoweringFusesTheCommonShapes(t *testing.T) {
 		{`[x + 1 for x in xs]`, "loop_init add_i collect_next_i halt"},
 		{`[x for x in xs if x > 0]`, "loop_init branch_lt_i collect_next_i loop_next halt"},
 		{`[x * y for x in xs for y in xs]`, "loop_init loop_init mul_i collect_next_i loop_next halt"},
+		{`[x for x in xs if x > 0 && x < 9]`, "loop_init branch_lt_i branch_lt_i collect_next_i loop_next halt"},
+		{`[x for x in xs if !(x > 0) || x == 5]`, "loop_init branch_lt_i branch_eq_i collect_next_i loop_next halt"},
+		{`len([c for c in cs if c.ok && c.fee < 50])`, "loop_init branch_field field_i branch_lt_i add_i loop_next halt"},
+		{`"k" in d`, "has_key halt"},
 	} {
-		artifact, err := compile.CompileExpr(test.source, registry, randomContract)
+		artifact, err := compile.CompileExpr(test.source, registry, shapesContract)
 		if err != nil {
 			t.Fatalf("%s: %v", test.source, err)
 		}
@@ -47,6 +52,12 @@ func TestLoweringFusesTheCommonShapes(t *testing.T) {
 		}
 	}
 }
+
+// shapesContract is randomContract with an array of records and a
+// dictionary.
+var shapesContract = compile.CompileOptions{Args: append(slices.Clone(randomContract.Args),
+	compile.ArgSpec{Name: "cs", Type: machine.ArrayOf(machine.RecordOf(machine.FieldOf("ok", machine.BoolType), machine.FieldOf("fee", machine.IntType)))},
+	compile.ArgSpec{Name: "d", Type: machine.DictOf(machine.IntType)})}
 
 // generator writes random programs of the language: every form a lowering
 // has a rule for, arithmetic that overflows and divides by zero, indexes

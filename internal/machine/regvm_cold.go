@@ -116,6 +116,7 @@ var coldKernels = [rCall]kernelStep{
 	rFloatToI: func(b *banks, pc int, in *rinstr) (int, bool) { return pc, floatToInt(b, in) },
 	rAtA:      func(b *banks, pc int, in *rinstr) (int, bool) { return pc, arenaAt(b, in) },
 	rTake:     func(b *banks, pc int, in *rinstr) (int, bool) { return pc, takeOp(b, in) },
+	rHasKey:   func(b *banks, pc int, in *rinstr) (int, bool) { hasKey(b, in); return pc, true },
 }
 
 // structure runs what builds values and what opens and closes a loop, a
@@ -139,11 +140,11 @@ func (f *frame) structure(pc int, in *rinstr) (int, bool, error) {
 }
 
 // readField reads field b of the record in a into register c, in the file
-// of its kind.
-func (f *frame) readField(in *rinstr) error {
+// of its kind, or branches on it, and is where the run goes on.
+func (f *frame) readField(pc int, in *rinstr) (int, error) {
 	record, ok := f.regs[in.a].box.(*recordValue)
 	if !ok {
-		return errNotARecord
+		return pc, errNotARecord
 	}
 	switch field := &record.fields[in.b]; in.op {
 	case rFieldI:
@@ -152,10 +153,12 @@ func (f *frame) readField(in *rinstr) error {
 		f.floats[in.c] = field.f
 	case rFieldB:
 		f.ints[in.c] = word(field.b)
+	case rBranchField:
+		return branchUnless(field.b, pc, in.c), nil
 	default:
 		f.regs[in.c] = *field
 	}
-	return nil
+	return pc, nil
 }
 
 // scoped runs what builds values and what opens and closes a loop, a

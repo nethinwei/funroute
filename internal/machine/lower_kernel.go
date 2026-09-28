@@ -41,6 +41,7 @@ var kernelOps = map[string]kernelOp{
 	"at(array<T>,int)->T":          {op: rAt},
 	"at(dict<T>,string)->T":        {op: rAtD},
 	"take(array<T>,int)->array<T>": {op: rTake},
+	"member(string,dict<T>)->bool": {op: rHasKey},
 	"float(int)->float":            {op: rIntToF, unary: true},
 	"int(float)->int":              {op: rFloatToI, unary: true},
 	"int(int)->int":                {op: rMoveI, unary: true},

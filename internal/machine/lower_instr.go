@@ -276,7 +276,7 @@ func (l *lowerer) branch(target int) {
 // branchOps is the branch each ordering makes with the jump after it.
 var branchOps = map[rop]rop{
 	rLtI: rBranchLtI, rLeI: rBranchLeI, rLtF: rBranchLtF, rLeF: rBranchLeF, rLtS: rBranchLtS, rLeS: rBranchLeS, rEq: rBranchEq,
-	rEqI: rBranchEqI, rEqF: rBranchEqF,
+	rEqI: rBranchEqI, rEqF: rBranchEqF, rFieldB: rBranchField,
 }
 
 // loopInit lowers the start of a loop: the source, and a fold's seed.
@@ -288,7 +288,7 @@ func (l *lowerer) loopInit(in Instruction) {
 	source := l.pop()
 	l.flush(0)
 	loop := rloop{typ: in.Type, item: l.localBase + int32(in.B), key: -1, acc: -1, dst: l.top(), exit: int32(in.A), built: l.builtFor(l.pc),
-		itemsInPlace: l.flow.at[l.pc].itemsInPlace}
+		itemsInPlace: l.flow.at[l.pc].itemsInPlace, fields: l.flow.at[l.pc].itemFields}
 	if in.D != NoKey {
 		loop.key = l.localBase + int32(in.D)
 	}

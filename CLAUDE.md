@@ -92,11 +92,11 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 - 形状常见的 Go 函数（`pureOf`）在候选分支外直接从各组调用（`rcall.banked`），纯的不看截止时间，宿主的照旧先看；在 fallback 的候选里一律按值调用，由翻译器静态决定。
 - 改了翻译器、`rinstr` 或 `frame.exec`，与改动前交替跑 `BenchmarkDispatch`/`BenchmarkCall`/`BenchmarkRunPaths` 对照，再 `make perf`。
 - 值流分析（`lower_escape.go`）决定数组建在哪：不逃出运行的建在帧的 arena 槽里，box 是指向槽的指针（`*[]T`），只有翻译器为它选的指令（循环、`at_a`）见得到；答案建在宿主借出的槽里（`RunInto`）。**指针形式的 box 绝不能流到宿主函数、结果或容器里**——新增会读或放出数组的指令，先在值流分析里给它规则。帧里不存指向宿主 struct 的指针（它可能在宿主的栈上），只拷切片头。
-- 纯标量字段的 record 数组以视图（`recordsView`）为 backing：新增读数组的路径（`length`、`at`、`Slice`、`Array`、`elemType`、写回）都要认得它，派生视图（`perm`、子视图）不指向帧；只有 `rloop.itemsInPlace` 的循环复用 `f.items`，并置 `frame.walked` 让收尾清掉。
+- 纯标量字段的 record 数组以视图（`recordsView`）为 backing：新增读数组的路径（`length`、`at`、`Slice`、`Array`、`elemType`、写回）都要认得它，派生视图（`perm`、子视图）不指向帧；只有 `rloop.itemsInPlace` 的循环复用 `f.items`，每项只装循环体读到的字段（值流分析的 `itemFields`：新增读循环项的栈指令要在那里记下它读的字段），并置 `frame.walked` 让收尾清掉。
 - 帧的 `release` 只清这次运行写过的部分：清含指针的内存要走写屏障——多清三个空槽就让固定开销从 30 ns 变成 60 ns。
 - `Session` 独占一个帧（`frame.owned`，不回池），给单个 goroutine 反复运行；还帧一律经 `putFrame`。`exec` 只交回答案所在的寄存器，调用方在收尾前取值一次。
 - 帧池只用 `sync.Pool`，热路径上不许有跨 goroutine 共享的可写状态：一个用原子操作取还的共享空闲帧，曾让 10 核并行比单核还慢（`BenchmarkRunParallel` 用 `-cpu 1,10` 看扩展）。
-- 向量（`lower_vector.go`、`regvm_vector*.go`）只跑逐列运算与折叠、收集、停止；遇到失败或停止，就把循环交回标量循环体，由它重跑那一项。所以向量只写快路径，`intOp`/`floatOp` 与内核指令必须逐项同义（`TestVectorOpsAnswerAsTheKernel`、`TestTheVectorAnswersAsTheBody` 守着）。
+- 向量（`lower_vector.go`、`regvm_vector*.go`）只跑逐列运算与折叠、收集、停止；遇到失败或停止，就把循环交回标量循环体，由它重跑那一项。所以向量只写快路径，`intOp`/`floatOp` 与内核指令必须逐项同义（`TestVectorOpsAnswerAsTheKernel`、`TestTheVectorAnswersAsTheBody` 守着）。少于 `vecShortest` 项的循环不进向量，对照测试要用更长的输入。
 - 类型在装载时由 `machine/verify.go` 证明一次，执行路径不再检查内核运算的结果、容器的元素、循环收集的值与局部槽是否绑定；只检查宿主函数的回答。新增会产生值的执行路径，先让验证器能证明它的类型。
 
 **Go 只做语言**

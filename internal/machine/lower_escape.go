@@ -1,5 +1,7 @@
 package machine
 
+import "slices"
+
 // Value flow: where each array a program builds goes, found once, before it
 // is lowered, as Go's compiler finds where a value escapes. An array of
 // bools, ints, floats or strings that only feeds a loop, len or an index —
@@ -61,10 +63,11 @@ type flow struct {
 // being 0 for the whole answer and i+1 for field i of the answer's record.
 // itemsInPlace says it is a loop over an array of plain records whose item
 // is only read field by field: it loads each item into the frame's own
-// record.
+// record, only the fields itemFields names.
 type flowAt struct {
 	arena, uses, builds, itemsInPlace bool
 	dest                              int
+	itemFields                        []int32
 }
 
 // fstate is what the walk knows on entering an instruction.
@@ -108,11 +111,13 @@ type flower struct {
 // reads where it is, when it does.
 type pcFacts struct {
 	escaped, itemEscaped bool
-	firstUse             int32
-	usedElsewhere        bool
-	consumes             bool
-	consumer             origin
-	fields               []origin
+	// itemFields is the fields of a loop's item its body reads.
+	itemFields    []int32
+	firstUse      int32
+	usedElsewhere bool
+	consumes      bool
+	consumer      origin
+	fields        []origin
 }
 
 // flowOf analyzes a verified program.
@@ -293,7 +298,10 @@ func (w *flower) straight(pc int, in Instruction, s *fstate) {
 		// a loop over an array of plain records.
 		record := s.pop(1)[0]
 		i, argument := record.arg()
-		_, item := record.item()
+		loop, item := record.item()
+		if item && !slices.Contains(w.facts[loop].itemFields, int32(in.A)) {
+			w.facts[loop].itemFields = append(w.facts[loop].itemFields, int32(in.A))
+		}
 		w.use(pc, record, item || argument && w.args[i].typ.kind == RecordKind)
 		s.push(fromElsewhere)
 	case OpCall:
@@ -466,6 +474,7 @@ func (w *flower) result(parts *ArtifactParts) flow {
 		i, argument := o.arg()
 		f.at[pc].uses = o >= 0 && f.at[o].arena || argument && f.viewOnly[i]
 		f.at[pc].itemsInPlace = w.code[pc].Op == OpLoopInit && w.recordsArg(o) && !w.facts[pc].itemEscaped
+		f.at[pc].itemFields = w.facts[pc].itemFields
 	}
 	if answer := int(w.answer); w.answer >= 0 && w.usedOnce(answer) {
 		w.answerDest(&f, answer)
