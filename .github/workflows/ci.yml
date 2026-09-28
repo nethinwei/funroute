@@ -1,0 +1,37 @@
+# Every push and pull request runs make ci, the gate a commit must pass:
+# formatting, imports, the front end's checks and build, vet, staticcheck,
+# modernize, golangci-lint and deadcode — on the native and the js/wasm
+# build — the repository's own lint, the build, the WebAssembly module, and
+# the Go and JavaScript tests. The linters install at the versions the
+# Makefile pins; go.mod stays empty.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - uses: actions/cache@v4
+        with:
+          path: .tools
+          key: tools-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      - run: make ci

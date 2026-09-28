@@ -31,7 +31,7 @@ switch(country,
 - **类型尽量推出来**。参数类型由函数签名反推，数值只做安全的提升，跨类型必须显式转换。
 - **编译产物不会漂移**。Artifact 带 digest，冻结了它用到的每个函数签名；运行环境里函数变了，旧产物会拒绝装载。
 - **文本是唯一的来源**。源码和规范化 JSON（ExprJSON）可以无损互转；工作台的结构视图只是同一段文本的投影。
-- **能力由宿主开关**。内核只有 19 个函数名，`switch`、推导式、`reduce` 等按需启用，一个注册表就是一个控制台。
+- **能力由宿主开关**。内核是运算、比较、转换、容器与常用的库函数（76 个函数名、179 个重载，见 [`docs/limits.md`](docs/limits.md)），`switch`、推导式、`reduce` 等形式按需启用，金额与标准库按需注册，一个注册表就是一个控制台。
 
 ## 快速上手
 
@@ -787,7 +787,7 @@ registry.Register(funroute.FunctionSpec{
 ```
 
 - 参数可以是 Go 标量、任意嵌套的切片和 `map[string]…`、struct（见[记录](#记录)）或句柄；首参数可选 `context.Context`；返回 `R`，会失败的返回 `(R, error)`。
-- 常见签名——标量与 `[]float64`/`[]int64` 进、标量出，可带 `error`——直接调用，每次约 25 ns、0 次分配；其余签名经 `reflect.Call`，约 300 ns。也可以不填 `Go`，手写 `Params`、`Result`、`Eval`；两种写法二选一。
+- 常见签名——标量与 `[]float64`/`[]int64` 进、标量出，可带 `error`——直接调用，0 次分配（连同一次运行约 50 ns，见 [`docs/perf.md`](docs/perf.md)）；其余签名经 `reflect.Call`，每次调用多出几百纳秒，其中 struct 与切片参数按注册时规划好的布局读写，不在调用时再读 struct 标签。也可以不填 `Go`，手写 `Params`、`Result`、`Eval`；两种写法二选一。
 - 以一个数组为参数的聚合可以声明 `Fold`，套推导式调用时就边算边折叠，不建数组、也不调用它：`Fold: &funroute.Fold{Step: "add", Init: funroute.Int(0)}` 是一个求和，`Step` 是把"到目前的答案"和下一个元素并起来的内核函数；`Stops`/`Stop` 让一个 bool 的折叠遇到 `Stop` 就停（`any` 停在 true）；`Counts` 是计数；`First` 取第一个元素并就此停下（`first`），一个都没有时对空数组调用函数本身、照样报错。折叠必须与函数本身给出同样的答案。
 - 金额直接写 Go 类型：`funroute.Money`、`funroute.Ratio`、`funroute.FxRate`、`funroute.Currency` 及它们的切片与映射（零拷贝），`Go` 的签名反射就能读出；手写 `Params` 时用 `funroute.MoneyType` 等。币种是值的属性，签名不约束它：收到几笔金额的函数自己检查它们同币种（错了返回 `ErrCurrency`），返回的金额币种必须已声明，否则是 `ErrCurrency`。
 - 名字里的 `_v1` 只是约定。函数的身份是完整签名，签名变了，旧 artifact 会拒绝装载。
@@ -1062,35 +1062,37 @@ make run        # 构建前端与 wasm，组装 site/，然后启动静态服务
 
 编译器另做两处不改变结果的改写：声明了 `Fold` 的函数（`sum`、`any`、`all`、`first`、`len`）套推导式时编译成单遍折叠，不建中间数组；嵌套推导的内层源不依赖外层元素时只算一次。`any`/`all` 因此在决定答案的元素处停下，后面的元素不再计算，也不会报错，和 `||`、`&&` 一样。
 
-Apple M5 上的几个数（完整的对照表见 [`docs/perf.md`](docs/perf.md)，由 `make perf` 生成，每项旁边是同一件事直接用 Go 写的耗时）：
+Apple M5 上的几个数（2026-09-28；完整的表见 [`docs/perf.md`](docs/perf.md)，由 `make perf` 生成，那里每项都与同一件事直接用 Go 写的耗时对照，并与 expr 逐行对照）：
 
 | 场景 | 耗时 | 分配 |
 |---|---|---|
-| `amount * bps / 10000 + fixed`：`RunValues` / `Program.Run` / `Run(map)` | 32 / 47 / 54 ns | 0 |
-| 按 Go 签名注册的宿主函数调用（常见签名不经反射） | 45 ns | 0 |
-| `[x + 1 for x in xs]`，每个元素 | 1.2 ns | 结果 1 次 |
-| `sum([x * 2 for x in xs if x % 3 == 0])`，每个元素 | 4.2 ns | 0 |
-| 500 元素 `reduce` | 1.0 µs | 0 |
-| 把 16 到 65536 个 float 交给宿主函数（与长度无关：不拷贝） | 65 ns | 0 |
-| 模型调用（引擎每次 20 µs）：单条 vs 64 条一批 | 27 µs vs 0.66 µs / 请求 | — |
+| `amount * bps / 10000 + fixed`：`Program.Run` / `RunValues` / `Run(map)` | 21 / 42 / 60 ns | 0 |
+| 按 Go 签名注册的宿主函数调用（常见签名不经反射），连同一次运行 | 53 ns | 0 |
+| `[x + 1 for x in xs]`，每个元素 | 1.0 ns | 结果 1 次 |
+| `sum([x * 2 for x in xs if x % 3 == 0])`，每个元素 | 3.2 ns | 0 |
+| 500 元素 `reduce` | 0.96 µs | 0 |
+| 把 16 到 65536 个 float 交给宿主函数（与长度无关：不拷贝） | 71 ns | 0 |
+| 模型调用（引擎每次 20 µs）：单条 vs 64 条一批 | 27 µs vs 0.62 µs / 请求 | — |
+
+与 expr 同机对照时，执行的 100 行里 FunRoute 耗时更短的 92 行、持平 3 行；编译因为多做类型推导、常量折叠、字节码验证与 digest，耗时是 expr 的 1.0–2.0×。
 
 ## 现状
 
 **已完成**：
 
-- 语言：解析、类型推导与重载、编译期求值、record 与字段更新、nominal 枚举与穷尽检查、推导式与 `reduce`、格式化器。
+- 语言：解析、类型推导与重载、编译期求值、record 与字段更新、字段选择器 `.fee`、nominal 枚举与穷尽检查、推导式与 `reduce`、`time`/`duration` 与按时区的日历函数、受限的正则 `matches`、格式化器。
 - 金额：`money`/`ratio`/`fxrate`/`currency`、显式舍入与 `round` 内的精确计算、换汇 `->` 与 `using`、汇率加点与比较、`implied`、`prorate`、`round_to`、按策略分摊。
-- 执行与宿主：宿主契约、字节码 VM、Artifact digest、类型化绑定、句柄与模型批处理、超时与 `fallback`、类型化错误、标准库、签名清单。
+- 执行与宿主：宿主契约、装载时验证并翻译成寄存器形式的 VM（值流分析、向量化循环）、Artifact digest、类型化绑定 `Bind`/`Program`/`Session`、句柄与模型批处理、截止时间与 `fallback`、类型化错误、内核库与标准库、签名清单。
 - 工具：语言服务（stdio 与 WebAssembly）与策略工作台。
 
-**用于真实支付前还缺**：日期与时间、显式业务错误、决策 trace。语言服务还缺错误恢复（写到一半的程序目前只能给出词法层面的事实）和对表达式内部注释的格式化。详细计划与取舍见 [`docs/roadmap.md`](docs/roadmap.md)。
+**用于真实支付前还缺**：决策 trace、路由包（带原因码的 `decision`、`reject(code)`、确定性的 `split`）、治理工具（规则自带用例、批量兼容性检查、回测与影子运行）。语言服务还缺错误恢复（写到一半的程序目前只能给出词法层面的事实）和对表达式内部注释的格式化。详细计划与取舍见 [`docs/roadmap.md`](docs/roadmap.md)。
 
 为什么语言必然终止、最坏延迟为什么有多项式上界、以及"如果要图灵完备该怎么加"，见 [`docs/termination.md`](docs/termination.md)。
 
 ## 开发
 
 ```bash
-make ci        # 格式、import 分组、前端检查与构建、vet 与 staticcheck/modernize（均含 js/wasm）、lint、build、wasm、Go 与 JS 测试，提交前必须全过
+make ci        # 格式、import 分组、前端检查与构建、vet、staticcheck、modernize、golangci-lint（均含 js/wasm）、deadcode、lint、build、wasm、Go 与 JS 测试；提交前必须全过，GitHub Actions 在每次推送与 PR 上跑它
 make test      # Go 测试
 make wasm      # 浏览器用的语言服务：web/dist/funroute.wasm
 make web       # 前端产物：web/dist/*.js（需要先在 web/ 里 npm install；不提交）
@@ -1108,8 +1110,9 @@ go test ./internal/machine -bench . -benchtime 2000x   # VM 基准
 funroute.go            公开包 funroute：只有别名与转发，根目录唯一的 Go 文件
 lsp/                   语言服务：协议、stdio 传输
 extensions/std/        标准库，只用公开 API
-internal/money/        金额、比例、汇率、币种表与舍入：纯 Go 运算（只依赖标准库）
-internal/machine/      值、类型、字节码、VM、注册表、目录、签名清单（依赖 money）
+internal/kit/          多个包共用的同一段逻辑：错误分类、名字与数字字符、切片投影与查重、JSON 数字（只依赖标准库）
+internal/money/        金额、比例、汇率、币种表与舍入：纯 Go 运算（只依赖 kit）
+internal/machine/      值、类型、字节码、VM、注册表、目录、签名清单、内核库（依赖 money）
 internal/syntax/       词法、语法、AST、ExprJSON、词法段、格式化、语法树（只依赖 machine）
 internal/compile/      推导、编译、常量折叠、契约、Analyze（依赖 syntax + machine）
 internal/demo/         演示控制台：宿主组装注册表的范例，工作台用它（只用公开包）
@@ -1127,6 +1130,18 @@ cmd/funroute  cmd/playground  CLI（含 fmt、lsp）与工作台静态服务
 `internal/` 下的实现只有 `funroute.go` 与 `lsp/` 可以导入，由 `make lint` 检查。
 
 改动时的同步点与必须守住的不变量记在 [`CLAUDE.md`](CLAUDE.md)。
+
+## 版本与兼容
+
+FunRoute 按[语义化版本](https://semver.org/lang/zh-CN/)发布，目前是 v0.x：公开 API、语法、ExprJSON、Artifact 与签名清单的形状在两个次版本之间都可能不兼容地改变，改动写在 [`CHANGELOG.md`](CHANGELOG.md)。
+
+- **Artifact 跟着版本走**：`ArtifactVersion`、`ExprJSONVersion`、`ManifestVersion` 只标识当前形状，形状变了旧的就被拒绝装载（报出版本不符），不会被猜着读。升级后用规则的源码或 ExprJSON 重新编译即可；同一版本内，digest 保证装载的就是编译出来的那一份。
+- **答案不悄悄改变**：`tests/golden` 的行为金库逐字节记着随机程序的答案与失败，只改执行方式时必须一字不差；有意改变某个答案的会写进更新记录。
+- v1.0 之后才对公开 API 与 Artifact 格式做兼容承诺。
+
+## 许可证
+
+[MIT](LICENSE)。
 
 ## 附录 A：语法参考
 
