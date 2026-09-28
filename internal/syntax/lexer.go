@@ -48,6 +48,9 @@ const (
 	// tokenRatio is a number written with a ratio's unit, 2.9% or 25bps; its
 	// text keeps the unit.
 	tokenRatio
+	// tokenDuration is a duration: numbers each against its unit, 90s or
+	// 2h30m.
+	tokenDuration
 	// tokenInvalid is text the lexer could not read. It is produced only so
 	// the lexing can go on past it; the error that goes with it is reported.
 	tokenInvalid
@@ -270,6 +273,9 @@ func isIdentifierPart(ch byte) bool { return kit.IsNameChar(ch) || ch == '.' }
 func (l *lexer) number() (token, error) {
 	start := l.pos
 	l.digits()
+	if l.durationUnit() {
+		return l.duration(start)
+	}
 	kind := tokenInt
 	if l.pos < len(l.source) && l.source[l.pos] == '.' {
 		kind = tokenFloat
@@ -321,6 +327,35 @@ func (l *lexer) ratioUnit() string {
 		return "%"
 	}
 	return ""
+}
+
+// duration reads the rest of 2h30m after its first number and unit: more
+// numbers, each with its unit against it, and nothing a name is made of
+// after the last.
+func (l *lexer) duration(start int) (token, error) {
+	for l.startsDigitAt(l.pos) {
+		l.digits()
+		if !l.durationUnit() {
+			return token{}, At(start, "syntax error: %s needs a unit after its last number: ns, us, ms, s, m or h", l.source[start:l.pos])
+		}
+	}
+	if l.pos < len(l.source) && isIdentifierPart(l.source[l.pos]) {
+		return token{}, At(start, "syntax error: a duration is numbers each with a unit, ns, us, ms, s, m or h: 90s, 2h30m")
+	}
+	return token{kind: tokenDuration, text: strings.ReplaceAll(l.source[start:l.pos], "_", ""), pos: start}, nil
+}
+
+// durationUnit consumes a duration's unit at the cursor, if one is there:
+// the longest, so 1ms is not a minute.
+func (l *lexer) durationUnit() bool {
+	unit := ""
+	for _, candidate := range durationUnits {
+		if len(candidate.name) > len(unit) && strings.HasPrefix(l.source[l.pos:], candidate.name) {
+			unit = candidate.name
+		}
+	}
+	l.pos += len(unit)
+	return unit != ""
 }
 
 // digits consumes digits and the _ separators between them.

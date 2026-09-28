@@ -3,6 +3,7 @@ package syntax
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // A string literal holds text, and text is UTF-8: a byte that is not would be
@@ -265,6 +266,28 @@ func TestTheLexerNamesWhatStoppedIt(t *testing.T) {
 	} {
 		if _, err := Parse(source); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("Parse(%q) error = %v, want one saying %s", source, err, want)
+		}
+	}
+}
+
+// A duration is numbers each against its unit, the longest unit that fits
+// first, so 1ms is a millisecond; a word after it, or a number without a
+// unit, is no duration.
+func TestADurationIsNumbersWithTheirUnits(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]time.Duration{
+		"90s": 90 * time.Second, "2h30m": 150 * time.Minute, "1ms": time.Millisecond, "1m5s": 65 * time.Second,
+		"1_500ms": 1500 * time.Millisecond, "-2h": -2 * time.Hour, "3us": 3 * time.Microsecond, "7ns": 7,
+	} {
+		expr, err := Parse(source)
+		literal, ok := expr.(*LiteralExpr)
+		if got, _ := literal.Value.Duration(); err != nil || !ok || got != want {
+			t.Errorf("Parse(%q) = %v, %v, want %v", source, expr, err, want)
+		}
+	}
+	for _, source := range []string{"5sec", "2h30", "1h.x", "3000000h"} {
+		if _, err := Parse(source); err == nil {
+			t.Errorf("Parse(%q) succeeded, want a syntax error", source)
 		}
 	}
 }

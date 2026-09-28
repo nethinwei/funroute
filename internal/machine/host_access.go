@@ -6,6 +6,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"time"
 	"unsafe"
 
 	"github.com/nethinwei/funroute/internal/kit"
@@ -174,31 +175,36 @@ func (c *codec) load(p unsafe.Pointer) (Value, error) {
 		return c.loadRecord(p)
 	case shapeSlice:
 		return c.loadSlice(p)
-	case shapeMoney:
-		return loadMoney(c.goType, p), nil
+	case shapeOwn:
+		return loadOwn(c.goType, p)
 	default:
 		return c.loadBoxed(p)
 	}
 }
 
-// loadMoney reads a money Go type. An exchange rate boxes its quote.
-func loadMoney(typ reflect.Type, p unsafe.Pointer) Value {
+// loadOwn reads one of the language's own Go types. An exchange rate boxes
+// its quote; a time.Time outside the years a time spans is refused.
+func loadOwn(typ reflect.Type, p unsafe.Pointer) (Value, error) {
 	switch typ {
 	case moneyGoType:
 		amount := (*money.Money)(p)
-		return MoneyValue(amount.Minor(), amount.Currency())
+		return MoneyValue(amount.Minor(), amount.Currency()), nil
 	case ratioGoType:
-		return RatioValue(*(*money.Ratio)(p))
+		return RatioValue(*(*money.Ratio)(p)), nil
 	case fxRateGoType:
-		return FxRateValue(*(*money.FxRate)(p))
+		return FxRateValue(*(*money.FxRate)(p)), nil
+	case timeGoType:
+		return timeValue(*(*time.Time)(p))
+	case durationGoType:
+		return Duration(*(*time.Duration)(p)), nil
 	default:
-		return CurrencyValue((*money.Currency)(p).Code())
+		return CurrencyValue((*money.Currency)(p).Code()), nil
 	}
 }
 
-// storeMoney writes a money Go type.
-func storeMoney(typ reflect.Type, p unsafe.Pointer, v Value) error {
-	if want, _ := moneyGoKind(typ); v.kind != want.kind {
+// storeOwn writes one of the language's own Go types.
+func storeOwn(typ reflect.Type, p unsafe.Pointer, v Value) error {
+	if want, _ := ownGoKind(typ); v.kind != want.kind {
 		return fmt.Errorf("value is %s, want %s", v.Type().Summary(), want)
 	}
 	switch typ {
@@ -208,16 +214,20 @@ func storeMoney(typ reflect.Type, p unsafe.Pointer, v Value) error {
 		*(*money.Ratio)(p) = ratioFrom(v)
 	case fxRateGoType:
 		*(*money.FxRate)(p), _ = v.FxRate()
+	case timeGoType:
+		*(*time.Time)(p), _ = v.Time()
+	case durationGoType:
+		*(*time.Duration)(p) = time.Duration(v.i)
 	default:
 		*(*money.Currency)(p) = money.CurrencyOf(v.s)
 	}
 	return nil
 }
 
-// newMoneyGo is a new money Go value of typ holding v, whose kind is typ's.
-func newMoneyGo(typ reflect.Type, v Value) reflect.Value {
+// newOwnGo is a new Go value of one of those types, typ, holding v, whose kind is typ's.
+func newOwnGo(typ reflect.Type, v Value) reflect.Value {
 	out := reflect.New(typ)
-	_ = storeMoney(typ, out.UnsafePointer(), v)
+	_ = storeOwn(typ, out.UnsafePointer(), v)
 	return out.Elem()
 }
 
@@ -404,8 +414,8 @@ func (c *codec) store(p unsafe.Pointer, v Value) error {
 		return c.storeRecord(p, v)
 	case shapeSlice:
 		return c.storeSlice(p, v)
-	case shapeMoney:
-		return storeMoney(c.goType, p, v)
+	case shapeOwn:
+		return storeOwn(c.goType, p, v)
 	default:
 		return c.storeBoxed(p, v)
 	}

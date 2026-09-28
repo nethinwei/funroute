@@ -258,8 +258,8 @@
 <!-- limits:catalog -->
 | 注册表 | 函数名 | 重载 | 形式 |
 |---|---|---|---|
-| 内核（`CoreRegistry`） | 65 | 150 | 7 |
-| 内核 + 金额 + std | 89 | 238 | 8 |
+| 内核（`CoreRegistry`） | 72 | 174 | 7 |
+| 内核 + 金额 + std | 96 | 262 | 8 |
 <!-- /limits:catalog -->
 
 - **类型**：`bool`、`int`、`float`、`string`、`array<T>`、`dict<T>`、`record{…}`、名义枚举、不透明句柄 `handle<name>`、`money`、`ratio`、`fxrate`、`currency`。record 可以直接写字面量（`{a: 1, b: "x"}`）；枚举由契约或注册表声明（舍入方式 `@half_even` 就是注册表的）；类型别名只在契约里。

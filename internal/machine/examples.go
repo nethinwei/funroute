@@ -15,6 +15,8 @@ var kernelExamples = map[string][]Example{
 		{"USD 1.70 + USD 0.30", `"USD 2.00"`},
 		{"2.9% + 30bps", `"0.032"`},
 		{`"pay" + "out"`, `"payout"`},
+		{`time("2026-09-28T10:00:00Z") + 90m`, `"2026-09-28T11:30:00Z"`},
+		{"90m + 30s", `"1h30m30s"`},
 	},
 	"sub": {
 		{"5 - 3", "2"},
@@ -23,6 +25,9 @@ var kernelExamples = map[string][]Example{
 		{"5.5 - 0.5", "5"},
 		{"USD 2 - USD 0.30", `"USD 1.70"`},
 		{"100% - 2.9%", `"0.971"`},
+		{`time("2026-09-28T10:00:00Z") - 1h`, `"2026-09-28T09:00:00Z"`},
+		{`time("2026-09-28T10:00:00Z") - time("2026-09-28T08:30:00Z")`, `"1h30m0s"`},
+		{"2h - 30m", `"1h30m0s"`},
 	},
 	"mul": {
 		{"6 * 7", "42"},
@@ -38,6 +43,8 @@ var kernelExamples = map[string][]Example{
 		{"50% * 50%", `"0.25"`},
 		{"150 JPY / USD * 101%", `{"base":"USD","quote":"JPY","rate":"151.5"}`},
 		{"101% * 150 JPY / USD", `{"base":"USD","quote":"JPY","rate":"151.5"}`},
+		{"30m * 3", `"1h30m0s"`},
+		{"3 * 30m", `"1h30m0s"`},
 	},
 	"div": {
 		{"7 / 2", "3"},
@@ -48,6 +55,8 @@ var kernelExamples = map[string][]Example{
 		{"round(USD 10 / 50%, @half_even)", `"USD 20.00"`},
 		{"div(USD 1, 3%, @down)", `"USD 33.33"`},
 		{"10% / 40%", `"0.25"`},
+		{"90m / 4", `"22m30s"`},
+		{"90m / 20m", "4"},
 	},
 	"implied": {
 		{"implied(JPY 15000, USD 100)", `{"base":"USD","quote":"JPY","rate":"150"}`},
@@ -65,10 +74,17 @@ var kernelExamples = map[string][]Example{
 		{"USD 1 == USD 1.00", "true"},
 		{"[1, 2] == [1, 2]", "true"},
 	},
-	"lt": orderings("<", false),
-	"le": orderings("<=", false),
-	"gt": orderings(">", true),
-	"ge": orderings(">=", true),
+	"time":         {{`time("2026-09-28T10:00:00+08:00")`, `"2026-09-28T02:00:00Z"`}},
+	"hour":         {{`hour(time("2026-09-28T18:30:00Z"), "Asia/Shanghai")`, "2"}},
+	"weekday":      {{`weekday(time("2026-09-28T10:00:00Z"), "UTC")`, "1"}, {`weekday(time("2026-09-27T20:00:00-05:00"), "UTC")`, "1"}},
+	"day":          {{`day(time("2026-09-30T20:00:00Z"), "Asia/Tokyo")`, "1"}},
+	"month":        {{`month(time("2026-09-30T20:00:00Z"), "Asia/Tokyo")`, "10"}},
+	"start_of_day": {{`start_of_day(time("2026-09-28T18:30:00Z"), "Asia/Shanghai")`, `"2026-09-28T16:00:00Z"`}},
+	"add_days":     {{`add_days(time("2026-03-07T12:00:00-05:00"), 1, "America/New_York")`, `"2026-03-08T16:00:00Z"`}},
+	"lt":           orderings("<", false),
+	"le":           orderings("<=", false),
+	"gt":           orderings(">", true),
+	"ge":           orderings(">=", true),
 	"if": {
 		{`if(1 < 2, "yes", "no")`, `"yes"`},
 		{`if(false, USD 1, USD 2)`, `"USD 2.00"`},
@@ -202,6 +218,7 @@ func orderings(operator string, larger bool) []Example {
 	pairs := [][2]string{
 		{"1", "2"}, {"1.5", "2"}, {"1", "1.5"}, {"1.5", "2.5"}, {`"adyen"`, `"stripe"`},
 		{"USD 1", "USD 2"}, {"2.9%", "3%"}, {"150 JPY / USD", "151 JPY / USD"},
+		{`time("2026-09-28T10:00:00Z")`, `time("2026-09-28T10:00:00+08:00") + 9h`}, {"59m", "1h"},
 	}
 	out := make([]Example, 0, len(pairs))
 	for _, pair := range pairs {

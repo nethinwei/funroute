@@ -311,6 +311,15 @@ var (
 	FxRateType   = machine.FxRateType
 )
 
+// The time types: an instant, in no time zone, and a length of time. They
+// cross the boundary as time.Time and time.Duration — ToValue, FromValue,
+// Value.Time and Value.Duration — and JSON as RFC 3339 text and Go's
+// duration text, 1h30m0s. A time spans the years 1678 to 2262.
+var (
+	TimeType     = machine.TimeType
+	DurationType = machine.DurationType
+)
+
 // A money value becomes a Value through ToValue, like any Go value.
 var (
 	// ParseRatio reads a decimal ratio exactly.

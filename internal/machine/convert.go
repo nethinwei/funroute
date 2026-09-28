@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 	"strconv"
+	"time"
 
 	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
@@ -62,6 +63,10 @@ func fromGo(input any) (Value, error) {
 		return arrayOf(x), checkFxRates(x)
 	case map[string]money.Money:
 		return Value{kind: DictKind, box: x}, nil
+	case time.Time:
+		return timeValue(x)
+	case time.Duration:
+		return Duration(x), nil
 	default:
 		return structFromGo(input)
 	}
@@ -167,6 +172,10 @@ func FromValue[T any](value Value) (T, error) {
 		return out, assign(target, Value.Ratio, value)
 	case *money.FxRate:
 		return out, assign(target, Value.FxRate, value)
+	case *time.Time:
+		return out, assign(target, Value.Time, value)
+	case *time.Duration:
+		return out, assign(target, Value.Duration, value)
 	case *money.Currency:
 		code, ok := value.Currency()
 		*target = code
@@ -294,6 +303,8 @@ func coerceWith(input any, expected Type, table *money.Currencies) (Value, error
 		return coerceRecord(input, expected, table)
 	case MoneyKind, RatioKind, FxRateKind, CurrencyKind:
 		return coerceMoneyKind(input, expected, table)
+	case TimeKind, DurationKind:
+		return coerceTimeKind(input, expected)
 	default:
 		return Value{}, fmt.Errorf("unsupported expected type %s", expected)
 	}
@@ -327,7 +338,7 @@ func coerceRecord(input any, expected Type, table *money.Currencies) (Value, err
 // leniently reports whether a mismatched native value may still convert: a
 // float64 holding 3 is a fine int, a []float64 is not an array<int>.
 func leniently(kind Kind) bool {
-	return kind == IntKind || kind == FloatKind || IsMoneyKind(kind)
+	return kind == IntKind || kind == FloatKind || IsMoneyKind(kind) || kind == TimeKind || kind == DurationKind
 }
 
 func containerKind(kind Kind) bool {

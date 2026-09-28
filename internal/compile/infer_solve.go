@@ -381,6 +381,8 @@ var implicitScores = map[machine.Kind]int{
 	machine.RecordKind:   30,
 	machine.MoneyKind:    40,
 	machine.FxRateKind:   50,
+	machine.TimeKind:     20,
+	machine.DurationKind: 20,
 }
 
 func (s *inferState) scoreTerm(term typeTerm) int {

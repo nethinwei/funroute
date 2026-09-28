@@ -24,6 +24,7 @@ func librarySpecs() []FunctionSpec {
 		caseSpecs(), testSpecs(), partSpecs(),
 		shapeSpecs(), sortSpecs(), numericSpecs(),
 		selectSpecs(), keyedSpecs(), positionSpecs(), extremeBySpecs(), dictSpecs(),
+		timeSpecs(),
 	)
 }
 

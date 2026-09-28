@@ -78,10 +78,11 @@ func (s sampler) sample(typ machine.Type) string {
 }
 
 // scalarSamples are the samples of the kinds that have no parts and no
-// currency. A ratio is written the way arguments pass it.
+// currency. A ratio, a time and a duration are written the way arguments
+// pass them.
 var scalarSamples = map[machine.Kind]string{
 	machine.BoolKind: "true", machine.IntKind: "0", machine.FloatKind: "0.5", machine.StringKind: `"…"`, machine.EnumKind: `"…"`,
-	machine.RatioKind: `"0.029"`,
+	machine.RatioKind: `"0.029"`, machine.TimeKind: `"2026-01-01T00:00:00Z"`, machine.DurationKind: `"1h"`,
 }
 
 func (s sampler) record(fields []machine.Field) string {

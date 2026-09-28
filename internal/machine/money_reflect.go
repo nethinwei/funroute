@@ -7,9 +7,10 @@ import (
 	"github.com/nethinwei/funroute/internal/money"
 )
 
-// The money types' Go forms are structs and named scalars, so reflection
-// would otherwise read Money as a record and Currency as a string. They are
-// recognised first, everywhere a Go type crosses the boundary.
+// The Go forms of the language's own types — money's, and time.Time and
+// time.Duration — are structs and named scalars, so reflection would
+// otherwise read Money and time.Time as records and Currency as a string.
+// They are recognised first, everywhere a Go type crosses the boundary.
 
 var (
 	moneyGoType    = reflect.TypeFor[money.Money]()
@@ -18,10 +19,10 @@ var (
 	currencyGoType = reflect.TypeFor[money.Currency]()
 )
 
-// moneyGoKind is the FunRoute type of a money Go type. Reflection cannot see
-// a currency, so the unit is unknown: a signature that needs money<C> is a
-// FunctionSpec.
-func moneyGoKind(typ reflect.Type) (Type, bool) {
+// ownGoKind is the FunRoute type of one of those Go types. Reflection cannot
+// see a currency, so the unit is unknown: a signature that needs money<C> is
+// a FunctionSpec.
+func ownGoKind(typ reflect.Type) (Type, bool) {
 	switch typ {
 	case moneyGoType:
 		return MoneyType, true
@@ -32,25 +33,25 @@ func moneyGoKind(typ reflect.Type) (Type, bool) {
 	case currencyGoType:
 		return CurrencyType, true
 	default:
-		return Type{}, false
+		return timeGoKind(typ)
 	}
 }
 
-// intoMoneyGo converts a value into a money Go type; ok is false for any
+// intoOwnGo converts a value into one of those Go types; ok is false for any
 // other Go type.
-func intoMoneyGo(value Value, typ reflect.Type) (reflect.Value, bool, error) {
-	want, ok := moneyGoKind(typ)
+func intoOwnGo(value Value, typ reflect.Type) (reflect.Value, bool, error) {
+	want, ok := ownGoKind(typ)
 	if !ok {
 		return reflect.Value{}, false, nil
 	}
 	if value.kind != want.kind {
 		return reflect.Value{}, true, fmt.Errorf("argument is %s, want %s", value.Type(), want)
 	}
-	return newMoneyGo(typ, value), true, nil
+	return newOwnGo(typ, value), true, nil
 }
 
-// outOfMoneyGo converts a money Go value into a Value.
-func outOfMoneyGo(value reflect.Value) (Value, error) {
+// outOfOwnGo converts one of those Go values into a Value.
+func outOfOwnGo(value reflect.Value) (Value, error) {
 	converted, err := fromGo(value.Interface())
 	if err != nil {
 		return Value{}, fmt.Errorf("result %s: %w", value.Type(), err)

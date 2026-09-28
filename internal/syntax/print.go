@@ -130,6 +130,9 @@ func literalSource(literal *LiteralExpr) string {
 	case machine.StringKind:
 		text, _ := value.String()
 		return quote(text)
+	case machine.DurationKind:
+		length, _ := value.Duration()
+		return durationText(length)
 	default:
 		flag, _ := value.Bool()
 		return strconv.FormatBool(flag)

@@ -46,10 +46,14 @@ const (
 	// CurrencyKind is a currency itself, drawn from the registry's declared
 	// set: USD and EUR are its values.
 	CurrencyKind
+	// TimeKind is an instant, in no time zone: Go's time.Time.
+	TimeKind
+	// DurationKind is a length of time: Go's time.Duration.
+	DurationKind
 )
 
 var kindNames = [...]string{"invalid", "bool", "int", "float", "string", "array", "dict", "var", "handle", "enum", "record",
-	"money", "ratio", "fxrate", "currency"}
+	"money", "ratio", "fxrate", "currency", "time", "duration"}
 
 func (k Kind) String() string {
 	if int(k) < len(kindNames) {
@@ -179,6 +183,12 @@ var (
 
 // RatioType is the one ratio type: a ratio has no unit to tell ratios apart.
 var RatioType = Type{kind: RatioKind}
+
+// TimeType and DurationType are an instant and a length of time (time.go).
+var (
+	TimeType     = Type{kind: TimeKind}
+	DurationType = Type{kind: DurationKind}
+)
 
 // MoneyType, CurrencyType and FxRateType are the money types. Each is one
 // type: the currency is a value's, never its type's.

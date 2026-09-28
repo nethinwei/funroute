@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
@@ -64,7 +65,7 @@ func exportNode(buf *bytes.Buffer, expr Expr) error {
 // container to copy. A float is written as text so 1.0 stays a float.
 func exportLiteral(buf *bytes.Buffer, node *LiteralExpr) error {
 	kind := node.Value.Kind()
-	if kind != machine.IntKind && kind != machine.StringKind && kind != machine.BoolKind && kind != machine.FloatKind {
+	if kind != machine.IntKind && kind != machine.StringKind && kind != machine.BoolKind && kind != machine.FloatKind && kind != machine.DurationKind {
 		return fmt.Errorf("literal node has unsupported value type %s", node.Value.Type())
 	}
 	buf.WriteString(`{"node":`)
@@ -82,6 +83,9 @@ func exportLiteral(buf *bytes.Buffer, node *LiteralExpr) error {
 	case machine.BoolKind:
 		truth, _ := node.Value.Bool()
 		buf.WriteString(strconv.FormatBool(truth))
+	case machine.DurationKind:
+		length, _ := node.Value.Duration()
+		writeJSONString(buf, durationText(length))
 	default:
 		writeJSONString(buf, node.Decimal.String())
 	}
@@ -351,6 +355,12 @@ func literalValue(kind string, raw any) (*LiteralExpr, error) {
 		return nil, malformed
 	case kind == "string":
 		return &LiteralExpr{Value: machine.String(text)}, nil
+	case kind == "duration":
+		length, err := time.ParseDuration(text)
+		if err != nil {
+			return nil, malformed
+		}
+		return &LiteralExpr{Value: machine.Duration(length)}, nil
 	}
 	return decimalLiteral(text)
 }

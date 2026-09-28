@@ -2620,6 +2620,61 @@
       "operators": []
     },
     {
+      "label": "时间与时区",
+      "category": "数据结构",
+      "description": "time 是与时区无关的时刻，duration 是时长，30m、2h 是时长字面量；几点、星期几按写明的时区算。语言没有 now：当前时间由宿主作为参数传入，同一输入永远同一答案",
+      "source": "let(\n  local = hour(paid_at, \"Asia/Shanghai\"),\n  {\n    night: local < 6 || local >= 22,\n    weekend: weekday(paid_at, \"Asia/Shanghai\") >= 6,\n    day: day(paid_at, \"Asia/Shanghai\"),\n    month: month(paid_at, \"Asia/Shanghai\"),\n    day_start: start_of_day(paid_at, \"Asia/Shanghai\"),\n    settle_by: add_days(paid_at, 1, \"Asia/Shanghai\") + 2h,\n    stale: now - paid_at > 30m,\n    launched: paid_at >= time(\"2026-01-01T00:00:00+08:00\")\n  }\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "paid_at",
+            "type": "time",
+            "doc": "支付时刻"
+          },
+          {
+            "name": "now",
+            "type": "time",
+            "doc": "宿主传入的当前时刻"
+          }
+        ],
+        "result": {
+          "type": "record{night: bool, weekend: bool, day: int, month: int, day_start: time, settle_by: time, stale: bool, launched: bool}",
+          "doc": "按上海时间判断的夜间、周末与结算时限"
+        }
+      },
+      "args": {
+        "paid_at": "2026-09-26T23:40:00+08:00",
+        "now": "2026-09-27T00:05:00+08:00"
+      },
+      "expected": {
+        "night": true,
+        "weekend": true,
+        "day": 26,
+        "month": 9,
+        "day_start": "2026-09-25T16:00:00Z",
+        "settle_by": "2026-09-27T17:40:00Z",
+        "stale": false,
+        "launched": true
+      },
+      "covers": [
+        "hour",
+        "weekday",
+        "day",
+        "month",
+        "start_of_day",
+        "add_days",
+        "time"
+      ],
+      "operators": [
+        "infix:<",
+        "infix:||",
+        "infix:>=",
+        "infix:+",
+        "infix:-",
+        "infix:>"
+      ]
+    },
+    {
       "label": "稳定调用契约",
       "category": "契约治理",
       "description": "调用方仍传旧字段时，表达式可以不读取它，保持 ABI 稳定",

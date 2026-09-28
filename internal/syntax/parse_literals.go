@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nethinwei/funroute/internal/machine"
@@ -15,7 +16,7 @@ import (
 // number standing alone: -150 JPY / USD negates an exchange rate and -2[0]
 // an item, as the grammar's unary over postfix says.
 func (p *parser) negate(operator token) (Expr, error) {
-	if next := p.peek(); (next.kind == tokenInt || next.kind == tokenFloat) && p.numberAlone(next) {
+	if next := p.peek(); (next.kind == tokenInt || next.kind == tokenFloat || next.kind == tokenDuration) && p.numberAlone(next) {
 		p.index++
 		return p.numberLiteral(next, true)
 	}
@@ -98,7 +99,7 @@ func (p *parser) ratioLiteral(tok token) (Expr, error) {
 // operands, so [x * 2.9%for x in xs] still reads.
 func touchingOperand(next token) bool {
 	switch next.kind {
-	case tokenInt, tokenFloat, tokenRatio, tokenString, tokenEnum, tokenLeftParen, tokenLeftBrace, tokenBang:
+	case tokenInt, tokenFloat, tokenRatio, tokenDuration, tokenString, tokenEnum, tokenLeftParen, tokenLeftBrace, tokenBang:
 		return true
 	case tokenIdentifier:
 		return !machine.IsReservedName(next.text)
@@ -113,6 +114,13 @@ func (p *parser) numberLiteral(tok token, negative bool) (Expr, error) {
 	if negative {
 		text = "-" + text
 	}
+	if tok.kind == tokenDuration {
+		value, err := time.ParseDuration(text)
+		if err != nil {
+			return nil, p.errorf(tok, "duration is outside the about 292 years a duration holds")
+		}
+		return &LiteralExpr{Node: p.at(tok.pos), Value: machine.Duration(value)}, nil
+	}
 	if tok.kind == tokenInt {
 		value, err := strconv.ParseInt(text, 10, 64)
 		if err != nil {
@@ -126,6 +134,36 @@ func (p *parser) numberLiteral(tok token, negative bool) (Expr, error) {
 	}
 	literal.Node = p.at(tok.pos)
 	return literal, nil
+}
+
+// durationUnits are a duration literal's units, largest first.
+var durationUnits = []struct {
+	name string
+	size time.Duration
+}{{"h", time.Hour}, {"m", time.Minute}, {"s", time.Second}, {"ms", time.Millisecond}, {"us", time.Microsecond}, {"ns", time.Nanosecond}}
+
+// durationText is d as its literal is written: each unit's count, largest
+// first, the empty ones left out — 1h30m, 1s500ms, 0s.
+func durationText(d time.Duration) string {
+	if d == 0 {
+		return "0s"
+	}
+	var text strings.Builder
+	if d < 0 {
+		text.WriteByte('-')
+	}
+	rest := uint64(d)
+	if d < 0 {
+		rest = -rest
+	}
+	for _, unit := range durationUnits {
+		if count := rest / uint64(unit.size); count > 0 {
+			text.WriteString(strconv.FormatUint(count, 10))
+			text.WriteString(unit.name)
+			rest %= uint64(unit.size)
+		}
+	}
+	return text.String()
 }
 
 // decimalLiteral is the literal a decimal written as text stands for: the

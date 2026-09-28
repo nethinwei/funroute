@@ -55,6 +55,7 @@ var printCorpus = []string{
 	`{k: v * 2.9% for k, v in fees if v > USD 0}`, `money(170, @USD) + USD 1`, `round(amount * 2.9% * 25bps, @currency.USD)`,
 	`USD + 1`, `f(USD)`, `a -USD 1`, `a - - USD 1`,
 	// Selectors: a field read off one is not a longer one.
+	`t + 90s`, `2h30m - 1s500ms`, `-2h`, `0 - 2h`, `(30m).x`, `d * 2 > 1h`, `[1ms, 1us, 1ns][0]`,
 	`sort_by(xs, .fee)`, `top_k(xs, .meta.rank, 2)`, `(.a).b`, `(.a)[0]`, `f(xs, .a, .b.c)`,
 }
 

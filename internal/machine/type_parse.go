@@ -41,6 +41,7 @@ func ParseTypeWith(input string, aliases map[string]Type) (Type, error) {
 var namedTypes = map[string]Type{
 	"bool": BoolType, "int": IntType, "float": FloatType, "string": StringType, "ratio": RatioType,
 	"money": MoneyType, "currency": CurrencyType, "fxrate": FxRateType,
+	"time": TimeType, "duration": DurationType,
 }
 
 type typeParser struct {

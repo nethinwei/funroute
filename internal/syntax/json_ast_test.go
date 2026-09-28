@@ -273,6 +273,21 @@ func TestMoneySurvivesExprJSONRoundTrip(t *testing.T) {
 	}
 }
 
+// A duration is its literal's text in ExprJSON, and reads back as the same
+// length; text that is no duration is refused.
+func TestDurationsSurviveExprJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{`t + 2h30m - 1s500ms`, `[-90s, 0s, 1ns]`} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			assertExprJSONIsCanonical(t, source)
+		})
+	}
+	if _, err := ImportExprJSON([]byte(`{"version":1,"expr":{"node":"duration","duration":"soon"}}`)); err == nil {
+		t.Fatal("a duration of text that is none was imported")
+	}
+}
+
 // An exchange rate literal's figure is read as the parser reads one — digits
 // on both sides of a point — so a document the importer takes prints back
 // as source that parses: ".5" and "1." are no figures.

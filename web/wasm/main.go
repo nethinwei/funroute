@@ -7,12 +7,14 @@
 // callback with each message it sends.
 //
 // The registry is the example console's: its functions are plain Go, so the
-// page can run programs as well as check them.
+// page can run programs as well as check them. A browser has no zoneinfo on
+// disk, so the time zones come with the program (time/tzdata).
 package main
 
 import (
 	"sync"
 	"syscall/js"
+	_ "time/tzdata"
 
 	"github.com/nethinwei/funroute/internal/demo"
 	"github.com/nethinwei/funroute/lsp"

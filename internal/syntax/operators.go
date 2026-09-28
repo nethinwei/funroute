@@ -212,7 +212,7 @@ func isInt(expr Expr, want int64) bool {
 
 func isNumber(expr Expr) bool {
 	kind := literalOf(expr).Kind()
-	return kind == machine.IntKind || kind == machine.FloatKind
+	return kind == machine.IntKind || kind == machine.FloatKind || kind == machine.DurationKind
 }
 
 // Operators lists every operator as its fixity and spelling, fixity:token,

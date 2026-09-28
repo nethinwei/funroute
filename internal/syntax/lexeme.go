@@ -128,7 +128,7 @@ func classOf(kind tokenKind) Class {
 	switch kind {
 	case tokenIdentifier:
 		return ClassIdentifier
-	case tokenInt, tokenFloat, tokenRatio:
+	case tokenInt, tokenFloat, tokenRatio, tokenDuration:
 		return ClassNumber
 	case tokenString:
 		return ClassString

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"time"
 
 	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
@@ -241,7 +242,7 @@ func (v Value) hasType(t Type) bool {
 
 func (v Value) Type() Type {
 	switch v.kind {
-	case BoolKind, IntKind, FloatKind, StringKind, RatioKind, MoneyKind, CurrencyKind, FxRateKind:
+	case BoolKind, IntKind, FloatKind, StringKind, RatioKind, MoneyKind, CurrencyKind, FxRateKind, TimeKind, DurationKind:
 		return Type{kind: v.kind}
 	case ArrayKind:
 		return ArrayOf(v.elemType())
@@ -358,6 +359,11 @@ func (v Value) Any() any {
 		return rate
 	case CurrencyKind:
 		return v.s
+	case TimeKind:
+		t, _ := v.Time()
+		return t
+	case DurationKind:
+		return time.Duration(v.i)
 	default:
 		return nil
 	}
@@ -410,6 +416,9 @@ func (v Value) jsonLeaf() any {
 		return emptyJSONArray
 	case v.kind == DictKind && v.length() == 0:
 		return emptyJSONObject
+	case v.kind == DurationKind:
+		// time.Duration marshals as its nanoseconds; its text reads back.
+		return time.Duration(v.i).String()
 	}
 	return v.Any()
 }
@@ -483,7 +492,7 @@ func (v Value) Equal(other Value) bool {
 		return false
 	}
 	switch v.kind {
-	case BoolKind, IntKind, FloatKind, StringKind:
+	case BoolKind, IntKind, FloatKind, StringKind, TimeKind, DurationKind:
 		// A scalar's other fields are zero, so they match too.
 		return v.b == other.b && v.i == other.i && v.f == other.f && v.s == other.s
 	case ArrayKind, DictKind, RecordKind:

@@ -92,6 +92,10 @@ type FunctionSpec struct {
 	// only on its arguments — convert reads the quotes of its using — so
 	// folding must not call it.
 	readsRun bool
+	// zoned marks a kernel function that reads a time zone's rules. They are
+	// the host's tzdata, so folding must not call it: an artifact would then
+	// depend on the machine that compiled it.
+	zoned bool
 	// roundingScope marks round(expr, mode): the scope a step that lands
 	// between minor units is written in. Not a special form — nothing about
 	// it is lazy, and a front end draws it as a call.
@@ -135,9 +139,11 @@ func (f *RegisteredFunction) Key() string { return f.key }
 func (f *RegisteredFunction) NeedsBoundedArgs() bool { return f.Doc.BoundedArgs }
 
 // IsConstexpr reports whether folding may call this function. Everything the
-// kernel registers is, except what reads the run; a host function says so for
+// kernel registers is, except what reads the run or a time zone's rules; a host function says so for
 // itself.
-func (f *RegisteredFunction) IsConstexpr() bool { return (f.builtin && !f.readsRun) || f.Doc.Constexpr }
+func (f *RegisteredFunction) IsConstexpr() bool {
+	return (f.builtin && !f.readsRun && !f.zoned) || f.Doc.Constexpr
+}
 
 // ReadsRates reports a kernel function that reads the exchange rates of the
 // using it runs in — convert (->) and fx — which only a using's body may
@@ -416,7 +422,7 @@ func validateSignature(spec FunctionSpec) error {
 
 func validateTypePattern(t Type, vars map[string]bool) error {
 	switch t.kind {
-	case BoolKind, IntKind, FloatKind, StringKind, RatioKind:
+	case BoolKind, IntKind, FloatKind, StringKind, RatioKind, TimeKind, DurationKind:
 		return nil
 	case EnumKind:
 		if !IsAnyEnum(t) && !t.IsConcrete() {

@@ -104,6 +104,8 @@ CLI 一共六个子命令：
 | `ratio` | `2.9%`、`25bps` | 精确比例，只和金额、比例一起用 |
 | `fxrate` | `150 JPY / USD` | 1 USD 换多少 JPY，精确比值；也来自契约或 `implied(到账额, 支付额)` |
 | `currency` | `USD` | 注册表声明的币种，写它的代码即可 |
+| `time` | `time("2026-09-28T10:00:00+08:00")` | 与时区无关的时刻；宿主传 `time.Time`，JSON 是 RFC 3339 文本，见[时间](#时间) |
+| `duration` | `90s`、`2h30m`、`1500ms` | 时长，单位 `h` `m` `s` `ms` `us` `ns`；宿主传 `time.Duration`，JSON 是 Go 的时长文本 `1h30m0s` |
 
 几条规则：
 
@@ -113,6 +115,23 @@ CLI 一共六个子命令：
 - **没有 null**。数组越界、字典缺键、除零都是错误。要兜底就写出来：`get(d, "k", 0)`。
 - 金额不要用 `float`：注册表声明币种后用 `money`，见[金额](#金额)。
 - 每种类型的范围、精度和越界时的行为见[附录 B](#附录-b取值范围)；完整文法见[附录 A](#附录-a语法参考)。
+
+### 时间
+
+`time` 是时刻，`duration` 是时长，两者都按纳秒计。时刻加减时长还是时刻，两个时刻相减是时长，时长能加减、乘除整数、互相比较：
+
+```text
+now > paid_at + 30m                     // 已经过了半小时
+now - paid_at                           // 过了多久：duration
+hour(paid_at, "Asia/Shanghai") >= 22    // 上海时间晚上十点以后
+weekday(paid_at, "UTC") >= 6            // 周末：1 是周一，7 是周日
+add_days(start_of_day(now, "Asia/Shanghai"), 1, "Asia/Shanghai")   // 上海明天零点
+```
+
+- **没有 `now`**。当前时间由宿主作为参数传入，同一输入永远同一答案。
+- **时区写在调用处**：`hour`、`weekday`、`day`、`month`、`start_of_day`、`add_days` 都要一个 IANA 时区名（`"Asia/Shanghai"`、`"UTC"`）；不认识的名字、空串与 `"Local"` 是 `ErrDomain`。时区规则来自宿主机器的 tzdata，所以这些调用不在编译期折叠。
+- `add_days` 按那个时区的日历加天，钟点不变；遇到夏令时切换，一天不是 24 小时。
+- 负的时长写 `-30m`；对变量取负写 `0s - d`（`-d` 是 `0 - d`，整数减时长没有定义）。
 
 ### 运算符
 
@@ -224,6 +243,7 @@ reduce(name, weight in weights, total = 0.0, total + weight)            // 遍�
 | 序列 | `range` `indices` `first` `last` `take` `slice` `reverse` `concat` `unique` `flatten` `sort` `sort_desc` `top_k` `bottom_k` | `take_while` `drop_while` `windows` `chunk` `deltas` `cumsum` |
 | 选择与分组 | `index_of` `arg_min` `arg_max` `min_by` `max_by` `sort_by` `sort_by_desc` | `group_by` `rank` `intersect` `except` |
 | 字典 | `get` `merge` | |
+| 时间 | `time` `hour` `weekday` `day` `month` `start_of_day` `add_days` | |
 | 字符串 | `upper` `lower` `trim` `contains` `starts_with` `ends_with` `split` `join` `replace` | `pad_left` `pad_right`（宽度至多 10000） |
 | 数值 | `abs` `ceil` `floor` `round` `pow` `mod`（float） | |
 
@@ -1121,6 +1141,8 @@ digits     = digit { [ "_" ] digit }                // 下划线只能夹在两�
 decimal    = digits [ "." digits ]                  // 数字后的 "." 必须接数字
 exponent   = ( "e" | "E" ) [ "+" | "-" ] digits
 number     = decimal [ exponent ]                   // 没有 "." 也没有指数是 int，否则是 float；float 必须恰好是写下的值（0.30000000000000001 报错）
+duration   = digits unit { digits unit }            // 90s、2h30m、1_500ms；unit 取最长的一个（1ms 是毫秒），最后一个单位后不能紧接字母、数字或点
+unit       = "h" | "m" | "s" | "ms" | "us" | "ns"
 ratio      = decimal ( "%" | "bps" )                // 紧贴数字的 % 一律是比例的单位，带指数的数也一样（1e3% 报错）；bps 后不能紧接字母或数字
 word       = ( letter | "_" ) { letter | digit | "_" }
 code       = upper 2*7( upper | digit )             // 大写字母开头、共 3–8 位：币种，不是变量
@@ -1198,6 +1220,8 @@ quote          = expression                         // 一个 fxrate 或 array<f
 | `money` | int64 个最小单位；能表示多少主单位取决于币种的小数位，见[表达能力与精度](#表达能力与精度) | 精确 | 溢出报错；位数超过币种小数位报错 |
 | `ratio` | 约分后的 int64 分子/分母（各约 18 位数字）；小数文本至多 18 位小数 | 精确：`1/3` 就是三分之一 | 分子或分母放不下是 `ErrArithmetic` |
 | `fxrate` | 正的 int64 分子/分母，另带两边币种；同一币种之间恒为 1 | 精确：`150.25` 就是 601/4，报价的倒数也精确 | 零或负数、同币种却不是 1、放不下都是 `ErrArithmetic` |
+| `time` | int64 纳秒自 Unix 纪元，约 1678 年到 2262 年 | 纳秒 | 边界上超出范围的时刻、`add_days` 越出范围是 `ErrDomain`；加减时长溢出是 `ErrArithmetic` |
+| `duration` | int64 纳秒，约 ±292 年 | 纳秒 | 溢出、除零是 `ErrArithmetic`；整数除法向零截断 |
 | `currency` | 注册表声明的代码：大写字母开头，3–8 位大写字母或数字 | — | 未声明是 `ErrCurrency` |
 
 每种运算在哪里停下、程序能多大多深、性能与表达能力的边界，实测的数字见 [docs/limits.md](docs/limits.md)。

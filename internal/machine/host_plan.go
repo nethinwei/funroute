@@ -26,7 +26,7 @@ const (
 	shapeRecord              // a struct
 	shapeSlice               // any other slice, walked element by element
 	shapeBoxed               // a handle or any other map, through reflection
-	shapeMoney               // money.Money, money.Ratio, money.FxRate or money.Currency
+	shapeOwn                 // money.Money, money.Ratio, money.FxRate, money.Currency, time.Time or time.Duration
 )
 
 // native is which Value backing a shapeNative codec hands over.
@@ -92,11 +92,11 @@ func newCodecFor(registry *Registry, typ reflect.Type, want Type) (*codec, error
 		c.shape = shapeBoxed
 		return c, nil
 	}
-	if amount, ok := moneyGoKind(typ); ok {
+	if amount, ok := ownGoKind(typ); ok {
 		if amount.kind != want.kind {
 			return nil, c.mismatch()
 		}
-		c.shape = shapeMoney
+		c.shape = shapeOwn
 		return c, nil
 	}
 	switch typ.Kind() {

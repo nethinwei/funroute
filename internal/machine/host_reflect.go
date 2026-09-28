@@ -19,7 +19,7 @@ func reflectType(registry *Registry, typ reflect.Type) (Type, error) {
 	if name, ok := registry.handleName(typ); ok {
 		return HandleOf(name), nil
 	}
-	if amount, ok := moneyGoKind(typ); ok {
+	if amount, ok := ownGoKind(typ); ok {
 		return amount, nil
 	}
 	switch typ.Kind() {
@@ -78,7 +78,7 @@ func intoGo(registry *Registry, value Value, typ reflect.Type) (reflect.Value, e
 	if backing := nativeAny(value); backing != nil && reflect.TypeOf(backing) == typ {
 		return reflect.ValueOf(backing), nil
 	}
-	if converted, ok, err := intoMoneyGo(value, typ); ok {
+	if converted, ok, err := intoOwnGo(value, typ); ok {
 		return converted, err
 	}
 	switch typ.Kind() {
@@ -186,8 +186,8 @@ func outOfGo(registry *Registry, value reflect.Value, typ Type) (Value, error) {
 		return String(value.String()), nil
 	case HandleKind:
 		return NewHandle(typ.name, value.Interface()), nil
-	case MoneyKind, RatioKind, CurrencyKind:
-		return outOfMoneyGo(value)
+	case MoneyKind, RatioKind, CurrencyKind, TimeKind, DurationKind:
+		return outOfOwnGo(value)
 	case ArrayKind:
 		return outOfSlice(registry, value, typ)
 	case RecordKind:

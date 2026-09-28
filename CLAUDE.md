@@ -126,7 +126,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 新增读运行状态的内核函数 | `FunctionSpec.readsRun`（不折叠，要求写在 `using` 里） |
 | 新增金额函数 | 先在 `internal/money` 的 Go 方法上实现；会舍入的内核运算用 `registerRounded`；非内核函数自己检查容器里币种一致（std 的 `amountsOf`）；宿主先 `DeclareMoney` 再注册 std |
 | 改 `Doc` 里影响编译的字段 | `machine/manifest.go` 的 `ManifestFunction` |
-| `Kind` 加值 | `kindNames`；有运行时表示的还有 `Value.hasType`/`Type()`/`Any()`、`compile/infer.go` 的 `typeTerm`、`implicitTypeScore`、`ParseType` |
+| `Kind` 加值 | `kindNames`；有运行时表示的还有 `Value.Type()`/`Any()`/`Equal`、JSON（`jsonLeaf`、`coerceWith`）、`compile/infer_solve.go` 的 `implicitScores`、`namedTypes`（`ParseType`）、`lsp/sample.go`；Go 形式不是按形状读的（`time.Time` 是 struct），进 `ownGoKind` 与 `loadOwn`/`storeOwn`、`fromGo`/`FromValue` |
 | 新增原生 backing | `machine/container.go` 的 `natives` 一行（装入取出只经 `arrayOf`/`nativeItems`）与 `host_plan.go` 的 `native` 常量；`TestEveryBackingIsHandledEverywhere` 指出每个还要补的 switch |
 | `reflectType`/`fromGo` 新增非容器的 Go 类型 | `machine/host_plan.go` 的 `newCodecFor` 与 `host_access.go` |
 | 新增公开 API | `funroute.go` 对应的一节；新类型进 `tests/api/value_test.go` 的断言块，并在 `tests/api` 以宿主视角用一次。能不加就不加 |

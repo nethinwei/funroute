@@ -73,7 +73,7 @@ func init() {
 	for _, node := range nodeTypes {
 		typ := reflect.TypeOf(node).Elem()
 		if _, literal := node.(*LiteralExpr); literal {
-			for _, kind := range []string{"int", "float", "string", "bool"} {
+			for _, kind := range []string{"int", "float", "string", "bool", "duration"} {
 				byKind[kind] = typ
 			}
 			continue

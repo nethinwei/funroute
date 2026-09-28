@@ -419,7 +419,7 @@ func (p *parser) parsePrimary() (Expr, error) {
 func (p *parser) primary() (Expr, error) {
 	tok := p.peek()
 	switch tok.kind {
-	case tokenInt, tokenFloat:
+	case tokenInt, tokenFloat, tokenDuration:
 		p.index++
 		if p.startsFxRate(tok) {
 			return p.fxRateLiteral(tok)
