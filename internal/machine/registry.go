@@ -93,10 +93,12 @@ type FunctionSpec struct {
 	// only on its arguments — convert reads the quotes of its using — so
 	// folding must not call it.
 	readsRun bool
-	// zoned marks a kernel function that reads a time zone's rules. They are
-	// the host's tzdata, so folding must not call it: an artifact would then
-	// depend on the machine that compiled it.
-	zoned bool
+	// varies marks a kernel function whose answer depends on the machine it
+	// runs on: a time zone's rules are the host's tzdata, and a float's pow
+	// with a fractional exponent is Go's math.Pow, whose last bit follows the
+	// CPU (math.Exp on amd64 takes FMA where the CPU has it). Folding must not
+	// call it: an artifact would then depend on the machine that compiled it.
+	varies bool
 	// checkConstant checks a value a call fixes for one of its ConstArgs, at
 	// compile time: a pattern that is none fails there, where it is written.
 	checkConstant func(Value) error
@@ -143,10 +145,10 @@ func (f *RegisteredFunction) Key() string { return f.key }
 func (f *RegisteredFunction) NeedsBoundedArgs() bool { return f.Doc.BoundedArgs }
 
 // IsConstexpr reports whether folding may call this function. Everything the
-// kernel registers is, except what reads the run or a time zone's rules; a host function says so for
-// itself.
+// kernel registers is, except what reads the run or answers by the machine
+// (varies); a host function says so for itself.
 func (f *RegisteredFunction) IsConstexpr() bool {
-	return (f.builtin && !f.readsRun && !f.zoned) || f.Doc.Constexpr
+	return (f.builtin && !f.readsRun && !f.varies) || f.Doc.Constexpr
 }
 
 // ReadsRates reports a kernel function that reads the exchange rates of the

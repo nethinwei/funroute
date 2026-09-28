@@ -80,12 +80,16 @@ func modFloat(dividend, divisor float64) (float64, error) {
 func powerSpecs() []FunctionSpec {
 	doc := Doc{
 		Label: "幂", Category: "数值",
-		Description: "底数的指数次方。整数版的指数不能为负（那不是整数），结果溢出会报错，按平方求幂计算，指数再大也只算几十步；浮点版按 IEEE 754 计算。退避间隔写 base * pow(2, attempt)。",
+		Description: "底数的指数次方。整数版的指数不能为负（那不是整数），结果溢出会报错，按平方求幂计算，指数再大也只算几十步；浮点版按 IEEE 754 计算，指数不是整数时末位可能随 CPU 不同（与 Go 的 math.Pow 相同），所以不在编译期算好。退避间隔写 base * pow(2, attempt)。",
 		Params:      []string{"底数", "指数"}, Result: "幂",
 	}
-	return libEach("pow", doc, powInt, func(base, exponent float64) (float64, error) {
+	specs := libEach("pow", doc, powInt, func(base, exponent float64) (float64, error) {
 		return math.Pow(base, exponent), nil
 	})
+	// A fractional exponent goes through math.Exp and math.Log, whose last
+	// bit follows the CPU: the float pow is not folded.
+	specs[1].varies = true
+	return specs
 }
 
 // powInt squares its way up, so its work is the exponent's bit length — at
@@ -183,7 +187,10 @@ func deviationOf[T int64 | float64](items []T) (float64, error) {
 	total := 0.0
 	for _, item := range items {
 		diff := float64(item) - mean
-		total += diff * diff
+		// The conversion rounds the square before it is added, as Go's spec
+		// has it, so no CPU fuses the two into one FMA: the answer is the
+		// same on every machine.
+		total += float64(diff * diff)
 	}
 	return math.Sqrt(total / float64(len(items))), nil
 }
@@ -198,14 +205,16 @@ func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) 
 	}
 	sorted := append([]T(nil), items...)
 	slices.Sort(sorted)
-	position := ratio * float64(len(sorted)-1)
+	// Each product is rounded by a conversion before a sum takes it, so no
+	// CPU fuses them (stddev says why).
+	position := float64(ratio * float64(len(sorted)-1))
 	lower := int(math.Floor(position))
 	upper := int(math.Ceil(position))
 	if lower == upper {
 		return float64(sorted[lower]), nil
 	}
 	weight := position - float64(lower)
-	return float64(sorted[lower])*(1-weight) + float64(sorted[upper])*weight, nil
+	return float64(float64(sorted[lower])*(1-weight)) + float64(float64(sorted[upper])*weight), nil
 }
 
 // pairwiseSpecs are min and max on two values rather than on a list: a fee

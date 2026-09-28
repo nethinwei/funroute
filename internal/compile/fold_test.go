@@ -78,6 +78,34 @@ func TestClosedExpressionsAreFoldedAway(t *testing.T) {
 	}
 }
 
+// What answers by the machine it runs on is not folded, so an artifact is
+// the same wherever it is compiled: a float's pow with a fractional exponent
+// follows the CPU, and a zone's calendar the host's tzdata. The int pow is
+// the same everywhere and folds.
+func TestWhatVariesByMachineIsNotFolded(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	for _, test := range []struct {
+		source string
+		folds  bool
+	}{
+		{"pow(2, 10)", true},
+		{"pow(2.0, 0.5)", false},
+		{`hour(time("2026-09-28T10:00:00Z"), "Asia/Shanghai")`, false},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			artifact, err := CompileExpr(test.source, registry, CompileOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if folded := len(machine.PartsOf(artifact).Calls) == 0; folded != test.folds {
+				t.Fatalf("%s folded = %v, want %v (instructions %v)", test.source, folded, test.folds, machine.PartsOf(artifact).Instructions)
+			}
+		})
+	}
+}
+
 // Folding is transitive through header bindings, and a binding that folded
 // needs no local slot: nothing is stored or loaded at run time.
 func TestConstantBindingsUseNoLocalSlots(t *testing.T) {

@@ -105,7 +105,7 @@ func calendarSpecs() []FunctionSpec {
 	} {
 		of := part.of
 		specs = append(specs, FunctionSpec{
-			Name: part.name, Params: []Type{TimeType, StringType}, Result: IntType, zoned: true,
+			Name: part.name, Params: []Type{TimeType, StringType}, Result: IntType, varies: true,
 			Eval: func(_ context.Context, args []Value) (Value, error) {
 				local, err := inZone(args[0], args[1])
 				return Int(int64(of(local))), err
@@ -114,10 +114,10 @@ func calendarSpecs() []FunctionSpec {
 		})
 	}
 	return append(specs, FunctionSpec{
-		Name: "start_of_day", Params: []Type{TimeType, StringType}, Result: TimeType, zoned: true, Eval: startOfDay,
+		Name: "start_of_day", Params: []Type{TimeType, StringType}, Result: TimeType, varies: true, Eval: startOfDay,
 		Doc: timeDoc("当天零点", "时刻在该时区当天的零点。"+zoned, "零点", "时刻", "时区"),
 	}, FunctionSpec{
-		Name: "add_days", Params: []Type{TimeType, IntType, StringType}, Result: TimeType, zoned: true, Eval: addDays,
+		Name: "add_days", Params: []Type{TimeType, IntType, StringType}, Result: TimeType, varies: true, Eval: addDays,
 		Doc: timeDoc("加天数", "按该时区的日历加 n 天，钟点不变；遇到夏令时切换，一天不是 24 小时。"+zoned, "时刻", "时刻", "天数", "时区"),
 	})
 }

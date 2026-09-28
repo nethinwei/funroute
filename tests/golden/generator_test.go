@@ -111,7 +111,7 @@ var rules = map[string][]string{
 		"({float} + {float})", "({float} - {float})", "({float} * {float})", "({float} / {float})",
 		"float({int})", "{floats}[{int}]", "if({bool}, {float}, {float})", "avg({ints})", "avg({floats})",
 		"median({floats})", "sum({floats})", "min({floats})", "max({floats})", "abs({float})",
-		"pow({float}, {float})", "stddev({floats})", "{chans}[{int}].risk", "sum([c.risk for c in {chans}])",
+		"pow({float}, float({int}))", "stddev({floats})", "{chans}[{int}].risk", "sum([c.risk for c in {chans}])",
 	},
 	"bool": {
 		"({int} < {int})", "({int} <= {int})", "({int} == {int})", "({int} != {int})",
