@@ -85,7 +85,7 @@ func fxRateTimesRate(fx, rate int) EvalFunc {
 	}
 }
 
-// The evaluators below are the Go methods on Money, Ratio and Currencies (money_ops.go, currencies.go), so a rule and a host computing
+// The evaluators below are the Go methods on Money, Ratio and Currencies (internal/money's ops.go and currencies.go), so a rule and a host computing
 // beside it get one answer.
 
 func moneyOf(value Value) money.Money { amount, _ := value.Money(); return amount }

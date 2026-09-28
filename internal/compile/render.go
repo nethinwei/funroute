@@ -55,8 +55,6 @@ func comment(label string, width int, typeName, doc string) string {
 	return fmt.Sprintf("%-28s %s", line, doc)
 }
 
-// ContractFromArtifact recovers the contract an artifact was compiled with, so
-// a host that only stored the artifact can still render or re-check it.
 // argSpecs is the contract's arguments as parameters declare them.
 func argSpecs(params []machine.Parameter) []ArgSpec {
 	return kit.Map(params, func(param machine.Parameter) ArgSpec {
@@ -64,6 +62,8 @@ func argSpecs(params []machine.Parameter) []ArgSpec {
 	})
 }
 
+// ContractFromArtifact recovers the contract an artifact was compiled with, so
+// a host that only stored the artifact can still render or re-check it.
 func ContractFromArtifact(artifact *machine.Artifact) CompileOptions {
 	if artifact == nil {
 		return CompileOptions{}

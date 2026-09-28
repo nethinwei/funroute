@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"math"
 	"slices"
 )
 
@@ -40,10 +39,10 @@ func sumSpecs() []FunctionSpec {
 func sumInts(items []int64) (int64, error) {
 	total := int64(0)
 	for _, item := range items {
-		if item > 0 && total > math.MaxInt64-item || item < 0 && total < math.MinInt64-item {
+		var ok bool
+		if total, ok = addInt(total, item); !ok {
 			return 0, errIntegerOverflow
 		}
-		total += item
 	}
 	return total, nil
 }
@@ -113,13 +112,27 @@ func best[T cmp.Ordered](items []T, smallest bool) (int, bool) {
 	if len(items) == 0 {
 		return 0, false
 	}
-	// slices.Min and Max answer a NaN when there is one, as Go's min and max
-	// do; cmp.Compare, unlike ==, finds a NaN equal to itself.
-	extreme := slices.Max(items)
-	if smallest {
-		extreme = slices.Min(items)
+	// One pass: a NaN is the answer when there is one, as Go's min and max
+	// have it, and the first NaN is where it is; otherwise only an item
+	// strictly past the best so far moves it, which keeps the first of equal
+	// ones — of 0 and -0 as well, which compare equal.
+	at := 0
+	for i, item := range items {
+		switch {
+		case isNaN(item):
+			return i, true
+		case smallest && item < items[at], !smallest && item > items[at]:
+			at = i
+		}
 	}
-	return slices.IndexFunc(items, func(item T) bool { return cmp.Compare(item, extreme) == 0 }), true
+	return at, true
+}
+
+// isNaN reports a NaN, the one value unequal to itself; of an int or a
+// string, never.
+func isNaN[T cmp.Ordered](x T) bool {
+	same := x
+	return x != same
 }
 
 // quantifierSpecs stop at the item that decides them: any([p(x) for x in

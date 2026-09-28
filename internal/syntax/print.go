@@ -42,9 +42,41 @@ func readOperator(expr Expr) (operatorMatch, bool) {
 // prefix or infix operator, so what they apply to keeps its parentheses.
 var postfixPrecedence = sourceOperators[slices.IndexFunc(sourceOperators, func(spec operatorSpec) bool { return spec.fixity == "index" })].precedence
 
-func inline(expr Expr, parent int) string {
+// printer writes one program. It keeps each node's one-line text by the
+// precedence it was written under, so a node is written once however many
+// times the layout asks whether it fits: a layout asks at every level, and
+// writing each node's subtree again there made formatting a deep program
+// cubic in its depth.
+type printer struct {
+	written map[printed]string
+}
+
+// printed is a node written under a parent's precedence.
+type printed struct {
+	expr   Expr
+	parent int
+}
+
+func newPrinter() *printer { return &printer{written: map[printed]string{}} }
+
+// inline is expr on one line.
+func inline(expr Expr) string { return newPrinter().inline(expr, 0) }
+
+// inline is expr on one line, written once.
+func (p *printer) inline(expr Expr, parent int) string {
+	key := printed{expr: expr, parent: parent}
+	if text, ok := p.written[key]; ok {
+		return text
+	}
+	text := p.render(expr, parent)
+	p.written[key] = text
+	return text
+}
+
+// render writes expr on one line.
+func (p *printer) render(expr Expr, parent int) string {
 	if match, ok := readOperator(expr); ok {
-		return operatorSource(match, parent)
+		return p.operatorSource(match, parent)
 	}
 	switch node := expr.(type) {
 	case *VariableExpr:
@@ -69,32 +101,32 @@ func inline(expr Expr, parent int) string {
 	case *RatioExpr:
 		return node.Value + node.Unit
 	case *FieldExpr:
-		return postfixBase(node.Value) + "." + node.Field
+		return p.postfixBase(node.Value) + "." + node.Field
 	case *SelectorExpr:
 		return "." + node.Path
 	}
-	layout, ok := splitNode(expr)
+	layout, ok := p.splitNode(expr)
 	if !ok {
 		panic("print: unknown node " + kindOf(expr, planOf(expr)))
 	}
-	return layout.inline()
+	return layout.inline(p)
 }
 
-func operatorSource(match operatorMatch, parent int) string {
+func (p *printer) operatorSource(match operatorMatch, parent int) string {
 	spec := match.spec
 	var text string
 	switch spec.fixity {
 	case "index":
-		return postfixBase(match.operands[0]) + "[" + inline(match.operands[1], 0) + "]"
+		return p.postfixBase(match.operands[0]) + "[" + p.inline(match.operands[1], 0) + "]"
 	case "prefix":
-		text = spec.token + inline(match.operands[0], spec.precedence)
+		text = spec.token + p.inline(match.operands[0], spec.precedence)
 	default:
 		// Left associative: a right operand of the same precedence keeps its
 		// parentheses, so a - (b - c) stays and (a - b) - c loses them; a
 		// comparison keeps them on both sides, and -> on any right operand
 		// that is not postfix (leftLevel, rightLevel).
-		left := inline(match.operands[0], spec.leftLevel())
-		right := inline(match.operands[1], spec.rightLevel())
+		left := p.inline(match.operands[0], spec.leftLevel())
+		right := p.inline(match.operands[1], spec.rightLevel())
 		text = left + " " + spec.token + " " + right
 	}
 	if spec.precedence < parent {
@@ -108,15 +140,15 @@ func operatorSource(match operatorMatch, parent int) string {
 // the . or [ into it: (1).x is not 1.x, (@a).b is not the qualified member
 // @a.b, and so for (USD 1).x, (2.9%)[0] and (150 JPY / USD).x; (.a).b is
 // not the selector .a.b.
-func postfixBase(expr Expr) string {
+func (p *printer) postfixBase(expr Expr) string {
 	switch expr.(type) {
 	case *EnumExpr, *RatioExpr, *MoneyExpr, *FxRateExpr, *CurrencyExpr, *SelectorExpr:
-		return "(" + inline(expr, 0) + ")"
+		return "(" + p.inline(expr, 0) + ")"
 	}
 	if isNumber(expr) {
-		return "(" + inline(expr, 0) + ")"
+		return "(" + p.inline(expr, 0) + ")"
 	}
-	return inline(expr, postfixPrecedence)
+	return p.inline(expr, postfixPrecedence)
 }
 
 func literalSource(literal *LiteralExpr) string {
@@ -158,13 +190,13 @@ func quote(text string) string {
 
 // A spliced loop's yield is the loop written after it, so the chain prints as
 // the one comprehension someone wrote: [e for x in xs for y in ys].
-func forClauses(node *ForExpr) []string {
-	clauses := []string{"for " + loopVariables(node.KeyVariable, node.Variable) + " in " + inline(node.Source, 0)}
+func (p *printer) forClauses(node *ForExpr) []string {
+	clauses := []string{"for " + loopVariables(node.KeyVariable, node.Variable) + " in " + p.inline(node.Source, 0)}
 	if node.Where != nil {
-		clauses = append(clauses, "if "+inline(node.Where, 0))
+		clauses = append(clauses, "if "+p.inline(node.Where, 0))
 	}
 	if next, ok := spliced(node); ok {
-		clauses = append(clauses, forClauses(next)...)
+		clauses = append(clauses, p.forClauses(next)...)
 	}
 	return clauses
 }
@@ -194,14 +226,14 @@ func loopVariables(key, value string) string {
 	return key + ", " + value
 }
 
-func reduceHead(node *ReduceExpr) string {
-	head := loopVariables(node.KeyVariable, node.Variable) + " in " + inline(node.Source, 0)
+func (p *printer) reduceHead(node *ReduceExpr) string {
+	head := loopVariables(node.KeyVariable, node.Variable) + " in " + p.inline(node.Source, 0)
 	if node.Where == nil {
 		return head
 	}
-	return head + " if " + inline(node.Where, 0)
+	return head + " if " + p.inline(node.Where, 0)
 }
 
-func accumulatorHead(node *ReduceExpr) string {
-	return node.Accumulator + " = " + inline(node.Init, 0)
+func (p *printer) accumulatorHead(node *ReduceExpr) string {
+	return node.Accumulator + " = " + p.inline(node.Init, 0)
 }

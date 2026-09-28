@@ -90,7 +90,10 @@ func branchUnless(cond bool, pc int, target int32) int {
 // caught hands a failure to the innermost fallback that takes it: the
 // loops and usings its candidate opened are closed.
 func (f *frame) caught(err error) (int, error) {
-	if class, _ := classOf(err); len(f.fallbacks) == 0 || !class.fallback {
+	if len(f.fallbacks) == 0 {
+		return 0, err
+	}
+	if class, _ := classOf(err); !class.fallback {
 		return 0, err
 	}
 	last := len(f.fallbacks) - 1

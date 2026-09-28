@@ -73,7 +73,7 @@ func init() {
 	for _, node := range nodeTypes {
 		typ := reflect.TypeOf(node).Elem()
 		if _, literal := node.(*LiteralExpr); literal {
-			for _, kind := range []string{"int", "float", "string", "bool", "duration"} {
+			for _, kind := range literalKinds {
 				byKind[kind] = typ
 			}
 			continue
@@ -214,32 +214,59 @@ func preorder(expr Expr, yield func(Expr) bool) bool {
 }
 
 // scope is the locally bound names at a point in the tree, outermost
-// first; a name may be there twice, when an inner form binds it again.
-type scope []string
+// first, each with the node that binds it; a name may be there twice, when
+// an inner form binds it again.
+type scope []local
 
-func (s scope) has(name string) bool { return slices.Contains(s, name) }
+// local is a bound name and the form that binds it.
+type local struct {
+	name string
+	by   Expr
+}
 
-// with is s and names after it, in a list of its own: s itself is shared by
-// every sibling, so it is never appended to in place.
-func (s scope) with(names []string) scope {
+func (s scope) has(name string) bool {
+	_, ok := s.binder(name)
+	return ok
+}
+
+// binder is the form whose binding of name is visible here: the innermost.
+func (s scope) binder(name string) (Expr, bool) {
+	for _, bound := range slices.Backward(s) {
+		if bound.name == name {
+			return bound.by, true
+		}
+	}
+	return nil, false
+}
+
+// names is the bound names, outermost first.
+func (s scope) names() []string { return kit.Map(s, func(l local) string { return l.name }) }
+
+// with is s and names, bound by by, after it, in a list of its own: s itself
+// is shared by every sibling, so it is never appended to in place.
+func (s scope) with(names []string, by Expr) scope {
 	if len(names) == 0 {
 		return s
 	}
-	return append(slices.Clip(s), names...)
+	out := slices.Grow(slices.Clip(s), len(names))
+	for _, name := range names {
+		out = append(out, local{name: name, by: by})
+	}
+	return out
 }
 
 // boundName is a name a node binds and the field it is visible in.
 type boundName struct{ target, name string }
 
-// in is s and the names binds makes visible in field.
-func (s scope) in(binds []boundName, field string) scope {
+// in is s and the names binds makes visible in field, bound by by.
+func (s scope) in(binds []boundName, field string, by Expr) scope {
 	var names []string
 	for _, bind := range binds {
 		if bind.target == field {
 			names = append(names, bind.name)
 		}
 	}
-	return s.with(names)
+	return s.with(names, by)
 }
 
 // walkChildren visits each direct child with the names bound at it: the
@@ -255,9 +282,9 @@ func walkChildren(expr Expr, bound scope, visit func(Expr, scope)) {
 		binds = collectBinds(value, plan, binds)
 	}
 	for _, field := range plan.fields {
-		inner := bound.in(binds, field.name)
+		inner := bound.in(binds, field.name, expr)
 		if field.kind == fieldList {
-			walkList(value.Field(field.index), field.item, inner, visit)
+			walkList(value.Field(field.index), field.item, inner, expr, visit)
 			continue
 		}
 		visitField(value.Field(field.index), field.kind, inner, visit)
@@ -297,8 +324,9 @@ func addBinds(binds []boundName, name string, targets []string) []boundName {
 
 // walkList visits the expressions inside each list item. An item's names that
 // bind "@rest" are visible in the items after it; what they bind into the
-// parent's fields was already gathered by collectBinds.
-func walkList(list reflect.Value, plan *structPlan, bound scope, visit func(Expr, scope)) {
+// parent's fields was already gathered by collectBinds. by is the node the
+// list belongs to, which binds what its items do.
+func walkList(list reflect.Value, plan *structPlan, bound scope, by Expr, visit func(Expr, scope)) {
 	// Only items that bind "@rest" gather names, one a let binding; any other
 	// list gathers none, and a zero capacity allocates nothing.
 	size := 0
@@ -308,7 +336,7 @@ func walkList(list reflect.Value, plan *structPlan, bound scope, visit func(Expr
 	rest := make([]string, 0, size)
 	for i := range list.Len() {
 		item := list.Index(i)
-		inner := bound.with(rest)
+		inner := bound.with(rest, by)
 		for _, field := range plan.fields {
 			visitField(item.Field(field.index), field.kind, inner, visit)
 		}
@@ -429,10 +457,19 @@ func FirstReads(expr Expr) []*VariableExpr {
 // free variables, the locals the language server colours and the reads
 // Lexemes marks are all this walk.
 func eachVariable(root Expr, visit func(variable *VariableExpr, local bool)) {
+	EachRead(root, func(variable *VariableExpr, binder Expr) { visit(variable, binder != nil) })
+}
+
+// EachRead visits every variable read in root, in source order, with the
+// form whose binding of its name the read sees there: a let, a loop, a
+// reduce — or nil for a read of a free variable, one of the program's
+// arguments.
+func EachRead(root Expr, visit func(variable *VariableExpr, binder Expr)) {
 	var walk func(Expr, scope)
 	walk = func(expr Expr, bound scope) {
 		if variable, ok := expr.(*VariableExpr); ok {
-			visit(variable, bound.has(variable.Name))
+			binder, _ := bound.binder(variable.Name)
+			visit(variable, binder)
 			return
 		}
 		walkChildren(expr, bound, walk)
@@ -440,11 +477,15 @@ func eachVariable(root Expr, visit func(variable *VariableExpr, local bool)) {
 	walk(root, nil)
 }
 
-// NodeKinds lists every node's ExprJSON tag: the four literal kinds and one
-// per node type.
+// literalKinds are a literal's ExprJSON tags, one per kind of value it may
+// hold.
+var literalKinds = []string{"int", "float", "string", "bool", "duration"}
+
+// NodeKinds lists every node's ExprJSON tag: the literal kinds and one per
+// node type.
 func NodeKinds() []string {
-	out := make([]string, 0, 4+len(nodeTypes)-1)
-	out = append(out, "int", "float", "string", "bool")
+	out := make([]string, 0, len(literalKinds)+len(nodeTypes)-1)
+	out = append(out, literalKinds...)
 	for _, node := range nodeTypes[1:] {
 		out = append(out, planOf(node).kind)
 	}

@@ -22,7 +22,7 @@ func ScopeAt(root Expr, offset int) []string {
 		}
 		current, bound = next, inner
 	}
-	names := append(make([]string, 0, len(bound)), bound...)
+	names := bound.names()
 	slices.Sort(names)
 	return slices.Compact(names)
 }

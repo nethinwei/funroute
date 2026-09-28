@@ -43,8 +43,8 @@ func SyntaxTree(source string) (*Tree, error) {
 	return &tree, nil
 }
 
-// nameSpans lists where each local or field name is written, by name, in
-// source order.
+// nameSpans lists where each local or field name is written, by name, in no
+// particular order: spanWithin takes the first place by offset.
 func nameSpans(source string, roles map[int]roleMark) map[string][]Span {
 	out := map[string][]Span{}
 	for start, mark := range roles {

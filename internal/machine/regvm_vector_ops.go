@@ -1,7 +1,5 @@
 package machine
 
-import "math"
-
 // The vector's operations over a column. Each answers what the kernel
 // operation answers for every item that reaches it, and is the first such
 // item it fails on — where the kernel's function fails — or limit when there
@@ -13,26 +11,15 @@ import "math"
 func intOp(op rop, a, b int64) (int64, bool) {
 	switch op {
 	case rAddI:
-		sum := a + b
-		return sum, (a^sum)&(b^sum) >= 0
+		return addInt(a, b)
 	case rSubI:
-		difference := a - b
-		return difference, (a^b)&(a^difference) >= 0
+		return subInt(a, b)
 	case rMulI:
 		return mulInt(a, b)
 	case rDivI:
-		if b == 0 || a == math.MinInt64 && b == -1 {
-			return 0, false
-		}
-		return a / b, true
+		return divInt(a, b)
 	case rModI:
-		switch b {
-		case 0:
-			return 0, false
-		case -1:
-			return 0, true
-		}
-		return a % b, true
+		return modInt(a, b)
 	}
 	return 0, false
 }
@@ -77,9 +64,8 @@ func (o *vecOp) ints(limit int, alive []bool) int {
 	switch o.op {
 	case rAddI:
 		for i := range limit {
-			x, y := a.int(i), b.int(i)
-			sum := x + y
-			if (x^sum)&(y^sum) < 0 && alive[i] {
+			sum, ok := addInt(a.int(i), b.int(i))
+			if !ok && alive[i] {
 				return i
 			}
 			dst[i] = sum

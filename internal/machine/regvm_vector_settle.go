@@ -98,8 +98,8 @@ func (r *vecRun) addInts(values *vecValue, n int) int {
 	defer func() { r.acc.i = answer }()
 	if values.ints == nil {
 		for i := range n {
-			sum := answer + values.i
-			if (answer^sum)&(values.i^sum) < 0 {
+			sum, ok := addInt(answer, values.i)
+			if !ok {
 				return i
 			}
 			answer = sum
@@ -107,8 +107,8 @@ func (r *vecRun) addInts(values *vecValue, n int) int {
 		return n
 	}
 	for i, value := range values.ints[:n] {
-		sum := answer + value
-		if (answer^sum)&(value^sum) < 0 {
+		sum, ok := addInt(answer, value)
+		if !ok {
 			return i
 		}
 		answer = sum
@@ -122,9 +122,8 @@ func (r *vecRun) addAlive(values []int64, alive []bool, n int) int {
 	answer := r.acc.i
 	defer func() { r.acc.i = answer }()
 	for i, value := range values[:n] {
-		value *= int64(bit(alive[i]))
-		sum := answer + value
-		if (answer^sum)&(value^sum) < 0 {
+		sum, ok := addInt(answer, value*int64(bit(alive[i])))
+		if !ok {
 			return i
 		}
 		answer = sum

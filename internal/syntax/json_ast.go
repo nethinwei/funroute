@@ -258,11 +258,13 @@ func (o object) take(name string) (any, bool) {
 	return value, ok
 }
 
+// unknown refuses the fields left, naming the first in key order, so the
+// message is the same every time.
 func (o object) unknown() error {
-	for key := range o {
-		return fmt.Errorf("unknown field %q", key)
+	if len(o) == 0 {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("unknown field %q", slices.Min(slices.Collect(maps.Keys(o))))
 }
 
 func decodeObject(value any) (object, error) {

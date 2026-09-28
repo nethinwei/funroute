@@ -59,7 +59,7 @@ func TestChildrenAreListedInDefinitionOrder(t *testing.T) {
 // Every node the walker knows is listed, the literal kinds included.
 func TestNodeKindsListEveryNode(t *testing.T) {
 	t.Parallel()
-	want := "int float string bool var enum array dict call record field switch for reduce let record_update money ratio using fxrate currency selector"
+	want := "int float string bool duration var enum array dict call record field switch for reduce let record_update money ratio using fxrate currency selector"
 	if got := strings.Join(NodeKinds(), " "); got != want {
 		t.Fatalf("node kinds = %s, want %s", got, want)
 	}
@@ -185,5 +185,29 @@ func TestFreeReadsAreEveryUnboundRead(t *testing.T) {
 	})
 	if want := []string{"x", "x", "x"}; !slices.Equal(got, want) {
 		t.Fatalf("FreeReads reads %v, want %v", got, want)
+	}
+}
+
+// A read sees the form whose binding of its name is visible there, the
+// innermost; a read of an argument sees none.
+func TestEachReadSeesTheBindingForm(t *testing.T) {
+	t.Parallel()
+	expr := mustParse(t, `let(a = b, [a + x for x in let(x = a, [x])])`)
+	outer, _ := expr.(*LetExpr)
+	var got []string
+	EachRead(expr, func(variable *VariableExpr, binder Expr) {
+		switch {
+		case binder == nil:
+			got = append(got, variable.Name+":argument")
+		case binder == Expr(outer):
+			got = append(got, variable.Name+":outer let")
+		default:
+			got = append(got, variable.Name+":"+kindOf(binder, planOf(binder)))
+		}
+	})
+	// The loop's source is read before what it yields.
+	want := "b:argument a:outer let x:let a:outer let x:for"
+	if joined := strings.Join(got, " "); joined != want {
+		t.Fatalf("reads = %s, want %s", joined, want)
 	}
 }

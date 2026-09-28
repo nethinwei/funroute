@@ -72,18 +72,7 @@ func (b *banks) valueAt(reg int32, kind Kind) Value {
 }
 
 // setValue puts v in register reg, in the file of its kind.
-func (b *banks) setValue(reg int32, v Value) {
-	switch v.kind {
-	case IntKind:
-		b.ints[reg] = v.i
-	case BoolKind:
-		b.ints[reg] = word(v.b)
-	case FloatKind:
-		b.floats[reg] = v.f
-	default:
-		b.regs[reg] = v
-	}
-}
+func (b *banks) setValue(reg int32, v Value) { b.put(reg, v.kind, v) }
 
 // put puts v, of kind, in register reg: its int, bool or float in their
 // file, anything else as it is.

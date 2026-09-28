@@ -174,8 +174,6 @@ func (v Value) lookup(key string) (Value, bool) {
 	}
 }
 
-// keys lists a dictionary's keys in sorted order: the language promises a
-// program replays identically, and Go's map order does not.
 // eachEntry visits a dictionary's entries in the map's order, which is none:
 // for a walk whose outcome does not depend on the order, such as checking
 // every entry, without sorting or copying the keys as keys does.
@@ -241,6 +239,8 @@ func (v Value) eachPart(ordered bool, check func(Value) error) error {
 	return nil
 }
 
+// keys lists a dictionary's keys in sorted order: the language promises a
+// program replays identically, and Go's map order does not.
 func (v Value) keys() []string {
 	switch box := v.box.(type) {
 	case map[string]bool:

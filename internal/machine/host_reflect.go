@@ -11,7 +11,9 @@ import (
 // slices and string-keyed maps, at any depth, maps onto a FunRoute type, and a
 // converter in each direction is resolved once at registration. The exact
 // native forms ([]float64 for array<float>, and so on) still cross with no
-// pass over the elements; every other shape is walked.
+// pass over the elements. A struct or a slice crosses by the codec planned
+// for it then (host_plan.go), as a Program's arguments do, so a call neither
+// reads struct tags nor derives a type again; any other shape is walked.
 
 // reflectType is the FunRoute type of a Go type, or the handle it was defined
 // as.
@@ -58,8 +60,18 @@ func reflectType(registry *Registry, typ reflect.Type) (Type, error) {
 	}
 }
 
-// converterInto builds the Value → Go conversion for one parameter type.
-func converterInto(registry *Registry, typ reflect.Type) func(Value) (reflect.Value, error) {
+// converterInto builds the Value → Go conversion for one parameter type,
+// the Go type typ carrying want.
+func converterInto(registry *Registry, typ reflect.Type, want Type) func(Value) (reflect.Value, error) {
+	if plan, ok := plannedCrossing(registry, typ, want); ok {
+		return func(value Value) (reflect.Value, error) {
+			out := reflect.New(typ)
+			if err := plan.store(out.UnsafePointer(), value); err != nil {
+				return reflect.Value{}, err
+			}
+			return out.Elem(), nil
+		}
+	}
 	if _, ok := registry.handleName(typ); ok {
 		return func(value Value) (reflect.Value, error) {
 			payload, ok := value.Payload()
@@ -112,7 +124,7 @@ func intoScalar(value Value, typ reflect.Type) (reflect.Value, error) {
 		}
 		out.SetUint(uint64(value.i))
 	case reflect.Float32, reflect.Float64:
-		if value.kind != FloatKind || (typ.Kind() == reflect.Float32 && math.Abs(value.f) > math.MaxFloat32) {
+		if value.kind != FloatKind || (typ.Kind() == reflect.Float32 && !math.IsInf(value.f, 0) && math.Abs(value.f) > math.MaxFloat32) {
 			return out, fmt.Errorf("argument %s does not fit %s", value.Type(), typ)
 		}
 		out.SetFloat(value.f)
@@ -159,8 +171,30 @@ func intoMap(registry *Registry, value Value, typ reflect.Type) (reflect.Value, 
 	return out, nil
 }
 
-// converterOutOf builds the Go → Value conversion for a result type.
-func converterOutOf(registry *Registry, result Type) func(reflect.Value) (Value, error) {
+// plannedCrossing is the codec of a struct or a slice typ carrying want,
+// planned now; false for any other shape, and for one no codec plans.
+func plannedCrossing(registry *Registry, typ reflect.Type, want Type) (*codec, bool) {
+	if kind := typ.Kind(); kind != reflect.Struct && kind != reflect.Slice {
+		return nil, false
+	}
+	if _, handle := registry.handleName(typ); handle {
+		return nil, false
+	}
+	plan, err := newCodecFor(registry, typ, want)
+	return plan, err == nil
+}
+
+// converterOutOf builds the Go → Value conversion for a result type, the
+// Go type typ carrying result.
+func converterOutOf(registry *Registry, typ reflect.Type, result Type) func(reflect.Value) (Value, error) {
+	if plan, ok := plannedCrossing(registry, typ, result); ok {
+		return func(value reflect.Value) (Value, error) {
+			// The codec reads memory: the result, copied where it has some.
+			held := reflect.New(typ)
+			held.Elem().Set(value)
+			return plan.load(held.UnsafePointer())
+		}
+	}
 	if result.kind == HandleKind {
 		return func(value reflect.Value) (Value, error) { return NewHandle(result.name, value.Interface()), nil }
 	}

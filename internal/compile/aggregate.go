@@ -222,5 +222,5 @@ func (c *bytecodeCompiler) invariant(expr syntax.Expr, loop *syntax.ForExpr) boo
 			return false
 		}
 	}
-	return constexprOnly(expr, c.inferred, c.registry)
+	return c.callsConstexpr(expr)
 }

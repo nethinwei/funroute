@@ -106,10 +106,9 @@ func EnumNamespace(options CompileOptions, registry *machine.Registry) map[strin
 }
 
 // validateMoneyContract checks the contract's money types against the
-// registry: money must be declared, every code it names too, the registry's
-// enum names are not the contract's to take, and a currency variable in the
-// result must be bound by an argument — or the run could not say which
-// currency the result is in.
+// registry: money must be declared for a contract that uses it, and the
+// registry's enum names are not the contract's to take. A currency is a
+// value's, never a type's, so a type names none to check.
 func validateMoneyContract(options CompileOptions, registry *machine.Registry) error {
 	_, declared := registry.Money()
 	for _, arg := range options.Args {

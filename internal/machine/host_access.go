@@ -13,9 +13,11 @@ import (
 	"github.com/nethinwei/funroute/internal/money"
 )
 
-// This file is the only one that uses unsafe. A Program reads its arguments
-// straight out of the host's struct and writes its result straight into the
-// host's Go value, at offsets plan.go worked out with reflection when it was
+// This file and the other host_*.go are where unsafe touches the host's
+// memory (container.go uses it only for a native array's pointer and
+// length). A Program reads its arguments straight out of the host's struct
+// and writes its result straight into the host's Go value, at offsets
+// host_plan.go worked out with reflection when it was
 // instantiated — so the hot path neither reflects, nor looks a name up, nor builds a
 // map or a []Value in between.
 //
@@ -430,7 +432,8 @@ func storeScalar(kind reflect.Kind, p unsafe.Pointer, v Value) error {
 	case reflect.Float64:
 		*(*float64)(p) = v.f
 	case reflect.Float32:
-		if math.Abs(v.f) > math.MaxFloat32 {
+		// An infinity is a float32 too; a finite float past its range is not.
+		if !math.IsInf(v.f, 0) && math.Abs(v.f) > math.MaxFloat32 {
 			return fmt.Errorf("%v does not fit float32", v.f)
 		}
 		*(*float32)(p) = float32(v.f)

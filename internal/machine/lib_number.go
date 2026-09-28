@@ -115,11 +115,8 @@ func powInt(base, exponent int64) (int64, error) {
 }
 
 func multiplyInts(left, right int64) (int64, error) {
-	if left == 0 || right == 0 {
-		return 0, nil
-	}
-	product := left * right
-	if product/right != left {
+	product, ok := mulInt(left, right)
+	if !ok {
 		return 0, fmt.Errorf("%w: integer overflow in pow", ErrArithmetic)
 	}
 	return product, nil

@@ -259,8 +259,9 @@ func memberWrittenAsString(item syntax.SwitchCaseExpr, enums map[string]machine.
 		if !isString {
 			continue
 		}
-		for _, enum := range enums {
-			if slices.Contains(enum.Values(), value) {
+		// In name order, so the enum named is the same every time.
+		for _, name := range kit.SortedKeys(enums) {
+			if enum := enums[name]; slices.Contains(enum.Values(), value) {
 				return fmt.Sprintf("; %q is a member of %s, written @%s", value, enum.Summary(), value)
 			}
 		}

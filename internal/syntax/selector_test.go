@@ -28,7 +28,7 @@ func TestExpandSelectorsWritesOutTheComprehension(t *testing.T) {
 			if expanded, err := ExpandSelectors(expr); err != nil {
 				got = err.Error()
 			} else {
-				got = inline(expanded, 0)
+				got = inline(expanded)
 			}
 			if !strings.Contains(got, want) {
 				t.Fatalf("ExpandSelectors(%s) = %s, want %s", source, got, want)
@@ -43,13 +43,13 @@ func TestExpandSelectorsSharesWhatItKeeps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := inline(expr, 0)
+	before := inline(expr)
 	expanded, err := ExpandSelectors(expr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inline(expr, 0) != before {
-		t.Fatalf("expanding changed the program to %s", inline(expr, 0))
+	if inline(expr) != before {
+		t.Fatalf("expanding changed the program to %s", inline(expr))
 	}
 	kept, _ := expr.(*LetExpr)
 	made, ok := expanded.(*LetExpr)

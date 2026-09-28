@@ -642,7 +642,9 @@ func newInferContext(state *inferState, names []string, registry *machine.Regist
 }
 
 func applyHints(state *inferState, args namedTerms, hints map[string]machine.Type) error {
-	for name, hint := range hints {
+	// In name order, so a failure is said the same every time.
+	for _, name := range kit.SortedKeys(hints) {
+		hint := hints[name]
 		arg, _ := args.find(name)
 		if err := state.unify(arg, state.concrete(hint)); err != nil {
 			return fmt.Errorf("type hint for %q: %w", name, err)

@@ -443,7 +443,7 @@ type UsingExpr struct {
 }
 
 // nodeTypes lists every node the walker knows, by its ExprJSON tag. A literal
-// has four tags, one per value kind; the others have one each.
+// has a tag per kind of value (literalKinds); the others have one each.
 var nodeTypes = []Expr{
 	&LiteralExpr{}, &VariableExpr{}, &EnumExpr{}, &ArrayExpr{}, &DictExpr{}, &CallExpr{},
 	&RecordExpr{}, &FieldExpr{}, &SwitchExpr{}, &ForExpr{}, &ReduceExpr{}, &LetExpr{},

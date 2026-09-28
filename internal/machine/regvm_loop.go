@@ -210,15 +210,9 @@ func (f *frame) collect(value, key int32, kind Kind) {
 		loop.dict.add(f.regs[key].s, f.valueAt(value, kind))
 		return
 	}
-	// An array of ints or floats is appended to as it is, not through add.
-	switch out := loop.out; {
-	case out.ints != nil:
-		out.ints = append(out.ints, f.regs[value].i)
-	case out.floats != nil:
-		out.floats = append(out.floats, f.regs[value].f)
-	default:
-		out.add(f.regs[value])
-	}
+	// An int, a bool or a float is collected out of its file (collectInt,
+	// collectFloat): what reaches here is in the values.
+	loop.out.add(f.regs[value])
 }
 
 // collectInt adds the int or the bool in register value to the array the

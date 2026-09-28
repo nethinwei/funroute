@@ -375,3 +375,15 @@ func TestTheNestingLimitIsTheSameBothWays(t *testing.T) {
 		}
 	}
 }
+
+// Of several unknown fields, the first in key order is the one named, so
+// the message is the same every time.
+func TestTheUnknownFieldNamedIsTheFirstByKey(t *testing.T) {
+	t.Parallel()
+	for range 20 {
+		_, err := ImportExprJSON([]byte(`{"version":1,"expr":{"node":"int","int":1,"zz":1,"mm":2,"aa":3}}`))
+		if err == nil || !strings.Contains(err.Error(), `unknown field "aa"`) {
+			t.Fatalf("import = %v, want the unknown field \"aa\"", err)
+		}
+	}
+}

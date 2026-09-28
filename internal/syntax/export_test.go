@@ -4,4 +4,4 @@ package syntax
 // use for: nothing outside the tests needs a one-line rendering.
 
 // Inline writes expr on one line.
-func Inline(expr Expr) string { return inline(expr, 0) }
+func Inline(expr Expr) string { return inline(expr) }

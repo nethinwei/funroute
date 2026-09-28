@@ -30,7 +30,7 @@ func (f *frame) callSite(call int32) error {
 			}
 		}
 		if err := site.banked(&f.banks, site.args, site.dst); err != nil {
-			return fmt.Errorf("%s: %w", site.fn.Name, f.classify(err))
+			return fmt.Errorf("%s: %w", site.fn.Name, f.functionError(site.fn, err))
 		}
 		return nil
 	}

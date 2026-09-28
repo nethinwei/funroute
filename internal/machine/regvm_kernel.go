@@ -10,24 +10,57 @@ import (
 // frame then asks the function. TestKernelOpsAnswerAsTheirFunctions holds
 // every operation to its function on the edges.
 
-func addI(ints []int64, in *rinstr) bool {
-	x, y := ints[in.a], ints[in.b]
-	sum := x + y
-	if (x^sum)&(y^sum) < 0 {
-		return false
+// The int arithmetic, each answering false where int64 has no answer: the
+// one statement of it, which the kernel's functions, their operations, the
+// vector and the library all use.
+
+// addInt is a+b when it fits: an overflow gives the sum the sign neither
+// operand has.
+func addInt(a, b int64) (int64, bool) {
+	sum := a + b
+	return sum, (a^sum)&(b^sum) >= 0
+}
+
+// subInt is a-b when it fits.
+func subInt(a, b int64) (int64, bool) {
+	difference := a - b
+	return difference, (a^b)&(a^difference) >= 0
+}
+
+// divInt is a/b, truncated, when b is not zero and the quotient fits.
+func divInt(a, b int64) (int64, bool) {
+	if b == 0 || a == math.MinInt64 && b == -1 {
+		return 0, false
 	}
-	ints[in.c] = sum
-	return true
+	return a / b, true
+}
+
+// modInt is a%b, its sign the dividend's, when b is not zero; by -1 it is 0,
+// which a%b would trap on for the smallest int.
+func modInt(a, b int64) (int64, bool) {
+	switch b {
+	case 0:
+		return 0, false
+	case -1:
+		return 0, true
+	}
+	return a % b, true
+}
+
+func addI(ints []int64, in *rinstr) bool {
+	sum, ok := addInt(ints[in.a], ints[in.b])
+	if ok {
+		ints[in.c] = sum
+	}
+	return ok
 }
 
 func subI(ints []int64, in *rinstr) bool {
-	x, y := ints[in.a], ints[in.b]
-	difference := x - y
-	if (x^y)&(x^difference) < 0 {
-		return false
+	difference, ok := subInt(ints[in.a], ints[in.b])
+	if ok {
+		ints[in.c] = difference
 	}
-	ints[in.c] = difference
-	return true
+	return ok
 }
 
 func mulI(ints []int64, in *rinstr) bool {
@@ -54,25 +87,19 @@ func mulInt(a, b int64) (int64, bool) {
 }
 
 func divI(ints []int64, in *rinstr) bool {
-	x, y := ints[in.a], ints[in.b]
-	if y == 0 || x == math.MinInt64 && y == -1 {
-		return false
+	quotient, ok := divInt(ints[in.a], ints[in.b])
+	if ok {
+		ints[in.c] = quotient
 	}
-	ints[in.c] = x / y
-	return true
+	return ok
 }
 
 func modI(ints []int64, in *rinstr) bool {
-	x, y := ints[in.a], ints[in.b]
-	switch y {
-	case 0:
-		return false
-	case -1:
-		ints[in.c] = 0
-	default:
-		ints[in.c] = x % y
+	remainder, ok := modInt(ints[in.a], ints[in.b])
+	if ok {
+		ints[in.c] = remainder
 	}
-	return true
+	return ok
 }
 
 // A float operation always answers, as IEEE 754 does: an overflow is an

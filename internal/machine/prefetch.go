@@ -52,21 +52,27 @@ func PrefetchSites(artifact *Artifact) []PrefetchSite {
 // guardedInstructions marks every instruction that a forward jump can skip or
 // a loop can repeat: the body of an if branch, a switch case, a for or a
 // reduce. A backward jump is a loop's return edge and marks nothing new.
+//
+// Each range is counted where it opens and where it closes, and a running
+// sum says which instructions some range covers: one pass however the
+// ranges nest.
 func guardedInstructions(code []Instruction) []bool {
-	guarded := make([]bool, len(code))
+	opened := make([]int, len(code)+1)
 	for pc, instruction := range code {
 		switch instruction.Op {
 		case OpJumpIfFalse, OpJump, OpLoopInit, OpBeginFallback:
-			markRange(guarded, pc+1, instruction.A)
+			if from, to := pc+1, min(instruction.A, len(code)); from < to {
+				opened[from]++
+				opened[to]--
+			}
 		}
 	}
-	return guarded
-}
-
-func markRange(guarded []bool, from, to int) {
-	for pc := from; pc < to && pc < len(guarded); pc++ {
-		guarded[pc] = true
+	guarded := make([]bool, len(code))
+	for pc, depth := 0, 0; pc < len(code); pc++ {
+		depth += opened[pc]
+		guarded[pc] = depth > 0
 	}
+	return guarded
 }
 
 // callOperands reads the count instructions before a call, which on a stack

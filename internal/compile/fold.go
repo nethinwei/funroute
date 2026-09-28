@@ -122,7 +122,15 @@ func (c *bytecodeCompiler) foldable(expr syntax.Expr) bool {
 	case *syntax.LiteralExpr, *syntax.VariableExpr:
 		return false
 	}
-	return c.constantExpr(expr) && constexprOnly(expr, c.inferred, c.registry)
+	return c.constantExpr(expr) && c.callsConstexpr(expr)
+}
+
+// callsConstexpr is constexprOnly, as the walk of the program found it.
+func (c *bytecodeCompiler) callsConstexpr(expr syntax.Expr) bool {
+	if constexpr, known := c.closure.callsConstexpr(expr.NodeID()); known {
+		return constexpr
+	}
+	return constexprOnly(expr, c.inferred, c.registry)
 }
 
 // constantExpr reports whether expr's value is fixed at compile time: it reads
@@ -134,6 +142,9 @@ func (c *bytecodeCompiler) constantExpr(expr syntax.Expr) bool {
 	}
 	if c.readsArgument[expr.NodeID()] {
 		return false
+	}
+	if fixed, known := c.closure.fixed(expr.NodeID(), c.foldedName); known {
+		return fixed
 	}
 	for _, name := range syntax.FreeVariables(expr) {
 		if !c.foldedName(name) {
@@ -189,6 +200,7 @@ func (c *bytecodeCompiler) compileNested(expr syntax.Expr) (*bytecodeCompiler, b
 	sub.constants = c.constants
 	sub.names = c.names
 	sub.readsArgument = c.readsArgument
+	sub.closure = c.closure
 	sub.inRound = c.inRound
 	sub.plain = c.plain
 	return sub, sub.compile(expr) == nil

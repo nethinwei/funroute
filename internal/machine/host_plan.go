@@ -15,7 +15,7 @@ import (
 // stretched — an int field does not become a float — with one exception: a Go
 // string carries an enum, checked for membership where it enters. A codec only
 // adds where things sit in memory: field offsets and element sizes.
-// access.go reads and writes by them.
+// host_access.go reads and writes by them.
 
 // shape is what a codec does with the memory it is pointed at.
 type shape uint8

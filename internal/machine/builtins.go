@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"math"
 	"strconv"
 	"strings"
 
@@ -311,45 +310,38 @@ func registerBinary(registry *Registry, name string, typ Type, label, descriptio
 }
 
 func evalIntAdd(_ context.Context, args []Value) (Value, error) {
-	a, b := args[0].i, args[1].i
-	if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
+	sum, ok := addInt(args[0].i, args[1].i)
+	if !ok {
 		return Value{}, overflowIn("add")
 	}
-	return Int(a + b), nil
+	return Int(sum), nil
 }
 
 func evalIntSub(_ context.Context, args []Value) (Value, error) {
-	a, b := args[0].i, args[1].i
-	if (b < 0 && a > math.MaxInt64+b) || (b > 0 && a < math.MinInt64+b) {
+	difference, ok := subInt(args[0].i, args[1].i)
+	if !ok {
 		return Value{}, overflowIn("sub")
 	}
-	return Int(a - b), nil
+	return Int(difference), nil
 }
 
 func evalIntMul(_ context.Context, args []Value) (Value, error) {
-	a, b := args[0].i, args[1].i
-	if a == 0 || b == 0 {
-		return Int(0), nil
-	}
-	if (a == math.MinInt64 && b == -1) || (b == math.MinInt64 && a == -1) {
+	product, ok := mulInt(args[0].i, args[1].i)
+	if !ok {
 		return Value{}, overflowIn("mul")
 	}
-	result := a * b
-	if result/b != a {
-		return Value{}, overflowIn("mul")
-	}
-	return Int(result), nil
+	return Int(product), nil
 }
 
 func evalIntDiv(_ context.Context, args []Value) (Value, error) {
-	a, b := args[0].i, args[1].i
-	if b == 0 {
+	if args[1].i == 0 {
 		return Value{}, errDivisionByZero
 	}
-	if a == math.MinInt64 && b == -1 {
+	quotient, ok := divInt(args[0].i, args[1].i)
+	if !ok {
 		return Value{}, overflowIn("div")
 	}
-	return Int(a / b), nil
+	return Int(quotient), nil
 }
 
 func evalFloatAdd(_ context.Context, args []Value) (Value, error) {

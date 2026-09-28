@@ -80,9 +80,10 @@ func ArtifactUsesMoney(artifact *Artifact) bool {
 
 func typeUsesMoney(typ Type) bool { return typeHas(typ, IsMoneyKind) }
 
-// checkMoneyStamp refuses an artifact whose money was compiled against
-// another default rounding than the registry's, or against other places for
-// a currency it names, or a currency the registry no longer declares.
+// checkMoneyStamp refuses an artifact whose money was compiled against other
+// places for a currency it names, or a currency the registry no longer
+// declares, and one that uses money with no stamp or on a registry without
+// money.
 func checkMoneyStamp(artifact *Artifact, registry *Registry) error {
 	table := registry.currencies()
 	stamp := artifact.parts.Money

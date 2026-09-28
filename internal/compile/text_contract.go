@@ -65,8 +65,9 @@ func (c *TextContract) Aliases() (map[string]machine.Type, error) {
 		return map[string]machine.Type{}, nil
 	}
 	aliases := make(map[string]machine.Type, len(c.Types))
-	for name, text := range c.Types {
-		typ, err := machine.ParseType(text)
+	// In name order, so the alias a failure names is the same every time.
+	for _, name := range kit.SortedKeys(c.Types) {
+		typ, err := machine.ParseType(c.Types[name])
 		if err != nil {
 			return nil, kit.Errorf(machine.ErrContract, "type %q: %v", name, err)
 		}

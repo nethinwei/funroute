@@ -155,14 +155,14 @@ func reflectSignature(registry *Registry, fn any) (*reflected, error) {
 		}
 		out.params = append(out.params, param)
 		out.goTypes = append(out.goTypes, typ.In(i))
-		out.into = append(out.into, converterInto(registry, typ.In(i)))
+		out.into = append(out.into, converterInto(registry, typ.In(i), param))
 	}
 	result, err := reflectType(registry, typ.Out(0))
 	if err != nil {
 		return nil, fmt.Errorf("result: %w", err)
 	}
 	out.result = result
-	out.outOf = converterOutOf(registry, result)
+	out.outOf = converterOutOf(registry, typ.Out(0), result)
 	return out, nil
 }
 

@@ -92,6 +92,7 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	}
 	compiler := newBytecodeCompiler(registry, inferred)
 	compiler.readsArgument = surveyed.readers
+	compiler.closure = closureOf(expr, inferred, registry)
 	// A node compiles to an instruction or so; a switch or a loop to a few.
 	compiler.instructions = make([]machine.Instruction, 0, surveyed.nodes+surveyed.nodes/2)
 	compiler.plain, compiler.unsealed = options.plain, options.unsealed
@@ -136,7 +137,9 @@ type bytecodeCompiler struct {
 	// readsArgument is every node whose subtree reads a program argument:
 	// one that never folds, known without walking it again.
 	readsArgument map[int]bool
-	argIndex      map[string]int
+	// closure is, by node, what folding asks of it (closed.go).
+	closure  *closure
+	argIndex map[string]int
 	// names is every bound name in scope, innermost last: a local slot, or
 	// a let binding that folded to a constant, which occupies a constant-pool
 	// slot instead, so nothing is stored at run time and every read is a

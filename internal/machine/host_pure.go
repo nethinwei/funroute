@@ -1,13 +1,15 @@
 package machine
 
-// A pure host function — one the compiler may fold (Doc.Constexpr), with no
-// Timeout, not Detached, with no batch form — of a common scalar shape is
-// called straight from the registers: its arguments read and its answer
-// written with no Value slice and no closure between, and no look at the
-// deadline first — a pure function is quick and waits on nothing, and a loop
-// around it still looks. Inside a fallback's candidate it is called the
-// ordinary way, where a panic becomes the candidate's failure. The answer and
-// every failure are those of its ordinary call (TestPureCallsAnswerAsTheirEval).
+// A Go function of a common scalar shape, with no Timeout, not Detached and
+// with no batch form, is called straight from the registers (rcall.banked):
+// its arguments read and its answer written with no Value slice and no
+// closure between. A pure one — the kernel's, or one the compiler may fold
+// (Doc.Constexpr) — is called with no look at the deadline first: it is
+// quick and waits on nothing, and a loop around it still looks; a host's
+// other functions look first, as every host call does. Inside a fallback's
+// candidate each is called the ordinary way, where a panic becomes the
+// candidate's failure. The answer and every failure are those of its ordinary
+// call (TestPureCallsAnswerAsTheirEval).
 
 // pureCall calls a pure function on the registers from args — each in the
 // file of its kind — and writes its answer to dst, in the file of its kind.
