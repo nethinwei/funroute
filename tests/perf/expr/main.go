@@ -31,12 +31,12 @@ func main() {
 	var out strings.Builder
 	fmt.Fprintf(&out, "\n## 与 expr 对照\n\n由 `tests/perf/expr` 生成：它是单独的 module，只有它依赖 expr（%s），FunRoute 的 go.mod 仍然为空。"+
 		"两边从同一个宿主 struct 读参数，先编译好再反复执行，每边测 %s。FunRoute 用 `Program.Run`（可并发调用）；expr 用复用的 `vm.VM`，这是它最快的用法，但一个 `VM` 不能并发；宿主函数在 expr 里经 `expr.Function` 注册。"+
-		"每一行都先经 JSON 核对两边答案相同。倍数是 expr 的耗时除以 FunRoute 的，大于 1 表示 FunRoute 更快。\n", exprVersion(), benchTime)
+		"每一行都先经 JSON 核对两边答案相同。耗时比是 FunRoute 的耗时除以 expr 的：大于 1 表示 FunRoute 更慢，小于 1 表示更快，与上文对原生 Go 的同一口径。\n", exprVersion(), benchTime)
 	for i, rows := range tables {
-		fmt.Fprintf(&out, "\n### %s\n\n| FunRoute 写法 | expr 写法 | FunRoute | 分配 | expr | 分配 | 倍数 |\n|---|---|---|---|---|---|---|\n", groups[i].title)
+		fmt.Fprintf(&out, "\n### %s\n\n| FunRoute 写法 | expr 写法 | FunRoute | 分配 | expr | 分配 | 耗时比 |\n|---|---|---|---|---|---|---|\n", groups[i].title)
 		for _, row := range rows {
 			fmt.Fprintf(&out, "| %s | %s | %s | %d 次 | %s | %d 次 | %s |\n", cell(row.name), cell(row.expr), duration(row.ours.nanoseconds), row.ours.allocations,
-				duration(row.theirs.nanoseconds), row.theirs.allocations, ratio(row.theirs.nanoseconds, row.ours.nanoseconds))
+				duration(row.theirs.nanoseconds), row.theirs.allocations, ratio(row.ours.nanoseconds, row.theirs.nanoseconds))
 		}
 	}
 	registry, err := newRegistry()
@@ -116,10 +116,19 @@ func duration(nanoseconds float64) string {
 }
 
 // ratio is how many times the first time is the second, to two figures.
-func ratio(theirs, ours float64) string {
-	times := theirs / ours
-	if times >= 10 {
-		return fmt.Sprintf("%.0f×", times)
+// ratio is FunRoute's time over expr's, written to two figures: above 1
+// FunRoute is slower, below 1 faster — the one way the whole report says it
+// (tests/perf writes the same against native Go).
+func ratio(ours, theirs float64) string {
+	if theirs <= 0 {
+		return "—"
 	}
-	return fmt.Sprintf("%.1f×", times)
+	switch times := ours / theirs; {
+	case times >= 10:
+		return fmt.Sprintf("%.0f×", times)
+	case times >= 1:
+		return fmt.Sprintf("%.1f×", times)
+	default:
+		return fmt.Sprintf("%.2g×", times)
+	}
 }

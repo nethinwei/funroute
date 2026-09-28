@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/nethinwei/funroute"
@@ -17,7 +18,7 @@ func largeInputs(out *strings.Builder) error {
 		return err
 	}
 	out.WriteString("\n## 大输入的吞吐\n\n参数是固定种子打乱的 0…n−1，两边用同一份。\"原生 Go\"是同一件事的 Go 循环，在 100 万个元素上测：筛选求和不建中间数组；排序用 `slices.Sort`，std 的 `sort` 在没有 0 与 -0 这种相等却可区分的元素时也用它。\n\n" +
-		"| 程序 | n = 1 万 | n = 10 万 | n = 100 万 | 每个元素 | 原生 Go 每个元素 | 倍数 |\n|---|---|---|---|---|---|---|\n")
+		"| 程序 | n = 1 万 | n = 10 万 | n = 100 万 | 每个元素 | 原生 Go 每个元素 | 耗时比 |\n|---|---|---|---|---|---|---|\n")
 	for _, c := range []struct {
 		source string
 		native func([]int64)
@@ -155,6 +156,55 @@ func inferenceChain(out *strings.Builder, registry *funroute.Registry) error {
 			return err
 		}
 		fmt.Fprintf(out, "| %d | %s |\n", n, duration(float64(took)))
+	}
+	return ruleSizes(out, registry)
+}
+
+// benchRun is the time run takes, measured as go test -bench does: a few
+// microseconds of work need more than fastest's three tries to settle.
+func benchRun(run func() error) (float64, error) {
+	var failed error
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			if err := run(); err != nil {
+				failed = err
+				return
+			}
+		}
+	})
+	return perOp(result), failed
+}
+
+// ruleSizes times what a console does with one rule on each keystroke —
+// compile it under its contract and format it — for the rules most are,
+// and for two deep ones, which must stay linear in their size.
+func ruleSizes(out *strings.Builder, registry *funroute.Registry) error {
+	out.WriteString("\n一条规则，有契约（深的两行守着编译与格式化随规模线性增长）：\n\n| 规则 | 编译 | 格式化 |\n|---|---|---|\n")
+	args := []funroute.ArgSpec{{Name: "a", Type: funroute.IntType}, {Name: "b", Type: funroute.IntType},
+		{Name: "xs", Type: funroute.ArrayOf(funroute.IntType)}}
+	for _, rule := range []struct{ label, source string }{
+		{"`a + b`", `a + b`},
+		{"`switch(case a > 10 => \"big\", …)`", `switch(case a > 10 => "big", case a > 5 => "mid", else => "small")`},
+		{"`sum([x * 2 for x in xs if x % 3 == 0])`", `sum([x * 2 for x in xs if x % 3 == 0])`},
+		{"`let(k = 3, t = k * 4, [x * t + a for x in xs if x > k])`", `let(k = 3, t = k * 4, [x * t + a for x in xs if x > k])`},
+		{"循环体里 800 项的加法链", "[x" + strings.Repeat(" + 1", 800) + " for x in xs]"},
+		{"400 层嵌套的调用", strings.Repeat("max(a, ", 400) + "b" + strings.Repeat(")", 400)},
+	} {
+		compiled, err := benchRun(func() error {
+			_, err := funroute.CompileExpr(rule.source, registry, funroute.CompileOptions{Args: args})
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		formatted, err := benchRun(func() error {
+			_, err := funroute.Format(rule.source)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "| %s | %s | %s |\n", rule.label, duration(compiled), duration(formatted))
 	}
 	return nil
 }

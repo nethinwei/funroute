@@ -125,12 +125,12 @@ func (o CompileOptions) validate(program programSurvey) error {
 }
 
 // programSurvey is what one walk of a program finds before it is typed:
-// where each free variable is first read, in that order, every node whose
-// subtree reads one, and how many nodes there are.
+// where each free variable is first read, in that order, what each node
+// reads from outside it (syntax.Survey), and how many nodes there are.
 type programSurvey struct {
-	first   []*syntax.VariableExpr
-	readers map[int]bool
-	nodes   int
+	first []*syntax.VariableExpr
+	reads *syntax.Survey
+	nodes int
 	// selects says a selector is in the program, to be expanded before
 	// anything else reads it.
 	selects bool
@@ -144,9 +144,8 @@ type programSurvey struct {
 // the walk is the generic one, so a new form needs nothing here.
 func survey(expr syntax.Expr, registry *machine.Registry) (programSurvey, error) {
 	var disabled syntax.Expr
-	nodes, selects := 0, false
-	first, readers := syntax.Survey(expr, func(node syntax.Expr) {
-		nodes++
+	selects := false
+	reads := syntax.SurveyOf(expr, func(node syntax.Expr) {
 		_, selector := node.(*syntax.SelectorExpr)
 		selects = selects || selector
 		if form, ok := syntax.FormOf(node); disabled == nil && ok && !registry.FormEnabled(form) {
@@ -157,7 +156,7 @@ func survey(expr syntax.Expr, registry *machine.Registry) (programSurvey, error)
 		form, _ := syntax.FormOf(disabled)
 		return programSurvey{}, syntax.Around(disabled, "%s is not enabled in this registry", string(form))
 	}
-	return programSurvey{first: first, readers: readers, nodes: nodes, selects: selects}, nil
+	return programSurvey{first: reads.First, reads: reads, nodes: reads.Nodes, selects: selects}, nil
 }
 
 // expanded is expr with its selectors written out (syntax.ExpandSelectors),

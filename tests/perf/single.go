@@ -72,8 +72,8 @@ func singleRuns(out *strings.Builder) error {
 	if err != nil {
 		return err
 	}
-	out.WriteString("\n## 单次执行\n\n\"原生 Go\"是同一件事直接用 Go 写：宿主惯常的写法，不查溢出、不过边界；换汇调用的就是规则里用的 `Currencies.Convert`。倍数是 FunRoute 的耗时除以它。\n\n" +
-		"| 场景 | FunRoute | 分配 | 原生 Go | 分配 | 倍数 |\n|---|---|---|---|---|---|\n")
+	out.WriteString("\n## 单次执行\n\n\"原生 Go\"是同一件事直接用 Go 写：宿主惯常的写法，不查溢出、不过边界；换汇调用的就是规则里用的 `Currencies.Convert`。耗时比是 FunRoute 的耗时除以它的：大于 1 表示 FunRoute 更慢，小于 1 表示更快，全文同一口径。\n\n" +
+		"| 场景 | FunRoute | 分配 | 原生 Go | 分配 | 耗时比 |\n|---|---|---|---|---|---|\n")
 	for _, row := range rows {
 		if row.err != nil {
 			return fmt.Errorf("%s: %w", row.name, row.err)
@@ -91,14 +91,19 @@ type row struct {
 	native measured
 }
 
-// ratio is how many times slower than Go, written to two figures.
-func ratio(funroute, native float64) string {
-	if native <= 0 {
+// ratio is FunRoute's time over the other's, written to two figures: above
+// 1 FunRoute is slower, below 1 faster. Every table of the report says it
+// this one way (tests/perf/expr writes it the same).
+func ratio(funroute, other float64) string {
+	if other <= 0 {
 		return "—"
 	}
-	times := funroute / native
-	if times >= 10 {
+	switch times := funroute / other; {
+	case times >= 10:
 		return fmt.Sprintf("%.0f×", times)
+	case times >= 1:
+		return fmt.Sprintf("%.1f×", times)
+	default:
+		return fmt.Sprintf("%.2g×", times)
 	}
-	return fmt.Sprintf("%.1f×", times)
 }

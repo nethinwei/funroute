@@ -46,3 +46,29 @@ func TestRepeatedFindsTheFirstRepeat(t *testing.T) {
 		})
 	}
 }
+
+// Reach keeps what the items held, zeroes what they did not, and grows by
+// doubling: filling a table index by index allocates a logarithmic number
+// of times.
+func TestReachKeepsTheItemsAndDoubles(t *testing.T) {
+	t.Parallel()
+	items := Reach([]int{7}, 3)
+	if !slices.Equal(items, []int{7, 0, 0, 0}) {
+		t.Fatalf("Reach([7], 3) = %v, want [7 0 0 0]", items)
+	}
+	if same := Reach(items, 2); &same[0] != &items[0] || len(same) != 4 {
+		t.Fatalf("Reach of an index it holds = %v, want the items themselves", same)
+	}
+	grown := 0
+	var table []bool
+	for i := range 1 << 12 {
+		before := cap(table)
+		table = Reach(table, i)
+		if cap(table) != before {
+			grown++
+		}
+	}
+	if grown > 20 {
+		t.Fatalf("filling 4096 entries grew the table %d times, want a logarithmic number", grown)
+	}
+}

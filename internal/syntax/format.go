@@ -13,9 +13,23 @@ import (
 // one infix operator breaks before each operator. The layout changes only
 // whitespace, so the text parses back to the same program.
 func Format(expr Expr) string {
+	p := &printer{}
+	one := p.inline(expr, 0)
+	if fits("", 0, one) {
+		return one
+	}
+	// The layout starts from the text just written.
+	p.keep()
+	p.written[printed{expr: expr, parent: 0}] = one
 	var out strings.Builder
-	newPrinter().format(&out, expr, "", 0)
+	p.format(&out, expr, "", 0)
 	return out.String()
+}
+
+// fits reports whether one, after indent and used characters, stays within
+// a line.
+func fits(indent string, used int, one string) bool {
+	return utf8.RuneCountInString(indent)+used+utf8.RuneCountInString(one) < maxLine
 }
 
 // maxLine is where a line is split into parts. It counts the indent, so a
@@ -28,10 +42,13 @@ const maxLine = 72
 // program costs what its text is, not that again at every level.
 func (p *printer) format(out *strings.Builder, expr Expr, indent string, used int) {
 	one := p.inline(expr, 0)
-	if utf8.RuneCountInString(indent)+used+utf8.RuneCountInString(one) < maxLine {
+	if fits(indent, used, one) {
 		out.WriteString(one)
 		return
 	}
+	// The layout asks again of every part: from here on what is written is
+	// kept.
+	p.keep()
 	if match, ok := readOperator(expr); ok {
 		if !p.chainSource(out, match, indent) {
 			out.WriteString(one)

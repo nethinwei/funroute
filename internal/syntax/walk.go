@@ -224,11 +224,6 @@ type local struct {
 	by   Expr
 }
 
-func (s scope) has(name string) bool {
-	_, ok := s.binder(name)
-	return ok
-}
-
 // binder is the form whose binding of name is visible here: the innermost.
 func (s scope) binder(name string) (Expr, bool) {
 	for _, bound := range slices.Backward(s) {
@@ -386,36 +381,6 @@ func heldExpr(value reflect.Value) Expr {
 		panic("syntax: " + value.Type().String() + " holds no expression")
 	}
 	return expr
-}
-
-// Survey walks root once by the scope rule, visiting every node parents
-// first, as Nodes does: first is where each free variable is first read, as
-// FirstReads says, and readers every node whose subtree reads one — the
-// reads themselves among them.
-func Survey(root Expr, visit func(Expr)) (first []*VariableExpr, readers map[int]bool) {
-	readers = map[int]bool{}
-	var walk func(Expr, scope) bool
-	walk = func(expr Expr, bound scope) bool {
-		visit(expr)
-		if variable, ok := expr.(*VariableExpr); ok {
-			if bound.has(variable.Name) {
-				return false
-			}
-			if !slices.ContainsFunc(first, func(read *VariableExpr) bool { return read.Name == variable.Name }) {
-				first = append(first, variable)
-			}
-			readers[variable.ID] = true
-			return true
-		}
-		reads := false
-		walkChildren(expr, bound, func(child Expr, inner scope) { reads = walk(child, inner) || reads })
-		if reads {
-			readers[expr.NodeID()] = true
-		}
-		return reads
-	}
-	walk(root, nil)
-	return first, readers
 }
 
 // FreeVariables returns the free variables in the order they first appear,

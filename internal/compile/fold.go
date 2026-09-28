@@ -125,12 +125,12 @@ func (c *bytecodeCompiler) foldable(expr syntax.Expr) bool {
 	return c.constantExpr(expr) && c.callsConstexpr(expr)
 }
 
-// callsConstexpr is constexprOnly, as the walk of the program found it.
+// callsConstexpr is constexprOnly, each node's answer found once.
 func (c *bytecodeCompiler) callsConstexpr(expr syntax.Expr) bool {
-	if constexpr, known := c.closure.callsConstexpr(expr.NodeID()); known {
-		return constexpr
+	if c.constexpr == nil {
+		return constexprOnly(expr, c.inferred, c.registry)
 	}
-	return constexprOnly(expr, c.inferred, c.registry)
+	return c.constexpr.of(expr, c.inferred, c.registry)
 }
 
 // constantExpr reports whether expr's value is fixed at compile time: it reads
@@ -140,10 +140,7 @@ func (c *bytecodeCompiler) constantExpr(expr syntax.Expr) bool {
 	if _, literal := expr.(*syntax.LiteralExpr); literal {
 		return true
 	}
-	if c.readsArgument[expr.NodeID()] {
-		return false
-	}
-	if fixed, known := c.closure.fixed(expr.NodeID(), c.foldedName); known {
+	if fixed, known := c.reads.Fixed(expr.NodeID(), c.foldedName); known {
 		return fixed
 	}
 	for _, name := range syntax.FreeVariables(expr) {
@@ -199,8 +196,8 @@ func (c *bytecodeCompiler) compileNested(expr syntax.Expr) (*bytecodeCompiler, b
 	// name it reads is a constant; the local slots it binds are its own.
 	sub.constants = c.constants
 	sub.names = c.names
-	sub.readsArgument = c.readsArgument
-	sub.closure = c.closure
+	sub.reads = c.reads
+	sub.constexpr = c.constexpr
 	sub.inRound = c.inRound
 	sub.plain = c.plain
 	return sub, sub.compile(expr) == nil

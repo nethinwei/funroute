@@ -42,11 +42,12 @@ func readOperator(expr Expr) (operatorMatch, bool) {
 // prefix or infix operator, so what they apply to keeps its parentheses.
 var postfixPrecedence = sourceOperators[slices.IndexFunc(sourceOperators, func(spec operatorSpec) bool { return spec.fixity == "index" })].precedence
 
-// printer writes one program. It keeps each node's one-line text by the
-// precedence it was written under, so a node is written once however many
-// times the layout asks whether it fits: a layout asks at every level, and
-// writing each node's subtree again there made formatting a deep program
-// cubic in its depth.
+// printer writes one program. Once the program does not fit on one line it
+// keeps each node's one-line text by the precedence it was written under, so
+// a node is written once however many times the layout asks whether it
+// fits: a layout asks at every level, and writing each node's subtree again
+// there made formatting a deep program cubic in its depth. A program that
+// fits — most rules — is written once and keeps nothing.
 type printer struct {
 	written map[printed]string
 }
@@ -57,13 +58,21 @@ type printed struct {
 	parent int
 }
 
-func newPrinter() *printer { return &printer{written: map[printed]string{}} }
-
 // inline is expr on one line.
-func inline(expr Expr) string { return newPrinter().inline(expr, 0) }
+func inline(expr Expr) string { return (&printer{}).inline(expr, 0) }
 
-// inline is expr on one line, written once.
+// keep has the printer keep what it writes from now on.
+func (p *printer) keep() {
+	if p.written == nil {
+		p.written = map[printed]string{}
+	}
+}
+
+// inline is expr on one line: written once, when the printer keeps it.
 func (p *printer) inline(expr Expr, parent int) string {
+	if p.written == nil {
+		return p.render(expr, parent)
+	}
 	key := printed{expr: expr, parent: parent}
 	if text, ok := p.written[key]; ok {
 		return text
