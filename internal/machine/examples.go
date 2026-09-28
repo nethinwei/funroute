@@ -188,6 +188,8 @@ var kernelExamples = map[string][]Example{
 	"bottom_k":     libByKey("bottom_k", ", 2)", `["c","a"]`),
 	"sort_by":      libByKey("sort_by", ")", `["c","a","b"]`),
 	"sort_by_desc": libByKey("sort_by_desc", ")", `["b","a","c"]`),
+	"min_by":       libByKey("min_by", ")", `"c"`),
+	"max_by":       libByKey("max_by", ")", `"b"`),
 	"indices":      {{`indices(["a", "b", "c"])`, "[0,1,2]"}},
 	"index_of":     {{`index_of(["adyen", "stripe"], "stripe")`, "1"}},
 	"get":          {{`get({"adyen": 1}, "stripe", 0)`, "0"}, {`get({"adyen": 1}, "adyen", 0)`, "1"}},

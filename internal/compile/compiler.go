@@ -64,7 +64,9 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	if registry == nil {
 		return nil, nil, compileError(errors.New("registry is required"))
 	}
-	surveyed, err := survey(expr, registry)
+	// The artifact keeps the program as written; everything after this
+	// reads it with its selectors expanded.
+	expr, surveyed, err := expanded(expr, registry)
 	if err != nil {
 		return nil, nil, compileError(err)
 	}

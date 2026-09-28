@@ -54,6 +54,8 @@ var printCorpus = []string{
 	`let(fee = amount * 2.9% + USD 0.30, cap = USD 25.00, if(fee > cap, cap, fee))`,
 	`{k: v * 2.9% for k, v in fees if v > USD 0}`, `money(170, @USD) + USD 1`, `round(amount * 2.9% * 25bps, @currency.USD)`,
 	`USD + 1`, `f(USD)`, `a -USD 1`, `a - - USD 1`,
+	// Selectors: a field read off one is not a longer one.
+	`sort_by(xs, .fee)`, `top_k(xs, .meta.rank, 2)`, `(.a).b`, `(.a)[0]`, `f(xs, .a, .b.c)`,
 }
 
 // Every printed program parses back to the node it was printed from, on one

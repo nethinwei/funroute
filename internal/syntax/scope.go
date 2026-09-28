@@ -72,6 +72,25 @@ func UpdatedRecordAt(root Expr, offset int, placeholder string) (base, update Sp
 	return found.Base.Extent(), found.Extent(), written, true
 }
 
+// SelectedListAt is where a selector is being written, sort_by(xs, .|): the
+// span of the list its call reads, the call's first argument, and of the
+// call, and the fields the selector names before the one being typed, whose
+// name ends in placeholder. It reports false anywhere else.
+func SelectedListAt(root Expr, offset int, placeholder string) (list, call Span, path []string, ok bool) {
+	for expr := range Nodes(root) {
+		node, isCall := expr.(*CallExpr)
+		if !isCall || !node.Extent().HoldsCursor(offset) || len(node.Args) < 2 {
+			continue
+		}
+		for _, arg := range node.Args[1:] {
+			if selector, isSelector := arg.(*SelectorExpr); isSelector && strings.HasSuffix(selector.Path, placeholder) {
+				list, call, path, ok = node.Args[0].Extent(), node.Extent(), strings.Split(selector.Path, ".")[:strings.Count(selector.Path, ".")], true
+			}
+		}
+	}
+	return list, call, path, ok
+}
+
 func typedInto(node *RecordUpdateExpr, placeholder string) bool {
 	return slices.ContainsFunc(node.Fields, func(field RecordFieldExpr) bool {
 		return strings.HasSuffix(field.Name, placeholder)

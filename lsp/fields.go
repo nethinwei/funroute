@@ -19,17 +19,58 @@ import (
 // program with the update replaced by its base, which is the one thing it
 // does not need to see finished.
 func (s *Server) updateFields(doc *document, offset int) ([]completionItem, bool) {
-	kept, closed := repaired(doc.text, offset, placeholder+": 0")
+	return s.fieldsAt(doc, offset, placeholder+": 0", func(tree syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool) {
+		base, around, written, ok = syntax.UpdatedRecordAt(tree, offset, placeholder)
+		return base, around, recordOf, written, ok
+	})
+}
+
+// selectorFields is what a selector being written can name, sort_by(xs, .|):
+// the fields of the items of the list its call reads, or of the record the
+// fields it names before reach, read off the program with the call replaced
+// by that list.
+func (s *Server) selectorFields(doc *document, offset int) ([]completionItem, bool) {
+	return s.fieldsAt(doc, offset, placeholder, func(tree syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool) {
+		base, around, path, ok := syntax.SelectedListAt(tree, offset, placeholder)
+		return base, around, itemRecord(path), nil, ok
+	})
+}
+
+// itemRecord reaches, from a list's type, the record path leads to from its
+// items.
+func itemRecord(path []string) reach {
+	return func(list machine.Type) (machine.Type, bool) {
+		typ, ok := list.Elem()
+		for _, name := range path {
+			at := typ.FieldIndex(name)
+			if !ok || at < 0 {
+				return machine.Type{}, false
+			}
+			typ = typ.Fields()[at].Type()
+		}
+		if !ok {
+			return machine.Type{}, false
+		}
+		return recordOf(typ)
+	}
+}
+
+// fieldsAt is the fields of the record find locates, with filler typed at
+// the cursor: find reads the span whose type leads to the record (base),
+// the span to stand the base in for (around), how the record is reached from
+// the base's type, and the fields already written.
+func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool)) ([]completionItem, bool) {
+	kept, closed := repaired(doc.text, offset, filler)
 	for _, candidate := range []string{kept, closed} {
 		tree, err := syntax.Parse(candidate)
 		if err != nil {
 			continue
 		}
-		base, update, written, ok := syntax.UpdatedRecordAt(tree, offset, placeholder)
+		base, around, record, written, ok := find(tree)
 		if !ok {
 			return nil, false
 		}
-		typ, ok := s.baseType(candidate, base, update)
+		typ, ok := s.baseType(candidate, base, around, record)
 		if !ok {
 			return nil, false
 		}
@@ -38,11 +79,17 @@ func (s *Server) updateFields(doc *document, offset int) ([]completionItem, bool
 	return nil, false
 }
 
-// baseType is the record type of an update's base, read off the program with
-// "(base)" where the update was.
-func (s *Server) baseType(candidate string, base, update syntax.Span) (machine.Type, bool) {
+// reach is how a record is found from a type: the record, and false when the
+// type leads to none.
+type reach func(machine.Type) (machine.Type, bool)
+
+func recordOf(typ machine.Type) (machine.Type, bool) { return typ, typ.Kind() == machine.RecordKind }
+
+// baseType is the record reached from a base's type, read off the program
+// with "(base)" where around was.
+func (s *Server) baseType(candidate string, base, around syntax.Span, record reach) (machine.Type, bool) {
 	stand := "(" + candidate[base.Start:base.End] + ")"
-	text := candidate[:update.Start] + stand + candidate[update.End:]
+	text := candidate[:around.Start] + stand + candidate[around.End:]
 	// The base's type follows from the arguments alone. A declared result is
 	// left out: a program half written rarely returns it yet, and holding it
 	// to one would lose the answer for no reason.
@@ -52,12 +99,14 @@ func (s *Server) baseType(candidate string, base, update syntax.Span) (machine.T
 	if analysis == nil {
 		return machine.Type{}, false
 	}
-	// Nodes are in pre-order, so the first one inside the parentheses is the
-	// base itself rather than a part of it.
-	end := update.Start + len(stand)
+	// Nodes are in pre-order, so the first one inside the parentheses that
+	// leads to a record is the base itself rather than a part of it.
+	end := around.Start + len(stand)
 	for _, node := range analysis.Nodes {
-		if node.Span.Start >= update.Start && node.Span.End <= end && node.Type != nil && node.Type.Kind() == machine.RecordKind {
-			return *node.Type, true
+		if node.Span.Start >= around.Start && node.Span.End <= end && node.Type != nil {
+			if typ, ok := record(*node.Type); ok {
+				return typ, true
+			}
 		}
 	}
 	return machine.Type{}, false

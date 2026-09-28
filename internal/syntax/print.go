@@ -70,6 +70,8 @@ func inline(expr Expr, parent int) string {
 		return node.Value + node.Unit
 	case *FieldExpr:
 		return postfixBase(node.Value) + "." + node.Field
+	case *SelectorExpr:
+		return "." + node.Path
 	}
 	layout, ok := splitNode(expr)
 	if !ok {
@@ -104,10 +106,11 @@ func operatorSource(match operatorMatch, parent int) string {
 // postfixBase writes what a subscript or a field read applies to. Anything
 // that ends in a number or a code is parenthesised, or the lexer would read
 // the . or [ into it: (1).x is not 1.x, (@a).b is not the qualified member
-// @a.b, and so for (USD 1).x, (2.9%)[0] and (150 JPY / USD).x.
+// @a.b, and so for (USD 1).x, (2.9%)[0] and (150 JPY / USD).x; (.a).b is
+// not the selector .a.b.
 func postfixBase(expr Expr) string {
 	switch expr.(type) {
-	case *EnumExpr, *RatioExpr, *MoneyExpr, *FxRateExpr, *CurrencyExpr:
+	case *EnumExpr, *RatioExpr, *MoneyExpr, *FxRateExpr, *CurrencyExpr, *SelectorExpr:
 		return "(" + inline(expr, 0) + ")"
 	}
 	if isNumber(expr) {

@@ -222,7 +222,7 @@ reduce(name, weight in weights, total = 0.0, total + weight)            // 遍�
 |---|---|---|
 | 聚合 | `sum` `min` `max` `any` `all` `avg` `median` `stddev` `percentile` | 它们的金额重载 |
 | 序列 | `range` `indices` `first` `last` `take` `slice` `reverse` `concat` `unique` `flatten` `sort` `sort_desc` `top_k` `bottom_k` | `take_while` `drop_while` `windows` `chunk` `deltas` `cumsum` |
-| 选择与分组 | `index_of` `arg_min` `arg_max` `sort_by` `sort_by_desc` | `group_by` `rank` `intersect` `except` |
+| 选择与分组 | `index_of` `arg_min` `arg_max` `min_by` `max_by` `sort_by` `sort_by_desc` | `group_by` `rank` `intersect` `except` |
 | 字典 | `get` `merge` | |
 | 字符串 | `upper` `lower` `trim` `contains` `starts_with` `ends_with` `split` `join` `replace` | `pad_left` `pad_right`（宽度至多 10000） |
 | 数值 | `abs` `ceil` `floor` `round` `pow` `mod`（float） | |
@@ -244,6 +244,19 @@ reduce(name, weight in weights, total = 0.0, total + weight)            // 遍�
 - **靠写法区分字典和记录**：`{"k": v}` 是字典，`{k: v}` 是记录。
 - **相等逐字段比较**，`==`、`in`、`switch` 都适用。
 - 可以随意组合：`[o.amount for o in orders]`、`order.tags[0]`、`dict<record{…}>` 都成立。
+
+**按字段选择**：调用第一个实参之后写 `.字段`，给第一个实参的每一项按字段取键，第一个实参只写一遍。
+
+```text
+sort_by(channels, .fee)            // 即 sort_by(channels, [c.fee for c in channels])
+top_k(channels, .meta.success, 3)  // 嵌套字段照样点下去
+min_by(channels, .fee).name        // 最便宜的那个渠道
+group_by(orders, .channel)
+```
+
+- 选择器就是那条推导式，答案与失败都一样；第一个实参不是名字时只求值一次。所以它需要注册表开启推导式（`for`）。
+- 只能写在调用第一个实参之后，第一个实参是它读的数组；写在别处是编译错误。
+- 记录本身不可排序。按多个字段排序就按次要的先排：排序是稳定的，`sort_by(sort_by(xs, .name), .fee)` 先按 `fee`、再按 `name`。
 
 **字段更新**用 `with`：复制一份记录，替换写出的字段，其余原样保留。
 
@@ -1150,6 +1163,7 @@ primary        = number | ratio | money | fxrate | code | string | "true" | "fal
                | "{" word ":" expression { "," word ":" expression } [ "," ] "}"              // 记录
                | "{" expression ":" expression loop "}"   // 字典推导，只接一个 loop
                | "(" expression ")"
+               | "." word                           // 选择器，只作调用第一个实参之后的实参：sort_by(xs, .fee)；word 里的点是嵌套字段
 case           = "case" expression { "," expression } "=>" expression
 binding        = word "=" expression ","
 loop           = "for" locals "in" expression [ "if" expression ]

@@ -131,9 +131,12 @@ func (s *Server) completion(doc *document, offset int) (any, error) {
 	if offset > 0 && doc.text[offset-1] == '@' {
 		return s.enumMembers(), nil
 	}
-	// Where only a field of the record being updated can be named, only
-	// fields are offered.
+	// Where only a field can be named — of the record being updated, or of
+	// the items a selector reads — only fields are offered.
 	if fields, ok := s.updateFields(doc, offset); ok {
+		return fields, nil
+	}
+	if fields, ok := s.selectorFields(doc, offset); ok {
 		return fields, nil
 	}
 	items := []completionItem{}

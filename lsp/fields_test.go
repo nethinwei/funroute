@@ -50,3 +50,27 @@ func TestCompletionOffersTheFieldsOfARecordBeingUpdated(t *testing.T) {
 		t.Errorf("a field's value is offered %v, want fee among them", got)
 	}
 }
+
+// In a selector, the fields of the items of the list its call reads are
+// offered, and after a field of theirs, that field's.
+func TestCompletionOffersTheFieldsASelectorCanRead(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]string{
+		"sort_by(quotes, .":           "fee channel meta",
+		"top_k(take(quotes, 2), .fe":  "fee channel meta",
+		"sort_by(quotes, .meta.":      "rank",
+		"let(q = quotes, min_by(q, .": "fee channel meta",
+	} {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+			s := newSession(t, standard(t), `{}`)
+			s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
+				{"name": "quotes", "type": "array<record{fee: int, channel: string, meta: record{rank: int}}>"},
+			}}})
+			s.open("file:///a.fr", text)
+			if got := strings.Join(labels(t, s.request("textDocument/completion", position("file:///a.fr", len(text)))), " "); got != want {
+				t.Errorf("%q: completion is %q, want %q", text, got, want)
+			}
+		})
+	}
+}

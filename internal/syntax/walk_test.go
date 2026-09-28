@@ -59,7 +59,7 @@ func TestChildrenAreListedInDefinitionOrder(t *testing.T) {
 // Every node the walker knows is listed, the literal kinds included.
 func TestNodeKindsListEveryNode(t *testing.T) {
 	t.Parallel()
-	want := "int float string bool var enum array dict call record field switch for reduce let record_update money ratio using fxrate currency"
+	want := "int float string bool var enum array dict call record field switch for reduce let record_update money ratio using fxrate currency selector"
 	if got := strings.Join(NodeKinds(), " "); got != want {
 		t.Fatalf("node kinds = %s, want %s", got, want)
 	}

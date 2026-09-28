@@ -131,6 +131,9 @@ type programSurvey struct {
 	first   []*syntax.VariableExpr
 	readers map[int]bool
 	nodes   int
+	// selects says a selector is in the program, to be expanded before
+	// anything else reads it.
+	selects bool
 }
 
 // survey walks the program once, and rejects one that uses a special form its
@@ -141,9 +144,11 @@ type programSurvey struct {
 // the walk is the generic one, so a new form needs nothing here.
 func survey(expr syntax.Expr, registry *machine.Registry) (programSurvey, error) {
 	var disabled syntax.Expr
-	nodes := 0
+	nodes, selects := 0, false
 	first, readers := syntax.Survey(expr, func(node syntax.Expr) {
 		nodes++
+		_, selector := node.(*syntax.SelectorExpr)
+		selects = selects || selector
 		if form, ok := syntax.FormOf(node); disabled == nil && ok && !registry.FormEnabled(form) {
 			disabled = node
 		}
@@ -152,7 +157,22 @@ func survey(expr syntax.Expr, registry *machine.Registry) (programSurvey, error)
 		form, _ := syntax.FormOf(disabled)
 		return programSurvey{}, syntax.Around(disabled, "%s is not enabled in this registry", string(form))
 	}
-	return programSurvey{first: first, readers: readers, nodes: nodes}, nil
+	return programSurvey{first: first, readers: readers, nodes: nodes, selects: selects}, nil
+}
+
+// expanded is expr with its selectors written out (syntax.ExpandSelectors),
+// and the survey of what it became: the comprehensions a selector stands for
+// are a form, which the registry must enable.
+func expanded(expr syntax.Expr, registry *machine.Registry) (syntax.Expr, programSurvey, error) {
+	surveyed, err := survey(expr, registry)
+	if err != nil || !surveyed.selects {
+		return expr, surveyed, err
+	}
+	if expr, err = syntax.ExpandSelectors(expr); err != nil {
+		return nil, programSurvey{}, err
+	}
+	surveyed, err = survey(expr, registry)
+	return expr, surveyed, err
 }
 
 // names is the free variables, in the order they are first read: the

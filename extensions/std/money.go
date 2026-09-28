@@ -19,6 +19,8 @@ import (
 func moneySpecs() []funroute.FunctionSpec {
 	c := funroute.MoneyType
 	amounts := funroute.ArrayOf(c)
+	item := funroute.TypeVar("T")
+	list := funroute.ArrayOf(item)
 	return slices.Concat([]funroute.FunctionSpec{
 		moneySpec("sum", []funroute.Type{amounts}, c, "求和", "同币种金额相加；空数组是不带币种的 0。", sumMoney),
 		moneySpec("min", []funroute.Type{amounts}, c, "最小值", "最小的金额；空数组报错。", extremeMoney(true)),
@@ -32,6 +34,8 @@ func moneySpecs() []funroute.FunctionSpec {
 		moneySpec("deltas", []funroute.Type{amounts}, amounts, "差分", "相邻两笔金额之差。", deltasMoney),
 		moneySpec("arg_min", []funroute.Type{amounts}, funroute.IntType, "最小值下标", "最小金额的下标；空数组报错。", argExtremeMoney(true)),
 		moneySpec("arg_max", []funroute.Type{amounts}, funroute.IntType, "最大值下标", "最大金额的下标；空数组报错。", argExtremeMoney(false)),
+		moneySpec("min_by", []funroute.Type{list, amounts}, item, "金额最小的候选", "金额键最小的那个候选；并列取第一个，空数组报错。", extremeByMoney(true)),
+		moneySpec("max_by", []funroute.Type{list, amounts}, item, "金额最大的候选", "金额键最大的那个候选；并列取第一个，空数组报错。", extremeByMoney(false)),
 	}, roundedMoneySpecs(amounts, c), keyedSpecs(true))
 }
 
@@ -157,6 +161,26 @@ func argExtremeMoney(smallest bool) funroute.EvalFunc {
 		}
 		at, err := extremeMoneyIndex(amounts, smallest)
 		return funroute.Int(int64(at)), err
+	}
+}
+
+// extremeByMoney is the candidate at argExtremeMoney's position among the
+// keys.
+func extremeByMoney(smallest bool) funroute.EvalFunc {
+	return func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+		amounts, _, err := amountsOf(args[1])
+		if err != nil {
+			return funroute.Value{}, err
+		}
+		if n, _ := args[0].Length(); n != len(amounts) {
+			return funroute.Value{}, fmt.Errorf("%w: the list has %d candidates and %d keys", funroute.ErrDomain, n, len(amounts))
+		}
+		at, err := extremeMoneyIndex(amounts, smallest)
+		if err != nil {
+			return funroute.Value{}, err
+		}
+		item, _ := args[0].At(at)
+		return item, nil
 	}
 }
 

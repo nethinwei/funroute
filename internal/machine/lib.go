@@ -23,7 +23,7 @@ func librarySpecs() []FunctionSpec {
 		sumSpecs(), extremeSpecs(), quantifierSpecs(), rangeSpecs(),
 		caseSpecs(), testSpecs(), partSpecs(),
 		shapeSpecs(), sortSpecs(), numericSpecs(),
-		selectSpecs(), keyedSpecs(), positionSpecs(), dictSpecs(),
+		selectSpecs(), keyedSpecs(), positionSpecs(), extremeBySpecs(), dictSpecs(),
 	)
 }
 

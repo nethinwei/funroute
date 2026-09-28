@@ -2564,6 +2564,62 @@
       "operators": []
     },
     {
+      "label": "按字段选择",
+      "category": "数据结构",
+      "description": ".fee 写在调用的第一个实参之后，按字段给第一个实参的每一项取键：sort_by(quotes, .fee) 就是 sort_by(quotes, [q.fee for q in quotes])，quotes 只写一遍",
+      "source": "{\n  cheapest: min_by(quotes, .fee).channel,\n  surest: max_by(quotes, .success).channel,\n  by_fee: [q.channel for q in sort_by(quotes, .fee)]\n}",
+      "contract": {
+        "types": {
+          "Quote": "record{channel: string, fee: int, success: float}"
+        },
+        "args": [
+          {
+            "name": "quotes",
+            "type": "array<Quote>",
+            "doc": "各渠道报价，费用单位：分"
+          }
+        ],
+        "result": {
+          "type": "record{cheapest: string, surest: string, by_fee: array<string>}",
+          "doc": "最便宜、成功率最高的渠道，与按费用排好的渠道"
+        }
+      },
+      "args": {
+        "quotes": [
+          {
+            "channel": "adyen",
+            "fee": 320,
+            "success": 0.97
+          },
+          {
+            "channel": "stripe",
+            "fee": 280,
+            "success": 0.95
+          },
+          {
+            "channel": "local",
+            "fee": 410,
+            "success": 0.99
+          }
+        ]
+      },
+      "expected": {
+        "cheapest": "stripe",
+        "surest": "local",
+        "by_fee": [
+          "stripe",
+          "adyen",
+          "local"
+        ]
+      },
+      "covers": [
+        "min_by",
+        "max_by",
+        "sort_by"
+      ],
+      "operators": []
+    },
+    {
       "label": "稳定调用契约",
       "category": "契约治理",
       "description": "调用方仍传旧字段时，表达式可以不读取它，保持 ABI 稳定",

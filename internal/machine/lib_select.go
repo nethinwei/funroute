@@ -279,6 +279,60 @@ func positionSpecs() []FunctionSpec {
 	return specs
 }
 
+// extremeBySpecs are the candidate whose key is the smallest or the largest,
+// the first of equal ones: min_by(channels, .fee) is the cheapest channel,
+// channels[arg_min([c.fee for c in channels])] with channels read once.
+func extremeBySpecs() []FunctionSpec {
+	item := TypeVar("T")
+	specs := make([]FunctionSpec, 0, 6) // two names, three key types each
+	for _, extreme := range []struct {
+		name, label, description string
+		smallest                 bool
+	}{
+		{"min_by", "键最小的候选", "键最小的那个候选；并列取第一个。两者长度必须相同，空数组报错。min_by(channels, .fee) 就是最便宜的渠道。", true},
+		{"max_by", "键最大的候选", "键最大的那个候选；并列取第一个。两者长度必须相同，空数组报错。", false},
+	} {
+		name, smallest := extreme.name, extreme.smallest
+		for _, key := range []Type{IntType, FloatType, StringType} {
+			specs = append(specs, FunctionSpec{
+				Name: name, Params: []Type{ArrayOf(item), ArrayOf(key)}, Result: item,
+				Eval: func(_ context.Context, args []Value) (Value, error) {
+					return extremeBy(name, args, smallest)
+				},
+				Doc: Doc{
+					Label: extreme.label, Category: "选择", Description: extreme.description,
+					Params: []string{"候选", "键"}, Result: "候选",
+				},
+			})
+		}
+	}
+	return specs
+}
+
+// extremeBy is the candidate at the position best finds among the keys.
+func extremeBy(name string, args []Value, smallest bool) (Value, error) {
+	items, keys := args[0], args[1]
+	if n, m := items.length(), keys.length(); n != m {
+		return Value{}, fmt.Errorf("%w: %s has %d candidates and %d keys", ErrDomain, name, n, m)
+	}
+	var at int
+	var ok bool
+	switch box := keys.box.(type) {
+	case *int64:
+		at, ok = best(itemsAt(box, keys.i), smallest)
+	case *float64:
+		at, ok = best(itemsAt(box, keys.i), smallest)
+	case *string:
+		at, ok = best(itemsAt(box, keys.i), smallest)
+	default:
+		return Value{}, fmt.Errorf("internal error: keys of %s", keys.Type())
+	}
+	if !ok {
+		return Value{}, errNoExtreme
+	}
+	return items.at(at), nil
+}
+
 // dictSpecs are two things a dictionary needs that a comprehension cannot
 // say. `d["k"]` on a missing key stays an error — inventing a zero there
 // would put a silently wrong amount in a routing decision — and `get` is

@@ -218,6 +218,24 @@ func (e *FieldExpr) check() error {
 	return nil
 }
 
+// SelectorExpr is .field or .a.b, written as an argument after the first of
+// a call: sort_by(channels, .fee) keys each item of the first argument by the
+// fields it reads. It is shorthand for [e.fee for e in channels], and the
+// compiler reads it as that (ExpandSelectors), so it needs no rules of its own.
+type SelectorExpr struct {
+	Node `kind:"selector"`
+	Path string `json:"path" role:"text"`
+}
+
+func (e *SelectorExpr) check() error {
+	for field := range strings.SplitSeq(e.Path, ".") {
+		if !machine.IsValidFieldName(field) {
+			return fmt.Errorf("invalid record field name %q", field)
+		}
+	}
+	return nil
+}
+
 type CallExpr struct {
 	Node `kind:"call"`
 	Name string `json:"name" role:"fn"`
@@ -430,4 +448,5 @@ var nodeTypes = []Expr{
 	&LiteralExpr{}, &VariableExpr{}, &EnumExpr{}, &ArrayExpr{}, &DictExpr{}, &CallExpr{},
 	&RecordExpr{}, &FieldExpr{}, &SwitchExpr{}, &ForExpr{}, &ReduceExpr{}, &LetExpr{},
 	&RecordUpdateExpr{}, &MoneyExpr{}, &RatioExpr{}, &UsingExpr{}, &FxRateExpr{}, &CurrencyExpr{},
+	&SelectorExpr{},
 }

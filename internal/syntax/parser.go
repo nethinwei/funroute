@@ -449,6 +449,8 @@ func (p *parser) primary() (Expr, error) {
 		return p.parseArray()
 	case tokenLeftBrace:
 		return p.parseBrace()
+	case tokenDot:
+		return p.selector(tok)
 	default:
 		return nil, p.errorf(tok, "expected an expression")
 	}
@@ -476,6 +478,24 @@ func (p *parser) name(tok token) (Expr, error) {
 	// keeps its dots, because that is how a function is versioned:
 	// route.score_v1(…).
 	return p.variableWithFields(tok)
+}
+
+// selector reads .a.b, the fields a call keys its first argument's items by.
+// A dot no name follows starts no expression.
+func (p *parser) selector(dot token) (Expr, error) {
+	name := p.peekN(1)
+	if name.kind != tokenIdentifier {
+		return nil, p.errorf(dot, "expected an expression")
+	}
+	p.index += 2
+	offset := name.pos
+	for part := range strings.SplitSeq(name.text, ".") {
+		if part != "" {
+			p.markSpan(offset, offset+len(part), RoleField)
+		}
+		offset += len(part) + 1
+	}
+	return p.node(dot, &SelectorExpr{Node: p.at(dot.pos), Path: name.text})
 }
 
 // parseGroup reads (e), which is only there to override infix precedence.

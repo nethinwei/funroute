@@ -76,7 +76,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 - 装载时不重新解析 ExprJSON，执行只依赖字节码。
 
 **语法**
-- 糖在 parser 里脱糖，不新增节点（`a+b` 即 `add(a,b)`，`->` 即 `convert`）；节点只在 `syntax/ast.go` 定义，struct tag 驱动导入、导出、作用域与语法树，不按节点类型分派。
+- 糖在 parser 里脱糖，不新增节点（`a+b` 即 `add(a,b)`，`->` 即 `convert`）。唯一的例外是选择器 `.fee`（`SelectorExpr`，格式化要读回它）：编译前由 `syntax.ExpandSelectors` 展开成推导式，推导、编译、折叠都看不见它，别给它写语义；节点只在 `syntax/ast.go` 定义，struct tag 驱动导入、导出、作用域与语法树，不按节点类型分派。
 - **格式化结果必须解析回同一 ExprJSON**（`FuzzFormatRoundTrip` 守着）。新增糖要同时给打印器一条反向读法（`operators.go` 的 `operatorSpec.read`）。
 - 嵌套至多 1000 层：Go 栈溢出是 `recover` 接不住的致命错误。ExprJSON 只解码一次，值槽位不接受 `null`。
 

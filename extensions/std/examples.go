@@ -25,6 +25,8 @@ var examples = map[string][]funroute.Example{
 	"bottom_k":     {{Source: `bottom_k(["a", "b", "c"], [USD 2, USD 3, USD 1], 2)`, Result: `["c","a"]`}},
 	"sort_by":      {{Source: `sort_by(["a", "b", "c"], [USD 2, USD 3, USD 1])`, Result: `["c","a","b"]`}},
 	"sort_by_desc": {{Source: `sort_by_desc(["a", "b", "c"], [USD 2, USD 3, USD 1])`, Result: `["b","a","c"]`}},
+	"min_by":       {{Source: `min_by(["a", "b", "c"], [USD 2, USD 3, USD 1])`, Result: `"c"`}},
+	"max_by":       {{Source: `max_by(["a", "b", "c"], [USD 2, USD 3, USD 1])`, Result: `"b"`}},
 	// The pack's own.
 	"pad_left":  {{Source: `pad_left("7", 3, "0")`, Result: `"007"`}, {Source: `pad_left("1234", 3, "0")`, Result: `"1234"`}},
 	"pad_right": {{Source: `pad_right("ab", 4, ".")`, Result: `"ab.."`}},

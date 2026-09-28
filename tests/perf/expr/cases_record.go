@@ -13,8 +13,8 @@ func recordGroup() group {
 		on[recordIn, []string](in, "[c.name for c in channels if c.healthy]", "map(filter(channels, .healthy), .name)"),
 		integer(in, "sum([c.fee for c in channels])", "sum(channels, .fee)"),
 		integer(in, "len([c for c in channels if c.healthy && c.fee < 50])", "count(channels, .healthy && .fee < 50)"),
-		on[recordIn, []channel](in, "sort_by(channels, [c.fee for c in channels])", "sortBy(channels, .fee)"),
-		text(in, "channels[arg_min([c.fee for c in channels])].name", "find(channels, .fee == min(map(channels, .fee))).name"),
+		on[recordIn, []channel](in, "sort_by(channels, .fee)", "sortBy(channels, .fee)"),
+		text(in, "min_by(channels, .fee).name", "find(channels, .fee == min(map(channels, .fee))).name"),
 	}}
 }
 
