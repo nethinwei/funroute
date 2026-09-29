@@ -1,6 +1,7 @@
 package syntax
 
 import (
+	"math"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -65,12 +66,14 @@ func (p *printer) format(out *strings.Builder, expr Expr, indent string, used in
 	// break when split; no other opening ends in a space.
 	out.WriteString(strings.TrimSuffix(layout.open, " "))
 	out.WriteByte('\n')
+	labels := kit.Map(layout.parts, func(x part) string { return x.laidLabel(p, inner) })
+	widths := alignedWidths(layout.parts, labels)
 	for i, part := range layout.parts {
 		if i > 0 {
 			out.WriteString(layout.separator)
 		}
 		out.WriteString(inner)
-		part.layout(p, out, inner)
+		part.layout(p, out, inner, part.lead(labels[i], widths[i]))
 	}
 	out.WriteByte('\n')
 	out.WriteString(indent)
@@ -123,40 +126,113 @@ func (s split) inline(p *printer) string {
 // part is one part of a split: a head — a binding's name, a key, else —
 // and the subexpression after it, the head counting toward the line. A
 // switch case's head is its matches; a part with no subexpression is a line
-// already written, such as a loop clause.
+// already written, such as a loop clause. A head with a joint — the = of a
+// binding, the space after a key's colon, the => of a case — is a label the
+// layout lines up with its neighbours', padding it before the joint.
 type part struct {
 	head    string
+	joint   string
 	matches []Expr
 	expr    Expr
 }
 
 func (x part) inline(p *printer) string {
-	head := x.lead(func(match Expr) string { return p.inline(match, 0) })
+	head := x.lead(x.label(func(match Expr) string { return p.inline(match, 0) }), 0)
 	if x.expr == nil {
 		return head
 	}
 	return head + p.inline(x.expr, 0)
 }
 
-// layout writes the part laid out from indent.
-func (x part) layout(p *printer, out *strings.Builder, indent string) {
-	head := x.lead(func(match Expr) string {
-		var text strings.Builder
-		p.format(&text, match, indent, 0)
-		return text.String()
-	})
+// layout writes the part laid out from indent after its head, the label as
+// it was laid out and padded. Each label is laid out once, for its width and
+// for the text, so a switch nested in a case costs what its text is.
+func (x part) layout(p *printer, out *strings.Builder, indent, head string) {
 	out.WriteString(head)
 	if x.expr != nil {
 		p.format(out, x.expr, indent, utf8.RuneCountInString(head))
 	}
 }
 
-// lead is the head, or a switch case's, written with its matches.
-func (x part) lead(write func(Expr) string) string {
+// label is the head before its =>: a switch case's is written with its
+// matches.
+func (x part) label(write func(Expr) string) string {
 	if x.matches == nil {
 		return x.head
 	}
-	return "case " + strings.Join(kit.Map(x.matches, write), ", ") + " => "
+	return "case " + strings.Join(kit.Map(x.matches, write), ", ")
+}
+
+// laidLabel is the label with its matches laid out from indent.
+func (x part) laidLabel(p *printer, indent string) string {
+	return x.label(func(match Expr) string {
+		var text strings.Builder
+		p.format(&text, match, indent, 0)
+		return text.String()
+	})
+}
+
+// lead is the label as it starts the part: padded to width and followed by
+// its joint when it has one.
+func (x part) lead(label string, width int) string {
+	if x.joint == "" {
+		return label
+	}
+	if pad := width - utf8.RuneCountInString(label); pad > 0 {
+		label += strings.Repeat(" ", pad)
+	}
+	return label + x.joint
+}
+
+// alignedWidths is the width each part's label is padded to: the joints of a
+// run of labels on one line each line up, at the widest label of the run. The
+// runs are cut as gofmt cuts the alignment of keys: two labels of at most
+// smallLabel columns always line up; otherwise a label 2.5 times wider or
+// narrower than the run's geometric mean starts a run of its own, so one long
+// case does not push the others' results far out. A part without a joint —
+// a let's body, a loop clause — ends a run, and a label over more than one
+// line stands alone.
+func alignedWidths(parts []part, labels []string) []int {
+	widths := make([]int, len(parts))
+	start, sum, widest, previous := 0, 0.0, 0, 0
+	for i, x := range parts {
+		size := utf8.RuneCountInString(labels[i])
+		if x.joint == "" || strings.Contains(labels[i], "\n") {
+			size = 0
+		}
+		if size == 0 || (i > start && !alignable(previous, size, sum/float64(i-start))) {
+			fill(widths[start:i], widest)
+			start, sum, widest = i, 0, 0
+		}
+		if size > 0 {
+			sum += math.Log(float64(size))
+			widest = max(widest, size)
+		} else {
+			start = i + 1
+		}
+		previous = size
+	}
+	fill(widths[start:], widest)
+	return widths
+}
+
+// smallLabel is the width up to which two neighbouring labels always line up.
+const smallLabel = 40
+
+// alignable reports whether a label of size continues a run whose last label
+// is previous and whose labels have logMean as the mean of their logarithms.
+func alignable(previous, size int, logMean float64) bool {
+	if previous <= smallLabel && size <= smallLabel {
+		return true
+	}
+	ratio := float64(size) / math.Exp(logMean)
+	return 2.5*ratio > 1 && ratio < 2.5
+}
+
+func fill(widths []int, width int) {
+	for i := range widths {
+		widths[i] = width
+	}
 }
 
 func listSplit(opening, closing string, parts []part) split {
@@ -169,7 +245,7 @@ func exprParts(items []Expr) []part {
 
 // fieldParts is a record's fields, each name: value.
 func fieldParts(fields []RecordFieldExpr) []part {
-	return kit.Map(fields, func(field RecordFieldExpr) part { return part{head: field.Name + ": ", expr: field.Value} })
+	return kit.Map(fields, func(field RecordFieldExpr) part { return part{head: field.Name + ":", joint: " ", expr: field.Value} })
 }
 
 // splitNode is how a node that has parts is printed; a leaf has none.
@@ -188,7 +264,7 @@ func (p *printer) splitNode(expr Expr) (split, bool) {
 	case *LetExpr:
 		parts := make([]part, 0, len(node.Bindings)+1)
 		for _, binding := range node.Bindings {
-			parts = append(parts, part{head: binding.Name + " = ", expr: binding.Value})
+			parts = append(parts, part{head: binding.Name, joint: " = ", expr: binding.Value})
 		}
 		return listSplit("let(", ")", append(parts, part{expr: node.Body})), true
 	case *UsingExpr:
@@ -207,7 +283,7 @@ func (p *printer) braceSplit(expr Expr) (split, bool) {
 	switch node := expr.(type) {
 	case *DictExpr:
 		return listSplit("{", "}", kit.Map(node.Entries, func(entry DictEntryExpr) part {
-			return part{head: quote(entry.Key) + ": ", expr: entry.Value}
+			return part{head: quote(entry.Key) + ":", joint: " ", expr: entry.Value}
 		})), true
 	case *RecordExpr:
 		return listSplit("{", "}", fieldParts(node.Fields)), true
@@ -225,10 +301,10 @@ func (p *printer) switchSplit(node *SwitchExpr) split {
 	}
 	parts := make([]part, 0, len(node.Cases)+1)
 	for _, branch := range node.Cases {
-		parts = append(parts, part{matches: branch.Match, expr: branch.Result})
+		parts = append(parts, part{joint: " => ", matches: branch.Match, expr: branch.Result})
 	}
 	if node.Default != nil {
-		parts = append(parts, part{head: "else => ", expr: node.Default})
+		parts = append(parts, part{head: "else", joint: " => ", expr: node.Default})
 	}
 	return listSplit(open, ")", parts)
 }

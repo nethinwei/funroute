@@ -12,7 +12,7 @@ func TestFormatBreaksWhatDoesNotFit(t *testing.T) {
 		`switch(case amount > 10_000 && route.is_healthy_v1(primary_channel_status) => "manual_review", case risk > 0.8 => "reject", else => "auto")`: `switch(
   case amount > 10000 && route.is_healthy_v1(primary_channel_status) => "manual_review",
   case risk > 0.8 => "reject",
-  else => "auto"
+  else            => "auto"
 )`,
 		`route.is_healthy_v1(primary_channel_status) && route.is_healthy_v1(secondary_channel_status) && amount > 1000`: `route.is_healthy_v1(primary_channel_status)
   && route.is_healthy_v1(secondary_channel_status)
@@ -24,17 +24,94 @@ func TestFormatBreaksWhatDoesNotFit(t *testing.T) {
   for k in currencies
 ]`,
 		`let(bps = 250, base = 3 * 100 + 50, total = bps * 2, amount * total / 10000 + base)`: `let(
-  bps = 250,
-  base = 3 * 100 + 50,
+  bps   = 250,
+  base  = 3 * 100 + 50,
   total = bps * 2,
   amount * total / 10000 + base
 )`,
 		`order with {amount: order.amount - route.fee_v1(order.channel, order.currency), currency: route.settlement_currency_v1(order.channel)}`: `order with {
-  amount: order.amount - route.fee_v1(order.channel, order.currency),
+  amount:   order.amount - route.fee_v1(order.channel, order.currency),
   currency: route.settlement_currency_v1(order.channel)
 }`,
 		`a + b`: `a + b`,
 	}
+	for source, want := range cases {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if got := Format(mustParse(t, source)); got != want {
+				t.Errorf("format of %q:\n%s\nwant:\n%s", source, got, want)
+			}
+		})
+	}
+}
+
+// A split switch lines up its => at the widest label of a run; a label far
+// wider than the others, and one over more than one line, each end a run.
+func TestFormatLinesUpTheArrowsOfASwitch(t *testing.T) {
+	t.Parallel()
+	formatsTo(t, map[string]string{
+		`switch(country, case "SG", "MY", "TH" => "asia_pacific_primary_channel", case "US" => "stripe_north_america_primary", else => "stripe_global_fallback_channel")`: `switch(country,
+  case "SG", "MY", "TH" => "asia_pacific_primary_channel",
+  case "US"             => "stripe_north_america_primary",
+  else                  => "stripe_global_fallback_channel"
+)`,
+		`switch(channel, case @adyen => route.primary_channel_v1(amount), case @stripe => route.backup_channel_v1(amount))`: `switch(channel,
+  case @adyen  => route.primary_channel_v1(amount),
+  case @stripe => route.backup_channel_v1(amount)
+)`,
+		`switch(case amount >= 100000 => switch(case vip => "large_vip_review", else => "large_standard_review"), case amount >= 1000 => "medium", else => "small")`: `switch(
+  case amount >= 100000 => switch(
+    case vip => "large_vip_review",
+    else     => "large_standard_review"
+  ),
+  case amount >= 1000   => "medium",
+  else                  => "small"
+)`,
+		`switch(case route.is_healthy_v1(primary_channel_status) && route.is_healthy_v1(backup_channel_status) => "both", case down => "none", case slow => "degraded", else => "one")`: `switch(
+  case route.is_healthy_v1(primary_channel_status)
+    && route.is_healthy_v1(backup_channel_status) => "both",
+  case down => "none",
+  case slow => "degraded",
+  else      => "one"
+)`,
+	})
+}
+
+// A split let, record, update or dictionary lines up what follows its labels
+// — the =, the values — as a switch does its =>; a part with no label, such
+// as a let's body or a loop clause, ends a run.
+func TestFormatLinesUpBindingsAndFields(t *testing.T) {
+	t.Parallel()
+	formatsTo(t, map[string]string{
+		`let(fee = round(amount * 2.9%, @half_even), cap = USD 25.00, floor_fee = USD 0.50, min(max(fee, floor_fee), cap))`: `let(
+  fee       = round(amount * 2.9%, @half_even),
+  cap       = USD 25.00,
+  floor_fee = USD 0.50,
+  min(max(fee, floor_fee), cap)
+)`,
+		`{cheapest: min_by(quotes, .fee).channel, surest: max_by(quotes, .success).channel, by_fee: [q.channel for q in sort_by(quotes, .fee)]}`: `{
+  cheapest: min_by(quotes, .fee).channel,
+  surest:   max_by(quotes, .success).channel,
+  by_fee:   [q.channel for q in sort_by(quotes, .fee)]
+}`,
+		`{"SG": "adyen_sg", "MY": "stripe_my", "TH": "omise_th", "US_EU": "stripe_us", "CA": "stripe_ca"}`: `{
+  "CA":    "stripe_ca",
+  "MY":    "stripe_my",
+  "SG":    "adyen_sg",
+  "TH":    "omise_th",
+  "US_EU": "stripe_us"
+}`,
+		`[{channel: c, fee: route.fee_quote_v1(c, amount)} for c in candidate_channels if route.is_healthy_v1(c)]`: `[
+  {channel: c, fee: route.fee_quote_v1(c, amount)}
+  for c in candidate_channels
+  if route.is_healthy_v1(c)
+]`,
+	})
+}
+
+// formatsTo holds Format to the text each source is laid out as.
+func formatsTo(t *testing.T, cases map[string]string) {
+	t.Helper()
 	for source, want := range cases {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
@@ -151,8 +228,8 @@ func TestFormatKeepsMoneyLiteralsWhole(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
 		`let(fee = amount * 2.9% + USD 0.30, cap = USD 25.00, floor = USD -0.50, switch(case fee > cap => cap, case fee < floor => floor, else => fee))`: `let(
-  fee = amount * 2.9% + USD 0.30,
-  cap = USD 25.00,
+  fee   = amount * 2.9% + USD 0.30,
+  cap   = USD 25.00,
   floor = USD -0.50,
   switch(case fee > cap => cap, case fee < floor => floor, else => fee)
 )`,
