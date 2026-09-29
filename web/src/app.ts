@@ -160,7 +160,14 @@ type Example = {
   args: Record<string, unknown>;
 };
 
+// The examples are many, so the picker shows one category at a time, or what
+// a search finds across all of them, and the description of the one picked.
+const picker = { examples: [] as Example[], category: "", query: "", current: "" };
+
 function pick(example: Example) {
+  picker.category = example.category;
+  picker.current = example.label;
+  showExamples();
   contract.contract = example.contract;
   runner.declared = example.contract.result;
   runner.values = Object.fromEntries(Object.entries(example.args ?? {}).map(([name, value]) => [name, JSON.stringify(value)]));
@@ -169,10 +176,24 @@ function pick(example: Example) {
   replaceAll(editor, example.source);
 }
 
-function showExamples(examples: Example[]) {
-  render(Object.entries(Object.groupBy(examples, (example) => example.category)).map(([category, group]) => html`<div class="example-group"><span class="example-group__label">${category}</span>
-    <div class="example-group__items">${group!.map((example) => html`
-      <button class="example" title=${example.description} @click=${() => pick(example)}>${example.label}</button>`)}</div></div>`),
+function showExamples() {
+  const { examples, query } = picker;
+  const groups = Object.groupBy(examples, (example) => example.category);
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? examples.filter((example) => `${example.label} ${example.category} ${example.description}`.toLowerCase().includes(needle))
+    : groups[picker.category] ?? [];
+  const current = examples.find((example) => example.label === picker.current);
+  const choose = (category: string) => { picker.category = category; picker.query = ""; showExamples(); };
+  const search = (event: Event) => { picker.query = (event.target as HTMLInputElement).value; showExamples(); };
+  render(html`<div class="example-bar">
+      <div class="example-tabs" role="group" aria-label="示例分类">${Object.entries(groups).map(([category, group]) => html`
+        <button type="button" class="example-tab" aria-pressed=${!needle && category === picker.category} @click=${() => choose(category)}>${category}<span>${group!.length}</span></button>`)}</div>
+      <input class="example-search" type="search" placeholder="搜索 ${examples.length} 个示例" aria-label="搜索示例" .value=${query} @input=${search}>
+    </div>
+    <div class="example-list">${shown.length ? shown.map((example) => html`
+      <button type="button" class="example" aria-pressed=${example.label === picker.current} title=${example.description} @click=${() => pick(example)}>${example.label}</button>`) : html`<span class="example-empty">没有匹配的示例</span>`}</div>
+    <p class="example-note">${current ? html`<b>${current.label}</b>${current.description}` : nothing}</p>`,
   $("#examples"));
 }
 
@@ -229,7 +250,7 @@ async function start() {
   await client.initializing;
   showCatalog(await client.request<object, Catalog>("funroute/catalog", {}));
   const manifest = await fetch("funroute-examples.json").then((response) => response.json());
-  showExamples(manifest.examples);
+  picker.examples = manifest.examples;
   pick(manifest.examples[0]);
 }
 void start().catch(failed("语言服务没有启动"));

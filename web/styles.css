@@ -69,12 +69,24 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .command-deck__intro p { max-width: 570px; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.7; }
 .examples-block { display: grid; gap: 8px; }
 .control-label { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
-.examples { display: grid; gap: 7px; }
-.example-group { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 9px; align-items: start; }
-.example-group__label { padding-top: 8px; color: var(--muted); font-size: 10px; font-weight: 750; white-space: nowrap; }
-.example-group__items { display: flex; gap: 7px; flex-wrap: wrap; }
-.example { padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink-3); background: var(--surface-2); font-size: 12px; font-weight: 650; transition: .16s ease; }
-.example:hover { border-color: var(--violet-edge); color: var(--violet-ink); background: var(--violet-soft); }
+/* The examples are one category at a time (or what a search finds) in a
+   box of fixed height, so picking another never moves the page under it. */
+.examples { display: grid; gap: 10px; }
+.example-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.example-tabs { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.example-tab { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid transparent; border-radius: 999px; color: var(--muted); background: none; font-size: 11px; font-weight: 700; transition: .16s ease; }
+.example-tab span { color: var(--muted-2); font: 10px/1 var(--mono); }
+.example-tab:hover { color: var(--ink-2); }
+.example-tab[aria-pressed="true"] { border-color: var(--violet-edge); color: var(--violet-ink); background: var(--violet-soft); }
+.example-tab[aria-pressed="true"] span { color: var(--violet-ink); }
+.example-search { flex: 0 1 190px; min-width: 120px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-2); background: var(--field); font-size: 12px; }
+.example-search:focus { outline: 3px solid var(--ring); border-color: var(--violet-edge); }
+.example-list { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px; height: 108px; padding: 2px; overflow-y: auto; }
+.example { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-3); background: var(--surface-2); font-size: 12px; font-weight: 650; transition: .16s ease; }
+.example:hover, .example[aria-pressed="true"] { border-color: var(--violet-edge); color: var(--violet-ink); background: var(--violet-soft); }
+.example-empty { padding: 6px 2px; color: var(--muted); font-size: 12px; }
+.example-note { min-height: 3.2em; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.example-note b { margin-right: 8px; color: var(--ink-2); }
 .icon-button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink-3); background: var(--surface); font-size: 11px; font-weight: 700; transition: transform .15s ease; }
 .icon-button:hover { transform: translateY(-1px); }
 /* The expression's state sits in its heading, between the title and the tools:
