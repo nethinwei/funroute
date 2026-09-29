@@ -52,8 +52,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .header-meta { display: flex; align-items: center; gap: 8px; }
 .chip { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--surface); font: 11px/1 var(--mono); white-space: nowrap; }
 .chip--live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 3px var(--live-ghost); }
-.theme-toggle { flex: 0 0 28px; width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface); }
-.theme-toggle:hover { border-color: var(--violet-edge); color: var(--ink-2); }
+.theme-toggle, .repo-link { flex: 0 0 28px; width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface); }
+.theme-toggle:hover, .repo-link:hover { border-color: var(--violet-edge); color: var(--ink-2); }
+.repo-link svg { width: 15px; height: 15px; }
 .theme-toggle svg { display: none; width: 15px; height: 15px; }
 :root:not([data-theme]) .theme-toggle__auto,
 :root[data-theme="system"] .theme-toggle__auto,
