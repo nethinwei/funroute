@@ -4,7 +4,7 @@
 import { html, nothing, render } from "lit";
 import type { EditorView } from "@codemirror/view";
 import { formatDocument } from "@codemirror/lsp-client";
-import { startClient } from "./lsp.ts";
+import { loadServer, startClient } from "./lsp.ts";
 import { createEditor, replaceAll } from "./editor.ts";
 import { argsText, offsetAt } from "./projection.ts";
 import type { Argument, Catalog, Diagnostic, MoneySpec, RunResult, TextContract, Tree } from "./protocol.ts";
@@ -23,9 +23,54 @@ const contract = $<ContractPanel>("fr-contract");
 const runner = $<RunPanel>("fr-runner");
 const structure = $<StructureView>("fr-structure");
 
+// The theme follows the system until someone picks one. The page's own
+// state is the truth; localStorage only remembers it, and may refuse to.
+// Following the system, each theme-color keeps the colour the page gives it
+// for its media query, so the browser follows the system too; a theme picked
+// is the colour of both.
+const THEMES: Record<string, string> = { system: "跟随系统", light: "浅色", dark: "深色" };
+function applyTheme(theme: string) {
+  if (theme === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  $("#theme").setAttribute("aria-label", `主题：${THEMES[theme]}，点击切换`);
+  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+    meta.dataset.system ??= meta.content;
+    meta.content = theme === "system" ? meta.dataset.system : theme === "dark" ? "#0d1017" : "#ffffff";
+  }
+}
+$("#theme").addEventListener("click", () => {
+  const order = Object.keys(THEMES);
+  const next = order[(order.indexOf(document.documentElement.dataset.theme ?? "system") + 1) % order.length];
+  try { localStorage.setItem("funroute:theme", next); } catch { /* the switch still works, unremembered */ }
+  applyTheme(next);
+});
+try { applyTheme(localStorage.getItem("funroute:theme") ?? "system"); } catch { applyTheme("system"); }
+
+// The page waits under the loading screen while the language server
+// downloads: the bar fills as the bytes come, however long that takes, and
+// the workspace is shown once the server has answered. Without a known size
+// the bar is indeterminate and only the bytes so far are said.
+const megabytes = (bytes: number) => (bytes / 1048576).toFixed(1);
+function showProgress(loaded: number, total: number) {
+  const bar = $<HTMLProgressElement>("#boot-progress");
+  if (total > 0) {
+    bar.max = total;
+    bar.value = Math.min(loaded, total);
+  }
+  $("#boot-bytes").textContent = total > 0 ? `${megabytes(loaded)} / ${megabytes(total)} MB` : `${megabytes(loaded)} MB`;
+}
+function bootFailed(error: unknown): never {
+  $("#boot").classList.add("boot--failed");
+  $("#boot-text").textContent = `语言服务没有载入：${error instanceof Error ? error.message : error}`;
+  $<HTMLButtonElement>("#boot-retry").hidden = false;
+  throw error;
+}
+$("#boot-retry").addEventListener("click", () => location.reload());
+const worker = await loadServer(showProgress).catch(bootFailed);
+
 const client = startClient((method, params) => {
   if (method === "textDocument/publishDiagnostics" && params.uri === URI) void showDiagnostics(params.diagnostics);
-});
+}, worker);
 const editor: EditorView = createEditor({ client, uri: URI, parent: $("#editor"), onRun: () => void run() });
 
 // ask sends a request about the document, command runs one of the server's
@@ -222,29 +267,6 @@ function moneySection(money?: MoneySpec) {
     <p class="currencies">${money.currencies.map((currency) => html`<code>${currency.code}(${currency.digits})</code> `)}</p>`;
 }
 
-// The theme follows the system until someone picks one. The page's own
-// state is the truth; localStorage only remembers it, and may refuse to.
-// Following the system, each theme-color keeps the colour the page gives it
-// for its media query, so the browser follows the system too; a theme picked
-// is the colour of both.
-const THEMES: Record<string, string> = { system: "跟随系统", light: "浅色", dark: "深色" };
-function applyTheme(theme: string) {
-  if (theme === "system") delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = theme;
-  $("#theme").setAttribute("aria-label", `主题：${THEMES[theme]}，点击切换`);
-  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
-    meta.dataset.system ??= meta.content;
-    meta.content = theme === "system" ? meta.dataset.system : theme === "dark" ? "#0d1017" : "#ffffff";
-  }
-}
-$("#theme").addEventListener("click", () => {
-  const order = Object.keys(THEMES);
-  const next = order[(order.indexOf(document.documentElement.dataset.theme ?? "system") + 1) % order.length];
-  try { localStorage.setItem("funroute:theme", next); } catch { /* the switch still works, unremembered */ }
-  applyTheme(next);
-});
-try { applyTheme(localStorage.getItem("funroute:theme") ?? "system"); } catch { applyTheme("system"); }
-
 async function start() {
   setStatus("正在载入语言服务…", "loading");
   await client.initializing;
@@ -253,4 +275,4 @@ async function start() {
   picker.examples = manifest.examples;
   pick(manifest.examples[0]);
 }
-void start().catch(failed("语言服务没有启动"));
+void start().catch(failed("语言服务没有启动")).finally(() => { $<HTMLElement>("#boot").hidden = true; });

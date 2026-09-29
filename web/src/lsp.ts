@@ -32,9 +32,12 @@ const editorFeatures = [
   serverDiagnostics(),
 ];
 
+// The worker's protocol messages are strings; its own reports on loading
+// are objects, which loadServer hears and the transport passes over.
 function workerTransport(worker: Worker): Transport {
   const handlers = new Set<(message: string) => void>();
-  worker.addEventListener("message", (event: MessageEvent<string>) => {
+  worker.addEventListener("message", (event: MessageEvent<unknown>) => {
+    if (typeof event.data !== "string") return;
     for (const handler of handlers) handler(event.data);
   });
   return {
@@ -47,12 +50,34 @@ function workerTransport(worker: Worker): Transport {
 // The worker next to the workbench's page. A page elsewhere passes its own.
 const defaultWorker = () => new Worker(new URL("../funroute-lsp-worker.js", import.meta.url));
 
+type WorkerReport = { loading?: { loaded: number; total: number }; ready?: true; failed?: string };
+
+// loadServer starts a server and resolves with its worker once the module
+// is running. progress hears the bytes as they arrive; total is 0 when the
+// size is unknown. However slow the network, it waits: only a failed
+// download or a module that does not start rejects.
+export function loadServer(progress: (loaded: number, total: number) => void, worker: Worker = defaultWorker()): Promise<Worker> {
+  return new Promise((resolve, reject) => {
+    const hear = (event: MessageEvent<unknown>) => {
+      if (typeof event.data !== "object" || event.data === null) return;
+      const report = event.data as WorkerReport;
+      if (report.loading) progress(report.loading.loaded, report.loading.total);
+      if (report.ready) resolve(worker);
+      if (report.failed !== undefined) reject(new Error(report.failed));
+      if (report.ready || report.failed !== undefined) worker.removeEventListener("message", hear);
+    };
+    worker.addEventListener("message", hear);
+    worker.addEventListener("error", (event) => reject(new Error(event.message || "语言服务的 worker 没有启动")));
+  });
+}
+
 // The client asks for no position encoding, so the server counts UTF-16
 // units — what JavaScript strings count, and what projection.ts offsetAt
 // assumes.
 //
-// startClient connects a client to a fresh server. listen hears every
-// notification the server sends, before the editor's own handlers do.
+// startClient connects a client to a server, fresh or one loadServer has
+// started. listen hears every notification the server sends, before the
+// editor's own handlers do.
 export function startClient(listen: (method: string, params: any) => void = () => {}, worker: Worker = defaultWorker()): LSPClient {
   const tap = new Proxy({}, {
     get: (_target, method: string) => (_client: LSPClient, params: unknown) => {

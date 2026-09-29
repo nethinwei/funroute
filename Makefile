@@ -78,10 +78,13 @@ check-web:
 
 # The language server for the browser, and the Go runtime glue that loads it.
 # wasm_exec.js has to come from the Go that built the module, so it is copied
-# from GOROOT rather than kept in the repository.
+# from GOROOT rather than kept in the repository. The module's size goes
+# beside it: Pages sends it gzipped with no length, and the loading bar needs
+# a total.
 wasm:
 	@mkdir -p web/dist
 	GOOS=js GOARCH=wasm $(GO) build -trimpath -ldflags="-s -w" -o web/dist/funroute.wasm ./web/wasm
+	wc -c < web/dist/funroute.wasm | tr -d ' ' > web/dist/funroute.wasm.size
 	cp "$$($(GO) env GOROOT)/lib/wasm/wasm_exec.js" web/dist/wasm_exec.js
 
 # The browser entry builds only for js/wasm, so the ordinary vet skips it.
@@ -148,7 +151,7 @@ SITE_FILES = index.html favicon.svg tokens.css styles.css funroute-examples.json
 site: web wasm
 	rm -rf site && mkdir -p site/dist
 	cp $(addprefix web/,$(SITE_FILES)) site/
-	cp web/dist/*.js web/dist/funroute.wasm site/dist/
+	cp web/dist/*.js web/dist/funroute.wasm web/dist/funroute.wasm.size site/dist/
 
 # ci-linux runs make ci as GitHub Actions does — Linux on amd64, Go 1.26,
 # Node 22 (tools/ci/Dockerfile) — in Docker, before a push. The checkout is

@@ -16,6 +16,18 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- Shown until the language server has loaded; app.ts fills the bar and
+       takes it away, or says what went wrong and offers to try again. -->
+  <div id="boot" class="boot" role="status" aria-live="polite">
+    <div class="boot__card">
+      <span class="brand__mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="boot__name">FunRoute Policy Studio</span>
+      <p id="boot-text" class="boot__text">正在下载语言服务，它完整地运行在你的浏览器里</p>
+      <progress id="boot-progress" class="boot__bar" aria-labelledby="boot-text"></progress>
+      <span id="boot-bytes" class="boot__bytes">&nbsp;</span>
+      <button id="boot-retry" class="icon-button" type="button" hidden>重试</button>
+    </div>
+  </div>
   <header class="app-header">
     <div class="app-header__inner">
       <a class="brand" href="./" aria-label="FunRoute Policy Studio 首页">
