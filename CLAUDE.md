@@ -145,6 +145,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 make ci        # 提交前必须全过：格式、import、前端检查与构建、vet、staticcheck、modernize、golangci-lint（均含 js/wasm）、deadcode、lint、build、wasm、Go 与 JS 测试
 make ci-linux  # 推送前：在 Docker 里按 GitHub Actions 的机器（linux/amd64）跑 make ci，看出架构带来的差别（如 arm64 的 FMA 融合）
 make test | make lint | make vet | make fmt
+make test-example  # 只跑读 web/funroute-examples.json 的测试：一致性流水线、LSP 运行与覆盖（每个重载、运算符、节点）、格式化往返
 make wasm      # web/dist/funroute.wasm
 make web       # web/dist/*.js（先在 web/ 里 npm install；产物不提交）
 make run       # 构建并在 http://127.0.0.1:8080 服务工作台

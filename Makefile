@@ -1,7 +1,7 @@
 GO ?= go
 NODE ?= node
 
-.PHONY: ci ci-linux build test test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden perf
+.PHONY: ci ci-linux build test test-example test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden perf
 
 # ci must pass before any commit.
 ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize golangci deadcode lint build wasm test test-js
@@ -93,6 +93,13 @@ build:
 
 test:
 	$(GO) test ./...
+
+# test-example runs every test that reads web/funroute-examples.json: each
+# example through the public pipeline and through a language server session,
+# the examples together covering every overload, operator and node, and their
+# sources as the formatter's round-trip seeds.
+test-example:
+	$(GO) test ./tests/conformance ./lsp ./internal/syntax -run 'TestEveryExampleHoldsThroughThePipeline|TestExamplesRunAndCoverTheLanguage|FuzzFormatRoundTrip'
 
 test-js:
 	$(NODE) --test web/src/*.test.ts web/funroute-lsp.test.mjs

@@ -92,8 +92,8 @@ func TestRenderAndCatalog(t *testing.T) {
 // The workbench's examples are programs the language server runs, so this is
 // where they are held to account: each one runs through a session to the
 // value it promises, and together they use everything the language has —
-// every function and form of the example registry, every operator and every
-// kind of node.
+// every function and form of the example registry, every overload the calls
+// resolve to, every operator and every kind of node.
 
 type example struct {
 	Label           string                `json:"label"`
@@ -133,8 +133,8 @@ func TestExamplesRunAndCoverTheLanguage(t *testing.T) {
 	}
 	missing := everything(registry)
 	// The examples run in parallel, each in its own session; the kinds of node
-	// they use are marked from all of them at once, so under a lock. What is
-	// left is judged once every example has run.
+	// and the overloads they use are marked from all of them at once, so under
+	// a lock. What is left is judged once every example has run.
 	var nodes sync.Mutex
 	t.Cleanup(func() {
 		for kind, left := range missing {
@@ -152,19 +152,26 @@ func TestExamplesRunAndCoverTheLanguage(t *testing.T) {
 		}
 		t.Run(item.Label, func(t *testing.T) {
 			t.Parallel()
-			coverNodes(t, item, &nodes, missing["nodes"])
+			coverNodes(t, registry, item, &nodes, missing)
 			runExample(t, newSession(t, registry, `{}`), item)
 		})
 	}
 }
 
 // everything is what the examples must use between them: every function and
-// form of registry, every operator and every kind of node.
+// form of registry, every overload of its functions, every operator and every
+// kind of node. A variadic function stands for all its arities, so it is
+// marked by name: any call of it covers it.
 func everything(registry *machine.Registry) map[string]map[string]bool {
-	missing := map[string]map[string]bool{"functions and forms": {}, "operators": {}, "nodes": {}}
+	missing := map[string]map[string]bool{"functions and forms": {}, "overloads": {}, "operators": {}, "nodes": {}}
 	catalog := registry.Catalog()
 	for _, function := range catalog.Functions() {
 		missing["functions and forms"][function.Name()] = true
+		if function.Variadic() {
+			missing["overloads"][function.Name()] = true
+		} else {
+			missing["overloads"][function.Signature()] = true
+		}
 	}
 	for _, form := range catalog.SpecialForms() {
 		missing["functions and forms"][form.Name()] = true
@@ -178,12 +185,33 @@ func everything(registry *machine.Registry) map[string]map[string]bool {
 	return missing
 }
 
-// coverNodes is coverTree for an example running alongside the others.
-func coverNodes(t *testing.T, item example, lock *sync.Mutex, missing map[string]bool) {
+// coverNodes is coverTree and coverOverloads for an example running alongside
+// the others.
+func coverNodes(t *testing.T, registry *machine.Registry, item example, lock *sync.Mutex, missing map[string]map[string]bool) {
 	t.Helper()
 	lock.Lock()
 	defer lock.Unlock()
-	coverTree(t, item, missing)
+	coverTree(t, item, missing["nodes"])
+	coverOverloads(t, registry, item, missing["overloads"])
+}
+
+// coverOverloads marks the overloads the example's calls resolve to, by the
+// types inference settled on — not by what the example says it covers.
+func coverOverloads(t *testing.T, registry *machine.Registry, item example, missing map[string]bool) {
+	t.Helper()
+	options, err := item.Contract.Options()
+	if err != nil {
+		t.Fatalf("example %q: the contract: %v", item.Label, err)
+	}
+	analysis, err := compile.Analyze(item.Source, registry, options)
+	if err != nil {
+		t.Fatalf("example %q: %v", item.Label, err)
+	}
+	for _, fact := range analysis.Nodes {
+		name, _, _ := strings.Cut(fact.Signature, "(")
+		delete(missing, fact.Signature)
+		delete(missing, name)
+	}
 }
 
 func runExample(t *testing.T, s *session, item example) {

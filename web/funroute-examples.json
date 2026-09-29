@@ -2412,6 +2412,85 @@
       "operators": []
     },
     {
+      "label": "整数与小数混算",
+      "category": "金融计算",
+      "description": "int 与 float 可以直接混算，结果是 float：次数乘成功率、成本除以次数都不用先写 float()；比较也一样，int 与 float 直接比",
+      "source": "let(\n  expected = attempts * approval,\n  per_try = cost / attempts,\n  {\n    expected: expected,\n    missed: attempts - expected,\n    per_try: per_try,\n    total: cost + retries,\n    left: budget - cost,\n    ratio: budget / cost,\n    padded: approval + 1,\n    lifted: retries + approval,\n    shortfall: approval - 1,\n    boosted: cost * 2,\n    over: cost > budget,\n    under: budget < cost,\n    enough: expected >= retries,\n    close: retries <= expected,\n    cheap: per_try < 1,\n    worth: 1 > per_try,\n    bounded: approval <= 1,\n    floor: 0 <= approval,\n    reached: attempts >= approval,\n    exceeded: retries > approval,\n  }\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "attempts",
+            "type": "int",
+            "doc": "尝试次数"
+          },
+          {
+            "name": "retries",
+            "type": "int",
+            "doc": "重试次数"
+          },
+          {
+            "name": "budget",
+            "type": "int",
+            "doc": "预算，单位：元"
+          },
+          {
+            "name": "approval",
+            "type": "float",
+            "doc": "成功率"
+          },
+          {
+            "name": "cost",
+            "type": "float",
+            "doc": "总成本，单位：元"
+          }
+        ],
+        "result": {
+          "type": "record{expected: float, missed: float, per_try: float, total: float, left: float, ratio: float, padded: float, lifted: float, shortfall: float, boosted: float, over: bool, under: bool, enough: bool, close: bool, cheap: bool, worth: bool, bounded: bool, floor: bool, reached: bool, exceeded: bool}",
+          "doc": "期望成功数、单次成本与各项判断"
+        }
+      },
+      "args": {
+        "attempts": 8,
+        "retries": 3,
+        "budget": 12,
+        "approval": 0.75,
+        "cost": 10.0
+      },
+      "expected": {
+        "expected": 6,
+        "missed": 2,
+        "per_try": 1.25,
+        "total": 13,
+        "left": 2,
+        "ratio": 1.2,
+        "padded": 1.75,
+        "lifted": 3.75,
+        "shortfall": -0.25,
+        "boosted": 20,
+        "over": false,
+        "under": false,
+        "enough": true,
+        "close": true,
+        "cheap": false,
+        "worth": false,
+        "bounded": true,
+        "floor": true,
+        "reached": true,
+        "exceeded": true
+      },
+      "covers": [],
+      "operators": [
+        "infix:*",
+        "infix:/",
+        "infix:-",
+        "infix:+",
+        "infix:>",
+        "infix:<",
+        "infix:>=",
+        "infix:<="
+      ]
+    },
+    {
       "label": "资金快照",
       "category": "数据结构",
       "description": "reduce 合计各项费用，同型数组和字典一次返回金额分解",
@@ -2828,6 +2907,201 @@
       ]
     },
     {
+      "label": "注释与数字写法",
+      "category": "基础语法",
+      "description": "// 到行尾是注释（目前格式化只保留写在表达式前面的注释）；数字可以用下划线分组（1_000_000），float 可以带指数（1.5e-3），bps 是万分之一的比例；记录、数组与调用的最后一项后可以留逗号",
+      "source": "// 大额门槛一万元（单位：分），每分钱的风险权重 1.5e-3\nlet(\n  threshold = 1_000_000,\n  weight = 1.5e-3,\n  {\n    large: amount >= threshold,\n    score: float(amount) * weight,\n    fee: round(price * 35bps, @half_even),\n  }\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "int",
+            "doc": "交易金额，单位：分"
+          },
+          {
+            "name": "price",
+            "type": "money",
+            "doc": "订单金额"
+          }
+        ],
+        "result": {
+          "type": "record{large: bool, score: float, fee: money}",
+          "doc": "是否大额、风险分与 35bps 的费用"
+        }
+      },
+      "args": {
+        "amount": 1200000,
+        "price": "USD 250.00"
+      },
+      "expected": {
+        "large": true,
+        "score": 1800,
+        "fee": "USD 0.88"
+      },
+      "covers": [
+        "float",
+        "round"
+      ],
+      "operators": [
+        "infix:>=",
+        "infix:*"
+      ]
+    },
+    {
+      "label": "字符串转义与子串",
+      "category": "基础语法",
+      "description": "字符串的转义同 Go（\\t、\\\"、\\n）；\"x\" in s 判断子串，index_of 取子串第一次出现的位置，s[i] 取第 i 个字符，len 是字符数",
+      "source": "let(\n  note = trim(memo),\n  {\n    refund: \"refund\" in note,\n    ticket_at: switch(case \"#\" in note => index_of(note, \"#\"), else => -1),\n    first: note[0],\n    size: len(note),\n    line: channel + \"\\t\\\"\" + note + \"\\\"\",\n  }\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "memo",
+            "type": "string",
+            "doc": "渠道回传的备注"
+          },
+          {
+            "name": "channel",
+            "type": "string",
+            "doc": "渠道名"
+          }
+        ],
+        "result": {
+          "type": "record{refund: bool, ticket_at: int, first: string, size: int, line: string}",
+          "doc": "备注里的退款标记、工单号位置与导出行"
+        }
+      },
+      "args": {
+        "memo": "  partial refund #A1029 ",
+        "channel": "adyen"
+      },
+      "expected": {
+        "refund": true,
+        "ticket_at": 15,
+        "first": "p",
+        "size": 21,
+        "line": "adyen\t\"partial refund #A1029\""
+      },
+      "covers": [
+        "trim",
+        "member",
+        "index_of",
+        "at",
+        "len"
+      ],
+      "operators": [
+        "infix:in",
+        "infix:+",
+        "prefix:-"
+      ]
+    },
+    {
+      "label": "枚举全名与转文字",
+      "category": "基础语法",
+      "description": "枚举成员可以写全名 @channel.adyen，与 @adyen 等价，同名成员分属几个枚举时用它消歧；string 把枚举与布尔值转成文字，写日志或拼键时用",
+      "source": "{\n  key: \"channel=\" + string(channel) + \";vip=\" + string(vip),\n  primary: channel == @channel.adyen,\n  role: switch(channel,\n    case @channel.adyen  => \"primary\",\n    case @channel.stripe => \"backup\",\n  ),\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "channel",
+            "type": "enum<channel>{adyen, stripe}",
+            "doc": "当前渠道"
+          },
+          {
+            "name": "vip",
+            "type": "bool",
+            "doc": "是否 VIP 商户"
+          }
+        ],
+        "result": {
+          "type": "record{key: string, primary: bool, role: string}",
+          "doc": "日志键、是否主渠道与渠道角色"
+        }
+      },
+      "args": {
+        "channel": "adyen",
+        "vip": true
+      },
+      "expected": {
+        "key": "channel=adyen;vip=true",
+        "primary": true,
+        "role": "primary"
+      },
+      "covers": [
+        "string"
+      ],
+      "operators": [
+        "infix:+",
+        "infix:=="
+      ]
+    },
+    {
+      "label": "恒等转换",
+      "category": "基础语法",
+      "description": "类型转换对已经是目标类型的值是恒等的：int(int)、float(float)、string(string)、bool(bool) 原样返回，宿主按模板生成规则时可以无条件套一层；int(float) 只接受没有小数部分的值，57.9 这样的会报错而不是悄悄截断，float(文本) 精确读数",
+      "source": "{\n  cents: int(amount),\n  truncated: int(estimate),\n  rate: float(rate_text),\n  score: float(score),\n  memo: string(memo),\n  captured: bool(captured),\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "int",
+            "doc": "金额，单位：分"
+          },
+          {
+            "name": "estimate",
+            "type": "float",
+            "doc": "模型估算的费用，单位：分"
+          },
+          {
+            "name": "rate_text",
+            "type": "string",
+            "doc": "文本里的费率"
+          },
+          {
+            "name": "score",
+            "type": "float",
+            "doc": "风险分"
+          },
+          {
+            "name": "memo",
+            "type": "string",
+            "doc": "备注"
+          },
+          {
+            "name": "captured",
+            "type": "bool",
+            "doc": "是否已请款"
+          }
+        ],
+        "result": {
+          "type": "record{cents: int, truncated: int, rate: float, score: float, memo: string, captured: bool}",
+          "doc": "归一后的对账字段"
+        }
+      },
+      "args": {
+        "amount": 1999,
+        "estimate": 58.0,
+        "rate_text": "0.029",
+        "score": 0.42,
+        "memo": "ok",
+        "captured": true
+      },
+      "expected": {
+        "cents": 1999,
+        "truncated": 58,
+        "rate": 0.029,
+        "score": 0.42,
+        "memo": "ok",
+        "captured": true
+      },
+      "covers": [
+        "int",
+        "float",
+        "string",
+        "bool"
+      ],
+      "operators": []
+    },
+    {
       "label": "累计到超限",
       "category": "金额计算",
       "description": "按累计额切一刀：take_while 取到第一个不满足为止，drop_while 把剩下的接着拿走，两者用同一个逐项判断",
@@ -2926,6 +3200,144 @@
         "merge"
       ],
       "operators": []
+    },
+    {
+      "label": "商户号与渠道码排序",
+      "category": "数据结构",
+      "description": "字符串按字节序比较与排序：sort、sort_desc、min、max、arg_min、arg_max、rank 都适用于 string，两个字符串之间也能直接比大小",
+      "source": "{\n  ordered: sort(merchants),\n  reversed: sort_desc(merchants),\n  first: min(merchants),\n  last: max(merchants),\n  first_at: arg_min(merchants),\n  last_at: arg_max(merchants),\n  ranks: rank(merchants),\n  earlier: min(primary, backup),\n  later: max(primary, backup),\n  before: primary < backup,\n  not_after: primary <= backup,\n  after: primary > backup,\n  not_before: primary >= backup,\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "merchants",
+            "type": "array<string>",
+            "doc": "商户号"
+          },
+          {
+            "name": "primary",
+            "type": "string",
+            "doc": "主渠道码"
+          },
+          {
+            "name": "backup",
+            "type": "string",
+            "doc": "备渠道码"
+          }
+        ],
+        "result": {
+          "type": "record{ordered: array<string>, reversed: array<string>, first: string, last: string, first_at: int, last_at: int, ranks: array<int>, earlier: string, later: string, before: bool, not_after: bool, after: bool, not_before: bool}",
+          "doc": "排序与比较的结果"
+        }
+      },
+      "args": {
+        "merchants": [
+          "M300",
+          "M120",
+          "M999",
+          "M120"
+        ],
+        "primary": "stripe",
+        "backup": "adyen"
+      },
+      "expected": {
+        "ordered": [
+          "M120",
+          "M120",
+          "M300",
+          "M999"
+        ],
+        "reversed": [
+          "M999",
+          "M300",
+          "M120",
+          "M120"
+        ],
+        "first": "M120",
+        "last": "M999",
+        "first_at": 1,
+        "last_at": 2,
+        "ranks": [
+          3,
+          1,
+          4,
+          1
+        ],
+        "earlier": "adyen",
+        "later": "stripe",
+        "before": false,
+        "not_after": false,
+        "after": true,
+        "not_before": true
+      },
+      "covers": [
+        "sort",
+        "sort_desc",
+        "min",
+        "max",
+        "arg_min",
+        "arg_max",
+        "rank"
+      ],
+      "operators": [
+        "infix:<",
+        "infix:<=",
+        "infix:>",
+        "infix:>="
+      ]
+    },
+    {
+      "label": "按步长取批次",
+      "category": "数据结构",
+      "description": "range 的第三个参数是步长：range(0, len(ids), 3) 是每批的起点，配 slice 切出批次；参数的规模由输入界定，所以程序必然终止",
+      "source": "[slice(ids, start, min(start + 3, len(ids))) for start in range(0, len(ids), 3)]",
+      "contract": {
+        "args": [
+          {
+            "name": "ids",
+            "type": "array<string>",
+            "doc": "待提交的订单号"
+          }
+        ],
+        "result": {
+          "type": "array<array<string>>",
+          "doc": "每批至多 3 个订单号"
+        }
+      },
+      "args": {
+        "ids": [
+          "A1",
+          "A2",
+          "A3",
+          "A4",
+          "A5",
+          "A6",
+          "A7"
+        ]
+      },
+      "expected": [
+        [
+          "A1",
+          "A2",
+          "A3"
+        ],
+        [
+          "A4",
+          "A5",
+          "A6"
+        ],
+        [
+          "A7"
+        ]
+      ],
+      "covers": [
+        "range",
+        "len",
+        "slice",
+        "min"
+      ],
+      "operators": [
+        "infix:+"
+      ]
     },
     {
       "label": "按币种计费并封顶",
@@ -3102,6 +3514,124 @@
       ],
       "operators": [
         "infix:*",
+        "infix:+"
+      ]
+    },
+    {
+      "label": "商户日结金额分析",
+      "category": "金额计算",
+      "description": "金额数组能排序、取最大、找下标、累计与差分；平均与中位数会落到最小单位之间，所以要写舍入方式：avg(xs, @half_even)",
+      "source": "{\n  largest: max(amounts),\n  largest_at: arg_max(amounts),\n  ordered: sort(amounts),\n  descending: sort_desc(amounts),\n  running: cumsum(amounts),\n  changes: deltas(amounts),\n  mean: avg(amounts, @half_even),\n  middle: median(amounts, @half_up),\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "amounts",
+            "type": "array<money>",
+            "doc": "各笔结算金额，同一币种"
+          }
+        ],
+        "result": {
+          "type": "record{largest: money, largest_at: int, ordered: array<money>, descending: array<money>, running: array<money>, changes: array<money>, mean: money, middle: money}",
+          "doc": "日结金额的分布"
+        }
+      },
+      "args": {
+        "amounts": [
+          "USD 12.00",
+          "USD 7.50",
+          "USD 30.01",
+          "USD 7.50"
+        ]
+      },
+      "expected": {
+        "largest": "USD 30.01",
+        "largest_at": 2,
+        "ordered": [
+          "USD 7.50",
+          "USD 7.50",
+          "USD 12.00",
+          "USD 30.01"
+        ],
+        "descending": [
+          "USD 30.01",
+          "USD 12.00",
+          "USD 7.50",
+          "USD 7.50"
+        ],
+        "running": [
+          "USD 12.00",
+          "USD 19.50",
+          "USD 49.51",
+          "USD 57.01"
+        ],
+        "changes": [
+          "USD -4.50",
+          "USD 22.51",
+          "USD -22.51"
+        ],
+        "mean": "USD 14.25",
+        "middle": "USD 9.75"
+      },
+      "covers": [
+        "max",
+        "arg_max",
+        "sort",
+        "sort_desc",
+        "cumsum",
+        "deltas",
+        "avg",
+        "median"
+      ],
+      "operators": []
+    },
+    {
+      "label": "退款冲正与差额",
+      "category": "金额计算",
+      "description": "USD -1.70 是负金额字面量，负号紧贴数字；-fee 是对金额取负；abs 取绝对值；金额之间直接比大小，币种不同是错误",
+      "source": "let(\n  reversal = -fee,\n  gap = settled - expected,\n  {\n    reversal: reversal,\n    gap: abs(gap),\n    short: settled < expected,\n    tolerable: abs(gap) <= USD 0.05,\n    adjusted: gap + USD -0.02,\n  }\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "fee",
+            "type": "money",
+            "doc": "原交易手续费"
+          },
+          {
+            "name": "settled",
+            "type": "money",
+            "doc": "实际到账"
+          },
+          {
+            "name": "expected",
+            "type": "money",
+            "doc": "应到账"
+          }
+        ],
+        "result": {
+          "type": "record{reversal: money, gap: money, short: bool, tolerable: bool, adjusted: money}",
+          "doc": "冲正金额、差额与是否在容差内"
+        }
+      },
+      "args": {
+        "fee": "USD 1.70",
+        "settled": "USD 98.27",
+        "expected": "USD 98.30"
+      },
+      "expected": {
+        "reversal": "USD -1.70",
+        "gap": "USD 0.03",
+        "short": true,
+        "tolerable": true,
+        "adjusted": "USD -0.05"
+      },
+      "covers": [
+        "abs"
+      ],
+      "operators": [
+        "prefix:-",
+        "infix:-",
+        "infix:<",
+        "infix:<=",
         "infix:+"
       ]
     },
@@ -3658,6 +4188,326 @@
       ]
     },
     {
+      "label": "按文字键挑候选",
+      "category": "支付路由",
+      "description": "sort_by、sort_by_desc、min_by、max_by、top_k、bottom_k 的键可以是 int、float、string 或金额，这里按渠道码的字典序挑候选",
+      "source": "{\n  by_code: sort_by(channels, codes),\n  by_code_desc: sort_by_desc(channels, codes),\n  first: min_by(channels, codes),\n  last: max_by(channels, codes),\n  top2: top_k(channels, codes, 2),\n  bottom2: bottom_k(channels, codes, 2),\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "channels",
+            "type": "array<string>",
+            "doc": "渠道名"
+          },
+          {
+            "name": "codes",
+            "type": "array<string>",
+            "doc": "各渠道的路由码，与 channels 一一对应"
+          }
+        ],
+        "result": {
+          "type": "record{by_code: array<string>, by_code_desc: array<string>, first: string, last: string, top2: array<string>, bottom2: array<string>}",
+          "doc": "按路由码排好、挑出的渠道"
+        }
+      },
+      "args": {
+        "channels": [
+          "adyen",
+          "stripe",
+          "local",
+          "paypal"
+        ],
+        "codes": [
+          "B20",
+          "A10",
+          "C30",
+          "A05"
+        ]
+      },
+      "expected": {
+        "by_code": [
+          "paypal",
+          "stripe",
+          "adyen",
+          "local"
+        ],
+        "by_code_desc": [
+          "local",
+          "adyen",
+          "stripe",
+          "paypal"
+        ],
+        "first": "paypal",
+        "last": "local",
+        "top2": [
+          "local",
+          "adyen"
+        ],
+        "bottom2": [
+          "paypal",
+          "stripe"
+        ]
+      },
+      "covers": [
+        "sort_by",
+        "sort_by_desc",
+        "min_by",
+        "max_by",
+        "top_k",
+        "bottom_k"
+      ],
+      "operators": []
+    },
+    {
+      "label": "按成功率挑候选",
+      "category": "支付路由",
+      "description": "top_k 取成功率最高的 k 个，bottom_k 取最低的 k 个，min_by 是成功率最低的一个；k 大于长度就取完",
+      "source": "{\n  best2: top_k(channels, approvals, 2),\n  worst2: bottom_k(channels, approvals, 2),\n  weakest: min_by(channels, approvals),\n  ascending: sort_by(channels, approvals),\n  ranked: sort_by_desc(channels, approvals),\n  all: top_k(channels, approvals, 10),\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "channels",
+            "type": "array<string>",
+            "doc": "渠道名"
+          },
+          {
+            "name": "approvals",
+            "type": "array<float>",
+            "doc": "各渠道成功率"
+          }
+        ],
+        "result": {
+          "type": "record{best2: array<string>, worst2: array<string>, weakest: string, ascending: array<string>, ranked: array<string>, all: array<string>}",
+          "doc": "按成功率挑出的渠道"
+        }
+      },
+      "args": {
+        "channels": [
+          "adyen",
+          "stripe",
+          "local"
+        ],
+        "approvals": [
+          0.97,
+          0.95,
+          0.99
+        ]
+      },
+      "expected": {
+        "best2": [
+          "local",
+          "adyen"
+        ],
+        "worst2": [
+          "stripe",
+          "adyen"
+        ],
+        "weakest": "stripe",
+        "ascending": [
+          "stripe",
+          "adyen",
+          "local"
+        ],
+        "ranked": [
+          "local",
+          "adyen",
+          "stripe"
+        ],
+        "all": [
+          "local",
+          "adyen",
+          "stripe"
+        ]
+      },
+      "covers": [
+        "top_k",
+        "bottom_k",
+        "min_by",
+        "sort_by",
+        "sort_by_desc"
+      ],
+      "operators": []
+    },
+    {
+      "label": "按笔数挑候选",
+      "category": "支付路由",
+      "description": "键是整数时同样可以挑：sort_by_desc 按笔数从多到少，max_by 是笔数最多的，top_k 取前 k；min 与 max 也能比两个整数，stddev 看笔数是否均衡",
+      "source": "{\n  busiest_first: sort_by_desc(channels, counts),\n  busiest: max_by(channels, counts),\n  top2: top_k(channels, counts, 2),\n  least: min(counts),\n  spread: stddev(counts),\n  cap: min(max(counts[0], floor), ceiling),\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "channels",
+            "type": "array<string>",
+            "doc": "渠道名"
+          },
+          {
+            "name": "counts",
+            "type": "array<int>",
+            "doc": "各渠道今日笔数"
+          },
+          {
+            "name": "floor",
+            "type": "int",
+            "doc": "下限"
+          },
+          {
+            "name": "ceiling",
+            "type": "int",
+            "doc": "上限"
+          }
+        ],
+        "result": {
+          "type": "record{busiest_first: array<string>, busiest: string, top2: array<string>, least: int, spread: float, cap: int}",
+          "doc": "按笔数挑出的渠道与笔数统计"
+        }
+      },
+      "args": {
+        "channels": [
+          "adyen",
+          "stripe",
+          "local"
+        ],
+        "counts": [
+          40,
+          70,
+          10
+        ],
+        "floor": 50,
+        "ceiling": 60
+      },
+      "expected": {
+        "busiest_first": [
+          "stripe",
+          "adyen",
+          "local"
+        ],
+        "busiest": "stripe",
+        "top2": [
+          "stripe",
+          "adyen"
+        ],
+        "least": 10,
+        "spread": 24.49489742783178,
+        "cap": 50
+      },
+      "covers": [
+        "sort_by_desc",
+        "max_by",
+        "top_k",
+        "min",
+        "stddev",
+        "max",
+        "at"
+      ],
+      "operators": []
+    },
+    {
+      "label": "按报价金额挑渠道",
+      "category": "支付路由",
+      "description": "键是金额时，sort_by、sort_by_desc、min_by、max_by、top_k、bottom_k 按金额大小挑，币种必须一致",
+      "source": "{\n  cheapest: min_by(channels, fees),\n  priciest: max_by(channels, fees),\n  by_fee: sort_by(channels, fees),\n  by_fee_desc: sort_by_desc(channels, fees),\n  cheap2: bottom_k(channels, fees, 2),\n  pricey2: top_k(channels, fees, 2),\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "channels",
+            "type": "array<string>",
+            "doc": "渠道名"
+          },
+          {
+            "name": "fees",
+            "type": "array<money>",
+            "doc": "各渠道报价"
+          }
+        ],
+        "result": {
+          "type": "record{cheapest: string, priciest: string, by_fee: array<string>, by_fee_desc: array<string>, cheap2: array<string>, pricey2: array<string>}",
+          "doc": "按报价挑出的渠道"
+        }
+      },
+      "args": {
+        "channels": [
+          "adyen",
+          "stripe",
+          "local"
+        ],
+        "fees": [
+          "USD 0.32",
+          "USD 0.28",
+          "USD 0.41"
+        ]
+      },
+      "expected": {
+        "cheapest": "stripe",
+        "priciest": "local",
+        "by_fee": [
+          "stripe",
+          "adyen",
+          "local"
+        ],
+        "by_fee_desc": [
+          "local",
+          "adyen",
+          "stripe"
+        ],
+        "cheap2": [
+          "stripe",
+          "adyen"
+        ],
+        "pricey2": [
+          "local",
+          "adyen"
+        ]
+      },
+      "covers": [
+        "min_by",
+        "max_by",
+        "sort_by",
+        "sort_by_desc",
+        "bottom_k",
+        "top_k"
+      ],
+      "operators": []
+    },
+    {
+      "label": "按国家查配置",
+      "category": "支付路由",
+      "description": "\"SG\" in routes 判断字典里有没有这个键，有才去取，免得取不存在的键报错；switch 的 case 可以列几个值",
+      "source": "switch(\n  case country in routes => routes[country],\n  case country in [\"US\", \"CA\"] => \"stripe_na\",\n  else => \"stripe_global\"\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "country",
+            "type": "string",
+            "doc": "国家代码"
+          },
+          {
+            "name": "routes",
+            "type": "dict<string>",
+            "doc": "按国家配置的渠道"
+          }
+        ],
+        "result": {
+          "type": "string",
+          "doc": "选中的渠道"
+        }
+      },
+      "args": {
+        "country": "SG",
+        "routes": {
+          "SG": "adyen_sg",
+          "MY": "stripe_my"
+        }
+      },
+      "expected": "adyen_sg",
+      "covers": [
+        "member",
+        "at"
+      ],
+      "operators": [
+        "infix:in"
+      ]
+    },
+    {
       "label": "平台分账",
       "category": "结算分账",
       "description": "平台抽佣 8%，支付通道收 2.9% 加固定费，剩下的给卖家；三方都是同一币种的金额",
@@ -3780,6 +4630,235 @@
         "infix:+",
         "infix:-",
         "infix:->"
+      ]
+    },
+    {
+      "label": "按天折算月费",
+      "category": "结算分账",
+      "description": "prorate(m, part, whole) 是 m × part / whole，中间精确、只舍入一次：可以末尾带舍入方式一步写完，也可以不带、交给外面的 round；分子分母也可以是同币种的金额",
+      "source": "{\n  used: prorate(monthly, days_used, 30, @down),\n  exact: round(prorate(monthly, days_used, 30), @half_even),\n  refund_fee: prorate(fee, refund, amount, @half_even),\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "monthly",
+            "type": "money",
+            "doc": "月费"
+          },
+          {
+            "name": "days_used",
+            "type": "int",
+            "doc": "已用天数"
+          },
+          {
+            "name": "fee",
+            "type": "money",
+            "doc": "原交易手续费"
+          },
+          {
+            "name": "refund",
+            "type": "money",
+            "doc": "退款金额"
+          },
+          {
+            "name": "amount",
+            "type": "money",
+            "doc": "原交易金额"
+          }
+        ],
+        "result": {
+          "type": "record{used: money, exact: money, refund_fee: money}",
+          "doc": "按天折算的月费与按退款比例退还的手续费"
+        }
+      },
+      "args": {
+        "monthly": "USD 99.00",
+        "days_used": 17,
+        "fee": "USD 3.20",
+        "refund": "USD 40.00",
+        "amount": "USD 100.00"
+      },
+      "expected": {
+        "used": "USD 56.10",
+        "exact": "USD 56.10",
+        "refund_fee": "USD 1.28"
+      },
+      "covers": [
+        "prorate",
+        "round"
+      ],
+      "operators": []
+    },
+    {
+      "label": "按份数分摊",
+      "category": "结算分账",
+      "description": "allocate(total, n, 策略) 平分成 n 份，余数按策略发：@all_first 全给第一份，@in_order 从前往后每份一分，@largest_remainder 是缺省",
+      "source": "{\n  first_takes: allocate(total, 3, @all_first),\n  in_order: allocate(total, 3, @in_order),\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "total",
+            "type": "money",
+            "doc": "要分摊的总额"
+          }
+        ],
+        "result": {
+          "type": "record{first_takes: array<money>, in_order: array<money>}",
+          "doc": "两种策略下的各份金额"
+        }
+      },
+      "args": {
+        "total": "USD 10.01"
+      },
+      "expected": {
+        "first_takes": [
+          "USD 3.35",
+          "USD 3.33",
+          "USD 3.33"
+        ],
+        "in_order": [
+          "USD 3.34",
+          "USD 3.34",
+          "USD 3.33"
+        ]
+      },
+      "covers": [
+        "allocate"
+      ],
+      "operators": []
+    },
+    {
+      "label": "结算时效与时长",
+      "category": "结算分账",
+      "description": "duration 能相加、相减、乘除整数，两个时长相除得到倍数；时刻减时长是更早的时刻，时刻之间直接比先后",
+      "source": "let(\n  window = hold + grace * 2,\n  deadline = paid_at + window,\n  {\n    window: window,\n    half: window / 2,\n    slack: window - elapsed,\n    slots: window / 30m,\n    late: now > deadline,\n    on_time: now <= deadline,\n    before_cutoff: now < cutoff,\n    opened: cutoff - 1h,\n    rushed: elapsed < 1h,\n    long: window >= 24h,\n    short: 2 * grace <= 1h,\n  }\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "paid_at",
+            "type": "time",
+            "doc": "支付时刻"
+          },
+          {
+            "name": "now",
+            "type": "time",
+            "doc": "宿主传入的当前时刻"
+          },
+          {
+            "name": "cutoff",
+            "type": "time",
+            "doc": "当日截单时刻"
+          },
+          {
+            "name": "hold",
+            "type": "duration",
+            "doc": "风控冻结时长"
+          },
+          {
+            "name": "grace",
+            "type": "duration",
+            "doc": "宽限时长"
+          },
+          {
+            "name": "elapsed",
+            "type": "duration",
+            "doc": "已处理时长"
+          }
+        ],
+        "result": {
+          "type": "record{window: duration, half: duration, slack: duration, slots: int, late: bool, on_time: bool, before_cutoff: bool, opened: time, rushed: bool, long: bool, short: bool}",
+          "doc": "结算窗口与是否超时"
+        }
+      },
+      "args": {
+        "paid_at": "2026-09-26T10:00:00Z",
+        "now": "2026-09-27T12:30:00Z",
+        "cutoff": "2026-09-27T16:00:00Z",
+        "hold": "24h",
+        "grace": "1h30m",
+        "elapsed": "2h"
+      },
+      "expected": {
+        "window": "27h0m0s",
+        "half": "13h30m0s",
+        "slack": "25h0m0s",
+        "slots": 54,
+        "late": false,
+        "on_time": true,
+        "before_cutoff": true,
+        "opened": "2026-09-27T15:00:00Z",
+        "rushed": false,
+        "long": true,
+        "short": false
+      },
+      "covers": [],
+      "operators": [
+        "infix:+",
+        "infix:*",
+        "infix:/",
+        "infix:-",
+        "infix:>",
+        "infix:<=",
+        "infix:<",
+        "infix:>="
+      ]
+    },
+    {
+      "label": "按渠道汇总费用",
+      "category": "结算分账",
+      "description": "reduce 可以有两个局部名：遍历字典时依次是键与值，只折叠满足 if 的那些项；嵌套字段的选择器写作 .quote.fee",
+      "source": "{\n  total: reduce(name, fee in fees if name != \"test\", acc = 0, acc + fee),\n  cheapest: min_by(offers, .quote.fee).channel,\n}",
+      "contract": {
+        "types": {
+          "Offer": "record{channel: string, quote: record{fee: int}}"
+        },
+        "args": [
+          {
+            "name": "fees",
+            "type": "dict<int>",
+            "doc": "各渠道今日手续费，单位：分"
+          },
+          {
+            "name": "offers",
+            "type": "array<Offer>",
+            "doc": "各渠道报价"
+          }
+        ],
+        "result": {
+          "type": "record{total: int, cheapest: string}",
+          "doc": "除测试渠道外的费用合计与最便宜的渠道"
+        }
+      },
+      "args": {
+        "fees": {
+          "adyen": 1200,
+          "stripe": 900,
+          "test": 5
+        },
+        "offers": [
+          {
+            "channel": "adyen",
+            "quote": {
+              "fee": 32
+            }
+          },
+          {
+            "channel": "stripe",
+            "quote": {
+              "fee": 28
+            }
+          }
+        ]
+      },
+      "expected": {
+        "total": 2100,
+        "cheapest": "stripe"
+      },
+      "covers": [
+        "min_by"
+      ],
+      "operators": [
+        "infix:!=",
+        "infix:+"
       ]
     },
     {
@@ -4231,6 +5310,117 @@
       ]
     },
     {
+      "label": "显式换汇函数",
+      "category": "跨境汇率",
+      "description": "amount -> JPY 是 convert(amount, JPY) 的糖；convert 也可以带舍入方式一步写完，和 round(amount -> JPY, @down) 同一个答案",
+      "source": "using(market, {\n  one_step: convert(amount, JPY, @down),\n  rounded: round(amount -> JPY, @down),\n})",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money",
+            "doc": "结算金额"
+          },
+          {
+            "name": "market",
+            "type": "array<fxrate>",
+            "doc": "市场价报价"
+          }
+        ],
+        "result": {
+          "type": "record{one_step: money, rounded: money}",
+          "doc": "两种写法的日元金额"
+        }
+      },
+      "args": {
+        "amount": "USD 100.00",
+        "market": [
+          {
+            "base": "USD",
+            "quote": "JPY",
+            "rate": "150.255"
+          }
+        ]
+      },
+      "expected": {
+        "one_step": "JPY 15025",
+        "rounded": "JPY 15025"
+      },
+      "covers": [
+        "convert",
+        "round"
+      ],
+      "operators": [
+        "infix:->"
+      ]
+    },
+    {
+      "label": "汇率的比较与加点",
+      "category": "跨境汇率",
+      "description": "汇率之间可以比较，比如市场价是否偏离协议价太多；比例乘汇率得到加点后的汇率，写在前面后面都行",
+      "source": "using(market, let(\n  rate = fx(USD, JPY),\n  marked = (100% + 1.5%) * rate,\n  {\n    above_floor: rate >= 148 JPY / USD,\n    below_cap: rate <= 155 JPY / USD,\n    cheaper: rate < agreed,\n    dearer: marked > agreed,\n    customer: round(amount -> JPY, @down),\n    marked_up: using(marked, round(amount -> JPY, @down)),\n  }\n))",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money",
+            "doc": "支付金额"
+          },
+          {
+            "name": "market",
+            "type": "array<fxrate>",
+            "doc": "市场价报价"
+          },
+          {
+            "name": "agreed",
+            "type": "fxrate",
+            "doc": "协议汇率"
+          }
+        ],
+        "result": {
+          "type": "record{above_floor: bool, below_cap: bool, cheaper: bool, dearer: bool, customer: money, marked_up: money}",
+          "doc": "汇率判断与换汇结果"
+        }
+      },
+      "args": {
+        "amount": "USD 100.00",
+        "market": [
+          {
+            "base": "USD",
+            "quote": "JPY",
+            "rate": "150"
+          }
+        ],
+        "agreed": {
+          "base": "USD",
+          "quote": "JPY",
+          "rate": "151"
+        }
+      },
+      "expected": {
+        "above_floor": true,
+        "below_cap": true,
+        "cheaper": true,
+        "dearer": true,
+        "customer": "JPY 15000",
+        "marked_up": "JPY 15225"
+      },
+      "covers": [
+        "fx",
+        "convert",
+        "round"
+      ],
+      "operators": [
+        "infix:*",
+        "infix:+",
+        "infix:>=",
+        "infix:<=",
+        "infix:<",
+        "infix:>",
+        "infix:->"
+      ]
+    },
+    {
       "label": "单日累计限额",
       "category": "风险控制",
       "description": "今天已成交的金额加上这一笔，超过单日限额就拦截；数组里的金额与限额必须同币种",
@@ -4276,6 +5466,239 @@
       ]
     },
     {
+      "label": "延迟分布",
+      "category": "风险控制",
+      "description": "float 数组的统计：sum、avg、median、percentile（线性插值），sort_desc 从大到小，arg_max/arg_min 是最大、最小值的下标，rank 是升序名次",
+      "source": "{\n  total: sum(latencies),\n  mean: avg(latencies),\n  p50: median(latencies),\n  p99: percentile(latencies, 0.99),\n  ordered: sort(latencies),\n  slowest_first: sort_desc(latencies),\n  worst: arg_max(latencies),\n  best: arg_min(latencies),\n  ranks: rank(latencies),\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "latencies",
+            "type": "array<float>",
+            "doc": "各次请求耗时，单位：毫秒"
+          }
+        ],
+        "result": {
+          "type": "record{total: float, mean: float, p50: float, p99: float, ordered: array<float>, slowest_first: array<float>, worst: int, best: int, ranks: array<int>}",
+          "doc": "耗时分布"
+        }
+      },
+      "args": {
+        "latencies": [
+          120.0,
+          80.0,
+          250.0,
+          80.0,
+          150.0
+        ]
+      },
+      "expected": {
+        "total": 680,
+        "mean": 136,
+        "p50": 120,
+        "p99": 246,
+        "ordered": [
+          80,
+          80,
+          120,
+          150,
+          250
+        ],
+        "slowest_first": [
+          250,
+          150,
+          120,
+          80,
+          80
+        ],
+        "worst": 2,
+        "best": 1,
+        "ranks": [
+          3,
+          1,
+          5,
+          1,
+          4
+        ]
+      },
+      "covers": [
+        "sum",
+        "avg",
+        "median",
+        "percentile",
+        "sort",
+        "sort_desc",
+        "arg_max",
+        "arg_min",
+        "rank"
+      ],
+      "operators": []
+    },
+    {
+      "label": "指数退避与抖动",
+      "category": "风险控制",
+      "description": "pow 算指数退避，min/max 夹在上下限之间，% 是浮点取余（把等待对齐到 0.25 秒的格子），abs 是与目标的偏差",
+      "source": "let(\n  raw = base * pow(2.0, float(attempt)),\n  wait = max(min(raw, ceiling), base),\n  {\n    wait: wait,\n    capped: raw > ceiling,\n    within: wait <= ceiling,\n    offset: wait % 0.25,\n    drift: abs(wait - target),\n    spread: wait - base + 0.5,\n  }\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "base",
+            "type": "float",
+            "doc": "首次等待，单位：秒"
+          },
+          {
+            "name": "attempt",
+            "type": "int",
+            "doc": "第几次重试，从 0 开始"
+          },
+          {
+            "name": "ceiling",
+            "type": "float",
+            "doc": "等待上限，单位：秒"
+          },
+          {
+            "name": "target",
+            "type": "float",
+            "doc": "期望的等待，单位：秒"
+          }
+        ],
+        "result": {
+          "type": "record{wait: float, capped: bool, within: bool, offset: float, drift: float, spread: float}",
+          "doc": "这次重试的等待与偏差"
+        }
+      },
+      "args": {
+        "base": 0.5,
+        "attempt": 4,
+        "ceiling": 6.125,
+        "target": 5.25
+      },
+      "expected": {
+        "wait": 6.125,
+        "capped": true,
+        "within": true,
+        "offset": 0.125,
+        "drift": 0.875,
+        "spread": 6.125
+      },
+      "covers": [
+        "pow",
+        "float",
+        "min",
+        "max",
+        "abs"
+      ],
+      "operators": [
+        "infix:*",
+        "infix:>",
+        "infix:<=",
+        "infix:%",
+        "infix:-",
+        "infix:+"
+      ]
+    },
+    {
+      "label": "成功率趋势",
+      "category": "风险控制",
+      "description": "deltas 是逐项差，看成功率是否在连续下滑；cumsum 是累计序列，看流量份额累计到多少；两者也适用于 int 与金额",
+      "source": "let(\n  changes = deltas(rates),\n  {\n    changes: changes,\n    falling: all([c < 0.0 for c in changes]),\n    shares: cumsum(weights),\n  }\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "rates",
+            "type": "array<float>",
+            "doc": "按小时的成功率"
+          },
+          {
+            "name": "weights",
+            "type": "array<float>",
+            "doc": "各渠道的流量份额"
+          }
+        ],
+        "result": {
+          "type": "record{changes: array<float>, falling: bool, shares: array<float>}",
+          "doc": "成功率变化、是否持续下滑与累计份额"
+        }
+      },
+      "args": {
+        "rates": [
+          0.96875,
+          0.9375,
+          0.875,
+          0.8125
+        ],
+        "weights": [
+          0.5,
+          0.25,
+          0.125,
+          0.125
+        ]
+      },
+      "expected": {
+        "changes": [
+          -0.03125,
+          -0.0625,
+          -0.0625
+        ],
+        "falling": true,
+        "shares": [
+          0.5,
+          0.75,
+          0.875,
+          1
+        ]
+      },
+      "covers": [
+        "deltas",
+        "all",
+        "cumsum"
+      ],
+      "operators": [
+        "infix:<"
+      ]
+    },
+    {
+      "label": "按币种查限额",
+      "category": "风险控制",
+      "description": "dict 的键可以用币种取：limits[currency(amount)]；currency in limits 判断这个币种有没有配置；dict 的值也可以是金额",
+      "source": "let(\n  code = currency(amount),\n  switch(\n    case code in limits => amount > limits[code],\n    else => true\n  )\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money",
+            "doc": "交易金额"
+          },
+          {
+            "name": "limits",
+            "type": "dict<money>",
+            "doc": "各币种单笔限额，键是币种代码"
+          }
+        ],
+        "result": {
+          "type": "bool",
+          "doc": "是否需要人工审核：超限或币种未配置"
+        }
+      },
+      "args": {
+        "amount": "EUR 1200.00",
+        "limits": {
+          "USD": "USD 1000.00",
+          "EUR": "EUR 1000.00"
+        }
+      },
+      "expected": true,
+      "covers": [
+        "currency",
+        "member",
+        "at"
+      ],
+      "operators": [
+        "infix:in",
+        "infix:>"
+      ]
+    },
+    {
       "label": "稳定币通道：比例加固定费封顶",
       "category": "费率计费",
       "description": "USDT 按业务精度 6 位小数声明；千分之一加每笔 1 USDT，封顶 20 USDT。链上精确金额在宿主记账系统换算，规则只按业务精度计费",
@@ -4302,6 +5725,97 @@
         "infix:*",
         "infix:+",
         "infix:>"
+      ]
+    },
+    {
+      "label": "显式舍入的乘除",
+      "category": "费率计费",
+      "description": "round(amount * 2.9%, @half_even) 也可以写成一步：mul(amount, 2.9%, @half_even)；比例写在前面也行；div 同理。比例乘整数倍的金额（3 * fee）是精确的，不用舍入",
+      "source": "{\n  fee: mul(amount, 2.9%, @half_even),\n  fee_ratio_first: mul(2.9%, amount, @half_even),\n  gross_up: div(amount, 100% - 2.9%, @up),\n  exact: round(2.9% * amount, @half_even),\n  three_fees: 3 * fixed,\n}",
+      "contract": {
+        "args": [
+          {
+            "name": "amount",
+            "type": "money",
+            "doc": "交易金额"
+          },
+          {
+            "name": "fixed",
+            "type": "money",
+            "doc": "每笔固定费"
+          }
+        ],
+        "result": {
+          "type": "record{fee: money, fee_ratio_first: money, gross_up: money, exact: money, three_fees: money}",
+          "doc": "几种写法的费用"
+        }
+      },
+      "args": {
+        "amount": "USD 123.45",
+        "fixed": "USD 0.30"
+      },
+      "expected": {
+        "fee": "USD 3.58",
+        "fee_ratio_first": "USD 3.58",
+        "gross_up": "USD 127.14",
+        "exact": "USD 3.58",
+        "three_fees": "USD 0.90"
+      },
+      "covers": [
+        "mul",
+        "div",
+        "round"
+      ],
+      "operators": [
+        "infix:-",
+        "infix:*"
+      ]
+    },
+    {
+      "label": "比例的运算与比较",
+      "category": "费率计费",
+      "description": "比例之间可以相乘、相除、比较：渠道费率乘以分润比例得到平台所得的费率，两个费率相除得到倍数；全部精确，不经过 float",
+      "source": "let(\n  platform = rate * share,\n  {\n    platform: platform,\n    multiple: rate / base_rate,\n    within_cap: rate <= 3%,\n    at_least_base: rate >= base_rate,\n  }\n)",
+      "contract": {
+        "args": [
+          {
+            "name": "rate",
+            "type": "ratio",
+            "doc": "渠道费率"
+          },
+          {
+            "name": "share",
+            "type": "ratio",
+            "doc": "平台分润比例"
+          },
+          {
+            "name": "base_rate",
+            "type": "ratio",
+            "doc": "基准费率"
+          }
+        ],
+        "result": {
+          "type": "record{platform: ratio, multiple: ratio, within_cap: bool, at_least_base: bool}",
+          "doc": "平台费率、倍数与是否合规"
+        }
+      },
+      "args": {
+        "rate": "0.029",
+        "share": "0.2",
+        "base_rate": "0.0145"
+      },
+      "expected": {
+        "platform": "0.0058",
+        "multiple": "2",
+        "within_cap": true,
+        "at_least_base": true
+      },
+      "covers": [],
+      "operators": [
+        "infix:*",
+        "infix:/",
+        "infix:<=",
+        "infix:>="
       ]
     }
   ]
