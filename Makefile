@@ -1,7 +1,7 @@
 GO ?= go
 NODE ?= node
 
-.PHONY: ci build test test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden perf
+.PHONY: ci ci-linux build test test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden perf
 
 # ci must pass before any commit.
 ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize golangci deadcode lint build wasm test test-js
@@ -142,6 +142,21 @@ site: web wasm
 	rm -rf site && mkdir -p site/dist
 	cp $(addprefix web/,$(SITE_FILES)) site/
 	cp web/dist/*.js web/dist/funroute.wasm site/dist/
+
+# ci-linux runs make ci as GitHub Actions does — Linux on amd64, Go 1.26,
+# Node 22 (tools/ci/Dockerfile) — in Docker, before a push. The checkout is
+# mounted as it is; the pinned linters, web/node_modules and Go's caches live
+# in volumes of their own, because the ones on this machine are built for it.
+# An emulated amd64 has no FMA or AVX, so a path the standard library picks by
+# CPU feature may still differ from the runner's.
+CI_PLATFORM ?= linux/amd64
+CI_IMAGE    := funroute-ci
+ci-linux:
+	docker build --platform $(CI_PLATFORM) -t $(CI_IMAGE) tools/ci
+	docker run --rm --platform $(CI_PLATFORM) -v $(CURDIR):/src \
+		-v funroute-ci-tools:/src/.tools -v funroute-ci-node:/src/web/node_modules \
+		-v funroute-ci-gomod:/go/pkg/mod -v funroute-ci-gocache:/root/.cache \
+		$(CI_IMAGE) sh -c 'cd web && npm ci --no-audit --no-fund && cd .. && make ci'
 
 run: site
 	$(GO) run ./cmd/playground
