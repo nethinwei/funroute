@@ -289,8 +289,8 @@ func positionSpecs() []FunctionSpec {
 		name, label, description string
 		smallest                 bool
 	}{
-		{"arg_min", "最小值的位置", "最小元素的下标；并列取第一个，遇 NaN 取它的下标，空数组报错。channels[arg_min(fees)] 就是最便宜的那个。", true},
-		{"arg_max", "最大值的位置", "最大元素的下标；并列取第一个，遇 NaN 取它的下标，空数组报错。", false},
+		{"arg_min", "最小值的位置", "最小元素的下标；并列取第一个（-0 比 0 小，与 min 相同），遇 NaN 取它的下标，空数组报错。channels[arg_min(fees)] 就是最便宜的那个。", true},
+		{"arg_max", "最大值的位置", "最大元素的下标；并列取第一个（0 比 -0 大，与 max 相同），遇 NaN 取它的下标，空数组报错。", false},
 	} {
 		doc := Doc{
 			Label: extreme.label, Category: "选择",
@@ -313,8 +313,8 @@ func extremeBySpecs() []FunctionSpec {
 		name, label, description string
 		smallest                 bool
 	}{
-		{"min_by", "键最小的候选", "键最小的那个候选；并列取第一个，float 的键遇 NaN 取它的候选（与 min 相同，而 sort_by 把 NaN 排最前）。两者长度必须相同，空数组报错。min_by(channels, .fee) 就是最便宜的渠道。", true},
-		{"max_by", "键最大的候选", "键最大的那个候选；并列取第一个，float 的键遇 NaN 取它的候选（与 max 相同，而 top_k 把 NaN 排最后）。两者长度必须相同，空数组报错。", false},
+		{"min_by", "键最小的候选", "键最小的那个候选；并列取第一个，float 的键 -0 比 0 小、遇 NaN 取它的候选（与 min 相同，而 sort_by 把 NaN 排最前）。两者长度必须相同，空数组报错。min_by(channels, .fee) 就是最便宜的渠道。", true},
+		{"max_by", "键最大的候选", "键最大的那个候选；并列取第一个，float 的键 0 比 -0 大、遇 NaN 取它的候选（与 max 相同，而 top_k 把 NaN 排最后）。两者长度必须相同，空数组报错。", false},
 	} {
 		name, smallest := extreme.name, extreme.smallest
 		for _, key := range []Type{IntType, FloatType, StringType} {

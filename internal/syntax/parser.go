@@ -313,10 +313,11 @@ func (p *parser) parseFieldRead(base Expr) (Expr, error) {
 
 // fieldChain reads the dotted field names in fields off expr, the first
 // after the dot at at and written from name: blanks may part a postfix dot
-// from its name, f(x) . a, never the dots inside a name. Each read covers the source from expr's start through
-// its name, and its errors are placed at from. A postfix read, f(x).a.b,
-// points at its own dot and marks its name as it goes; the fields of a
-// dotted name, order.a.b, point at the name, which is already marked.
+// from its name, f(x) . a, never the dots inside a name. Each read covers
+// the source from expr's start through its name, and its errors are placed
+// at from. A postfix read, f(x).a.b, points at its own dot and marks its
+// name as it goes; the fields of a dotted name, order.a.b, point at the
+// name, which is already marked.
 func (p *parser) fieldChain(expr Expr, from token, at, name int, fields string, postfix bool) (Expr, error) {
 	start := expr.Extent().Start
 	for field := range strings.SplitSeq(fields, ".") {
