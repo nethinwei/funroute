@@ -118,7 +118,11 @@ func (f *frame) fault(pc int) error {
 		return err
 	}
 	function := f.runtime.functions[source.A]
-	args := []Value{left, right}[:len(function.Params)]
+	args := []Value{left, right, {}}[:len(function.Params)]
+	if in.op == rSliceS {
+		// Its third operand is where lowering put it, untouched by a refusal.
+		args[2] = Value{kind: IntKind, i: f.ints[in.c]}
+	}
 	// A run with no call never had a context to keep.
 	ctx := f.ctx
 	if ctx == nil {

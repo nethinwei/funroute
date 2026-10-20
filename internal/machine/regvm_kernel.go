@@ -325,7 +325,7 @@ func (c *textCursor) on(text string) {
 }
 
 // to moves the cursor to character n, or as near as the text goes, and
-// reports whether the text has one there.
+// reports whether it got there: to a character of the text, or to its end.
 func (c *textCursor) to(n int64) bool {
 	text := c.text
 	// Back is as far as forward from the start when n is less than half the
@@ -343,7 +343,6 @@ func (c *textCursor) to(n int64) bool {
 	}
 	if c.offset == len(text) {
 		c.count = c.char
-		return false
 	}
 	return int64(c.char) == n
 }
@@ -358,7 +357,7 @@ func charAt(b *banks, in *rinstr) bool {
 	}
 	c := &b.text
 	c.on(b.regs[in.a].s)
-	if !c.to(index) {
+	if !c.to(index) || c.offset == len(c.text) {
 		return false
 	}
 	_, size := utf8.DecodeRuneInString(c.text[c.offset:])
@@ -375,4 +374,33 @@ func textLength(b *banks, in *rinstr) {
 		c.count = c.char + utf8.RuneCountInString(c.text[c.offset:])
 	}
 	b.ints[in.c] = int64(c.count)
+}
+
+// textSlice is slice(string, int, int): of the text in a, the characters
+// from b up to the end in c's int, cut at their bytes as sliceString cuts
+// them. A range outside the text, or backwards, is the function's to say.
+func textSlice(b *banks, in *rinstr) bool {
+	start, end := b.ints[in.b], b.ints[in.c]
+	if start < 0 || end < start {
+		return false
+	}
+	c := &b.text
+	c.on(b.regs[in.a].s)
+	// The end goes on from where the cursor was when that is nearer than
+	// the start: slice(s, 0, i) down a text steps a character, as s[i] does.
+	before := *c
+	if !c.to(start) {
+		return false
+	}
+	from := c.offset
+	if before.char > c.char && int64(before.char) <= end {
+		count := c.count
+		*c = before
+		c.count = max(c.count, count)
+	}
+	if !c.to(end) {
+		return false
+	}
+	b.regs[in.c] = String(c.text[from:c.offset])
+	return true
 }

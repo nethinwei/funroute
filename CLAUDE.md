@@ -92,7 +92,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 - 形状常见的 Go 函数（`pureOf`）在候选分支外直接从各组调用（`rcall.banked`），纯的不看截止时间，宿主的照旧先看；在 fallback 的候选里一律按值调用，由翻译器静态决定。
 - 改了翻译器、`rinstr` 或 `frame.exec`，与改动前交替跑 `BenchmarkDispatch`/`BenchmarkCall`/`BenchmarkRunPaths` 对照，再 `make perf`。
 - 值流分析（`lower_escape.go`）决定数组建在哪：不逃出运行的建在帧的 arena 槽里，box 是指向槽的指针（`*[]T`），只有翻译器为它选的指令（循环、`at_a`）见得到；答案建在宿主借出的槽里（`RunInto`）。**指针形式的 box 绝不能流到宿主函数、结果或容器里**——新增会读或放出数组的指令，先在值流分析里给它规则。帧里不存指向宿主 struct 的指针（它可能在宿主的栈上），只拷切片头。
-- 纯标量字段的 record 数组以视图（`recordsView`）为 backing：新增读数组的路径（`length`、`at`、`Slice`、`Array`、`elemType`、写回）都要认得它，派生视图（`perm`、子视图）不指向帧；`rloop.itemsInPlace` 的循环不为循环项建 record，每项只把循环体读到的字段装进各自的寄存器（值流分析的 `itemFields` 与 `itemOf`，`lower_promote.go` 的 `itemRegsOf`：新增读循环项的栈指令要在那里记下它读的字段），原样收集的循环项只记下标、结果是置换视图（`collectsItem`、`rCollectItem`）。循环项的寄存器本身没有值：读它的只能是提升过的字段与紧挨着 `load_local` 的 collect。
+- 字段都是标量、金额或币种的 record 数组以视图（`recordsView`）为 backing（`viewable`）：金额与币种装载时从不失败，币种在边界上就地检查（`recordsView.units`），所以按需装载与在边界装载同一个答案；装载会失败的字段（`time`）不能进视图。新增读数组的路径（`length`、`at`、`Slice`、`Array`、`elemType`、写回）都要认得它，派生视图（`perm`、子视图）不指向帧；`rloop.itemsInPlace` 的循环不为循环项建 record，每项只把循环体读到的字段装进各自的寄存器（值流分析的 `itemFields` 与 `itemOf`，`lower_promote.go` 的 `itemRegsOf`：新增读循环项的栈指令要在那里记下它读的字段），原样收集的循环项只记下标、结果是置换视图（`collectsItem`、`rCollectItem`）。循环项的寄存器本身没有值：读它的只能是提升过的字段与紧挨着 `load_local` 的 collect。
 - 帧的 `release` 只清这次运行写过的部分：清含指针的内存要走写屏障——多清三个空槽就让固定开销从 30 ns 变成 60 ns。
 - `Session` 独占一个帧（`frame.owned`，不回池），给单个 goroutine 反复运行；还帧一律经 `putFrame`。`exec` 只交回答案所在的寄存器，调用方在收尾前取值一次。
 - 帧池只用 `sync.Pool`，热路径上不许有跨 goroutine 共享的可写状态：一个用原子操作取还的共享空闲帧，曾让 10 核并行比单核还慢（`BenchmarkRunParallel` 用 `-cpu 1,10` 看扩展）。

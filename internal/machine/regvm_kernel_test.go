@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// s[i] and len(s) on the cursor answer as the functions do, whatever the
+// s[i], len(s) and slice(s, i, j) on the cursor answer as the functions do, whatever the
 // cursor was left at: down a text and up it, jumping, past either end, on
 // one text and on another, with characters of several bytes and bytes
 // that are not UTF-8.
@@ -30,6 +30,12 @@ func TestTheTextCursorAnswersAsTheFunctions(t *testing.T) {
 			got := charAt(&b, &rinstr{op: rAtS, a: 0, b: 1, c: 2})
 			if got != (wantErr == nil) || got && b.regs[2].s != want.s {
 				t.Fatalf("%q[%d] = %q, %v; the function says %q, %v", text, index, b.regs[2].s, got, want.s, wantErr)
+			}
+			from, to := cursorIndex(random, step, len(text)), cursorIndex(random, step+random.IntN(3), len(text))
+			b.ints[1], b.ints[3] = from, to
+			wantSlice, sliceErr := sliceString(text, from, to)
+			if ok := textSlice(&b, &rinstr{op: rSliceS, a: 0, b: 1, c: 3}); ok != (sliceErr == nil) || ok && b.regs[3].s != wantSlice {
+				t.Fatalf("slice(%q, %d, %d) = %q, %v; the function says %q, %v", text, from, to, b.regs[3].s, ok, wantSlice, sliceErr)
 			}
 			if random.IntN(2) == 0 {
 				continue

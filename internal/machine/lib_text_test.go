@@ -81,3 +81,74 @@ func TestConstArgsAreKeptByTheManifest(t *testing.T) {
 		}
 	}
 }
+
+// A program's s[i], len(s) and slice(s, i, j) answer, and fail, word for
+// word as the functions do: called alone, kept in a let and read twice,
+// with computed positions, and down a text in a loop.
+func TestTextOperationsInAProgramAnswerAsTheirFunctions(t *testing.T) {
+	t.Parallel()
+	texts, positions := []string{"", "a", "aé名", "\xffb𝄞"}, []int64{-1, 0, 1, 2, 5}
+	cases := make([]textCut, 0, len(texts)*len(positions)*len(positions))
+	for _, text := range texts {
+		for _, i := range positions {
+			for _, j := range positions {
+				cases = append(cases, textCut{text, i, j})
+			}
+		}
+	}
+	for _, in := range cases {
+		assertTextOperations(t, in)
+	}
+	specs := []compile.ArgSpec{{Name: "s", Type: machine.StringType}}
+	got, err := libRun(t, `[slice(s, k, k + 1) + s[k] + slice(s, 0, k + 1) for k in range(len(s))]`, map[string]any{"s": "aé名"}, specs...)
+	if want := []string{"aaa", "ééaé", "名名aé名"}; err != nil || !equalStrings(got, want) {
+		t.Errorf("the loop down the text = %v, %v; want %v", got, err, want)
+	}
+}
+
+// textCut is a text and two positions in it.
+type textCut struct {
+	text string
+	i, j int64
+}
+
+// assertTextOperations runs the text operations on the text and the two
+// positions, as s, i and j, and holds each to its function.
+func assertTextOperations(t *testing.T, in textCut) {
+	t.Helper()
+	registry := machine.CoreRegistry()
+	slice, _ := registry.Resolve("slice(string,int,int)->string")
+	at, _ := registry.Resolve("at(string,int)->string")
+	args := map[string]any{"s": in.text, "i": in.i, "j": in.j}
+	text, i, j := machine.String(in.text), machine.Int(in.i), machine.Int(in.j)
+	want, wantErr := slice.Eval(t.Context(), []machine.Value{text, i, j})
+	char, charErr := at.Eval(t.Context(), []machine.Value{text, i})
+	cut := textOf(want)
+	specs := []compile.ArgSpec{{Name: "s", Type: machine.StringType}, {Name: "i", Type: machine.IntType}, {Name: "j", Type: machine.IntType}}
+	for source, expected := range map[string]string{
+		`slice(s, i, j)`: cut, `let(x = slice(s, i, j), x + x)`: cut + cut, `slice(s, i + 0, j * 1)`: cut, `s[i]`: textOf(char),
+	} {
+		failure := wantErr
+		if source == `s[i]` {
+			failure = charErr
+		}
+		got, err := libRun(t, source, args, specs...)
+		switch {
+		case failure != nil && (err == nil || !strings.HasSuffix(err.Error(), failure.Error())):
+			t.Errorf("%s with %v = %v, %v; want %v", source, args, got, err, failure)
+		case failure == nil && (err != nil || got != expected):
+			t.Errorf("%s with %v = %v, %v; want %q", source, args, got, err, expected)
+		}
+	}
+}
+
+// textOf is a string value's text, "" for the zero value a failure leaves.
+func textOf(value machine.Value) string {
+	text, _ := value.Any().(string)
+	return text
+}
+
+func equalStrings(got any, want []string) bool {
+	items, ok := got.([]string)
+	return ok && strings.Join(items, "|") == strings.Join(want, "|")
+}

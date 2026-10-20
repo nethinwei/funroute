@@ -28,6 +28,10 @@ func TestKernelOpsAnswerAsTheirFunctions(t *testing.T) {
 	strings := []string{"", "a", "b", "ab", "é"}
 	for key, kernel := range kernelOps {
 		function, _ := registry.Resolve(key)
+		if kernel.ternary {
+			assertTernaryKernelOp(t, function, kernel, append(strings, "aé名\xff𝄞"), ints)
+			continue
+		}
 		pairs := operandsOf(function.Params, ints, floats, strings)
 		if kernel.op == rEq {
 			// eq(T, T) of ints and floats is eq_i and eq_f.
@@ -103,6 +107,43 @@ func assertKernelOp(t *testing.T, function *RegisteredFunction, kernel kernelOp,
 	if !runKernelOp(inPlace, &rinstr{op: in.op, a: 0, b: 1, c: 0}) && !identical(inPlace.valueAt(0, pair[0].kind), pair[0]) {
 		t.Errorf("%s%v refused in place, and changed its operand to %v", function.key, args, inPlace.valueAt(0, pair[0].kind).Any())
 	}
+}
+
+// assertTernaryKernelOp holds an operation of a text and two ints — the
+// last in the int of the answer's register, as lowering puts it — to its
+// function on every text with every two ints, and in place.
+func assertTernaryKernelOp(t *testing.T, function *RegisteredFunction, kernel kernelOp, texts []string, ints []int64) {
+	t.Helper()
+	cases := make([]textRange, 0, len(texts)*len(ints)*len(ints))
+	for _, text := range texts {
+		for _, first := range ints {
+			for _, last := range ints {
+				cases = append(cases, textRange{text, first, last})
+			}
+		}
+	}
+	for _, c := range cases {
+		want, wantErr := function.Eval(t.Context(), []Value{String(c.text), Int(c.first), Int(c.last)})
+		b := newBanks(3, nil)
+		b.setValue(0, String(c.text))
+		b.ints[1], b.ints[2] = c.first, c.last
+		ok := runKernelOp(&b, &rinstr{op: kernel.op, a: 0, b: 1, c: 2})
+		if ok != (wantErr == nil) || ok && b.regs[2].s != want.s {
+			t.Errorf("%s%v = %q, %v; the function says %q, %v", function.key, c, b.regs[2].s, ok, want.s, wantErr)
+		}
+		inPlace := newBanks(3, nil)
+		inPlace.setValue(0, String(c.text))
+		inPlace.ints[1], inPlace.ints[0] = c.first, c.last
+		if !runKernelOp(&inPlace, &rinstr{op: kernel.op, a: 0, b: 1, c: 0}) && (inPlace.regs[0].s != c.text || inPlace.ints[0] != c.last) {
+			t.Errorf("%s%v refused in place, and changed its operands", function.key, c)
+		}
+	}
+}
+
+// textRange is a text and two positions in it.
+type textRange struct {
+	text        string
+	first, last int64
 }
 
 // loweredOp is the operation lowering makes of op on the pair: an equality

@@ -123,11 +123,13 @@ const (
 	rMaxF
 	rAbsI // c = |a|, refusing the smallest int, which has none
 	rAbsF
-	// A text's character and its length, from where the last of them on the
-	// same text left off (banks.text): s[i] down a text steps a character,
-	// not the text up to it.
+	// A text's character, its length and a slice of it, from where the last
+	// of them on the same text left off (banks.text): s[i] down a text steps
+	// a character, not the text up to it. rSliceS takes a third operand, the
+	// end, in c's int, ahead of writing the slice to c's value.
 	rAtS
 	rLenS
+	rSliceS
 	ropCount
 )
 
@@ -142,7 +144,7 @@ var ropNames = [ropCount]string{
 	rBranchEqI: "branch_eq_i", rBranchEqF: "branch_eq_f", rEq: "eq", rEqI: "eq_i", rEqF: "eq_f",
 	rLen: "len", rAt: "at", rAtI: "at_i", rAtF: "at_f", rAtB: "at_b",
 	rAtD: "at_d", rAtDI: "at_d_i", rAtDF: "at_d_f", rAtDB: "at_d_b", rIntToF: "int_to_f", rFloatToI: "float_to_i", rAtA: "at_a", rTake: "take",
-	rMinI: "min_i", rMaxI: "max_i", rMinF: "min_f", rMaxF: "max_f", rAbsI: "abs_i", rAbsF: "abs_f", rAtS: "at_s", rLenS: "len_s", rCall: "call",
+	rMinI: "min_i", rMaxI: "max_i", rMinF: "min_f", rMaxF: "max_f", rAbsI: "abs_i", rAbsF: "abs_f", rAtS: "at_s", rLenS: "len_s", rSliceS: "slice_s", rCall: "call",
 	rField: "field", rFieldI: "field_i", rFieldF: "field_f", rFieldB: "field_b", rBranchField: "branch_field", rHasKey: "has_key",
 	rMakeArray: "make_array", rMakeDict: "make_dict", rMakeRecord: "make_record", rRecordWith: "record_with",
 	rLoopInit: "loop_init", rCollect: "collect", rSpread: "spread", rLoopNext: "loop_next", rLoopBreak: "loop_break", rCollectNext: "collect_next",

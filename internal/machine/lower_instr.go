@@ -244,11 +244,24 @@ func (l *lowerer) kernel(kernel kernelOp) {
 	case rAtD:
 		op = entryOp(l.pushedKind())
 	}
-	if kernel.unary {
+	switch {
+	case kernel.unary:
 		l.unary(op, 0)
-	} else {
+	case kernel.ternary:
+		l.ternary(op)
+	default:
 		l.binary(op, kernel.swap)
 	}
+}
+
+// ternary replaces the top three values with op of them: the last is moved
+// to the int of the register the answer goes in, which op reads before it
+// writes the answer there, and fault reads when op refuses.
+func (l *lowerer) ternary(op rop) {
+	last, right, left := l.pop(), l.pop(), l.pop()
+	l.move(last.kind, last.reg, l.top())
+	l.emitOn(op, left.reg, right.reg, l.top(), opKinds{a: left.kind, b: right.kind})
+	l.push(l.top())
 }
 
 // fusedBranch is the branch the operation at last makes one with, when it is

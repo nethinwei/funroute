@@ -359,15 +359,15 @@ func arenaElem(kind Kind) bool {
 }
 
 // plainRecords reports an array of records whose fields are all bools, ints,
-// floats or strings: an item loads in place with nothing to check but a
-// float's being finite.
+// floats, strings, amounts or currencies: an item loads in place with
+// nothing to check, the currencies having been at the boundary (viewable).
 func plainRecords(typ Type) bool {
 	if typ.kind != ArrayKind || typ.elem == nil || typ.elem.kind != RecordKind {
 		return false
 	}
 	for _, field := range typ.elem.fields {
 		switch field.typ.kind {
-		case BoolKind, IntKind, FloatKind, StringKind:
+		case BoolKind, IntKind, FloatKind, StringKind, MoneyKind, CurrencyKind:
 		default:
 			return false
 		}

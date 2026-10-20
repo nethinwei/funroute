@@ -6,7 +6,7 @@ import (
 )
 
 // An array of plain records — every field a bool, an int, a float or a
-// string — is held as the host's slice, as .NET holds an array of values or
+// string, or an amount or a currency — is held as the host's slice, as .NET holds an array of values or
 // a Span: the Value's backing is a recordsView of the slice's memory, and a
 // record is made of an item only where one is asked for (at, Array). The
 // library sorts and cuts a view into another view of the same memory, and a
@@ -25,7 +25,7 @@ import (
 
 // recordsView is an array of plain records in the host's memory: its items,
 // how many, and the plan of the slice, whose element is a record every field
-// of which loads in place.
+// of which loads in place (viewable).
 type recordsView struct {
 	data   unsafe.Pointer
 	length int
@@ -37,17 +37,75 @@ type recordsView struct {
 }
 
 // viewable reports a slice plan a recordsView can carry: every field of its
-// records is a plain bool, int, float or string.
+// records is a plain bool, int, float or string, or an amount or a currency.
+// Those two load as they are, never failing — the boundary checks their
+// currencies, in the host's memory (units) — so a field loaded only when a
+// record is asked for answers as one loaded at the boundary. A time is not
+// one: one outside the years a time spans fails as it loads.
 func viewable(plan *codec) bool {
 	if plan.shape != shapeSlice || plan.elem.shape != shapeRecord {
 		return false
 	}
 	for _, field := range plan.elem.fields {
-		if field.plain == reflect.Invalid {
+		if field.plain == reflect.Invalid && !viewUnit(field.codec) {
 			return false
 		}
 	}
 	return true
+}
+
+// viewUnit reports a field a view loads by its codec: an amount or a
+// currency.
+func viewUnit(plan *codec) bool {
+	return plan.shape == shapeOwn && (plan.goType == moneyGoType || plan.goType == currencyGoType)
+}
+
+// loadViewField loads a field of a view's item at p into slot: a plain one
+// in place, an amount or a currency by loadUnit.
+func loadViewField(field *fieldCodec, p unsafe.Pointer, slot *Value) {
+	if field.plain == reflect.Invalid {
+		*slot = loadUnit(field, p)
+		return
+	}
+	loadPlain(field.plain, p, slot)
+}
+
+// loadUnit is an amount or a currency field at p, by loadOwn, which never
+// fails on them; out of the way of plain fields.
+//
+//go:noinline
+func loadUnit(field *fieldCodec, p unsafe.Pointer) Value {
+	unit, _ := loadOwn(field.codec.goType, p)
+	return unit
+}
+
+// loadUnitInto loads an amount or a currency field at p into register reg,
+// out of the loop's way: a loop over plain fields reads none.
+//
+//go:noinline
+func loadUnitInto(field *fieldCodec, p unsafe.Pointer, b *banks, reg int32) {
+	b.regs[reg], _ = loadOwn(field.codec.goType, p)
+}
+
+// units hands check each amount and currency of the view, by item and
+// field, read where it is in the host's memory: the boundary's walk, with
+// no record made of an item.
+func (v *recordsView) units(check func(item, field int, unit Value) error) error {
+	plan := v.plan.elem
+	for i := range v.length {
+		item := v.item(i)
+		for j := range plan.fields {
+			field := &plan.fields[j]
+			if field.plain != reflect.Invalid {
+				continue
+			}
+			unit, _ := loadOwn(field.codec.goType, unsafe.Add(item, field.offset))
+			if err := check(i, j, unit); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // viewRecords makes view the host's slice at p, and is the array there:
@@ -74,8 +132,11 @@ func (v *recordsView) item(i int) unsafe.Pointer {
 func (v *recordsView) loadInto(index int, fields, regs []int32, b *banks) {
 	plan, item := v.plan.elem, v.item(index)
 	for i, at := range fields {
-		// Every field is plain.
 		field := &plan.fields[at]
+		if field.plain == reflect.Invalid {
+			loadUnitInto(field, unsafe.Add(item, field.offset), b, regs[i])
+			continue
+		}
 		loadPlainInto(field.plain, unsafe.Add(item, field.offset), b, regs[i])
 	}
 }
@@ -85,8 +146,8 @@ func (v *recordsView) record(i int) Value {
 	plan := v.plan.elem
 	record := newRecord(&plan.typ, len(plan.fields))
 	item := v.item(i)
-	for j, field := range plan.fields {
-		loadPlain(field.plain, unsafe.Add(item, field.offset), &record.fields[j])
+	for j := range plan.fields {
+		loadViewField(&plan.fields[j], unsafe.Add(item, plan.fields[j].offset), &record.fields[j])
 	}
 	return Value{kind: RecordKind, box: record}
 }
@@ -99,8 +160,8 @@ func (v *recordsView) items() []Value {
 	for i := range v.length {
 		record, item := &records[i], v.item(i)
 		record.typ, record.fields = &plan.typ, fields[i*width:(i+1)*width:(i+1)*width]
-		for j, field := range plan.fields {
-			loadPlain(field.plain, unsafe.Add(item, field.offset), &record.fields[j])
+		for j := range plan.fields {
+			loadViewField(&plan.fields[j], unsafe.Add(item, plan.fields[j].offset), &record.fields[j])
 		}
 		items[i] = Value{kind: RecordKind, box: record}
 	}
@@ -135,15 +196,16 @@ func (v *recordsView) arranged(n int, at func(int) int) *recordsView {
 
 // storeView writes the view into the slice at p of plan, a slice of records
 // of the same type: field by field from the host's memory, when every field
-// is the same Go kind in both, which is what a slice of the same struct is.
-// It reports false for a slice it does not answer so.
+// is a plain one of the same Go kind in both, which is what a slice of the
+// same struct of plain fields is. It reports false for a slice it does not
+// answer so, an amount's or a currency's among them.
 func storeView(plan *codec, p unsafe.Pointer, v *recordsView) bool {
 	from, to := v.plan.elem.fields, plan.elem.fields
 	if !viewable(plan) || len(from) != len(to) {
 		return false
 	}
 	for i := range from {
-		if from[i].plain != to[i].plain {
+		if from[i].plain != to[i].plain || from[i].plain == reflect.Invalid {
 			return false
 		}
 	}
