@@ -3,6 +3,7 @@ package machine
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -12,6 +13,20 @@ import (
 // ValidateInstruction is validateInstruction, for vm_test.go's table test of
 // how a single instruction is checked on load.
 var ValidateInstruction = validateInstruction
+
+// OwnRoundTrip writes v into a new Go value of typ, one of the language's
+// own Go types, and reads it back, for host_own_test.go.
+func OwnRoundTrip(typ reflect.Type, v Value) (Value, error) {
+	out := reflect.New(typ)
+	if err := storeOwn(typ, out.UnsafePointer(), v); err != nil {
+		return Value{}, err
+	}
+	return loadOwn(typ, out.UnsafePointer())
+}
+
+// LoadOwn is loadOwn, for host_own_test.go to hand it a type it has no
+// reading of.
+var LoadOwn = loadOwn
 
 // NewMoney is money without a currency table, for the external tests that
 // build values: they test the machine, not the boundary.

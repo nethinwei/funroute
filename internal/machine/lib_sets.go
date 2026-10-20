@@ -3,6 +3,7 @@ package machine
 import (
 	"context"
 	"slices"
+	"strconv"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -60,8 +61,8 @@ func keptAgainst(array, other Value, shared bool) []int {
 		// Met, two amounts are one when their minor units are.
 		return keptBy(minorsOf(itemsAt(items, array.i)), minorsOf(mustItems[money.Money](other)), shared)
 	}
-	if keys, keyed := itemKeys(array); keyed {
-		if others, keyed := itemKeys(other); keyed {
+	if keys, keyed := itemKeys(array, 'a'); keyed {
+		if others, keyed := itemKeys(other, 'b'); keyed {
 			return keptBy(keys, others, shared)
 		}
 	}
@@ -84,15 +85,20 @@ func minorsOf(amounts []money.Money) []int64 {
 }
 
 // itemKeys is the itemKey of each item of an array, and false when one has
-// none.
-func itemKeys(array Value) ([]string, bool) {
+// none. An item equal to nothing has a key of its own, no other item's on
+// either side: a kind of 0, which no key starts with, the side, then where
+// the item is.
+func itemKeys(array Value, side byte) ([]string, bool) {
 	items := valuesOf(array)
 	keys := make([]string, len(items))
 	var key []byte
 	for i, item := range items {
-		var keyed bool
-		if key, keyed = itemKey(item, key[:0]); !keyed {
+		var state keyState
+		switch key, state = itemKey(item, key[:0]); state {
+		case keyNone:
 			return nil, false
+		case keyAlone:
+			key = strconv.AppendInt(append(key[:0], 0, side), int64(i), 10)
 		}
 		keys[i] = string(key)
 	}
@@ -100,7 +106,8 @@ func itemKeys(array Value) ([]string, bool) {
 }
 
 // keptBy is where in items the ones others has — or has not — first are,
-// by key: a NaN, which no key equals, is never had, and kept each time.
+// by key: a NaN, which no key equals, is never had, and kept each time, as
+// is a key no other item has.
 func keptBy[K comparable](items, others []K, shared bool) []int {
 	had := make(map[K]bool, len(others))
 	for _, key := range others {

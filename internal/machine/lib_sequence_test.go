@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -29,7 +30,13 @@ func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 	if _, keyed := distinctKeyed(valuesOf(dicts)); !keyed {
 		t.Fatal("records holding a dictionary are not keyed")
 	}
-	for _, array := range []Value{arrayOf(amounts), recordArray, nested, held, rates, dicts} {
+	// A NaN anywhere in a record makes it equal to nothing, which keys as
+	// well: kept each time, the others still by key.
+	alone := aloneRecords(t, random)
+	if _, keyed := distinctKeyed(valuesOf(alone)); !keyed {
+		t.Fatal("records holding a NaN, a time or a currency are not keyed")
+	}
+	for _, array := range []Value{arrayOf(amounts), recordArray, nested, held, rates, dicts, alone} {
 		got, err := uniqueItems(t.Context(), []Value{array})
 		if err != nil {
 			t.Fatal(err)
@@ -41,7 +48,12 @@ func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 				want = append(want, item)
 			}
 		}
-		if kept, _ := got.Array(); !slices.EqualFunc(kept, want, Value.Equal) {
+		// A record equal to nothing is the same record.
+		same := func(a, b Value) bool {
+			x, isRecord := a.box.(*recordValue)
+			return a.Equal(b) || isRecord && x == b.box
+		}
+		if kept, _ := got.Array(); !slices.EqualFunc(kept, want, same) {
 			t.Errorf("unique of %s kept %d items, Equal keeps %d", array.Type(), len(kept), len(want))
 		}
 	}
@@ -50,6 +62,36 @@ func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 			t.Errorf("unique of %v = %v, %v; want ErrCurrency", mixed, got.Any(), err)
 		}
 	}
+}
+
+// aloneRecords is 200 records of an int, a float that may be a NaN, a
+// time, a duration, a currency and an array of floats that may hold one:
+// the same records more than once, and some equal to nothing.
+func aloneRecords(t *testing.T, random *rand.Rand) Value {
+	t.Helper()
+	floats := []float64{0, math.Copysign(0, -1), 1, math.NaN(), math.Inf(1)}
+	typ := RecordOf(FieldOf("n", IntType), FieldOf("f", FloatType), FieldOf("t", TimeType), FieldOf("d", DurationType),
+		FieldOf("c", CurrencyType), FieldOf("xs", ArrayOf(FloatType)))
+	records := make([]Value, 200)
+	for i := range records {
+		xs := make([]float64, random.IntN(3))
+		for j := range xs {
+			xs[j] = floats[random.IntN(len(floats))]
+		}
+		fields := []Value{Int(int64(random.IntN(3))), Float(floats[random.IntN(len(floats))]),
+			{kind: TimeKind, i: int64(random.IntN(2)) * int64(time.Hour)}, Duration(time.Duration(random.IntN(2))),
+			CurrencyValue([]string{"USD", "EUR"}[random.IntN(2)]), arrayOf(xs)}
+		record, err := Record(typ, fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records[i] = record
+	}
+	array, err := Array(typ, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return array
 }
 
 // scalarRecords is 200 amounts in dollars or none, and 200 records of a
