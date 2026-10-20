@@ -239,10 +239,11 @@ func distinctKeyed(items []Value) ([]Value, bool) {
 // itemKey appends item to key as bytes two items of one type share exactly
 // when they are Equal: a float's zeros as one, an amount by its minor units —
 // its currency is the place's one, or none for a zero — a string by its
-// length then itself, a record field by field and an array by its length
-// then item by item, each written whole before the next.
-// It is false for anything else — a dictionary, a rate, exact money, a NaN,
-// which is equal to nothing — and Equal decides those.
+// length then itself, a rate by its pair and its ratio, a record field by
+// field, an array by its length then item by item and a dictionary by its
+// size then its entries in key order, each written whole before the next.
+// It is false for anything else — exact money, a handle, a NaN, which is
+// equal to nothing — and Equal decides those.
 func itemKey(item Value, key []byte) ([]byte, bool) {
 	key = append(key, byte(item.kind))
 	switch {
@@ -259,10 +260,35 @@ func itemKey(item Value, key []byte) ([]byte, bool) {
 		key = append(key, item.s...)
 	case item.kind == MoneyKind && !IsExact(item):
 		key = strconv.AppendInt(key, item.i, 10)
+	case item.kind == FxRateKind:
+		// A rate is its pair and its ratio, as == has two equal.
+		rate, _ := item.FxRate()
+		num, den := money.RatioParts(ratioFrom(item))
+		key = append(append(append(key, rate.Base()...), '/'), rate.Quote()...)
+		key = strconv.AppendInt(append(strconv.AppendInt(append(key, ':'), num, 10), '/'), den, 10)
 	case item.kind == RecordKind || item.kind == ArrayKind:
 		return partsKey(item, key)
+	case item.kind == DictKind:
+		return entriesKey(item, key)
 	default:
 		return key, false
+	}
+	return append(key, '|'), true
+}
+
+// entriesKey is itemKey of a dictionary: its size, then each key and its
+// value in key order — two are equal when they hold the same entries,
+// whatever order their maps keep them in.
+func entriesKey(item Value, key []byte) ([]byte, bool) {
+	keys := item.keys()
+	key = append(strconv.AppendInt(key, int64(len(keys)), 10), ':')
+	for _, name := range keys {
+		key = append(append(strconv.AppendInt(key, int64(len(name)), 10), ':'), name...)
+		entry, _ := item.lookup(name)
+		var keyed bool
+		if key, keyed = itemKey(entry, key); !keyed {
+			return key, false
+		}
 	}
 	return append(key, '|'), true
 }

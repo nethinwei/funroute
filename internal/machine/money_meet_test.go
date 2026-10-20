@@ -119,3 +119,26 @@ func TestTheSetFunctionsBuildNoTypeToMeet(t *testing.T) {
 		}
 	}
 }
+
+// A record of currencies alone has no place to meet: comparing two asks for
+// no plan, and allocates nothing for it.
+func TestCurrenciesAloneMeetForNothing(t *testing.T) {
+	registry := moneyRegistry(t)
+	artifact, err := compileMoney(t, registry, "x == y", "x: record{c: currency, n: int}; y: record{c: currency, n: int}", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ := machine.RecordOf(machine.FieldOf("c", machine.CurrencyType), machine.FieldOf("n", machine.IntType))
+	x, err := machine.Record(typ, []machine.Value{machine.CurrencyValue("USD"), machine.Int(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, args := t.Context(), []machine.Value{x, x}
+	if allocs := testing.AllocsPerRun(100, func() { _, _ = runtime.RunValues(ctx, args) }); allocs != 0 {
+		t.Errorf("comparing two records of a currency allocated %v times, want 0", allocs)
+	}
+}

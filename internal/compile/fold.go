@@ -2,7 +2,6 @@ package compile
 
 import (
 	"errors"
-	"slices"
 
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
@@ -52,20 +51,53 @@ func (c *bytecodeCompiler) tryFold(expr syntax.Expr) (bool, error) {
 // failure is a compile error whichever branch it is written in, as when the
 // branch is compiled on its own: if(true, 1, 1 / 0) as much as if(f, 1, 1 / 0),
 // and the 1 / 0 of a branch that reads a loop's item as much as of one that
-// reads nothing. The deepest branches go first, and each closed part that
-// evaluates is known after (bytecodeCompiler.known): the branch around it
-// compiles it as its value, so a chain of n ifs is evaluated in n steps, not
-// n² of them.
+// reads nothing. It walks expr in the scopes compileLet makes: a let's
+// binding that folds is a constant to the branches under it, so
+// let(x = 0, if(true, 2, 1 / x)) is held to the rule as if(b, 2, 1 / 0) is.
+// The deepest branches go first, and each closed part that evaluates is known
+// after (bytecodeCompiler.known): the branch around it compiles it as its
+// value, so a chain of n ifs is evaluated in n steps, not n² of them. The
+// constants the walk folds the bindings to are its own, dropped after.
 func (c *bytecodeCompiler) untaken(expr syntax.Expr) error {
-	nodes := slices.Collect(syntax.Nodes(expr))
-	for _, node := range slices.Backward(nodes) {
-		for _, branch := range c.branches(node) {
-			if err := c.closedParts(branch); err != nil {
-				return err
-			}
+	pool := len(c.constants)
+	defer func() { c.constants = c.constants[:pool] }()
+	return c.untakenIn(expr)
+}
+
+func (c *bytecodeCompiler) untakenIn(expr syntax.Expr) error {
+	if let, ok := expr.(*syntax.LetExpr); ok {
+		return c.untakenLet(let)
+	}
+	var err error
+	syntax.EachChild(expr, func(child syntax.Expr) {
+		if err == nil {
+			err = c.untakenIn(child)
+		}
+	})
+	for _, branch := range c.branches(expr) {
+		if err == nil {
+			err = c.closedParts(branch)
 		}
 	}
-	return nil
+	return err
+}
+
+// untakenLet is untakenIn of a let: each binding, then the body with the
+// bindings in scope — as constants when they fold, as names that are not
+// otherwise, which hide an outer one of the same name either way.
+func (c *bytecodeCompiler) untakenLet(node *syntax.LetExpr) error {
+	for _, binding := range node.Bindings {
+		if err := c.untakenIn(binding.Value); err != nil {
+			return err
+		}
+		index, folded, err := c.foldBinding(binding.Value)
+		if err != nil {
+			return err
+		}
+		c.names.push(binding.Name, nameSlot{index: index, constant: folded})
+		defer c.names.pop(binding.Name)
+	}
+	return c.untakenIn(node.Body)
 }
 
 // closedParts evaluates expr when it is closed, and otherwise each of its

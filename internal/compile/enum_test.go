@@ -378,3 +378,17 @@ func TestTwoEnumsOfOneNameAreAContractError(t *testing.T) {
 		}
 	}
 }
+
+// Without money, an enum the contract calls rounding is the contract's own:
+// a bare member it shares with another enum is ambiguous, not resolved to the
+// other as if the first were the registry's.
+func TestAContractsOwnRoundingEnumIsNotTheRegistrys(t *testing.T) {
+	t.Parallel()
+	options := CompileOptions{Args: []ArgSpec{
+		{Name: "r", Type: machine.EnumOf("rounding", "up", "down")},
+		{Name: "d", Type: machine.EnumOf("direction", "up", "left")},
+	}}
+	if _, err := CompileExpr("@up", machine.CoreRegistry(), options); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("@up under a contract's rounding and direction: error = %v, want it ambiguous", err)
+	}
+}

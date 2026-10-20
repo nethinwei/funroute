@@ -358,3 +358,18 @@ func TestMoneyMinorPastExactFloatsIsRefused(t *testing.T) {
 		t.Fatalf("minor as json.Number = %d, %v, want 9007199254740993", got.i, err)
 	}
 }
+
+// A rate's figure is read as an amount's is: a string, a json.Number or an
+// int, never a float64, which decoding has already rounded.
+func TestAnExchangeRatesFigureMayBeAnInt(t *testing.T) {
+	t.Parallel()
+	for _, rate := range []any{"150", json.Number("150"), 150, int64(150)} {
+		value, err := coerceFxRate(map[string]any{"base": "USD", "quote": "JPY", "rate": rate})
+		if fx, _ := value.FxRate(); err != nil || fx.String() != "150 JPY / USD" {
+			t.Errorf("a rate of %#v reads as %v, %v, want 150 JPY / USD", rate, fx, err)
+		}
+	}
+	if _, err := coerceFxRate(map[string]any{"base": "USD", "quote": "JPY", "rate": 150.25}); err == nil {
+		t.Error("a rate of float64 150.25 was read, want it refused")
+	}
+}

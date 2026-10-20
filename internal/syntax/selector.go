@@ -82,14 +82,21 @@ func (x *expander) call(node *CallExpr) (Expr, error) {
 	return &LetExpr{Node: x.node(node), Bindings: []LetBinding{{Name: name, Value: first}}, Body: call}, nil
 }
 
-// keys is [e.path for e in list]: the selector's own node, so what is known
-// about the keys is known about the selector that wrote them.
+// keys is [e.path for e in list]. The last field read is the selector's own
+// node, so what is known about an item's key — .fee is an int — is known
+// about the selector that wrote it; the rest cover the selector's source, so
+// a message about them points there too.
 func (x *expander) keys(list string, selector *SelectorExpr) Expr {
 	key := x.variable(selectedItem, selector)
-	for field := range strings.SplitSeq(selector.Path, ".") {
-		key = &FieldExpr{Node: x.node(selector), Value: key, Field: field}
+	fields := strings.Split(selector.Path, ".")
+	for i, field := range fields {
+		node := x.node(selector)
+		if i == len(fields)-1 {
+			node = selector.Node
+		}
+		key = &FieldExpr{Node: node, Value: key, Field: field}
 	}
-	return &ForExpr{Node: selector.Node, Source: x.variable(list, selector), Variable: selectedItem, Yield: key}
+	return &ForExpr{Node: x.node(selector), Source: x.variable(list, selector), Variable: selectedItem, Yield: key}
 }
 
 func (x *expander) variable(name string, at Expr) Expr {

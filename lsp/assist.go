@@ -84,6 +84,10 @@ func (s *Server) explain(doc *document, fact compile.NodeFact, name string) []st
 // is the literal as written, so any space may part the code from the figure
 // and the figure may carry a sign and _ separators (JPY -1_000).
 func (s *Server) minorUnits(text string) string {
+	// A literal written in parens covers them: (USD 1.70) is USD 1.70.
+	for text = strings.TrimSpace(text); len(text) >= 2 && text[0] == '(' && text[len(text)-1] == ')'; {
+		text = strings.TrimSpace(text[1 : len(text)-1])
+	}
 	words := strings.Fields(text)
 	if len(words) != 2 {
 		return ""
@@ -352,7 +356,8 @@ func signatureOf(function *machine.RegisteredFunction) signatureInformation {
 }
 
 // enclosingCall walks back from offset to the "(" that opens the call it is
-// in, counting the commas at that level: the argument the cursor is on. A
+// in, past any that only group, counting the commas at that level: the
+// argument the cursor is on. A
 // bracket or brace on the way means the cursor is inside a container, whose
 // commas are not the call's. Other punctuation (":" of a record, "." of a
 // field) says nothing about where the call is.
@@ -370,10 +375,14 @@ func enclosingCall(text string, lexemes []syntax.Lexeme, offset int) (string, in
 				commas++
 			}
 		case "(":
-			if depth == 0 {
-				return callee(text, lexemes, i), commas, i > 0 && lexemes[i-1].Class == syntax.ClassIdentifier
+			if depth == 0 && i > 0 && lexemes[i-1].Class == syntax.ClassIdentifier {
+				return callee(text, lexemes, i), commas, true
 			}
-			depth--
+			// A paren that only groups holds one expression: the call the
+			// cursor is in, if any, is further out, at the same argument.
+			if depth > 0 {
+				depth--
+			}
 		case "[", "{":
 			if depth == 0 {
 				commas = 0

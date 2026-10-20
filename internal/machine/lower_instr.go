@@ -252,9 +252,12 @@ func (l *lowerer) kernel(kernel kernelOp) {
 }
 
 // fusedBranch is the branch the operation at last makes one with, when it is
-// this block's ordering of condition.
+// this block's ordering of condition. Fusing drops the operation's write, so
+// condition must be a stack temporary, which the jump is the last to read: a
+// let's local the ordering was retargeted to (store) is read again by every
+// later load_local, and must keep its value.
 func (l *lowerer) fusedBranch(last int, condition int32) (rop, bool) {
-	if int32(last) < l.blockStart || l.out.code[last].c != condition {
+	if int32(last) < l.blockStart || l.out.code[last].c != condition || condition < l.stackBase || condition >= l.localBase {
 		return rInvalid, false
 	}
 	fused, ok := branchOps[l.out.code[last].op]

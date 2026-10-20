@@ -409,7 +409,10 @@ func (l *lowerer) store(reg int32) {
 
 // retarget has the last operation, which wrote value, write reg instead:
 // one of this block's, writing the register value is on top of the stack
-// in, when no value on the stack is read from reg.
+// in, when no value on the stack is read from reg. The operation is then a
+// local's only write, so nothing after may drop it: a fusion that takes an
+// operation's write away (fusedBranch) takes it only from a stack
+// temporary, which the operation fused into is the last to read.
 func (l *lowerer) retarget(value, reg int32) bool {
 	last := int32(len(l.out.code) - 1)
 	if last < l.blockStart || value != l.top() || slices.ContainsFunc(l.stack, func(held slot) bool { return held.reg == reg }) {

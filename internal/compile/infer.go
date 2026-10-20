@@ -550,9 +550,12 @@ type inference struct {
 }
 
 type inferContext struct {
-	// args is the program's arguments, and locals the names the loops and
-	// lets around a node bind, innermost first, hiding an argument's.
+	// args is the program's arguments, and argAt each one's index by name,
+	// which a read of a name asks however many arguments there are; locals
+	// the names the loops and lets around a node bind, innermost first,
+	// hiding an argument's.
 	args     namedTerms
+	argAt    map[string]int
 	locals   *localName
 	registry *machine.Registry
 	// money is whether the registry declares money, which is what lets a
@@ -585,7 +588,7 @@ func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string
 		return nil, err
 	}
 	addRegistryEnums(context.enums, registry)
-	if err := applyHints(state, context.args, hints); err != nil {
+	if err := applyHints(state, context, hints); err != nil {
 		return nil, err
 	}
 	result, err := inferExpr(expr, state, context)
@@ -638,18 +641,29 @@ func applyResultType(expr syntax.Expr, state *inferState, result typeTerm, ret *
 // the variables appear, which is also the argument order of the program.
 func newInferContext(state *inferState, names []string, registry *machine.Registry) inferContext {
 	args := make(namedTerms, len(names))
+	argAt := make(map[string]int, len(names))
 	for i, name := range names {
 		args[i] = namedTerm{name: name, term: state.fresh()}
+		argAt[name] = i
 	}
-	_, money := registry.Money()
-	return inferContext{args: args, registry: registry, enums: map[string]machine.Type{}, money: money}
+	_, money := registry.Currencies()
+	return inferContext{args: args, argAt: argAt, registry: registry, enums: map[string]machine.Type{}, money: money}
 }
 
-func applyHints(state *inferState, args namedTerms, hints map[string]machine.Type) error {
+// arg is the term of the argument named name.
+func (c inferContext) arg(name string) (typeTerm, bool) {
+	i, ok := c.argAt[name]
+	if !ok {
+		return typeTerm{}, false
+	}
+	return c.args[i].term, true
+}
+
+func applyHints(state *inferState, context inferContext, hints map[string]machine.Type) error {
 	// In name order, so a failure is said the same every time.
 	for _, name := range kit.SortedKeys(hints) {
 		hint := hints[name]
-		arg, _ := args.find(name)
+		arg, _ := context.arg(name)
 		if err := state.unify(arg, state.concrete(hint)); err != nil {
 			return fmt.Errorf("type hint for %q: %w", name, err)
 		}

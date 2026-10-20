@@ -89,7 +89,7 @@ func TestAnOperatorsTreeHoldsWhatWasWritten(t *testing.T) {
 		"a && b": {"a", "b"},
 		"a || b": {"a", "b"},
 		"!a":     {"a"},
-		"a != b": {"a != b"}, // the == it negates, written as the !=
+		"a != b": {"a", "b"},
 		"-(b)":   {"(b)"},
 	} {
 		tree, err := SyntaxTree(source)
@@ -111,7 +111,7 @@ func TestAnOperatorsTreeHoldsWhatWasWritten(t *testing.T) {
 // A selector's path is located whole, one name or several.
 func TestASelectorsPathIsLocated(t *testing.T) {
 	t.Parallel()
-	for _, source := range []string{"sort_by(xs, .fee)", "sort_by(xs, .customer.fee)"} {
+	for _, source := range []string{"sort_by(xs, .fee)", "sort_by(xs, .customer.fee)", "sort_by(xs, (.fee))"} {
 		tree, err := SyntaxTree(source)
 		if err != nil {
 			t.Fatal(err)

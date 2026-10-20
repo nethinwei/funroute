@@ -2,6 +2,7 @@ package machine_test
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -56,6 +57,37 @@ func TestLoweringFusesTheCommonShapes(t *testing.T) {
 	}
 }
 
+// A comparison or a field read stored in a let's local is read again by
+// every read of the local: a branch on it does not take the store away. The
+// answers are written out — a fold runs the same lowering, so a closed
+// version agreeing with the open one would prove nothing.
+func TestALocalAnOrderingWroteIsReadAgain(t *testing.T) {
+	t.Parallel()
+	registry := randomRegistry(t)
+	for _, test := range []struct {
+		source string
+		args   map[string]any
+		want   string
+	}{
+		{`let(c = a < b, add(if(c, 10, 20), if(c, 1, 0)))`, map[string]any{"a": 1, "b": 2}, `11`},
+		{`let(c = a >= b, add(if(c, 10, 20), if(c, 1, 0)))`, map[string]any{"a": 2, "b": 1}, `11`},
+		{`let(c = a == b, add(if(c, 10, 20), if(c, 1, 0)))`, map[string]any{"a": 2, "b": 2}, `11`},
+		{`let(c = 1 < 2, add(if(c, 10, 20), if(c, 1, 0)))`, map[string]any{}, `11`},
+		{`sum([let(c = x > 0, if(c, 1, 0) + if(c, 2, 3)) for x in xs])`, map[string]any{"xs": []any{int64(-1), int64(2)}}, `6`},
+		{`let(r = {ok: a > 0}, let(ok = r.ok, add(if(ok, 10, 20), if(ok, 1, 0))))`, map[string]any{"a": 1}, `11`},
+	} {
+		runtime, err := load(test.source, registry, randomContract)
+		if err != nil {
+			t.Fatalf("%s: %v", test.source, err)
+		}
+		args := map[string]any{"a": 0, "b": 0, "f": 0.0, "s": "", "flag": false, "xs": []any{}, "fs": []any{}}
+		maps.Copy(args, test.args)
+		if got := outcome(t, runtime, args); got != test.want {
+			t.Errorf("%s with %v = %s, want %s", test.source, test.args, got, test.want)
+		}
+	}
+}
+
 // shapesContract is randomContract with an array of records and a
 // dictionary.
 var shapesContract = compile.CompileOptions{Args: append(slices.Clone(randomContract.Args),
@@ -67,9 +99,10 @@ var shapesContract = compile.CompileOptions{Args: append(slices.Clone(randomCont
 // outside their arrays, and a host function fallback takes the failures of.
 type generator struct {
 	rand *rand.Rand
-	// ints and arrays are the names in scope of type int and array<int>.
-	ints, arrays []string
-	fresh        int
+	// ints, bools and arrays are the names in scope of type int, bool and
+	// array<int>.
+	ints, bools, arrays []string
+	fresh               int
 }
 
 func (g *generator) pick(options ...string) string { return options[g.rand.IntN(len(options))] }
@@ -104,7 +137,7 @@ func (g *generator) leaf(typ string) string {
 	case "float":
 		return g.pick("f", "1.5", "0.0", "-2.25")
 	case "bool":
-		return g.pick("flag", "true", "false")
+		return g.pick(append([]string{"flag", "true", "false"}, g.bools...)...)
 	case "string":
 		return g.pick("s", `"a"`, `"zz"`)
 	}
@@ -166,8 +199,17 @@ func (g *generator) dictionary(d int) string {
 }
 
 // let binds a new int name for its body.
+// let binds an int, or a bool a body may read more than once.
 func (g *generator) let(d int) string {
-	value, name := g.of("int", d), g.name()
+	name := g.name()
+	if g.rand.IntN(3) == 0 {
+		value := g.of("bool", d)
+		g.bools = append(g.bools, name)
+		body := g.of("int", d)
+		g.bools = g.bools[:len(g.bools)-1]
+		return fmt.Sprintf("let(%s = %s, %s)", name, value, body)
+	}
+	value := g.of("int", d)
 	g.ints = append(g.ints, name)
 	body := g.of("int", d)
 	g.ints = g.ints[:len(g.ints)-1]

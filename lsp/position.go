@@ -134,7 +134,10 @@ func (d *document) offset(position Position, encoding string) int {
 		return len(d.text)
 	}
 	start, end := d.lines[line], d.ends[line]
-	column := max(position.Character, 0)
+	// A column past the line's bytes is past its end in any encoding — a
+	// character is never fewer bytes than UTF-16 units — and held there
+	// before it is added, so a huge one cannot wrap.
+	column := min(max(position.Character, 0), end-start)
 	w := d.wide[line]
 	if w == nil {
 		return min(start+column, end)

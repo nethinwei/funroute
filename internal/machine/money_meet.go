@@ -122,7 +122,7 @@ func plansOf(typ Type) (*unitPlan, int) {
 func planOfValue(v Value) (*unitPlan, int, bool) {
 	if v.kind == ArrayKind || v.kind == DictKind {
 		elem := v.elemType()
-		if !containsUnits(elem) {
+		if !holdsPlaces(elem) {
 			return nil, 0, false
 		}
 		if plan := itemsPlan(v.kind, elem.kind); plan != nil {
@@ -130,7 +130,7 @@ func planOfValue(v Value) (*unitPlan, int, bool) {
 		}
 	}
 	typ := v.Type()
-	if !containsUnits(typ) {
+	if !holdsPlaces(typ) {
 		return nil, 0, false
 	}
 	plan, places := plansOf(typ)
@@ -167,7 +167,7 @@ func planUnits(typ Type, place int) (unitPlan, int) {
 	}
 	places := 0
 	for i, field := range typ.fields {
-		if containsUnits(field.typ) {
+		if holdsPlaces(field.typ) {
 			sub, n := planUnits(field.typ, place+places)
 			plan.fields = append(plan.fields, unitField{at: i, plan: sub})
 			places += n
@@ -253,4 +253,11 @@ func (m *unitsMeet) see(place int, unit string, pair bool) error {
 	// holds would otherwise be taken to leave with it, and m, on the
 	// caller's stack, would be moved to the heap on every call.
 	return unitsDiffer(strings.Clone(seen), unit, pair)
+}
+
+// holdsPlaces reports a type with a place in it — an amount or a rate — that
+// meeting holds to one unit. A currency is a unit, not a place: two records
+// of currencies alone have nothing to meet.
+func holdsPlaces(typ Type) bool {
+	return typeHas(typ, func(kind Kind) bool { return kind == MoneyKind || kind == FxRateKind })
 }

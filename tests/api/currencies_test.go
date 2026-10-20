@@ -335,3 +335,33 @@ func assertTheRuleHopsHomeWhereChainRefuses(t *testing.T, registry *funroute.Reg
 		t.Errorf("EUR→USD→JPY→EUR chained = %v, %v, want ErrArithmetic", home, err)
 	}
 }
+
+// RateHolder is a host struct holding an exchange rate.
+type RateHolder struct {
+	Rate funroute.FxRate `funroute:"rate"`
+}
+
+// The zero FxRate is no rate wherever a host hands it over — alone, in a
+// slice, in a struct — and says so as a currency error, by ToValue and by
+// Run alike.
+func TestAZeroRateAnywhereIsACurrencyError(t *testing.T) {
+	t.Parallel()
+	for name, input := range map[string]any{"alone": funroute.FxRate{}, "in a slice": []funroute.FxRate{{}}, "in a struct": RateHolder{}} {
+		if _, err := funroute.ToValue(input); !errors.Is(err, funroute.ErrCurrency) {
+			t.Errorf("ToValue(the zero rate %s) error = %v, want ErrCurrency", name, err)
+		}
+	}
+	registry := moneyConsole(t)
+	held := funroute.RecordOf(funroute.FieldOf("rate", funroute.FxRateType))
+	artifact, err := funroute.CompileExpr("r.rate", registry, funroute.CompileOptions{Args: []funroute.ArgSpec{{Name: "r", Type: held}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := funroute.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Run(t.Context(), map[string]any{"r": RateHolder{}}); !errors.Is(err, funroute.ErrCurrency) {
+		t.Errorf("Run with the zero rate in a struct: error = %v, want ErrCurrency", err)
+	}
+}

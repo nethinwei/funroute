@@ -95,6 +95,9 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	// A node compiles to an instruction or so; a switch or a loop to a few.
 	compiler.instructions = make([]machine.Instruction, 0, surveyed.nodes+surveyed.nodes/2)
 	compiler.plain, compiler.unsealed = options.plain, options.unsealed
+	if err := compiler.checkLiterals(expr); err != nil {
+		return inferred, nil, compileError(err)
+	}
 	if err := compiler.compile(expr); err != nil {
 		return inferred, nil, compileError(err)
 	}

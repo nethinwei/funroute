@@ -55,7 +55,7 @@ func moneyRowsOf(registry *funroute.Registry, typ funroute.Type, recordArray, fe
 		{"4096 笔金额去重（`unique`）", "unique(fees)", byFee, feeArray, func() { keep(nativeDistinct(fees)) }},
 		{"4096 个渠道 record 去重（`unique`）", "unique(channels)", byChannel, recordArray, func() { keep(nativeDistinct(channels)) }},
 		{"4096 笔金额去掉前一半（`except`）", "except(fees, take(fees, 2048))", byFee, feeArray, func() { keep(nativeExcept(fees, fees[:2048])) }},
-		{"4096 个渠道里第一个可用的（`first` 推导式，一半可用）", "first([c for c in channels if c.ok])", byChannel, recordArray, func() { keep(nativeFirstUp(channels)) }},
+		{"4096 个渠道里第一个可用的（`first` 推导式，一半可用；耗时几乎全在入口处对 4096 笔费用的币种检查，`first` 找到就停）", "first([c for c in channels if c.ok])", byChannel, recordArray, func() { keep(nativeFirstUp(channels)) }},
 		{"4096 笔费用每 10 笔一个窗口（`windows`）", "len(windows(fees, 10))", byFee, feeArray, func() { keep(nativeWindows(fees, 10)) }},
 	} {
 		runtime, err := loaded(registry, c.source, c.arg)

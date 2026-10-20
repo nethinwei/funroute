@@ -65,7 +65,8 @@ func nameSpans(source string, roles map[int]roleMark) map[string][]Span {
 func treeOf(expr Expr, names map[string][]Span) Tree {
 	plan := planOf(expr)
 	tree := Tree{Node: kindOf(expr, plan), Span: expr.Extent()}
-	if match, ok := readOperator(expr); ok {
+	match, operator := readOperator(expr)
+	if operator {
 		tree.Operator = match.spec.token
 	}
 	if plan != nil {
@@ -74,12 +75,30 @@ func treeOf(expr Expr, names map[string][]Span) Tree {
 		EachChild(expr, func(child Expr) { own.children = append(own.children, ownedBy(expr, child)...) })
 		tree.Fields = fieldsOf(reflect.ValueOf(expr).Elem(), plan, own, names)
 	}
-	if _, selector := expr.(*SelectorExpr); selector && len(tree.Fields) == 1 {
+	if operator {
+		// An operator's operands are what was written around it: a != b
+		// holds a and b, not the == its expansion negates.
+		for i := range tree.Fields {
+			if tree.Fields[i].Name == "args" {
+				tree.Fields[i].Nodes = operandTrees(match.operands, names)
+			}
+		}
+	}
+	if selector, ok := expr.(*SelectorExpr); ok && len(tree.Fields) == 1 {
 		// A selector's path is one lexeme after its dot, however many
-		// names it reads: .fee as much as .customer.fee.
-		tree.Fields[0].TextSpan = &Span{Start: tree.Span.Start + 1, End: tree.Span.End}
+		// names it reads: .fee as much as .customer.fee, and in parens too.
+		start := selector.Position() + 1
+		tree.Fields[0].TextSpan = &Span{Start: start, End: start + len(selector.Path)}
 	}
 	return tree
+}
+
+func operandTrees(operands []Expr, names map[string][]Span) []Tree {
+	out := make([]Tree, len(operands))
+	for i, operand := range operands {
+		out[i] = treeOf(operand, names)
+	}
+	return out
 }
 
 // ownedBy is the source child holds within expr: its extent, but of a

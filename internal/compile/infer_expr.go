@@ -349,7 +349,7 @@ func (c inferContext) lookup(name string) (typeTerm, bool) {
 			return local.term, true
 		}
 	}
-	return c.args.find(name)
+	return c.arg(name)
 }
 
 // loopSourceHint explains which source shape the variable count asks for.

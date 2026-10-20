@@ -270,6 +270,10 @@ func TestClosedFailuresAreCompileErrors(t *testing.T) {
 		// that folds: as it is when the whole reads an argument.
 		`sum([if(true, x, 1 / 0 + x) for x in [1, 2]])`,
 		`if(true, 1, if(use_bad, 2, 1 / 0))`,
+		// A let's name that folds is a constant to the branches under it.
+		`let(x = 0, if(true, 2, 1 / x))`,
+		`let(x = 0, switch(case true => 2, else => 1 / x))`,
+		`let(x = 0, y = x + 1, fallback(2, 1 / (y - 1)))`,
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()

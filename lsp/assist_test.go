@@ -47,6 +47,22 @@ func TestFormattingSaysWhyItCannot(t *testing.T) {
 	}
 }
 
+// On a selector the hover says what it reads of each item: .fee is an int,
+// not the array of every item's.
+func TestHoverOnASelectorIsTheFieldsType(t *testing.T) {
+	t.Parallel()
+	s := newSession(t, standard(t), `{}`)
+	s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
+		{"name": "quotes", "type": "array<record{fee: int, channel: string}>"},
+	}}})
+	text := "sort_by(quotes, .fee)"
+	s.open("file:///a.fr", text)
+	shown := as[map[string]any](t, s.request("textDocument/hover", position("file:///a.fr", strings.Index(text, "fee"))))
+	if value := as[string](t, as[map[string]any](t, shown["contents"])["value"]); !strings.Contains(value, ".fee: int") {
+		t.Errorf("hover on .fee is %q, want \".fee: int\"", value)
+	}
+}
+
 func TestCompletionOffersWhatThePositionCanName(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, standard(t), `{}`)
@@ -93,7 +109,9 @@ func TestSignatureHelpCountsPastRecordsAndFields(t *testing.T) {
 	t.Parallel()
 	// Past the last parameter, the last one stays active: the index never
 	// leaves the signature shown.
-	for text, want := range map[string]float64{"if(true, {a: 1}, ": 2, "if(r.a, ": 1, "if(true, [x for x in xs], ": 2, "if(true, 1, 2, 3, ": 2} {
+	// A paren that only groups is no call: the call is the one around it.
+	for text, want := range map[string]float64{"if(true, {a: 1}, ": 2, "if(r.a, ": 1, "if(true, [x for x in xs], ": 2, "if(true, 1, 2, 3, ": 2,
+		"if(a, (b": 1, "if(a, (b + (c": 1, "if((a), b, ": 2} {
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
 			s := newSession(t, standard(t), `{}`)
@@ -295,6 +313,7 @@ func TestHoverSaysAnAmountInMinorUnits(t *testing.T) {
 		{"KWD 1.234", "KWD 1.234: money", "最小单位 1234（KWD 保留 3 位小数）", 0, 0, 9},
 		{"k + KWD -0.001", "KWD -0.001: money", "最小单位 -1（KWD 保留 3 位小数）", 6, 4, 14},
 		{"USD 0", "USD 0: money", "最小单位 0（USD 保留 2 位小数）", 4, 0, 5},
+		{"k + (USD 1.70)", "(USD 1.70): money", "最小单位 170（USD 保留 2 位小数）", 6, 4, 14},
 	} {
 		t.Run(test.text, func(t *testing.T) {
 			t.Parallel()

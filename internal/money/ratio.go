@@ -290,7 +290,9 @@ func (r Ratio) plus(other Ratio, sign int64) (Ratio, error) {
 	if denHi != 0 {
 		return Ratio{}, errRatioOverflow
 	}
-	return ratioFrom(sum.negative, num, den)
+	// Two ratios in lowest terms sum to one in lowest terms this way (Knuth,
+	// TAOCP 4.5.1): there is nothing left to reduce.
+	return fitted(sum.negative, num, den)
 }
 
 // wide is a signed 128-bit integer: a sign and a magnitude, which is what a

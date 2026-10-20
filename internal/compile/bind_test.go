@@ -431,3 +431,30 @@ func TestABindingLoadsWhatItCompilesAsItIs(t *testing.T) {
 		t.Errorf("the program's artifact does not load: %v", err)
 	}
 }
+
+// Options is a copy: a contract made of it with an argument's type changed
+// compiles to that type, not to the binding's.
+func TestABindingsOptionsAreACopy(t *testing.T) {
+	t.Parallel()
+	binding, err := Bind[mixedIn, int64](machine.CoreRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := binding.Options()
+	for i := range options.Args {
+		if options.Args[i].Name == "amount" {
+			options.Args[i].Type = machine.StringType
+		}
+	}
+	options.Result = nil
+	artifact, err := CompileExpr("amount", machine.CoreRegistry(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := artifact.Result().String(); got != "string" {
+		t.Errorf("amount under the copy with amount a string answers %s, want string", got)
+	}
+	if again := binding.Options(); again.Args[0].Type.String() == "string" {
+		t.Error("changing the copy changed the binding's own contract")
+	}
+}

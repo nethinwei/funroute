@@ -231,7 +231,7 @@ func outOfGo(registry *Registry, value reflect.Value, typ Type) (Value, error) {
 		return String(value.String()), nil
 	case HandleKind:
 		return NewHandle(typ.name, value.Interface()), nil
-	case MoneyKind, RatioKind, CurrencyKind, TimeKind, DurationKind:
+	case MoneyKind, RatioKind, FxRateKind, CurrencyKind, TimeKind, DurationKind:
 		return outOfOwnGo(value)
 	case ArrayKind:
 		return outOfSlice(registry, value, typ)
@@ -270,6 +270,9 @@ func outOfSlice(registry *Registry, value reflect.Value, typ Type) (Value, error
 func outOfMap(registry *Registry, value reflect.Value, typ Type) (Value, error) {
 	if wrapped, err := fromGo(value.Interface()); err == nil && wrapped.hasType(typ) {
 		return wrapped, nil
+	}
+	if value.Kind() != reflect.Map {
+		return Value{}, fmt.Errorf("%s is not a map, want %s", value.Type(), typ.Summary())
 	}
 	entries := make(map[string]Value, value.Len())
 	iter := value.MapRange()

@@ -315,7 +315,9 @@ func TestRatioArithmeticAgreesWithBigRat(t *testing.T) {
 			}
 			want := step.big(new(big.Rat), bigRat(left), bigRat(right))
 			fits := want.Num().IsInt64() && want.Denom().IsInt64()
-			if fits && (err != nil || bigRat(got).Cmp(want) != 0) || !fits && !errors.Is(err, ErrArithmetic) {
+			// big.Rat is in lowest terms, so equal parts say the answer is too.
+			num, den := got.parts()
+			if fits && (err != nil || num != want.Num().Int64() || den != want.Denom().Int64()) || !fits && !errors.Is(err, ErrArithmetic) {
 				t.Fatalf("%s %s %s = %s, %v, want %s", left, name, right, got, err, want.RatString())
 			}
 		}

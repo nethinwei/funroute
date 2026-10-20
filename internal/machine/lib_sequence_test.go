@@ -25,7 +25,11 @@ func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 	if _, keyed := distinctKeyed(valuesOf(nested)); !keyed {
 		t.Fatal("arrays of ints are not keyed")
 	}
-	for _, array := range []Value{arrayOf(amounts), recordArray, nested, held} {
+	rates, dicts := ratesAndDicts(t, random)
+	if _, keyed := distinctKeyed(valuesOf(dicts)); !keyed {
+		t.Fatal("records holding a dictionary are not keyed")
+	}
+	for _, array := range []Value{arrayOf(amounts), recordArray, nested, held, rates, dicts} {
 		got, err := uniqueItems(t.Context(), []Value{array})
 		if err != nil {
 			t.Fatal(err)
@@ -104,4 +108,37 @@ func nestedArrays(t *testing.T, random *rand.Rand) (Value, Value) {
 		t.Fatal(err)
 	}
 	return nested, holding
+}
+
+// ratesAndDicts is 200 rates of one pair, a few ratios among them, and 200
+// records that hold a dictionary of up to two small entries.
+func ratesAndDicts(t *testing.T, random *rand.Rand) (Value, Value) {
+	t.Helper()
+	pair := &money.Pair{Base: "USD", Quote: "JPY"}
+	rates := make([]money.FxRate, 200)
+	for i := range rates {
+		ratio, err := money.RatioOf(int64(150+random.IntN(3)), int64(1+random.IntN(2)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rates[i] = money.FxRateFrom(pair, ratio)
+	}
+	holds := RecordOf(FieldOf("n", IntType), FieldOf("d", DictOf(IntType)))
+	records := make([]Value, 200)
+	for i := range records {
+		entries := map[string]int64{}
+		for range random.IntN(3) {
+			entries[[]string{"a", "b"}[random.IntN(2)]] = int64(random.IntN(2))
+		}
+		record, err := Record(holds, []Value{Int(int64(random.IntN(2))), {kind: DictKind, box: entries}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		records[i] = record
+	}
+	array, err := Array(holds, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return arrayOf(rates), array
 }

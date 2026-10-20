@@ -35,6 +35,9 @@ func (b *Binding[In, Out]) Options() CompileOptions {
 	options.Args = append([]ArgSpec{}, b.options.Args...)
 	result := *b.options.Result
 	options.Result = &result
+	// The types worked out of the arguments are the binding's: a copy whose
+	// Args are changed works them out again.
+	options.hints = nil
 	return options
 }
 

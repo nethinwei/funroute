@@ -747,3 +747,23 @@ func parsedLiteral(text string) (*syntax.LiteralExpr, bool) {
 	literal, ok := expr.(*syntax.LiteralExpr)
 	return literal, ok
 }
+
+// A literal is held to what it was written as wherever it is, compiled or
+// not: what len counts is never computed, and its float is still refused.
+func TestALiteralIsCheckedWhetherOrNotItCompiles(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}}
+	for _, source := range []string{
+		`len([0.1000000000000000055511151231257827 for x in xs])`,
+		`len([1e-400 for x in [1]])`,
+		`sum([0.1000000000000000055511151231257827 for x in xs])`,
+	} {
+		if _, err := CompileExpr(source, registry, options); err == nil || !strings.Contains(err.Error(), "not a float64 as written") {
+			t.Errorf("CompileExpr(%s) error = %v, want the float refused", source, err)
+		}
+	}
+}
