@@ -1,6 +1,7 @@
 package machine_test
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -140,6 +141,40 @@ func TestAConstantThatIsNotItsTypeIsRefused(t *testing.T) {
 				t.Fatalf("the constant %s reads as %v, want a refusal", document, value.Any())
 			}
 		})
+	}
+}
+
+// A handle has no constant form, inside a container or a record as well as
+// alone: a constexpr host function that returns one is called again at run
+// time, and the artifact always loads.
+func TestAHandleInsideAValueIsNoConstant(t *testing.T) {
+	t.Parallel()
+	handle := machine.HandleOf("demo.token")
+	held := machine.RecordOf(machine.FieldOf("h", handle), machine.FieldOf("n", machine.IntType))
+	registry := machine.CoreRegistry()
+	for name, result := range map[string]machine.Type{"t.held_v1": held, "t.tokens_v1": machine.ArrayOf(handle)} {
+		err := registry.Register(machine.FunctionSpec{
+			Name: name, Result: result, Doc: machine.Doc{Constexpr: true},
+			Eval: func(context.Context, []machine.Value) (machine.Value, error) {
+				token := machine.NewHandle("demo.token", "secret")
+				if result.Kind() == machine.ArrayKind {
+					return machine.Array(handle, []machine.Value{token})
+				}
+				return machine.Record(held, []machine.Value{token, machine.Int(1)})
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, source := range []string{"t.held_v1()", "t.tokens_v1()", "t.held_v1().n"} {
+		artifact, err := compile.CompileExpr(source, registry, compile.CompileOptions{})
+		if err != nil {
+			t.Fatalf("CompileExpr(%s): %v", source, err)
+		}
+		if _, err := machine.Instantiate(artifact, registry); err != nil {
+			t.Errorf("Instantiate(%s) = %v, want the artifact its compile made to load", source, err)
+		}
 	}
 }
 

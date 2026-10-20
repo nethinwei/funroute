@@ -118,7 +118,13 @@ func rearranged(array Value, n int, at func(int) int) Value {
 	case *recordsView:
 		return viewed(box.arranged(n, at))
 	}
-	return array
+	// A backing not listed: item by item, as any array is read, never the
+	// array as it was.
+	builder := newArrayBuilder(array.elemType(), n)
+	for i := range n {
+		builder.add(array.at(at(i)))
+	}
+	return builder.finish()
 }
 
 func picked[T any](items []T, n int, at func(int) int) []T {
@@ -170,7 +176,7 @@ func joined[T any](left []T, right Value) Value {
 // any other's by Equal. Money meets first (money_meet.go): an array of two
 // currencies has no answer.
 func uniqueItems(_ context.Context, args []Value) (Value, error) {
-	if err := meetAll(args[0].Type(), args[0]); err != nil {
+	if err := meetValue(args[0]); err != nil {
 		return Value{}, err
 	}
 	switch box := args[0].box.(type) {

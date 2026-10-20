@@ -120,11 +120,7 @@ func (k moneyKernel) registerProportions(registry *Registry) {
 	byAmounts := moneyDoc("prorate", "按两笔同币种金额之比取金额：prorate(fee, refund, paid) 按退款占比退手续费，中间精确、只舍入一次。", "金额", "部分", "整体")
 	registerRounded(registry, FunctionSpec{Name: "prorate", Params: []Type{MoneyType, MoneyType, MoneyType}, Result: MoneyType, Doc: byAmounts},
 		func(_ context.Context, args []Value) (money.ExactMoney, error) {
-			part, err := moneyOf(args[1]).Ratio(moneyOf(args[2]))
-			if err != nil {
-				return money.ExactMoney{}, err
-			}
-			return exactOf(args[0]).MulRatio(part)
+			return exactOf(args[0]).ProrateBy(moneyOf(args[1]), moneyOf(args[2]))
 		},
 		func(_ context.Context, args []Value, mode money.Rounding) (Value, error) {
 			return moneyResult(moneyOf(args[0]).ProrateBy(moneyOf(args[1]), moneyOf(args[2]), mode))

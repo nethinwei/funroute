@@ -34,6 +34,18 @@ func (f *frame) dropScopes(depth int) {
 	clear(f.fxQuotes[mark:])
 	f.fxQuotes = f.fxQuotes[:mark]
 	f.fxMarks = f.fxMarks[:depth]
+	f.fxHit = fxHit{}
+}
+
+// fxHit is the innermost using's last answer to which of its quotes is
+// between two currencies: a loop converts one pair item after item, and a
+// using of a market's hundred quotes would be searched for it every time.
+// Its quotes do not change while it is open; opening or closing a using
+// forgets the answer.
+type fxHit struct {
+	from, to string
+	rate     money.FxRate
+	found    bool
 }
 
 // scopeQuotes is the innermost using's quotes; ok is false outside every
@@ -93,8 +105,13 @@ func (f *frame) rateBetween(table *money.Currencies, from, to string) (money.FxR
 		pair, err := money.PairOf(table, from, to)
 		return money.FxRateFrom(pair, money.RatioFromParts(1, 1)), err
 	}
-	quotes, _ := f.scopeQuotes()
-	rate, found := quoteBetween(quotes, from, to)
+	rate, found := f.fxHit.rate, f.fxHit.found && f.fxHit.from == from && f.fxHit.to == to
+	if !found {
+		quotes, _ := f.scopeQuotes()
+		if rate, found = quoteBetween(quotes, from, to); found {
+			f.fxHit = fxHit{from: from, to: to, rate: rate, found: true}
+		}
+	}
 	if !found {
 		return money.FxRate{}, fmt.Errorf("%w: the using has no quote between %s and %s, either way", ErrNoFxRate, from, to)
 	}

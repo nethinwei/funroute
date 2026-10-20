@@ -1,6 +1,9 @@
 package machine
 
-import "github.com/nethinwei/funroute/internal/kit"
+import (
+	"github.com/nethinwei/funroute/internal/kit"
+	"github.com/nethinwei/funroute/internal/money"
+)
 
 // regLoop is one active loop of the register machine.
 type regLoop struct {
@@ -131,7 +134,7 @@ func (f *frame) startOutput(loop *regLoop, in *rinstr) {
 			loop.output = builderIn(slot, *site.typ.elem, loop.length)
 		case site.collectsItem && loop.view != nil:
 			// The items stay where they are: what is built is which.
-			loop.output = arrayBuilder{elem: *site.typ.elem, of: loop.view, picked: make([]int32, 0, loop.length)}
+			loop.output = arrayBuilder{elem: *site.typ.elem, of: loop.view, picked: make([]int, 0, loop.length)}
 		default:
 			loop.output = newArrayBuilder(*site.typ.elem, loop.length)
 		}
@@ -234,7 +237,7 @@ func (f *frame) collectItem() {
 		loop.out.add(loop.source.at(loop.index))
 		return
 	}
-	at := int32(loop.index)
+	at := loop.index
 	if loop.view.perm != nil {
 		at = loop.view.perm[at]
 	}
@@ -329,15 +332,19 @@ func (f *frame) loopValue(loop *regLoop) (Value, error) {
 	return loop.output.finish(), nil
 }
 
-// dictBuilder builds a comprehension's dictionary as it goes: an int's or a
-// float's straight into its native map, anything else through a map of
-// values packed at the end. A key made twice is refused when the loop ends,
-// as a literal's is refused: one key, one value, whichever door the
-// dictionary came in by — and after every item, as the loop would have run.
+// dictBuilder builds a dictionary as it goes, a comprehension's or a
+// literal's: a native kind's values straight into the native map the
+// dictionary is, anything else into a map of values it owns. A key made twice
+// is refused when the loop ends, as a literal's is refused: one key, one
+// value, whichever door the dictionary came in by — and after every item, as
+// the loop would have run.
 type dictBuilder struct {
 	elem   Type
 	ints   map[string]int64
 	floats map[string]float64
+	bools  map[string]bool
+	texts  map[string]string
+	monies map[string]money.Money
 	values map[string]Value
 	twice  string
 	twiced bool
@@ -350,6 +357,12 @@ func newDictBuilder(elem Type, capacity int) dictBuilder {
 		builder.ints = make(map[string]int64, capacity)
 	case FloatKind:
 		builder.floats = make(map[string]float64, capacity)
+	case BoolKind:
+		builder.bools = make(map[string]bool, capacity)
+	case StringKind:
+		builder.texts = make(map[string]string, capacity)
+	case MoneyKind:
+		builder.monies = make(map[string]money.Money, capacity)
 	default:
 		builder.values = make(map[string]Value, capacity)
 	}
@@ -357,34 +370,51 @@ func newDictBuilder(elem Type, capacity int) dictBuilder {
 }
 
 func (d *dictBuilder) add(key string, value Value) {
-	var before, after int
+	var fresh bool
 	switch {
 	case d.ints != nil:
-		before = len(d.ints)
-		d.ints[key] = value.i
-		after = len(d.ints)
+		fresh = added(d.ints, key, value.i)
 	case d.floats != nil:
-		before = len(d.floats)
-		d.floats[key] = value.f
-		after = len(d.floats)
+		fresh = added(d.floats, key, value.f)
+	case d.bools != nil:
+		fresh = added(d.bools, key, value.b)
+	case d.texts != nil:
+		fresh = added(d.texts, key, value.s)
+	case d.monies != nil:
+		fresh = added(d.monies, key, money.Make(value.s, value.i))
 	default:
-		before = len(d.values)
-		d.values[key] = value
-		after = len(d.values)
+		fresh = added(d.values, key, value)
 	}
-	if after == before && !d.twiced {
+	if !fresh && !d.twiced {
 		d.twice, d.twiced = key, true
 	}
 }
 
+// added sets key in entries, and reports whether it was not there before.
+func added[T any](entries map[string]T, key string, value T) bool {
+	n := len(entries)
+	entries[key] = value
+	return len(entries) > n
+}
+
 func (d *dictBuilder) finish() (Value, error) {
+	var box any
 	switch {
 	case d.twiced:
 		return Value{}, kit.Errorf(ErrDomain, "the comprehension produced the key %q twice", d.twice)
 	case d.ints != nil:
-		return Value{kind: DictKind, box: d.ints}, nil
+		box = d.ints
 	case d.floats != nil:
-		return Value{kind: DictKind, box: d.floats}, nil
+		box = d.floats
+	case d.bools != nil:
+		box = d.bools
+	case d.texts != nil:
+		box = d.texts
+	case d.monies != nil:
+		box = d.monies
+	default:
+		// The builder's own map: nothing else holds it, so it is not copied.
+		box = &nestedDict{elem: d.elem, entries: d.values}
 	}
-	return packDict(d.elem, d.values), nil
+	return Value{kind: DictKind, box: box}, nil
 }

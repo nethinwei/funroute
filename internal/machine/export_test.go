@@ -29,14 +29,14 @@ func NewRatio(num, den int64) money.Ratio {
 // NewCurrency is a currency value's Go form without a table.
 func NewCurrency(code string) money.Currency { return money.CurrencyOf(code) }
 
-// RunPrefetched is RunValues with a Batch's answers for the runtime's calls,
+// RunPrefetched is RunValues with a Batch's answers for the runtime's sites,
 // by the call instructions' program counters, for a test that plays the
 // Batch.
 func RunPrefetched(ctx context.Context, r *Runtime, args []Value, byPC map[int]Prefetched) (Value, error) {
-	prefetched := make([]Prefetched, len(r.reg.calls))
+	prefetched := make([]Prefetched, len(r.batch.sites))
 	for pc, answer := range byPC {
 		answer.ready = true
-		prefetched[r.callAt(pc)] = answer
+		prefetched[r.batch.slots[r.callAt(pc)]] = answer
 	}
 	return r.runValues(ctx, args, prefetched)
 }

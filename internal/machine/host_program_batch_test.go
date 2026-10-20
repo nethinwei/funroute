@@ -3,7 +3,9 @@ package machine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -369,5 +371,46 @@ func TestRunBatchOfNoRequestsDoesNothing(t *testing.T) {
 	for _, n := range []int{0, -1} {
 		program.RunBatch(t.Context(), n, func(i int) *in { touched(i); return nil }, func(i int) *int64 { touched(i); return nil },
 			func(i int, _ error) { touched(i) })
+	}
+}
+
+// BenchmarkRunBatchManyCalls is a batch of 64 requests of a program that
+// calls one batchable model and nineteen host functions that are not: what
+// the batch keeps for the model's answers grows with the requests and the
+// model's calls, not with every call the program makes.
+func BenchmarkRunBatchManyCalls(b *testing.B) {
+	registry := machine.CoreRegistry()
+	err := registry.Register(machine.FunctionSpec{
+		Name:    "model.score_v1",
+		Go:      func(x float64) (float64, error) { return x, nil },
+		GoBatch: func(xs []float64) ([]float64, error) { return xs, nil },
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := registry.Register(machine.FunctionSpec{Name: "host.plus_v1", Go: func(x float64) float64 { return x + 1 }}); err != nil {
+		b.Fatal(err)
+	}
+	var source strings.Builder
+	source.WriteString("model.score_v1(x)")
+	for i := range 19 {
+		fmt.Fprintf(&source, " + host.plus_v1(x + %d.0)", i)
+	}
+	type in struct {
+		X float64 `funroute:"x"`
+	}
+	binding, err := compile.Bind[in, float64](registry)
+	if err != nil {
+		b.Fatal(err)
+	}
+	program, err := binding.Compile(source.String())
+	if err != nil {
+		b.Fatal(err)
+	}
+	requests, outs := make([]in, 64), make([]float64, 64)
+	ctx := b.Context()
+	b.ReportAllocs()
+	for b.Loop() {
+		program.RunBatch(ctx, len(requests), func(i int) *in { return &requests[i] }, func(i int) *float64 { return &outs[i] }, func(int, error) { b.Fatal("a request failed") })
 	}
 }

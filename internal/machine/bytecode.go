@@ -114,10 +114,10 @@ type Constant struct {
 // constant of typ, the type the program gives it — for an enum member more
 // than the string it holds. A literal list or record that does not read an
 // argument is built once, while the rule compiles, rather than on every run.
-// It reports false for a value that has no constant form: a handle, exact
-// money, or a value that is not of typ.
+// It reports false for a value that has no constant form: one whose type
+// holds a handle anywhere, exact money, or a value that is not of typ.
 func ConstantOf(value Value, typ Type) (Constant, bool) {
-	if value.kind == HandleKind || IsExact(value) || !typ.IsConcrete() || !value.hasType(typ) {
+	if TypeContains(typ, HandleKind) || IsExact(value) || !typ.IsConcrete() || !value.hasType(typ) {
 		return Constant{}, false
 	}
 	if data, ok := scalarJSON(value); ok {

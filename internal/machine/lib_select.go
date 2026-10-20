@@ -191,7 +191,7 @@ func keyedArgs(name string, args []Value) (items, keys Value, err error) {
 		return Value{}, Value{}, fmt.Errorf("%w: %s has %d candidates and %d keys", ErrDomain, name, n, m)
 	}
 	if amounts, ok := nativeItems[money.Money](keys); ok {
-		if err := meetAll(keys.Type(), keys); err != nil {
+		if err := meetValue(keys); err != nil {
 			return Value{}, Value{}, err
 		}
 		keys = arrayOf(minorsOf(amounts))

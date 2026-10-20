@@ -92,7 +92,7 @@ func TestPaddingWidthIsBounded(t *testing.T) {
 // more is refused, however it overflows.
 func TestRepeatIsBoundedByWhatItBuilds(t *testing.T) {
 	t.Parallel()
-	for source, want := range map[string]any{`repeat("", 10001)`: "", `len(repeat("é", 10000))`: int64(10_000), `repeat("ab", 0)`: ""} {
+	for source, want := range map[string]any{`repeat("", 10001)`: "", `repeat("", 9223372036854775807)`: "", `len(repeat("é", 10000))`: int64(10_000), `repeat("ab", 0)`: ""} {
 		if got, err := run(t, source, nil); err != nil || got != want {
 			t.Errorf("%s = %v, %v; want %v", source, got, err, want)
 		}

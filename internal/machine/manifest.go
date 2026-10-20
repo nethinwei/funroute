@@ -1,10 +1,12 @@
 package machine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 
@@ -119,6 +121,32 @@ func manifestFunction(function *RegisteredFunction) ManifestFunction {
 	return described
 }
 
+// compilesOtherwise is the field of have and want, one function described
+// twice, that changes what a call of it compiles to, or "" when none does.
+func compilesOtherwise(have, want ManifestFunction) string {
+	switch {
+	case have.Special != want.Special:
+		return "special"
+	case have.BoundedArgs != want.BoundedArgs:
+		return "bounded_args"
+	case !slices.Equal(have.ConstArgs, want.ConstArgs):
+		return "const_args"
+	case !sameFold(have.Fold, want.Fold):
+		return "fold"
+	}
+	return ""
+}
+
+func sameFold(a, b *ManifestFold) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	initA, initB := a.Init, b.Init
+	plainA, plainB := *a, *b
+	plainA.Init, plainB.Init = nil, nil
+	return reflect.DeepEqual(plainA, plainB) && bytes.Equal(initA, initB)
+}
+
 // fold is the Fold the manifest describes, its Init read as the function's
 // result type.
 func (m *ManifestFold) fold(result Type) (*Fold, error) {
@@ -181,7 +209,10 @@ func (r *Registry) applyMoney(spec *money.MoneySpec) error {
 func (r *Registry) applyFunction(function ManifestFunction) error {
 	spec := FunctionSpec{Name: function.Name, Params: function.Params, Result: function.Result, Doc: function.Doc}
 	spec.Doc.BoundedArgs, spec.Doc.ConstArgs = function.BoundedArgs, function.ConstArgs
-	if _, ok := ResolveOf(r, spec.Signature()); ok {
+	if existing, ok := ResolveOf(r, spec.Signature()); ok {
+		if field := compilesOtherwise(manifestFunction(existing), function); field != "" {
+			return fmt.Errorf("%s: the manifest's %s is not this registry's, so a program would compile otherwise against each", spec.Signature(), field)
+		}
 		return nil
 	}
 	if function.Special != "" {

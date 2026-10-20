@@ -344,10 +344,14 @@ func (w *flower) build(pc int, in Instruction, s *fstate) {
 // nativeElem reports an array type whose items are bools, ints, floats or
 // strings: one native slice backs it.
 func nativeElem(typ Type) bool {
-	if typ.kind != ArrayKind || typ.elem == nil {
-		return false
-	}
-	switch typ.elem.kind {
+	return typ.kind == ArrayKind && typ.elem != nil && arenaElem(typ.elem.kind)
+}
+
+// arenaElem is the kinds an array of which a frame's slot holds, a view
+// lends and an answer is built in: builderIn, finishIn and viewIn have a case
+// for each (TestEveryBackingIsHandledEverywhere).
+func arenaElem(kind Kind) bool {
+	switch kind {
 	case BoolKind, IntKind, FloatKind, StringKind:
 		return true
 	}

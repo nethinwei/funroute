@@ -31,8 +31,9 @@ type recordsView struct {
 	length int
 	plan   *codec
 	// perm, when set, is which item of the host's slice each item is: a
-	// view the library sorted or cut, not the slice as it is.
-	perm []int32
+	// view the library sorted or cut, not the slice as it is. An int, so a
+	// slice past 2^31 items cannot wrap to another item.
+	perm []int
 }
 
 // viewable reports a slice plan a recordsView can carry: every field of its
@@ -63,7 +64,7 @@ func viewRecords(view *recordsView, plan *codec, p unsafe.Pointer, inPlace bool)
 // item is where item i is in the host's memory.
 func (v *recordsView) item(i int) unsafe.Pointer {
 	if v.perm != nil {
-		i = int(v.perm[i])
+		i = v.perm[i]
 	}
 	return unsafe.Add(v.data, uintptr(i)*v.plan.stride)
 }
@@ -121,13 +122,13 @@ func (v *recordsView) slice(from, to int) *recordsView {
 // arranged is n items of the view, item i of it being item at(i) of v: a
 // view of the same memory in another order.
 func (v *recordsView) arranged(n int, at func(int) int) *recordsView {
-	perm := make([]int32, n)
+	perm := make([]int, n)
 	for i := range perm {
 		j := at(i)
 		if v.perm != nil {
-			j = int(v.perm[j])
+			j = v.perm[j]
 		}
-		perm[i] = int32(j)
+		perm[i] = j
 	}
 	return &recordsView{data: v.data, length: n, plan: v.plan, perm: perm}
 }

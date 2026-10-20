@@ -40,6 +40,10 @@
 - **精确金额不会被写成宿主的 `Money`**：伪造 artifact 让 `round` 之外的精确金额到达宿主时，原来把分子当作最小单位写进去（半分钱写成 USD 0.01），现在是错误。
 - `allocate(m, n)` 的 n 在 32 位平台上先在 int64 上比较上限，不会被截断绕过 10000。
 - **批处理**：被拒绝的请求原来不计入"不再等待"，其余请求都不等了也不取消引擎调用；全部被拒的批次仍以零条调用引擎。
+- **`round(prorate(m, part, whole))` 与 `prorate(m, part, whole, @mode)` 同一个答案**：按两笔金额取比例时，精确路径原来先把 part/whole 做成比例，whole 是最小金额时比例放不下就报 `ErrArithmetic`，而结果放得下。新增 `ExactMoney.ProrateBy`。
+- **编译出的 artifact 一定能装载**：宿主的 Constexpr 函数返回含 handle 的 record 或数组时，原来被折成一个装载时读不回的常量；现在含 handle 的类型一律不折叠。
+- `repeat("", n)` 在 32 位平台上不再因 n 回绕而 panic；宿主切片视图的置换下标不再用 int32。
+- 内核专用的取下标指令与 `reverse`/`sort_by` 的重排遇到不认识的存储时交给通用路径，不再静默给出旧值或原数组（目前不可达，防将来新增存储时出错）。
 
 
 ### 行为变化
@@ -61,6 +65,8 @@
 - 上面那些编译错误新增位置与 `type error:` 前缀。
 - `funroute fmt` 与 `Format` 输出 `a -> (-1)`、`{(true): …}`。
 - 目录与签名清单里 `sort_by`、`top_k`、`min_by`、`arg_max` 等的 `description` 写明了遇 NaN 的顺序。
+- `Currency{}` 的 `MarshalJSON` 报 `ErrCurrency`（与零值 `FxRate` 一样），原来写出读不回的 `""`。
+- `Manifest.Apply` 遇到注册表里已有、但 `Fold`、`BoundedArgs`、`ConstArgs` 或内核身份与清单不同的函数时报错，原来静默保留注册表的。
 
 
 ### 性能
@@ -80,6 +86,10 @@
 - `min`/`max`/`abs` 有专用指令，带它们的循环可以进向量：`[min(x, 10) for x in xs]`（500 个）从 5.4 µs 到 1.4 µs。
 - 金额的 `==`、`!=`、`in`、`index_of` 与 `dict<money>` 的相等不再分配（500 笔金额原来 2–3 次）；容器的 `Equal` 不再为比较类型新建 `Type`，字典的相等不再排序键。
 - 编译时找自由变量从平方变为线性：4 万个不同的自由变量从 826 ms 到 4.4 ms。
+- `unique`、`intersect`、`except` 与金额键的 `sort_by` 等不再为检查币种新建数组类型，各少一次分配。
+- `bool`、`string`、金额与 record 值的字典推导式只建一份 map（10 项的 `dict<bool>` 从 8 次分配到 4 次）；字典字面量走同一个构造器。
+- 批处理按合批的调用点保存答案，不再按程序的全部调用：20 个宿主调用、1 个合批模型的 64 条请求从每批 131 KB 到 30 KB。
+- `using` 记住最近一次找到的货币对：150 个报价里循环换 500 笔从 430 µs 到 71 µs，与报价数基本无关。
 
 
 ### 文档

@@ -114,6 +114,22 @@ func TestExactMoneyTakesAPart(t *testing.T) {
 	}
 }
 
+// ProrateBy takes the part by two amounts of one currency, as Money.ProrateBy
+// does: USD 0.01 of the smallest amount is no ratio, and needs none.
+func TestExactMoneyProratesByAmounts(t *testing.T) {
+	t.Parallel()
+	got, err := usd(2).Exact().ProrateBy(usd(1), usd(math.MinInt64))
+	if want := ratio(-1, 1<<62); err != nil || got.Minor() != want {
+		t.Errorf("(USD 0.02).ProrateBy(USD 0.01, the smallest) = %s, %v, want %s minor units", got, err, want)
+	}
+	if _, err := usd(2).Exact().ProrateBy(usd(1), Money{currency: "EUR", minor: 3}); !errors.Is(err, ErrCurrency) {
+		t.Errorf("ProrateBy(USD, EUR) error = %v, want ErrCurrency", err)
+	}
+	if _, err := usd(2).Exact().ProrateBy(usd(1), usd(0)); !errors.Is(err, ErrArithmetic) {
+		t.Errorf("ProrateBy(USD 0.01, USD 0) error = %v, want ErrArithmetic", err)
+	}
+}
+
 // The sign of exact money is the sign of its minor units, however small a
 // part of one they are.
 func TestExactMoneySign(t *testing.T) {

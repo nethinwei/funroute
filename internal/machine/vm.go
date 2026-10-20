@@ -21,8 +21,10 @@ type Runtime struct {
 	money moneyPlan
 	// depth is how deep the stack gets, which loading proved.
 	depth int
-	// reg is the program in register form, which is what runs.
-	reg regProgram
+	// reg is the program in register form, which is what runs; batch the
+	// calls of it a Batch hoists.
+	reg   regProgram
+	batch batchPlan
 	// scalars is, by argument, the kind of a bool, int, float or string
 	// parameter, which a value of that kind has without looking further;
 	// InvalidKind for the rest.
@@ -98,10 +100,12 @@ func newRuntime(artifact *Artifact, registry *Registry) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Runtime{
+	runtime := &Runtime{
 		artifact: artifact, registry: registry, constants: constants, functions: functions, depth: proof.depth, reg: reg,
 		money: newMoneyPlan(artifact, registry), scalars: scalarKinds(artifact.parts.Args),
-	}, nil
+	}
+	runtime.batch = planBatch(runtime)
+	return runtime, nil
 }
 
 // scalarKinds is what Runtime.scalars says of params.

@@ -85,6 +85,15 @@ func (e ExactMoney) MulPart(part, whole int64) (ExactMoney, error) {
 	return ExactMoney{currency: e.currency, minor: product}, err
 }
 
+// ProrateBy is e times part/whole, two amounts of one currency, exactly: as
+// Money.ProrateBy, rounded nowhere.
+func (e ExactMoney) ProrateBy(part, whole Money) (ExactMoney, error) {
+	if _, err := part.meet(whole); err != nil {
+		return ExactMoney{}, err
+	}
+	return e.MulPart(part.minor, whole.minor)
+}
+
 // DivRatio is e divided by a ratio, exactly; by zero it is ErrArithmetic.
 func (e ExactMoney) DivRatio(r Ratio) (ExactMoney, error) {
 	quotient, err := e.minor.Div(r)

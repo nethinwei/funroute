@@ -211,6 +211,7 @@ func (f *frame) scoped(pc int, in *rinstr) (int, bool, error) {
 	case rFxPush:
 		f.fxMarks = append(f.fxMarks, len(f.fxQuotes))
 		f.fxQuotes = append(f.fxQuotes, f.regs[in.a:in.a+in.b]...)
+		f.fxHit = fxHit{}
 	case rFxPop:
 		f.popScope()
 	default:
@@ -247,7 +248,11 @@ func (f *frame) build(in *rinstr) (Value, error) {
 		}
 		return finishIn(slot, &builder), nil
 	case rMakeDict:
-		return packDict(*made.typ.elem, zipEntries(made.keys, items)), nil
+		dict := newDictBuilder(*made.typ.elem, len(items))
+		for i, item := range items {
+			dict.add(made.keys[i], item)
+		}
+		return dict.finish()
 	case rMakeRecord:
 		if made.answer && f.lending {
 			f.answer.typ, f.answer.fields = made.typ, append(f.answer.fields[:0], items...)
@@ -304,13 +309,4 @@ func (f *frame) newRecord(made *rmake, typ *Type, n int) *recordValue {
 		return f.loops[len(f.loops)-1].out.record(typ, n)
 	}
 	return newRecord(typ, n)
-}
-
-// zipEntries pairs keys with values, one for one.
-func zipEntries(keys []string, values []Value) map[string]Value {
-	entries := make(map[string]Value, len(values))
-	for i, value := range values {
-		entries[keys[i]] = value
-	}
-	return entries
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,8 +52,32 @@ type BatchOptions struct {
 type batchSite struct {
 	PrefetchSite
 	function *RegisteredFunction
-	// call is the call of the register form the site is.
-	call int
+}
+
+// batchPlan is the calls of a program a Batch hoists, found once when the
+// program loads: each site, and by call of the register form its slot among
+// the sites, -1 for a call no batch hoists. A request's answers are one slot
+// a site, not one a call. Empty for a program that calls no function with a
+// batch implementation.
+type batchPlan struct {
+	sites []batchSite
+	slots []int32
+}
+
+func planBatch(r *Runtime) batchPlan {
+	if !slices.ContainsFunc(r.functions, func(function *RegisteredFunction) bool { return function.EvalBatch != nil }) {
+		return batchPlan{}
+	}
+	plan := batchPlan{slots: slices.Repeat([]int32{-1}, len(r.reg.calls))}
+	for _, site := range PrefetchSites(r.artifact) {
+		function, call := r.functions[site.Call], r.callAt(site.PC)
+		if function.EvalBatch == nil || call < 0 {
+			continue
+		}
+		plan.slots[call] = int32(len(plan.sites))
+		plan.sites = append(plan.sites, batchSite{PrefetchSite: site, function: function})
+	}
+	return plan
 }
 
 // batchRequest is one program run inside a batch. A request that someone is
@@ -114,14 +139,7 @@ func NewBatch(runtime *Runtime, options BatchOptions) *Batch {
 	if options.MaxWait <= 0 {
 		options.MaxWait = 2 * time.Millisecond
 	}
-	batch := &Batch{runtime: runtime, options: options}
-	for _, site := range PrefetchSites(runtime.artifact) {
-		function := runtime.functions[site.Call]
-		if function.EvalBatch != nil {
-			batch.sites = append(batch.sites, batchSite{PrefetchSite: site, function: function, call: runtime.callAt(site.PC)})
-		}
-	}
-	return batch
+	return &Batch{runtime: runtime, options: options, sites: runtime.batch.sites}
 }
 
 // Sites reports how many calls this batch hoists, so a host can see whether a
@@ -310,19 +328,19 @@ func (b *Batch) executeUnder(ctx context.Context, active []*batchRequest) {
 		return
 	}
 	// Every request's answers in one allocation: a share each, one slot
-	// for each call of the program.
-	calls := len(b.runtime.reg.calls)
+	// for each site the batch hoists.
+	sites := len(b.sites)
 	var answers []Prefetched
-	if len(b.sites) > 0 {
-		answers = make([]Prefetched, len(active)*calls)
+	if sites > 0 {
+		answers = make([]Prefetched, len(active)*sites)
 	}
-	for _, site := range b.sites {
-		b.prefetch(ctx, site, active, answers)
+	for slot, site := range b.sites {
+		b.prefetch(ctx, slot, site, active, answers)
 	}
 	for i, request := range active {
 		var prefetched []Prefetched
 		if answers != nil {
-			prefetched = answers[i*calls : (i+1)*calls]
+			prefetched = answers[i*sites : (i+1)*sites]
 		}
 		request.finish(b.run(request, prefetched))
 	}
@@ -381,7 +399,7 @@ func latestDeadline(requests []*batchRequest) (time.Time, bool) {
 
 // prefetch runs one hoisted call for the whole batch and files each request's
 // share of the answer in its slot for the call.
-func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchRequest, answers []Prefetched) {
+func (b *Batch) prefetch(ctx context.Context, slot int, site batchSite, requests []*batchRequest, answers []Prefetched) {
 	calls := make([][]Value, len(requests))
 	operands := make([]Value, len(requests)*len(site.Operands))
 	for i, request := range requests {
@@ -393,14 +411,14 @@ func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchR
 	} else if len(results) != len(requests) {
 		err = fmt.Errorf("batch returned %d results for %d requests", len(results), len(requests))
 	}
-	stride := len(b.runtime.reg.calls)
+	stride := len(b.sites)
 	for i := range requests {
-		slot := &answers[i*stride+site.call]
+		answer := &answers[i*stride+slot]
 		if err != nil {
-			*slot = Prefetched{Err: err, ready: true} // the call site adds the function's name
+			*answer = Prefetched{Err: err, ready: true} // the call site adds the function's name
 			continue
 		}
-		*slot = Prefetched{Value: results[i], ready: true}
+		*answer = Prefetched{Value: results[i], ready: true}
 	}
 }
 

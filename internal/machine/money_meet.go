@@ -33,24 +33,20 @@ func meeting(few *fewPlaces, n int) unitsMeet {
 	return unitsMeet{at: make([]string, n)}
 }
 
-// meetAll checks that values of typ meet. A type that holds no money has
-// nothing to check.
-func meetAll(typ Type, values ...Value) error {
-	if !containsUnits(typ) {
+// meetValue checks that the money in v meets: unique's question, and a
+// sort's by amounts. A type that holds no money has nothing to check.
+func meetValue(v Value) error {
+	plan, places, units := planOfValue(v)
+	if !units {
 		return nil
 	}
-	plan, places := plansOf(typ)
 	var few fewPlaces
 	m := meeting(&few, places)
-	for _, v := range values {
-		if err := m.meet(plan, v); err != nil {
-			return err
-		}
-	}
-	return nil
+	return m.meet(plan, v)
 }
 
-// meetPair checks that two values of one type, right's, meet: what == asks.
+// meetPair checks that two values of one type, right's, meet: what == asks,
+// and intersect and except.
 func meetPair(left, right Value) error {
 	plan, places, units := planOfValue(right)
 	if !units {

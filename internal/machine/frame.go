@@ -39,9 +39,10 @@ type frame struct {
 	fxQuotes   []Value
 	fxMarks    []int
 	fxCtx      fxContext       // handed to a kernel function that reads rates
+	fxHit      fxHit           // the innermost using's last quote found
 	ctx        context.Context // the request's budget; extension calls see it
 	deadline   bool            // whether ctx can end, and a host's call or a loop looks
-	prefetched []Prefetched    // a Batch's answers for hoisted calls, by call
+	prefetched []Prefetched    // a Batch's answers for hoisted calls, by slot (batchPlan)
 	// turns is how many turns of a loop are left before the run looks at
 	// its context again, and budget, for an evaluation at compile time, how
 	// many it has left in all (limit.go).

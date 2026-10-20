@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
@@ -74,5 +75,34 @@ func TestAManifestCarriesTheFold(t *testing.T) {
 		if function.Name() == "pick.first_v1" && !function.ShortCircuit() {
 			t.Fatal("the catalog does not say pick.first_v1 short-circuits")
 		}
+	}
+}
+
+// A function the registry has already must compile as the manifest says it
+// does: the same fold, the same arguments bounded or fixed. One that would
+// compile otherwise is refused by name, rather than quietly kept.
+func TestAManifestRefusesAFunctionThatWouldCompileOtherwise(t *testing.T) {
+	t.Parallel()
+	first := func(xs []int64) (int64, error) { return xs[0], nil }
+	host := machine.CoreRegistry()
+	if err := host.Register(machine.FunctionSpec{Name: "pick.first_v1", Go: first, Fold: &machine.Fold{First: true}}); err != nil {
+		t.Fatal(err)
+	}
+	for name, spec := range map[string]machine.FunctionSpec{
+		"the same":     {Name: "pick.first_v1", Go: first, Fold: &machine.Fold{First: true}},
+		"fold":         {Name: "pick.first_v1", Go: first},
+		"bounded_args": {Name: "pick.first_v1", Go: first, Fold: &machine.Fold{First: true}, Doc: machine.Doc{BoundedArgs: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			service := machine.CoreRegistry()
+			if err := service.Register(spec); err != nil {
+				t.Fatal(err)
+			}
+			err := host.Manifest().Apply(service)
+			if name == "the same" && err != nil || name != "the same" && (err == nil || !strings.Contains(err.Error(), name)) {
+				t.Fatalf("Apply onto a registry whose pick.first_v1 differs in %q: error = %v", name, err)
+			}
+		})
 	}
 }

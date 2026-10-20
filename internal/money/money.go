@@ -79,7 +79,14 @@ func (m Money) wellFormed() error {
 	return nil
 }
 
-func (c Currency) MarshalJSON() ([]byte, error) { return json.Marshal(c.code) }
+// MarshalJSON writes the code. The zero Currency has none to write: "" would
+// not read back, so it is an ErrCurrency, as the zero FxRate's is.
+func (c Currency) MarshalJSON() ([]byte, error) {
+	if c.code == "" {
+		return nil, fmt.Errorf("%w: the zero Currency is no currency; take one from a currency table", ErrCurrency)
+	}
+	return json.Marshal(c.code)
+}
 
 func (c *Currency) UnmarshalJSON(data []byte) error {
 	var code string

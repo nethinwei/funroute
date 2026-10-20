@@ -309,7 +309,7 @@ type arrayBuilder struct {
 	// picked where each is in the host's slice: the array is a view of
 	// them.
 	of     *recordsView
-	picked []int32
+	picked []int
 	// slab and slabFields are the records a loop builds as it collects them
 	// and their fields, a block at a time, rather than one allocation each
 	// (record).

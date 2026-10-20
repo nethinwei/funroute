@@ -147,10 +147,14 @@ func (f *frame) resultTypeError(function *RegisteredFunction, value Value, typ T
 // prefetchedAt is small enough to inline, so the common case — no batch — is
 // one nil check on the call path.
 func (f *frame) prefetchedAt(call int) (Prefetched, bool) {
-	if f.prefetched == nil || !f.prefetched[call].ready {
+	if f.prefetched == nil {
 		return Prefetched{}, false
 	}
-	return f.prefetched[call], true
+	slot := f.runtime.batch.slots[call]
+	if slot < 0 || !f.prefetched[slot].ready {
+		return Prefetched{}, false
+	}
+	return f.prefetched[slot], true
 }
 
 // invokeBounded caps one call by the function's Timeout and, for a Detached

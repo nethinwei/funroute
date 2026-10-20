@@ -32,7 +32,7 @@ func builderIn(slot *arenaSlot, elem Type, capacity int) arrayBuilder {
 		builder.ints = slices.Grow(slot.ints[:0], capacity)
 	case FloatKind:
 		builder.floats = slices.Grow(slot.floats[:0], capacity)
-	default:
+	case StringKind:
 		builder.strings = slices.Grow(slot.strings[:0], capacity)
 	}
 	return builder

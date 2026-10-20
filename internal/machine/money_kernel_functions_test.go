@@ -322,6 +322,12 @@ func TestAProportionOfTheSmallestAmountIsReducedFirst(t *testing.T) {
 		// 1/MinInt64 fits no ratio, and a round needs none.
 		"prorate(USD 1.00, 1, minor(m), @down)":        "{USD 0}",
 		"round(prorate(USD 1.00, 1, minor(m)), @down)": "{USD 0}",
+		// So too by amounts: USD 0.01 over the smallest amount is no ratio,
+		// and the product, half a cent's worth of 2^-62, needs none.
+		"prorate(USD 0.02, USD 0.01, m, @half_even)":        "{USD 0}",
+		"round(prorate(USD 0.02, USD 0.01, m), @half_even)": "{USD 0}",
+		"prorate(USD 0.02, USD 0.01, m, @floor)":            "{USD -1}",
+		"round(prorate(USD 0.02, USD 0.01, m), @floor)":     "{USD -1}",
 	} {
 		value, err := evalMoney(t, source, "m: money", args)
 		if got := fmt.Sprint(value.Any()); err != nil || got != want {

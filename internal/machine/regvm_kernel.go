@@ -213,6 +213,8 @@ func atI(b *banks, in *rinstr) bool {
 		b.ints[in.c] = itemsAt(items, array.i)[index]
 	case *[]int64:
 		b.ints[in.c] = (*items)[index]
+	default:
+		return false // a backing it does not read: the function answers
 	}
 	return true
 }
@@ -228,6 +230,8 @@ func atB(b *banks, in *rinstr) bool {
 		b.ints[in.c] = word(itemsAt(items, array.i)[index])
 	case *[]bool:
 		b.ints[in.c] = word((*items)[index])
+	default:
+		return false // a backing it does not read: the function answers
 	}
 	return true
 }
@@ -288,6 +292,8 @@ func atF(b *banks, in *rinstr) bool {
 		b.floats[in.c] = itemsAt(items, array.i)[index]
 	case *[]float64:
 		b.floats[in.c] = (*items)[index]
+	default:
+		return false // a backing it does not read: the function answers
 	}
 	return true
 }

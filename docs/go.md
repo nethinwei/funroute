@@ -139,10 +139,10 @@ table, _ := registry.Currencies()   // *funroute.Currencies，或 funroute.NewCu
 | 读金额 | `m.Currency()`、`m.Minor()`、`m.Sign()`、`m.IsZero()` |
 | 加减比较 | `m.Add(o)`、`m.Sub(o)`、`m.Neg()`、`m.Abs()`、`m.Cmp(o)` |
 | 乘除（当场舍入） | `m.MulInt(n)`、`m.MulRatio(r, mode)`、`m.DivRatio(r, mode)`、`m.Ratio(o)`（同币种之比，得比例）、`m.Prorate(part, whole, mode)`、`m.ProrateBy(part, whole, mode)`（按比例取，只舍入一次）、`m.RoundTo(step, mode)`（现金舍入） |
-| 精确计算（规则里的 `round`） | `m.Exact()` 得 `ExactMoney`；`e.Add`/`Sub`/`Neg`/`MulInt`/`MulRatio`/`DivRatio`/`Cmp`/`Sign`、`table.ConvertExact(e, fx)` 都不舍入；`e.Round(mode)` 舍入一次得回 `Money` |
+| 精确计算（规则里的 `round`） | `m.Exact()` 得 `ExactMoney`；`e.Add`/`Sub`/`Neg`/`MulInt`/`MulRatio`/`DivRatio`/`MulPart`/`ProrateBy`/`Cmp`/`Sign`、`table.ConvertExact(e, fx)` 都不舍入；`e.Round(mode)` 舍入一次得回 `Money` |
 | 分摊与统计 | `m.Allocate(权重...)`、`m.Split(n)`（一分不丢，剩下的最小单位按最大余数法发出；n 为 1–10000，与规则里的 `allocate` 相同）、`m.AllocateBy(strategy, 权重...)`、`m.SplitBy(strategy, n)`（按 `funroute.AllocateAllLast` 等策略发）、`funroute.AverageMoney(ms, mode)`、`funroute.MedianMoney(ms, mode)`（与 std 的 `avg`/`median` 相同） |
 | 比例 | `funroute.ParseRatio("0.029")`（也读分数 `"1/3"`）、`funroute.Percent("2.9")`、`funroute.BasisPoints("25")`；`r.Add`/`Sub`/`Mul`/`Div`、`r.Cmp`、`r.Sign`、`r.IsZero`、`r.String()` |
-| 币种 | `table.Currency("USD")`，`c.Code()` |
+| 币种 | `table.Currency("USD")`，`c.Code()`；零值 `Currency{}` 不是币种，写 JSON 是 `ErrCurrency`（与零值 `FxRate` 一样） |
 | 汇率 | `table.FxRate("USD", "JPY", "150.25")`、`table.Implied(over, under)`；`fx.Base()`、`fx.Quote()`、`fx.String()`（`150.25 JPY / USD`，与规则里的字面量同一写法）、`fx.Decimal(places)`（半偶舍入后的展示文本，汇率本身不变）、`fx.Inverse()`、`fx.Chain(next)`（串联，前一个的报价币种必须是后一个的基准币种；串回起点时乘积必须恰为 1，带点差的回环是 `ErrArithmetic`）、`fx.MulRatio(r)`（加点，与规则里的 `fx * 101%` 相同）、`fx.Cmp(other)` |
 | 换汇 | `table.Convert(m, fx, mode)`：把 fx 基准币种的 m 按这个汇率换成报价币种并舍入一次，与规则里的 `convert(m, JPY, @mode)` 相同；m 是别的币种（不是不带币种的零）就是 `ErrCurrency` |
 
