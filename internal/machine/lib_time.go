@@ -81,8 +81,8 @@ func orderTimes(accept func(int) bool) EvalFunc {
 }
 
 func parseTime(_ context.Context, args []Value) (Value, error) {
-	t, err := time.Parse(time.RFC3339Nano, args[0].s)
-	if err != nil {
+	t, ok := parseRFC3339(args[0].s)
+	if !ok {
 		return Value{}, fmt.Errorf("%w: time %q is not RFC 3339", ErrDomain, args[0].s)
 	}
 	return timeValue(t)
@@ -128,7 +128,7 @@ func startOfDay(_ context.Context, args []Value) (Value, error) {
 		return Value{}, err
 	}
 	year, month, day := local.Date()
-	return timeValue(time.Date(year, month, day, 0, 0, 0, 0, local.Location()))
+	return timeValue(wallIn(time.Date(year, month, day, 0, 0, 0, 0, time.UTC), local.Location()))
 }
 
 func addDays(_ context.Context, args []Value) (Value, error) {
@@ -142,7 +142,44 @@ func addDays(_ context.Context, args []Value) (Value, error) {
 	if days > 110_000 || days < -110_000 {
 		return Value{}, fmt.Errorf("%w: %d days is past the years a time holds", ErrDomain, days)
 	}
-	return timeValue(local.AddDate(0, 0, int(days)))
+	year, month, day := local.Date()
+	wall := time.Date(year, month, day+int(days), local.Hour(), local.Minute(), local.Second(), local.Nanosecond(), time.UTC)
+	return timeValue(wallIn(wall, local.Location()))
+}
+
+// wallIn is the instant location's clocks read wall at, written in UTC, as
+// java.time and RFC 5545 read one: a wall a change of clock repeats is the
+// earlier instant, one it skips is as far past the change as the wall is into
+// the gap — so a day a change starts at midnight starts when the change is,
+// not in the day before. time.Date promises only an instant right in one of
+// the two zones of a change, which zone left to it.
+func wallIn(wall time.Time, location *time.Location) time.Time {
+	t := time.Date(wall.Year(), wall.Month(), wall.Day(), wall.Hour(), wall.Minute(), wall.Second(), wall.Nanosecond(), location)
+	read := func(at time.Time) bool {
+		return at.Add(time.Duration(offsetOf(at.In(location))) * time.Second).Equal(wall)
+	}
+	if !read(t) {
+		// In a gap: one of the change's offsets is the one t was read with,
+		// the other t's own, and before the gap the smaller held.
+		used := int(wall.Sub(t) / time.Second)
+		return wall.Add(-time.Duration(min(used, offsetOf(t))) * time.Second)
+	}
+	if start, _ := t.ZoneBounds(); !start.IsZero() {
+		// A wall repeated reads in the span before t's too, with its larger
+		// offset, earlier.
+		if before := offsetOf(start.Add(-time.Nanosecond)); before > offsetOf(t) {
+			if earlier := wall.Add(-time.Duration(before) * time.Second); read(earlier) {
+				return earlier
+			}
+		}
+	}
+	return t
+}
+
+// offsetOf is the seconds t's zone is east of UTC.
+func offsetOf(t time.Time) int {
+	_, offset := t.Zone()
+	return offset
 }
 
 // zones is every zone a run has named, loaded once: IANA names a few

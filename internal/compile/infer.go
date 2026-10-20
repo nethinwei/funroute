@@ -387,6 +387,9 @@ func (s *inferState) bindVar(variable, term typeTerm) error {
 	if term.kind == machine.VarKind && term.id == variable.id {
 		return nil
 	}
+	if term.kind == machine.VarKind && s.joinsUnder(term.id, variable.id) {
+		variable, term = term, variable
+	}
 	mine := s.infoOf(variable.id)
 	if term.kind == machine.VarKind {
 		theirs := s.infoOf(term.id)
@@ -413,6 +416,16 @@ func (s *inferState) bindVar(variable, term typeTerm) error {
 	s.convert(varInfo{domain: kindsOf(term.kind), ints: mine.ints, floats: mine.floats}.forced() - mine.forced())
 	s.bind(variable.id, term)
 	return nil
+}
+
+// joinsUnder reports whether, of two open variables that meet, a is the one
+// to bind to b: the one fewer choices watch, the newer of two as watched. A
+// program's argument meets a fresh variable at every call it is passed to;
+// bound the other way, each call would lengthen the chain deref walks and
+// hand on every watcher the argument has gathered.
+func (s *inferState) joinsUnder(a, b int) bool {
+	mine, theirs := len(s.vars[a].watchers), len(s.vars[b].watchers)
+	return mine < theirs || mine == theirs && a > b
 }
 
 func (s *inferState) occurs(id int, term typeTerm) bool {

@@ -296,7 +296,8 @@ func (r *Registry) EnabledForms() []Form {
 // function could have). Two copies would drift.
 //
 // A function name may be dotted, to carry a namespace and a version:
-// route.score_v1. A variable name may not: "." is kept for field access. The
+// route.score_v1, each part named, so f..g and f. are not. A variable name
+// may not: "." is kept for field access. The
 // shapes are checked byte by byte rather than by a regular expression: the
 // run's boundary asks of every currency unit whether it is a variable, and a
 // regexp's matcher comes from a pool.
@@ -305,7 +306,7 @@ func nameShape(name string, dotted bool) bool {
 		return false
 	}
 	for i := 1; i < len(name); i++ {
-		if c := name[i]; !kit.IsNameChar(c) && (!dotted || c != '.') {
+		if c := name[i]; !kit.IsNameChar(c) && (!dotted || c != '.' || i+1 == len(name) || name[i+1] == '.') {
 			return false
 		}
 	}

@@ -3,6 +3,7 @@ package machine
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 )
 
@@ -44,8 +45,8 @@ func coerceTimeKind(input any, expected Type) (Value, error) {
 	case !ok:
 		return Value{}, fmt.Errorf("got %T, want %s text", input, expected)
 	case expected.kind == TimeKind:
-		t, err := time.Parse(time.RFC3339Nano, text)
-		if err != nil {
+		t, ok := parseRFC3339(text)
+		if !ok {
 			return Value{}, fmt.Errorf("time %q is not RFC 3339", text)
 		}
 		return timeValue(t)
@@ -55,6 +56,28 @@ func coerceTimeKind(input any, expected Type) (Value, error) {
 		return Value{}, fmt.Errorf("duration %q is not a Go duration such as 1h30m", text)
 	}
 	return Duration(d), nil
+}
+
+// parseRFC3339 reads a time as RFC 3339 writes it, which time.Parse is
+// laxer than in the fraction of a second.
+func parseRFC3339(text string) (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339Nano, text)
+	return t, err == nil && rfc3339Fraction(text)
+}
+
+// rfc3339Fraction is whether text's seconds have the fraction RFC 3339
+// writes, if any: after a point, never a comma, and to the nanosecond a time
+// holds, not cut there. time.Parse takes both.
+func rfc3339Fraction(text string) bool {
+	if strings.ContainsRune(text, ',') {
+		return false
+	}
+	_, fraction, ok := strings.Cut(text, ".")
+	if !ok {
+		return true
+	}
+	digits := strings.IndexFunc(fraction, func(r rune) bool { return r < '0' || r > '9' })
+	return digits >= 0 && digits <= 9
 }
 
 // timeGoKind is the type of time.Time and time.Duration, which reflection

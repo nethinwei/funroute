@@ -48,6 +48,13 @@ func inferQuotedRate(rate syntax.Expr, state *inferState, context inferContext) 
 	}, func() error { return state.unify(quote, rateTerm) })
 }
 
+// outsideUsing is the error of a call that reads exchange rates where no
+// using gives it any. checkExact says it before it says such a call is a step
+// outside a round: the round it would ask for would not be enough.
+func outsideUsing(node *syntax.CallExpr) error {
+	return syntax.Around(node, "type error: %s reads exchange rates, which only a using has: write it inside using(150 JPY / USD, …), or using(rates, …) with the rates as an argument", operatorName(node))
+}
+
 // compileUsing leaves the exchange rates on the stack, opens the scope with
 // them and closes it after the body.
 func (c *bytecodeCompiler) compileUsing(node *syntax.UsingExpr) error {

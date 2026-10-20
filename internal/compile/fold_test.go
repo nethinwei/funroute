@@ -293,13 +293,23 @@ func TestClosedFailuresAreCompileErrors(t *testing.T) {
 }
 
 // A closed expression that fails is a compile error that says where: the
-// node that failed, not the start of the program.
+// node that failed, not the start of the program, nor the closed part a fold
+// ran whole — a branch taken as well as one stepped over, and inside a let.
 func TestAFailingFoldIsPlaced(t *testing.T) {
 	t.Parallel()
+	deep := "1 / 0" + strings.Repeat(" + 1", 900)
 	for source, want := range map[string]string{
 		"x + 1 / 0":                     "1 / 0",
 		"if(x > 0, [1, 2][5], 0)":       "[1, 2][5]",
 		"x * (9223372036854775807 + 1)": "(9223372036854775807 + 1)",
+		"if(true, 1, 1 / 0)":            "1 / 0",
+		"if(false, 1, 1 / 0)":           "1 / 0",
+		"x + if(false, 1, 1 / 0)":       "1 / 0",
+		"2 + 3 * (1 / 0)":               "(1 / 0)",
+		"let(a = 0, b = 2, b / a)":      "b / a",
+		"let(a = 5, [1, 2][a] + 1)":     "[1, 2][a]",
+		"let(a = 1 / 0, a)":             "1 / 0",
+		deep:                            "1 / 0",
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()

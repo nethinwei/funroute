@@ -2,6 +2,7 @@ package machine_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
@@ -24,6 +25,13 @@ func TestStatisticsAndPowers(t *testing.T) {
 		{"最低分位", `percentile(latencies, 0.0)`, []compile.ArgSpec{latencies}, args, 100.0},
 		{"最高分位", `percentile(latencies, 1.0)`, []compile.ArgSpec{latencies}, args, 400.0},
 		{"标准差", `stddev([2, 4, 4, 4, 5, 5, 7, 9])`, nil, nil, 2.0},
+		// Past 2^53 a float64 does not tell neighbouring ints apart; their
+		// distances from the mean are taken in integers.
+		{"大整数标准差", `stddev([9007199254740993, 9007199254740995])`, nil, nil, 1.0},
+		{"更大整数标准差", `stddev([4611686018427387905, 4611686018427387907])`, nil, nil, 1.0},
+		{"负整数标准差", `stddev([-9007199254740995, -9007199254740993, -9007199254740994])`, nil, nil, math.Sqrt(2.0 / 3)},
+		{"负整数余数标准差", `stddev([-1, -2, -4])`, nil, nil, math.Sqrt(14.0 / 9)},
+		{"整数两端标准差", `stddev([-9223372036854775807 - 1, 9223372036854775807])`, nil, nil, 9223372036854775807.5},
 		{"整数幂", `pow(2, 10)`, nil, nil, int64(1024)},
 		{"浮点幂", `pow(9.0, 0.5)`, nil, nil, 3.0},
 		{"指数退避", `pow(2, 3) * 200`, nil, nil, int64(1600)},

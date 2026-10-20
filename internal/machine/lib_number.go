@@ -3,6 +3,7 @@ package machine
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"slices"
 )
 
@@ -145,7 +146,7 @@ func statisticSpecs() []FunctionSpec {
 			Label: "标准差", Category: "聚合",
 			Description: "总体标准差（除以个数，不是个数减一）：数据就是全部时用它，衡量成功率或费率的抖动。空数组报错。",
 			Params:      []string{"数组"}, Result: "标准差",
-		}, deviationOf[int64], deviationOf[float64]),
+		}, intDeviationOf, deviationOf),
 		libEach("percentile", Doc{
 			Label: "分位数", Category: "聚合",
 			Description: "升序排列后的分位值，比例写 0 到 1（p95 就是 0.95），落在两个样本之间时线性插值。空数组报错。",
@@ -179,20 +180,75 @@ func medianOf[T int64 | float64](items []T) (float64, error) {
 	return (float64(sorted[middle-1]) + float64(sorted[middle])) / 2, nil
 }
 
-func deviationOf[T int64 | float64](items []T) (float64, error) {
+func deviationOf(items []float64) (float64, error) {
 	mean, err := averageOf(items)
 	if err != nil {
 		return 0, fmt.Errorf("%w: stddev of an empty array", ErrDomain)
 	}
 	total := 0.0
 	for _, item := range items {
-		diff := float64(item) - mean
+		diff := item - mean
 		// The conversion rounds the square before it is added, as Go's spec
 		// has it, so no CPU fuses the two into one FMA: the answer is the
 		// same on every machine.
 		total += float64(diff * diff)
 	}
 	return math.Sqrt(total / float64(len(items))), nil
+}
+
+// intDeviationOf is stddev of ints, which past 2^53 a float64 does not tell
+// apart: each item's distance from the mean's floor is taken in integers, and
+// only then the mean's fraction off it, so items close to each other have a
+// deviation as exact as a float holds, however large they are.
+func intDeviationOf(items []int64) (float64, error) {
+	if len(items) == 0 {
+		return 0, fmt.Errorf("%w: stddev of an empty array", ErrDomain)
+	}
+	floor, rest := floorMean(items)
+	fraction := float64(rest) / float64(len(items))
+	total := 0.0
+	for _, item := range items {
+		diff := distance(item, floor) - fraction
+		// Rounded before it is added, as deviationOf's.
+		total += float64(diff * diff)
+	}
+	return math.Sqrt(total / float64(len(items))), nil
+}
+
+// floorMean is the mean of items as floor + rest/n, 0 <= rest < n, their sum
+// held in 128 bits. The sum is less than n·2^63 either way, so the high word
+// of its magnitude is below n and Div64 does not panic, and the floor, between
+// the least item and the greatest, is an int64.
+func floorMean(items []int64) (int64, uint64) {
+	var high, low uint64
+	for _, item := range items {
+		var carry uint64
+		low, carry = bits.Add64(low, uint64(item), 0)
+		// A negative item's high word is all ones.
+		high += carry + uint64(item>>63)
+	}
+	n := uint64(len(items))
+	if int64(high) >= 0 {
+		quotient, rest := bits.Div64(high, low, n)
+		return int64(quotient), rest
+	}
+	low, borrow := bits.Sub64(0, low, 0)
+	high, _ = bits.Sub64(0, high, borrow)
+	quotient, rest := bits.Div64(high, low, n)
+	if rest == 0 {
+		return -int64(quotient), 0
+	}
+	return -int64(quotient) - 1, n - rest
+}
+
+// distance is item - floor as a float, which subtracting int64s could
+// overflow: the difference of their bits is right modulo 2^64, and the
+// distance's magnitude is less than that.
+func distance(item, floor int64) float64 {
+	if item >= floor {
+		return float64(uint64(item) - uint64(floor))
+	}
+	return -float64(uint64(floor) - uint64(item))
 }
 
 func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) {

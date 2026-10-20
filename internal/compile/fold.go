@@ -256,6 +256,76 @@ func (c *bytecodeCompiler) constantExpr(expr syntax.Expr) bool {
 // evaluate returns the value expr has at compile time and true, false when it
 // cannot be folded for a reason that is not a failure, or the failure itself.
 func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (machine.Value, bool, error) {
+	value, ok, err := c.run(expr)
+	if err != nil {
+		return machine.Value{}, false, c.placed(expr, err)
+	}
+	return value, ok, nil
+}
+
+// placed is err, expr's failure, said at the smallest closed part of expr
+// that fails as expr does: expr runs whole, and its failure happens at the
+// 1/0 in 2 + 3 * (1/0), not at the +. Only a failure pays for the search.
+func (c *bytecodeCompiler) placed(expr syntax.Expr, err error) error {
+	if placed := c.failingIn(expr, err); placed != nil {
+		return placed
+	}
+	return syntax.AroundError(expr, err)
+}
+
+// failingIn is err placed at a part of expr that fails as expr does, nil
+// when no part does. The deepest parts go first, and each that evaluates is
+// known after, as closedParts has it: the part around it compiles it as its
+// value, so the search is as long as expr, not its depth times its size.
+func (c *bytecodeCompiler) failingIn(expr syntax.Expr, err error) error {
+	if let, ok := expr.(*syntax.LetExpr); ok {
+		return c.failingInLet(let, err)
+	}
+	for _, child := range syntax.Children(expr) {
+		if placed := c.failingAt(child, err); placed != nil {
+			return placed
+		}
+	}
+	return nil
+}
+
+// failingAt is failingIn of part, or err placed at part itself when part is
+// closed and fails as expr does; a closed part that evaluates is known after.
+func (c *bytecodeCompiler) failingAt(part syntax.Expr, err error) error {
+	if placed := c.failingIn(part, err); placed != nil || !c.foldable(part) {
+		return placed
+	}
+	value, ok, failed := c.run(part)
+	if failed != nil && failed.Error() == err.Error() {
+		return syntax.AroundError(part, err)
+	}
+	if constant, has := machine.ConstantOf(value, c.inferred.typeOf(part.NodeID())); failed == nil && ok && has {
+		c.known[part.NodeID()] = constant
+	}
+	return nil
+}
+
+// failingInLet is failingIn of a let, in the scopes untakenLet walks it in:
+// a binding that folds is a constant to the parts after it.
+func (c *bytecodeCompiler) failingInLet(node *syntax.LetExpr, err error) error {
+	pool := len(c.constants)
+	defer func() { c.constants = c.constants[:pool] }()
+	for _, binding := range node.Bindings {
+		if placed := c.failingIn(binding.Value, err); placed != nil {
+			return placed
+		}
+		index, folded, failed := c.foldBinding(binding.Value)
+		if failed != nil {
+			return failed
+		}
+		c.names.push(binding.Name, nameSlot{index: index, constant: folded})
+		defer c.names.pop(binding.Name)
+	}
+	return c.failingAt(node.Body, err)
+}
+
+// run is evaluate, its failure not yet placed.
+func (c *bytecodeCompiler) run(expr syntax.Expr) (machine.Value, bool, error) {
 	// The runtime checks the value it produced against the declared result
 	// type, so a node whose type inference left open is not folded.
 	result, ok := c.inferred.nodeType(expr.NodeID())
@@ -273,7 +343,7 @@ func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (machine.Value, bool, erro
 		if errors.Is(err, machine.ErrFoldBudget) {
 			return machine.Value{}, false, nil
 		}
-		return machine.Value{}, false, syntax.AroundError(expr, err)
+		return machine.Value{}, false, err
 	}
 	// Exact money has no constant form, and the round around it still has
 	// its rounding to do: the steps are left to run.

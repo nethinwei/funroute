@@ -166,10 +166,12 @@ func TestCompileUsingOpensAndClosesTheScope(t *testing.T) {
 }
 
 // A conversion outside every using has no rates to convert at, so it does
-// not compile: which rates a rule converts at is written in the rule.
+// not compile: which rates a rule converts at is written in the rule. That is
+// said first, before that a bare one lands between minor units, which a
+// round would not mend.
 func TestAConversionOutsideAUsingDoesNotCompile(t *testing.T) {
 	t.Parallel()
-	for _, source := range []string{"round(a -> JPY, @half_even)", "round(convert(a, JPY), @half_even)", "fx(USD, JPY)", "round(a -> JPY, @up)", "fallback(round(a -> JPY, @half_even), JPY 7)", "round(using(150 JPY / USD, a) -> JPY, @half_even)"} {
+	for _, source := range []string{"a -> JPY", "(a -> JPY) + JPY 1", "round(a -> JPY, @half_even)", "round(convert(a, JPY), @half_even)", "fx(USD, JPY)", "round(a -> JPY, @up)", "fallback(round(a -> JPY, @half_even), JPY 7)", "round(using(150 JPY / USD, a) -> JPY, @half_even)"} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			if _, err := compileMoney(t, source, "a: money", ""); err == nil || !strings.Contains(err.Error(), "inside using(") {

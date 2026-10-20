@@ -308,28 +308,29 @@ func (p *parser) parseFieldRead(base Expr) (Expr, error) {
 	p.index++
 	// The lexer keeps a name and the dots in it together, so f(x).a.b arrives
 	// as one name "a.b": it is two reads, as order.a.b is.
-	return p.fieldChain(base, dot, dot.pos, name.text, true)
+	return p.fieldChain(base, dot, dot.pos, name.pos, name.text, true)
 }
 
 // fieldChain reads the dotted field names in fields off expr, the first
-// after the dot at at. Each read covers the source from expr's start through
+// after the dot at at and written from name: blanks may part a postfix dot
+// from its name, f(x) . a, never the dots inside a name. Each read covers the source from expr's start through
 // its name, and its errors are placed at from. A postfix read, f(x).a.b,
 // points at its own dot and marks its name as it goes; the fields of a
 // dotted name, order.a.b, point at the name, which is already marked.
-func (p *parser) fieldChain(expr Expr, from token, at int, fields string, postfix bool) (Expr, error) {
+func (p *parser) fieldChain(expr Expr, from token, at, name int, fields string, postfix bool) (Expr, error) {
 	start := expr.Extent().Start
 	for field := range strings.SplitSeq(fields, ".") {
-		end := at + 1 + len(field)
+		end := name + len(field)
 		pos := from.pos
 		if postfix {
 			pos = at
-			p.markSpan(at+1, end, RoleField)
+			p.markSpan(name, end, RoleField)
 		}
 		node, err := p.node(from, &FieldExpr{Node: Node{ID: p.id(), Pos: pos, Span: Span{start, end}}, Value: expr, Field: field})
 		if err != nil {
 			return nil, err
 		}
-		at, expr = end, node
+		at, name, expr = end, end+1, node
 	}
 	return expr, nil
 }
@@ -530,7 +531,7 @@ func (p *parser) variableWithFields(tok token) (Expr, error) {
 	if !dotted {
 		return expr, nil
 	}
-	return p.fieldChain(expr, tok, end, fields, false)
+	return p.fieldChain(expr, tok, end, end+1, fields, false)
 }
 
 // callForm is the rule that reads a form written like a call, name(…), and

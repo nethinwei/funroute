@@ -357,7 +357,7 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 		return c.compileFallback(node)
 	}
 	if function.ReadsRates() && c.usingDepth == 0 {
-		return syntax.Around(node, "type error: %s reads exchange rates, which only a using has: write it inside using(150 JPY / USD, …), or using(rates, …) with the rates as an argument", operatorName(node))
+		return outsideUsing(node)
 	}
 	if function.NeedsBoundedArgs() {
 		if err := c.requireBoundedArgs(node); err != nil {

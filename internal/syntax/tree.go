@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"reflect"
 	"slices"
+	"strings"
 )
 
 // Tree is a program as it was written: every node with the source it covers
@@ -65,6 +66,9 @@ func nameSpans(source string, roles map[int]roleMark) map[string][]Span {
 func treeOf(expr Expr, names map[string][]Span) Tree {
 	plan := planOf(expr)
 	tree := Tree{Node: kindOf(expr, plan), Span: expr.Extent()}
+	// An operator's operands are what was written around it: a != b holds a
+	// and b, not the == its expansion negates. Only they are read, so a chain
+	// of operators is read once, not once per reading of its expansion.
 	match, operator := readOperator(expr)
 	if operator {
 		tree.Operator = match.spec.token
@@ -73,24 +77,25 @@ func treeOf(expr Expr, names map[string][]Span) Tree {
 		tree.Form = plan.isForm
 		own := ownSource{node: tree.Span}
 		EachChild(expr, func(child Expr) { own.children = append(own.children, ownedBy(expr, child)...) })
-		tree.Fields = fieldsOf(reflect.ValueOf(expr).Elem(), plan, own, names)
-	}
-	if operator {
-		// An operator's operands are what was written around it: a != b
-		// holds a and b, not the == its expansion negates.
-		for i := range tree.Fields {
-			if tree.Fields[i].Name == "args" {
-				tree.Fields[i].Nodes = operandTrees(match.operands, names)
-			}
-		}
+		tree.Fields = fieldsOf(reflect.ValueOf(expr).Elem(), plan, own, names, match.operands)
 	}
 	if selector, ok := expr.(*SelectorExpr); ok && len(tree.Fields) == 1 {
-		// A selector's path is one lexeme after its dot, however many
-		// names it reads: .fee as much as .customer.fee, and in parens too.
-		start := selector.Position() + 1
-		tree.Fields[0].TextSpan = &Span{Start: start, End: start + len(selector.Path)}
+		tree.Fields[0].TextSpan = pathSpan(selector, names)
 	}
 	return tree
+}
+
+// pathSpan is where a selector's path is written: one lexeme, however many
+// names it reads, .fee as much as .customer.fee, from the first name after
+// its dot, which blanks may part from it, . fee.
+func pathSpan(selector *SelectorExpr, names map[string][]Span) *Span {
+	first, _, _ := strings.Cut(selector.Path, ".")
+	spans := names[first]
+	at, _ := slices.BinarySearchFunc(spans, selector.Position()+1, func(span Span, start int) int { return cmp.Compare(span.Start, start) })
+	if at == len(spans) {
+		return nil
+	}
+	return &Span{Start: spans[at].Start, End: spans[at].Start + len(selector.Path)}
 }
 
 func operandTrees(operands []Expr, names map[string][]Span) []Tree {
@@ -140,11 +145,17 @@ func (o ownSource) holds(span Span) bool {
 	return true
 }
 
-func fieldsOf(value reflect.Value, plan *structPlan, within ownSource, names map[string][]Span) []TreeField {
+// fieldsOf reads a node's fields; operands, when the node is an operator's
+// expansion, stand for its args.
+func fieldsOf(value reflect.Value, plan *structPlan, within ownSource, names map[string][]Span, operands []Expr) []TreeField {
 	out := make([]TreeField, 0, len(plan.fields))
 	for _, field := range plan.fields {
 		current := value.Field(field.index)
 		if field.optional && isAbsent(current) {
+			continue
+		}
+		if operands != nil && field.name == "args" {
+			out = append(out, TreeField{Name: field.name, Nodes: operandTrees(operands, names)})
 			continue
 		}
 		out = append(out, fieldOf(current, field, within, names))
@@ -165,7 +176,7 @@ func fieldOf(value reflect.Value, field fieldPlan, within ownSource, names map[s
 		})
 	case fieldList:
 		for i := range value.Len() {
-			out.Items = append(out.Items, fieldsOf(value.Index(i), field.item, within, names))
+			out.Items = append(out.Items, fieldsOf(value.Index(i), field.item, within, names, nil))
 		}
 	case fieldFlag:
 		out.Flag = value.Bool()

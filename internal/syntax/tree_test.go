@@ -3,6 +3,7 @@ package syntax
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -108,10 +109,41 @@ func TestAnOperatorsTreeHoldsWhatWasWritten(t *testing.T) {
 	}
 }
 
+// A chain of operators is read once: each operator's operands are not read
+// again for its expansion, which held them, so the tree takes as long as the
+// chain is long and not twice as long for every operator more.
+func TestALongChainOfOperatorsIsReadOnce(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{strings.Repeat("!", 200) + "a", "a" + strings.Repeat(" + a", 500)} {
+		tree, err := SyntaxTree(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tree.Operator == "" {
+			t.Errorf("%.20s…: the root is %s, want the outermost operator", source, tree.Node)
+		}
+	}
+}
+
+// A postfix field's name is located where it is written, after blanks too.
+func TestAFieldsNameIsLocatedAfterItsDot(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{"order.amount", "order . amount", "f(x).amount", "f(x) . amount", "f(x).\n  amount"} {
+		tree, err := SyntaxTree(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := tree.Fields[1]
+		if name.TextSpan == nil || source[name.TextSpan.Start:name.TextSpan.End] != "amount" {
+			t.Errorf("%q: the field's name is at %v, want where amount is written", source, name.TextSpan)
+		}
+	}
+}
+
 // A selector's path is located whole, one name or several.
 func TestASelectorsPathIsLocated(t *testing.T) {
 	t.Parallel()
-	for _, source := range []string{"sort_by(xs, .fee)", "sort_by(xs, .customer.fee)", "sort_by(xs, (.fee))"} {
+	for _, source := range []string{"sort_by(xs, .fee)", "sort_by(xs, .customer.fee)", "sort_by(xs, (.fee))", "sort_by(xs, . fee)", "sort_by(xs, .\n  fee)"} {
 		tree, err := SyntaxTree(source)
 		if err != nil {
 			t.Fatal(err)

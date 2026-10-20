@@ -66,7 +66,8 @@ func TestEveryCompileErrorHasAPosition(t *testing.T) {
 		{`let(x = {}, 1)`, CompileOptions{}, `{}`},
 		// A type left open is the whole program's.
 		{`[]`, CompileOptions{}, `[]`},
-		{`first([])`, CompileOptions{}, `first([])`},
+		{`first([])`, CompileOptions{}, `[]`},
+		{`len({})`, CompileOptions{}, `{}`},
 		{`x`, CompileOptions{}, `x`},
 		{`1 + a`, CompileOptions{MaxInstructions: 1, Args: []ArgSpec{{Name: "a", Type: machine.IntType}}}, `1 + a`},
 		{`at(d, "k")`, CompileOptions{}, `at(d, "k")`},

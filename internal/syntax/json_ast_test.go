@@ -391,3 +391,24 @@ func TestTheUnknownFieldNamedIsTheFirstByKey(t *testing.T) {
 		}
 	}
 }
+
+// A key written twice in one object is refused wherever it is: encoding/json
+// keeps the last, and another reader of the bytes could keep the first.
+func TestImportRefusesAKeyWrittenTwice(t *testing.T) {
+	t.Parallel()
+	for _, document := range []string{
+		`{"version":1,"version":1,"expr":{"node":"int","int":1}}`,
+		`{"version":1,"expr":{"node":"var","name":"a","name":"b"}}`,
+		`{"version":1,"expr":{"node":"int","int":1,"int":2}}`,
+		`{"version":1,"expr":{"node":"call","name":"f","args":[{"node":"int","int":1,"int":1}]}}`,
+	} {
+		if _, err := ImportExprJSON([]byte(document)); err == nil || !strings.Contains(err.Error(), "duplicate key") {
+			t.Errorf("ImportExprJSON(%s) error = %v, want a duplicate key", document, err)
+		}
+	}
+	for _, document := range []string{`[]`, `null`, `1`, `{"version":1,"expr":{"node":"int","int":1}`, `{"version":1,"expr":{"node":"int","int":1}} {}`} {
+		if _, err := ImportExprJSON([]byte(document)); err == nil {
+			t.Errorf("ImportExprJSON(%s) error = nil, want it refused", document)
+		}
+	}
+}

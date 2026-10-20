@@ -36,12 +36,13 @@ func TestIfIsNoVariableName(t *testing.T) {
 }
 
 // A name's shape is a word: a letter or underscore first, then letters,
-// digits and underscores — and, in a function's name, dots.
+// digits and underscores — and, in a function's name, dots between them.
 func TestNameShapes(t *testing.T) {
 	t.Parallel()
 	for name, want := range map[string][2]bool{
 		"amount": {true, true}, "_x1": {true, true}, "route.score_v1": {false, true}, "1x": {false, false},
-		"": {false, false}, "a-b": {false, false}, "a b": {false, false}, "é": {false, false}, "a.": {false, true},
+		"": {false, false}, "a-b": {false, false}, "a b": {false, false}, "é": {false, false}, "a.": {false, false},
+		"a..b": {false, false}, "a.b.c": {false, true}, "a._1": {false, true},
 	} {
 		if got := [2]bool{nameShape(name, false), nameShape(name, true)}; got != want {
 			t.Errorf("nameShape(%q) = %v (variable, function), want %v", name, got, want)

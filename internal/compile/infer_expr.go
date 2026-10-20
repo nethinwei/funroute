@@ -78,7 +78,8 @@ func dictValues(node *syntax.DictExpr) []syntax.Expr {
 }
 
 // inferHomogeneous infers an array or dictionary node, whose elements all share
-// one element type.
+// one element type. An empty one nothing around decides is said where it is
+// written, as a type error: [] in len([]) holds nothing a program can name.
 func inferHomogeneous(node syntax.Expr, items []syntax.Expr, kind machine.Kind, message string, state *inferState, context inferContext) (typeTerm, error) {
 	elem := state.fresh()
 	for _, item := range items {
@@ -86,7 +87,18 @@ func inferHomogeneous(node syntax.Expr, items []syntax.Expr, kind machine.Kind, 
 			return typeTerm{}, typeErrorAt(node, err, message)
 		}
 	}
-	return record(node, state, containerTerm(kind, elem)), nil
+	term := containerTerm(kind, elem)
+	state.checks = append(state.checks, func() error {
+		if _, ok := state.publicType(term); ok {
+			return nil
+		}
+		name := "array"
+		if kind == machine.DictKind {
+			name = "dictionary"
+		}
+		return syntax.Around(node, "type error: cannot infer what this %s holds; give it an item, or provide a compile-time type hint", name)
+	})
+	return record(node, state, term), nil
 }
 
 // mismatch is a sub-expression that typed but not as what its place asks.
