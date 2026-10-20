@@ -368,6 +368,11 @@ func TestCurrenciesConvertAtARate(t *testing.T) {
 		// Rounded once: EUR 0.05 is JPY 8.26375 exactly, where rounding at
 		// the dollar would give USD 0.06, JPY 9.015, JPY 9.
 		"a chain rounded once": {Money{"EUR", 5}, chained, RoundHalfEven, Money{"JPY", 8}},
+		// The rate rescaled to minor units, 10^-20, fits no ratio; the
+		// amount cancels it: 100 × 10^-20 is 10^-18 yen.
+		"a tiny rate, down": {Money{"USD", 100}, fxRate(t, "USD", "JPY", "0.000000000000000001"), RoundDown, Money{"JPY", 0}},
+		"a tiny rate, up":   {Money{"USD", 100}, fxRate(t, "USD", "JPY", "0.000000000000000001"), RoundUp, Money{"JPY", 1}},
+		"zero, tiny rate":   {Money{"USD", 0}, fxRate(t, "USD", "JPY", "0.000000000000000001"), RoundUp, Money{"JPY", 0}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

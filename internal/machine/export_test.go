@@ -145,15 +145,13 @@ func IdleFrameHoldsPointers(r *Runtime) bool {
 			return true
 		}
 	}
-	for i := range f.items {
-		if slices.ContainsFunc(f.items[i].fields, func(v Value) bool { return v.s != "" || v.box != nil }) {
-			return true
-		}
-	}
 	for i := range f.records {
 		if slices.ContainsFunc(f.records[i].fields, func(v Value) bool { return v.s != "" || v.box != nil }) {
 			return true
 		}
+	}
+	if f.vector != nil && (f.vector.run.item.ints != nil || f.vector.run.item.floats != nil || f.vector.run.loop != nil || f.vector.run.out != nil) {
+		return true
 	}
 	if slices.ContainsFunc(f.views, func(slot arenaSlot) bool {
 		return slot.bools != nil || slot.ints != nil || slot.floats != nil || slot.strings != nil
@@ -166,6 +164,16 @@ func IdleFrameHoldsPointers(r *Runtime) bool {
 // Promotions is how many fields of record arguments r's program reads out of
 // registers of their own (lower_promote.go).
 func Promotions(r *Runtime) int { return len(r.reg.promotions) }
+
+// ItemPromotions is how many fields of loop items r's program reads out of
+// registers of their own (lower_promote.go's itemRegsOf).
+func ItemPromotions(r *Runtime) int {
+	n := 0
+	for _, loop := range r.reg.loops {
+		n += len(loop.promoted)
+	}
+	return n
+}
 
 // Straight reports whether p runs the shorter way (host_straight.go).
 func Straight[In, Out any](p *Program[In, Out]) bool { return p.straight }

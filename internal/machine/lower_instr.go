@@ -1,6 +1,10 @@
 package machine
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/nethinwei/funroute/internal/kit"
+)
 
 // instruction lowers one stack instruction.
 func (l *lowerer) instruction(in Instruction) {
@@ -157,18 +161,32 @@ func (l *lowerer) build(in Instruction) {
 		op, count = rRecordWith, len(in.Keys)+1
 	}
 	answers := in.Op == OpMakeRecord || in.Op == OpRecordWith
-	made := rmake{typ: in.Type, keys: in.Keys, built: built{arena: -1, dest: -1}, answer: answers && l.flow.answer == l.pc}
+	made := rmake{typ: in.Type, keys: in.Keys, built: built{arena: -1, dest: -1}, answer: answers && l.flow.answer == l.pc, sink: answers && l.collectedNext()}
 	if in.Op == OpMakeArray {
 		made.built = l.builtFor(l.pc)
 	}
 	if in.Op == OpRecordWith {
 		made.keys, made.fields = nil, fieldIndexes(in)
+		if loop := l.flow.at[l.pc].itemOf; loop > 0 {
+			made.base = l.itemRegs[int(loop-1)]
+		}
 	}
 	made.boxes = l.boxes(count)
 	l.out.makes = append(l.out.makes, made)
 	first := l.window(count)
 	l.emit(op, first, int32(count), int32(len(l.out.makes)-1))
 	l.push(first)
+}
+
+// collectedNext reports a value the instruction after this one collects
+// into an array, in the same block: nothing else sees it in between.
+func (l *lowerer) collectedNext() bool {
+	next := l.pc + 1
+	if next >= len(l.code) || l.leaders[next] || len(l.open) == 0 {
+		return false
+	}
+	in := l.code[next]
+	return in.Op == OpLoopCollect && in.A == 0 && l.out.loops[l.open[len(l.open)-1]].acc < 0
 }
 
 // fieldIndexes is where each field a record update names is in the record.
@@ -289,6 +307,10 @@ func (l *lowerer) loopInit(in Instruction) {
 	l.flush(0)
 	loop := rloop{typ: in.Type, item: l.localBase + int32(in.B), key: -1, acc: -1, dst: l.top(), exit: int32(in.A), built: l.builtFor(l.pc),
 		itemsInPlace: l.flow.at[l.pc].itemsInPlace, fields: l.flow.at[l.pc].itemFields}
+	if regs, promoted := l.itemRegs[l.pc]; promoted {
+		loop.promoted = kit.Map(loop.fields, func(field int32) int32 { return regs[field] })
+		loop.collectsItem = l.flow.at[l.pc].collectsItem
+	}
 	if in.D != NoKey {
 		loop.key = l.localBase + int32(in.D)
 	}
@@ -323,7 +345,7 @@ func (l *lowerer) fold(in Instruction) {
 		l.emitOn(op, left.reg, right.reg, acc.reg, opKinds{a: left.kind, b: right.kind})
 		return
 	}
-	scratch := l.scratch()
+	scratch := l.scratchRegs()
 	l.move(acc.kind, acc.reg, scratch)
 	l.move(item.kind, item.reg, scratch+1)
 	var boxes []scalarArg
@@ -339,12 +361,12 @@ func (l *lowerer) fold(in Instruction) {
 	l.emit(rCall, int32(len(l.out.calls)-1), 0, 0)
 }
 
-// scratch is the first of the two registers past the locals a folding call
-// takes its arguments from, made there the first time one is asked for.
-func (l *lowerer) scratch() int32 {
-	first := l.localBase + l.locals
-	l.out.size = max(l.out.size, first+2)
-	return first
+// scratchRegs is the first of the two registers past the locals and the
+// promoted fields a folding call takes its arguments from, made there the
+// first time one is asked for.
+func (l *lowerer) scratchRegs() int32 {
+	l.out.size = max(l.out.size, l.scratch+2)
+	return l.scratch
 }
 
 // collect lowers what one iteration adds: a fold's accumulator is stored
@@ -356,6 +378,11 @@ func (l *lowerer) collect(in Instruction) {
 		return
 	}
 	value := l.pop()
+	if loop.collectsItem && value.reg == loop.item {
+		// The item is in no register: it is where the loop is.
+		l.emit(rCollectItem, 0, 0, 0)
+		return
+	}
 	if in.A == 1 {
 		// A dictionary's entry is read out of the file its kind says, c.
 		key := l.pop()

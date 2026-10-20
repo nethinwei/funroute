@@ -346,6 +346,11 @@ func validateLoopInstruction(instruction Instruction, artifact *Artifact, fail f
 	if instruction.D != NoKey && (instruction.D < 0 || instruction.D >= artifact.parts.Locals) {
 		return fail("malformed loop key slot %d", instruction.D)
 	}
+	// The item, the key and the accumulator are bound at once: in one slot
+	// one of them would be read as another.
+	if instruction.Op == OpLoopInit && (instruction.D == instruction.B || instruction.C != NoAccumulator && (instruction.C == instruction.B || instruction.C == instruction.D)) {
+		return fail("loop slots %d, %d and %d are not distinct", instruction.B, instruction.D, instruction.C)
+	}
 	if instruction.C == NoAccumulator {
 		// A comprehension builds an array, or a dictionary when it has a key.
 		if kind := instruction.Type.kind; instruction.Type.elem == nil || kind != ArrayKind && kind != DictKind {

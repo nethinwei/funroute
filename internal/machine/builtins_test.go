@@ -2,6 +2,7 @@ package machine_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
@@ -55,6 +56,18 @@ func TestConversionsWithNoAnswerAreArithmetic(t *testing.T) {
 	} {
 		if got, err := runKernel(t, test.source, test.x); !errors.Is(err, machine.ErrArithmetic) {
 			t.Errorf("%s with x = %v: %v, %v, want ErrArithmetic", test.source, test.x.Any(), got.Any(), err)
+		}
+	}
+}
+
+// A comparison with NaN is false as IEEE 754 has it, whether the other side
+// is a float or an int: 1 and 1.0 are the same number, so x < 1 is x < 1.0.
+func TestNaNComparesFalseWithAnInt(t *testing.T) {
+	t.Parallel()
+	nan := machine.Float(math.NaN())
+	for _, source := range []string{"x < 1", "x <= 1", "x > 1", "x >= 1", "1 < x", "1 >= x", "x < 1.0", "x >= 1.0"} {
+		if got, err := runKernel(t, source, nan); err != nil || got.Any() != false {
+			t.Errorf("%s with x = NaN: %v, %v, want false", source, got.Any(), err)
 		}
 	}
 }

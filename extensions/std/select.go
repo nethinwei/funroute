@@ -5,69 +5,43 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 
 	"github.com/nethinwei/funroute"
 )
 
-// keyedSpecs are the keyed sorts, both ways, and the keyed cuts: sort_by
-// with a direction and a count, because "the three cheapest" and "the three
-// best" are what a rule actually asks for — writing take(sort_by(...), 3) or
-// take(reverse(sort_by(...)), 3) every time is a puzzle the rule writer
-// should not have to solve twice. The key type is what the registrations are
-// for: a key can be a fee, a rate or a name, and money where the registry
+// keyedSpecs are the money overloads of the kernel's keyed sorts, both
+// ways, and keyed cuts: sort_by with a direction and a count, because "the
+// three cheapest" and "the three best" are what a rule actually asks for —
+// writing take(sort_by(...), 3) or take(reverse(sort_by(...)), 3) every time
+// is a puzzle the rule writer should not have to solve twice. The kernel
+// keys by fee, rate or name; these key by money, where the registry
 // declares it — the cheapest channels by fee.
-func keyedSpecs(money bool) []funroute.FunctionSpec {
-	keys := []funroute.Type{funroute.IntType, funroute.FloatType, funroute.StringType}
-	if money {
-		keys = []funroute.Type{funroute.MoneyType}
-	}
+func keyedSpecs() []funroute.FunctionSpec {
+	list := funroute.ArrayOf(funroute.TypeVar("T"))
+	keys := funroute.ArrayOf(funroute.MoneyType)
 	sortByMoney := moneyDoc("按金额排序", "按金额键排序候选，相等的保持原顺序。")
 	rankByMoney := moneyDoc("按金额取前 k 个", "按金额键取最小或最大的 k 个候选。")
-	specs := make([]funroute.FunctionSpec, 0, 4*len(keys))
-	for _, keyed := range []keyedFunction{
-		{"sort_by", "按键排序", "按第二个数组的键把第一个数组升序排好，两者长度必须相同；相等的保持原顺序。取最便宜的三个写 take(sort_by(channels, fees), 3)。", sortByMoney, true, false},
-		{"sort_by_desc", "按键降序", "sort_by 的反向：按键从大到小排。相等的保持原顺序。", sortByMoney, false, false},
-		{"bottom_k", "取最小的 k 个", "按键升序取前 k 个候选：最便宜的几个渠道。k 大于长度就取完。", rankByMoney, true, true},
-		{"top_k", "取最大的 k 个", "按键降序取前 k 个候选：成功率最高的几个渠道。k 大于长度就取完。", rankByMoney, false, true},
-	} {
-		for _, key := range keys {
-			specs = append(specs, keyed.spec(key, money))
+	specs := make([]funroute.FunctionSpec, 0, 4)
+	for _, keyed := range []struct {
+		name              string
+		ascending, ranked bool
+	}{{"sort_by", true, false}, {"sort_by_desc", false, false}, {"bottom_k", true, true}, {"top_k", false, true}} {
+		ascending := keyed.ascending
+		spec := funroute.FunctionSpec{
+			Name: keyed.name, Params: []funroute.Type{list, keys}, Result: list, Doc: sortByMoney,
+			Eval: func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+				return sortedBy(args, ascending)
+			},
 		}
+		if keyed.ranked {
+			spec.Params, spec.Doc = append(spec.Params, funroute.IntType), rankByMoney
+			spec.Eval = func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
+				return pickRanked(args, ascending)
+			}
+		}
+		specs = append(specs, spec)
 	}
 	return specs
-}
-
-type keyedFunction struct {
-	name, label, description string
-	byMoney                  funroute.Doc
-	ascending, ranked        bool
-}
-
-func (k keyedFunction) spec(key funroute.Type, money bool) funroute.FunctionSpec {
-	list := funroute.ArrayOf(funroute.TypeVar("T"))
-	ascending := k.ascending
-	spec := funroute.FunctionSpec{
-		Name: k.name, Params: []funroute.Type{list, funroute.ArrayOf(key)}, Result: list,
-		Eval: func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-			return sortedBy(args, ascending)
-		},
-		Doc: funroute.Doc{
-			Label: k.label, Category: "选择", Description: k.description,
-			Params: []string{"候选", "键"}, Result: "排序后的候选",
-		},
-	}
-	if k.ranked {
-		spec.Params = append(spec.Params, funroute.IntType)
-		spec.Eval = func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-			return pickRanked(args, ascending)
-		}
-		spec.Doc.Params, spec.Doc.Result = []string{"候选", "键", "个数"}, "选出的候选"
-	}
-	if money {
-		spec.Doc, spec.Eval = k.byMoney, uniformKeys(1, spec.Eval)
-	}
-	return spec
 }
 
 // whileSpecs cut a list where a run of trues ends. The test is the second
@@ -100,86 +74,121 @@ func whileSpecs() []funroute.FunctionSpec {
 }
 
 func cutWhile(name string, args []funroute.Value, prefix bool) (funroute.Value, error) {
-	items, flags := itemsOf(args[0]), itemsOf(args[1])
-	if len(items) != len(flags) {
-		return funroute.Value{}, fmt.Errorf("%w: %s has %d candidates and %d tests", funroute.ErrDomain, name, len(items), len(flags))
+	count, _ := args[0].Length()
+	tests, _ := args[1].Length()
+	if count != tests {
+		return funroute.Value{}, fmt.Errorf("%w: %s has %d candidates and %d tests", funroute.ErrDomain, name, count, tests)
 	}
-	cut := len(items)
-	for i, flag := range flags {
-		if keep, _ := flag.Bool(); !keep {
+	cut := count
+	for i := range tests {
+		test, _ := args[1].At(i)
+		if keep, _ := test.Bool(); !keep {
 			cut = i
 			break
 		}
 	}
 	if prefix {
-		return funroute.Array(elementType(args[0]), items[:cut])
+		return part(args[0], 0, cut)
 	}
-	return funroute.Array(elementType(args[0]), items[cut:])
+	return part(args[0], cut, count)
 }
 
 func pickRanked(args []funroute.Value, ascending bool) (funroute.Value, error) {
-	sorted, err := sortedBy(args, ascending)
+	keys, err := keysOf(args)
 	if err != nil {
 		return funroute.Value{}, err
 	}
 	count, _ := args[2].Int()
-	return takeFirst(sorted, count, "a count of candidates cannot be negative, got %d")
+	if count < 0 {
+		return funroute.Value{}, fmt.Errorf("%w: a count of candidates cannot be negative, got %d", funroute.ErrArithmetic, count)
+	}
+	return arranged(args[0], best(keys, int(min(count, int64(len(keys)))), ascending))
 }
 
 func sortedBy(args []funroute.Value, ascending bool) (funroute.Value, error) {
-	itemCount, _ := args[0].Length()
-	keyCount, _ := args[1].Length()
-	if itemCount != keyCount {
-		return funroute.Value{}, fmt.Errorf("%w: sort_by has %d candidates and %d keys", funroute.ErrDomain, itemCount, keyCount)
+	keys, err := keysOf(args)
+	if err != nil {
+		return funroute.Value{}, err
 	}
-	if order, ok := nativeOrder(args[1], ascending); ok {
-		return arranged(args[0], order)
-	}
-	items, keys := itemsOf(args[0]), itemsOf(args[1])
-	order := make([]int, len(items))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool {
-		left, right := keys[order[a]], keys[order[b]]
-		if ascending {
-			return valueLess(left, right)
-		}
-		return valueLess(right, left)
-	})
-	out := make([]funroute.Value, len(items))
-	for position, index := range order {
-		out[position] = items[index]
-	}
-	return funroute.Array(elementType(args[0]), out)
+	return arranged(args[0], best(keys, len(keys), ascending))
 }
 
-// valueLess orders the key types the same way the comparison operators do.
-// nativeOrder is the candidates' order by native keys, ties in place.
-func nativeOrder(keys funroute.Value, ascending bool) ([]int, bool) {
-	switch keys := backing(keys).(type) {
-	case []int64:
-		return orderBy(keys, ascending), true
-	case []float64:
-		return orderBy(keys, ascending), true
-	case []string:
-		return orderBy(keys, ascending), true
+// keysOf is the amounts the candidates are keyed by, one currency and as
+// many as the candidates.
+func keysOf(args []funroute.Value) ([]funroute.Money, error) {
+	keys, _, err := amountsOf(args[1])
+	if err != nil {
+		return nil, err
 	}
-	return nil, false
+	if items, _ := args[0].Length(); items != len(keys) {
+		return nil, fmt.Errorf("%w: sort_by has %d candidates and %d keys", funroute.ErrDomain, items, len(keys))
+	}
+	return keys, nil
 }
 
-func orderBy[T cmp.Ordered](keys []T, ascending bool) []int {
-	order := make([]int, len(keys))
-	for i := range order {
-		order[i] = i
-	}
-	slices.SortStableFunc(order, func(a, b int) int {
-		if ascending {
-			return cmp.Compare(keys[a], keys[b])
+// best is the indexes of the count first keys in order, ties in their own
+// order: every one sorted, or for fewer the count first kept in a heap whose
+// top is the last of them, n log count rather than n log n.
+func best(keys []funroute.Money, count int, ascending bool) []int {
+	before := func(a, b int) int {
+		if order := cmp.Compare(keys[a].Minor(), keys[b].Minor()); order != 0 {
+			if ascending {
+				return order
+			}
+			return -order
 		}
-		return cmp.Compare(keys[b], keys[a])
-	})
-	return order
+		return cmp.Compare(a, b)
+	}
+	if count == len(keys) {
+		order := make([]int, len(keys))
+		for i := range order {
+			order[i] = i
+		}
+		slices.SortFunc(order, before)
+		return order
+	}
+	kept := make([]int, 0, count)
+	for i := range keys {
+		switch {
+		case len(kept) < count:
+			kept = append(kept, i)
+			siftUp(kept, before)
+		case count > 0 && before(i, kept[0]) < 0:
+			kept[0] = i
+			siftDown(kept, before)
+		}
+	}
+	slices.SortFunc(kept, before)
+	return kept
+}
+
+// siftUp and siftDown keep heap's last-ranked index on top as one is added
+// at the end or the top replaced.
+func siftUp(heap []int, before func(a, b int) int) {
+	for at := len(heap) - 1; at > 0; {
+		parent := (at - 1) / 2
+		if before(heap[parent], heap[at]) >= 0 {
+			return
+		}
+		heap[parent], heap[at] = heap[at], heap[parent]
+		at = parent
+	}
+}
+
+func siftDown(heap []int, before func(a, b int) int) {
+	for at := 0; ; {
+		last := at
+		for _, child := range []int{2*at + 1, 2*at + 2} {
+			if child < len(heap) && before(heap[child], heap[last]) > 0 {
+				last = child
+			}
+		}
+		if last == at {
+			return
+		}
+		heap[at], heap[last] = heap[last], heap[at]
+		at = last
+	}
 }
 
 // arranged is the candidates in order: a native array's as its own slice.
@@ -204,24 +213,6 @@ func picked[T any](items []T, order []int) []T {
 		out[i] = items[at]
 	}
 	return out
-}
-
-func valueLess(left, right funroute.Value) bool {
-	if a, ok := left.Int(); ok {
-		b, _ := right.Int()
-		return a < b
-	}
-	if a, ok := left.Money(); ok {
-		b, _ := right.Money()
-		return a.Minor() < b.Minor()
-	}
-	if a, ok := left.Float(); ok {
-		b, _ := right.Float()
-		return a < b
-	}
-	a, _ := left.String()
-	b, _ := right.String()
-	return a < b
 }
 
 // errNoExtreme is an arg_min or arg_max, or a money min or max, of nothing.

@@ -2,7 +2,6 @@ package std
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 
@@ -70,20 +69,32 @@ func groupsOf(args []funroute.Value, name string, windows bool) (funroute.Value,
 	if size <= 0 {
 		return funroute.Value{}, fmt.Errorf("%w: %s needs a size of at least one, got %d", funroute.ErrArithmetic, name, size)
 	}
-	items, width := itemsOf(args[0]), int(size)
-	stride, starts := width, len(items)
+	count, _ := args[0].Length()
+	// A size past the items is one past them, which an int holds wherever
+	// int is 32 bits: no window fits, and one batch takes them all.
+	width := int(min(size, int64(count)+1))
+	stride, starts := width, count
 	if windows {
-		stride, starts = 1, len(items)-width+1
+		stride, starts = 1, count-width+1
 	}
 	var groups []funroute.Value
 	for start := 0; start < starts; start += stride {
-		group, err := funroute.Array(elementType(args[0]), items[start:min(start+width, len(items))])
+		group, err := part(args[0], start, min(start+width, count))
 		if err != nil {
 			return funroute.Value{}, err
 		}
 		groups = append(groups, group)
 	}
 	return funroute.Array(args[0].Type(), groups)
+}
+
+// part is items [from, to) of array, over the array's own memory where it
+// has a form to share — a window is then no copy — and copied where not.
+func part(array funroute.Value, from, to int) (funroute.Value, error) {
+	if shared, ok := array.Slice(from, to); ok {
+		return shared, nil
+	}
+	return funroute.Array(elementType(array), itemsOf(array)[from:to])
 }
 
 // distinctItems is unique and intersect: an array's items, in order, each
@@ -169,19 +180,6 @@ func subtractInts(left, right int64) (int64, error) {
 
 func subtractFloats(left, right float64) (float64, error) {
 	return left - right, nil
-}
-
-// takeFirst is an array's first count items, all of them when it has fewer;
-// a negative count is an error, in the caller's words.
-func takeFirst(array funroute.Value, count int64, negative string) (funroute.Value, error) {
-	if count < 0 {
-		return funroute.Value{}, fmt.Errorf("%w: "+negative, funroute.ErrArithmetic, count)
-	}
-	length, _ := array.Length()
-	if first, ok := array.Slice(0, int(min(count, int64(length)))); ok {
-		return first, nil
-	}
-	return funroute.Value{}, errors.New("take needs an array")
 }
 
 func containsValue(values []funroute.Value, wanted funroute.Value) bool {

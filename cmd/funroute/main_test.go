@@ -17,3 +17,14 @@ func TestATypeAliasIsDeclaredOnce(t *testing.T) {
 		t.Fatalf("textContract(T, U) = %+v, %v, want two types and two arguments", contract, err)
 	}
 }
+
+// fmt prints one newline after the program, whether or not the text it read
+// ended with one.
+func TestFormattedTextEndsInOneNewline(t *testing.T) {
+	t.Parallel()
+	for _, text := range []string{"a + 1", "a + 1\n"} {
+		if got := endLine(text); got != "a + 1\n" {
+			t.Errorf("endLine(%q) = %q, want %q", text, got, "a + 1\n")
+		}
+	}
+}

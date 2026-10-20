@@ -62,6 +62,8 @@ func TestEveryCompileErrorHasAPosition(t *testing.T) {
 		{`@nope.ok`, CompileOptions{Args: []ArgSpec{{Name: "s", Type: status}}}, `@nope.ok`},
 		{`switch(1, case 1 => 2, else => 3)`, CompileOptions{}, `switch(1, case 1 => 2, else => 3)`},
 		{`1 + 2`, CompileOptions{Result: &machine.StringType}, `1 + 2`},
+		{`let(x = [], 1)`, CompileOptions{}, `[]`},
+		{`let(x = {}, 1)`, CompileOptions{}, `{}`},
 	}
 	for _, item := range cases {
 		t.Run(item.source, func(t *testing.T) {

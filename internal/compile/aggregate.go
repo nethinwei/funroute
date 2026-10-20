@@ -62,7 +62,7 @@ func (c *bytecodeCompiler) compileAggregate(node *syntax.CallExpr, function *mac
 func (c *bytecodeCompiler) compileFirst(node *syntax.CallExpr, function *machine.RegisteredFunction, comprehension *syntax.ForExpr) (bool, error) {
 	answer := c.inferred.typeOf(node.ID)
 	seed, ok := seedOf(answer)
-	if !ok {
+	if _, constant := machine.ConstantOf(seed, answer); !ok || !constant {
 		return false, nil
 	}
 	if err := c.compile(comprehension.Source); err != nil {
@@ -102,7 +102,9 @@ func (c *bytecodeCompiler) compileFirst(node *syntax.CallExpr, function *machine
 }
 
 // seedOf is a value of typ to stand for a first's answer until an item is
-// found: a zero, which no run answers with, for the plain types.
+// found: a zero, which no run answers with, for the plain types, an amount,
+// and a record of them — the channel a first(…) of channels finds, built
+// only once it is found rather than every one that might be.
 func seedOf(typ machine.Type) (machine.Value, bool) {
 	switch typ.Kind() {
 	case machine.BoolKind:
@@ -113,6 +115,20 @@ func seedOf(typ machine.Type) (machine.Value, bool) {
 		return machine.Float(0), true
 	case machine.StringKind:
 		return machine.String(""), true
+	case machine.MoneyKind:
+		return machine.MoneyValue(0, ""), true
+	case machine.RecordKind:
+		fields := typ.Fields()
+		seeds := make([]machine.Value, len(fields))
+		for i, field := range fields {
+			seed, ok := seedOf(field.Type())
+			if !ok {
+				return machine.Value{}, false
+			}
+			seeds[i] = seed
+		}
+		record, err := machine.Record(typ, seeds)
+		return record, err == nil
 	}
 	return machine.Value{}, false
 }

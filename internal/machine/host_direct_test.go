@@ -107,6 +107,19 @@ func assertDirectAsReflected(t *testing.T, fn any) {
 			t.Errorf("%T%v: directly %v, %v; by reflection %v, %v", fn, args, got.Any(), gotErr, want.Any(), wantErr)
 		}
 	}
+	// A shape of scalars alone is read straight from the registers too:
+	// the two lists of shapes are kept in step here.
+	if scalarsOnly(reflected) {
+		assertPureAsReflected(t, fn)
+	}
+}
+
+// scalarsOnly reports a signature of bools, ints, floats and strings only.
+func scalarsOnly(signature *reflected) bool {
+	scalar := func(typ Type) bool {
+		return typ.kind == BoolKind || typ.kind == IntKind || typ.kind == FloatKind || typ.kind == StringKind
+	}
+	return !signature.ctx && scalar(signature.result) && !slices.ContainsFunc(signature.params, func(typ Type) bool { return !scalar(typ) })
 }
 
 func sameOutcome(got Value, gotErr error, want Value, wantErr error) bool {

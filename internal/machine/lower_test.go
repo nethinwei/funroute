@@ -16,8 +16,9 @@ import (
 // each in its file: a value that is only read is read where it is, a result
 // is made where it goes, a comparison is one with its branch, a
 // comprehension's collect is one with its next — a filtered one's too, the
-// next staying for the items the filter skips — and a nested one's inner
-// clause fills the outer's array.
+// next staying for the items the filter skips — a nested one's inner clause
+// fills the outer's array, and the fields a loop reads of a record item are
+// loaded into registers, read with no field operation.
 func TestLoweringFusesTheCommonShapes(t *testing.T) {
 	t.Parallel()
 	registry := randomRegistry(t)
@@ -31,7 +32,7 @@ func TestLoweringFusesTheCommonShapes(t *testing.T) {
 		{`[x * y for x in xs for y in xs]`, "loop_init loop_init mul_i collect_next_i loop_next halt"},
 		{`[x for x in xs if x > 0 && x < 9]`, "loop_init branch_lt_i branch_lt_i collect_next_i loop_next halt"},
 		{`[x for x in xs if !(x > 0) || x == 5]`, "loop_init branch_lt_i branch_eq_i collect_next_i loop_next halt"},
-		{`len([c for c in cs if c.ok && c.fee < 50])`, "loop_init branch_field field_i branch_lt_i add_i loop_next halt"},
+		{`len([c for c in cs if c.ok && c.fee < 50])`, "loop_init branch branch_lt_i add_i loop_next halt"},
 		{`"k" in d`, "has_key halt"},
 	} {
 		artifact, err := compile.CompileExpr(test.source, registry, shapesContract)

@@ -271,11 +271,21 @@ func (s *inferState) decide() (bool, error) {
 			continue
 		}
 		mark := s.mark()
-		if err := s.commit(c, best); err == nil && s.propagate() == nil {
+		err := s.commit(c, best)
+		if err == nil {
+			err = s.propagate()
+		}
+		if err == nil {
 			return true, nil
 		}
 		s.undoTo(mark)
-		s.setOpen(c, kept(c.open, func(f *machine.RegisteredFunction) bool { return f != best }))
+		rest := kept(c.open, func(f *machine.RegisteredFunction) bool { return f != best })
+		if len(rest) == 0 {
+			// The last candidate failed: why it did is the program's error,
+			// not an ambiguity among none.
+			return false, err
+		}
+		s.setOpen(c, rest)
 		return true, nil
 	}
 	if first == nil {

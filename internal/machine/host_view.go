@@ -2,7 +2,6 @@ package machine
 
 import (
 	"reflect"
-	"slices"
 	"unsafe"
 )
 
@@ -16,10 +15,11 @@ import (
 //
 // A program that only walks or measures the array (lower_escape.go) is
 // given the view in the frame's own slot; any other, a view of its own. A
-// loop whose item is only read field by field loads each item into the
-// loop's own record in the frame: no record is made per item, and none
-// outlives its item, as the value flow proved nothing keeps one. Any other
-// loop over a view makes a record per item.
+// loop whose item is only read field by field loads the fields it reads of
+// each item into registers, and one that collects its item as it is makes a
+// view of the items it picked: no record is made per item, as the value
+// flow proved nothing keeps one. Any other loop over a view makes a record
+// per item.
 // Run the same program through RunValues and it walks the records it is
 // given.
 
@@ -68,22 +68,15 @@ func (v *recordsView) item(i int) unsafe.Pointer {
 	return unsafe.Add(v.data, uintptr(i)*v.plan.stride)
 }
 
-// load loads the fields of item index a loop reads into record, the
-// loop's own, which shape made one of the view's items.
-func (v *recordsView) load(index int, record *recordValue, fields []int32) {
+// loadInto loads the fields of item index a loop reads into their
+// registers, regs[i] the register of fields[i], each in the file of its kind.
+func (v *recordsView) loadInto(index int, fields, regs []int32, b *banks) {
 	plan, item := v.plan.elem, v.item(index)
-	for _, i := range fields {
+	for i, at := range fields {
 		// Every field is plain.
-		field := &plan.fields[i]
-		loadPlain(field.plain, unsafe.Add(item, field.offset), &record.fields[i])
+		field := &plan.fields[at]
+		loadPlainInto(field.plain, unsafe.Add(item, field.offset), b, regs[i])
 	}
-}
-
-// shape makes record one of the view's items, for load to fill.
-func (v *recordsView) shape(record *recordValue) {
-	plan := v.plan.elem
-	record.typ = &plan.typ
-	record.fields = slices.Grow(record.fields[:0], len(plan.fields))[:len(plan.fields)]
 }
 
 // record is item i as a record of its own.

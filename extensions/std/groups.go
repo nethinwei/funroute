@@ -1,8 +1,10 @@
 package std
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 
@@ -68,7 +70,9 @@ func rankOf[T int64 | float64 | string](keys []T) ([]int64, error) {
 	slices.Sort(sorted)
 	out := make([]int64, len(keys))
 	for i, key := range keys {
-		out[i] = int64(sort.Search(len(sorted), func(j int) bool { return !(sorted[j] < key) }) + 1)
+		// The order slices.Sort put them in, NaN first: with < a NaN would
+		// be after nothing and before nothing, and the search would stray.
+		out[i] = int64(sort.Search(len(sorted), func(j int) bool { return cmp.Compare(sorted[j], key) >= 0 }) + 1)
 	}
 	return out, nil
 }
@@ -77,11 +81,10 @@ func cumulativeInts(items []int64) ([]int64, error) {
 	out := make([]int64, len(items))
 	total := int64(0)
 	for i, item := range items {
-		sum, err := sumInts([]int64{total, item})
-		if err != nil {
-			return nil, err
+		if item > 0 && total > math.MaxInt64-item || item < 0 && total < math.MinInt64-item {
+			return nil, fmt.Errorf("%w: integer overflow in cumsum", funroute.ErrArithmetic)
 		}
-		total = sum
+		total += item
 		out[i] = total
 	}
 	return out, nil

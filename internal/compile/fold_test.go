@@ -259,6 +259,13 @@ func TestClosedFailuresAreCompileErrors(t *testing.T) {
 		`fallback(1 / 0, 7)`,
 		`[1, 2][5]`,
 		`9223372036854775807 + 1`,
+		// The whole is closed too, and folds to the branch it takes: the
+		// branch it does not take is held to the same rule.
+		`if(true, 1, 1 / 0)`,
+		`false && 1 / 0 > 0`,
+		`switch(case true => 2, else => 1 / 0)`,
+		`fallback(1, 1 / 0)`,
+		`let(v = if(true, 1, 1 / 0), v)`,
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()

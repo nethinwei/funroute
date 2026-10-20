@@ -56,9 +56,16 @@ func assertHandlesAreOpaque(t *testing.T, registry *machine.Registry) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := machine.NewHandle("demo.embedding", &embedding{})
-	if _, err := rt.RunValues(t.Context(), []machine.Value{h, h}); err == nil || !strings.Contains(err.Error(), "cannot be compared") {
-		t.Fatalf("handle equality error = %v, want cannot be compared", err)
+	// Whatever the payload is — a map or a slice too, which the values of
+	// the language compare — a handle is never equal to one.
+	for _, payload := range []any{&embedding{}, map[string]int64{"a": 1}, []float64{1}} {
+		h, same := machine.NewHandle("demo.embedding", payload), machine.NewHandle("demo.embedding", payload)
+		if _, err := rt.RunValues(t.Context(), []machine.Value{h, same}); err == nil || !strings.Contains(err.Error(), "cannot be compared") {
+			t.Fatalf("handle of %T equality error = %v, want cannot be compared", payload, err)
+		}
+		if h.Equal(same) {
+			t.Fatalf("handle of %T Equal itself, want never", payload)
+		}
 	}
 	_, err = compile.CompileExpr(`model.fraud_v1(x)`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "x", Type: machine.HandleOf("other.thing")}}})
 	if err == nil || !strings.Contains(err.Error(), "handle<other.thing>") {

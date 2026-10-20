@@ -54,6 +54,11 @@ type lowerer struct {
 	// producer builds in.
 	flow  flow
 	slots map[int]int32
+	// itemRegs is, by loop_init, the register of each field its body reads
+	// of an item it loads field by field (lower_promote.go); scratch is the
+	// first register past them, where a folding call's arguments go.
+	itemRegs map[int][]int32
+	scratch  int32
 }
 
 // slot is a value on the lowering's stack: the register it is in, and its
@@ -98,6 +103,8 @@ func lower(artifact *Artifact, constants []Value, functions []*RegisteredFunctio
 	l.out.args, l.out.size = nconst, l.localBase+l.locals+int32(len(l.out.promotions))
 	l.out.scalar, l.out.scalarReads = scalarProgram(parts, nil, false), scalarProgram(parts, l.out.promotions, true)
 	l.flow, l.slots = flowOf(parts, functions), map[int]int32{}
+	l.itemRegs, l.out.size = itemRegsOf(l.flow, l.out.size)
+	l.scratch = l.out.size
 	l.out.fieldOnly, l.out.viewOnly = l.flow.fieldOnly, l.flow.viewOnly
 	for pc := range l.code {
 		l.at[pc] = -1

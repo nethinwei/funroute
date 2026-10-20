@@ -611,3 +611,28 @@ func roundsAwayFromZero(mode funroute.Rounding, twice int, odd bool, sign int) b
 		return false
 	}
 }
+
+// top_k and bottom_k keep only the k best in a heap; what they answer is
+// the first k of the whole sort, ties in their own order, for every k.
+func TestRankedMoneyIsTheFirstOfTheSort(t *testing.T) {
+	t.Parallel()
+	registry := moneyPack(t)
+	random := rand.New(rand.NewPCG(3, 4))
+	ids := make([]any, 40)
+	fees := make([]any, len(ids))
+	for i := range ids {
+		ids[i] = int64(i)
+		fees[i] = fmt.Sprintf("USD %d.00", random.IntN(6)-2) // ties, negatives and zeros
+	}
+	args := map[string]any{"ids": ids, "fees": fees}
+	specs := []funroute.ArgSpec{{Name: "ids", Type: funroute.ArrayOf(funroute.IntType)}, unknownFees}
+	for _, k := range []int{0, 1, 2, 7, 39, 40, 41} {
+		for ranked, sorted := range map[string]string{"bottom_k": "sort_by", "top_k": "sort_by_desc"} {
+			got, err := runMoneyOn(t, registry, fmt.Sprintf("%s(ids, fees, %d)", ranked, k), args, specs...)
+			want, _ := runMoneyOn(t, registry, fmt.Sprintf("take(%s(ids, fees), %d)", sorted, k), args, specs...)
+			if err != nil || got != want {
+				t.Errorf("%s(ids, fees, %d) = %s, %v; want %s", ranked, k, got, err, want)
+			}
+		}
+	}
+}

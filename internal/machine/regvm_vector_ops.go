@@ -1,5 +1,7 @@
 package machine
 
+import "math"
+
 // The vector's operations over a column. Each answers what the kernel
 // operation answers for every item that reaches it, and is the first such
 // item it fails on — where the kernel's function fails — or limit when there
@@ -20,6 +22,13 @@ func intOp(op rop, a, b int64) (int64, bool) {
 		return divInt(a, b)
 	case rModI:
 		return modInt(a, b)
+	case rMinI:
+		return min(a, b), true
+	case rMaxI:
+		return max(a, b), true
+	case rAbsI:
+		value, err := absInt(a)
+		return value, err == nil
 	}
 	return 0, false
 }
@@ -34,6 +43,12 @@ func floatOp(op rop, a, b float64) float64 {
 		return a - b
 	case rMulF:
 		return a * b
+	case rMinF:
+		return min(a, b)
+	case rMaxF:
+		return max(a, b)
+	case rAbsF:
+		return math.Abs(a)
 	}
 	return a / b
 }

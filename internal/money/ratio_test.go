@@ -198,10 +198,26 @@ func TestARatioPastInt64IsArithmetic(t *testing.T) {
 		"coprime denominators": func() (Ratio, error) {
 			return ratio(1, 1<<40).Add(ratio(1, 3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3*3))
 		},
-		"over zero": func() (Ratio, error) { return ratio(1, 3).Div(Ratio{}) },
+		"over zero":             func() (Ratio, error) { return ratio(1, 3).Div(Ratio{}) },
+		"a quotient past int64": func() (Ratio, error) { return ratio(math.MaxInt64, 1).Div(ratio(1, 2)) },
 	} {
 		if got, err := run(); !errors.Is(err, ErrArithmetic) {
 			t.Errorf("%s = %s, %v, want ErrArithmetic", name, got, err)
+		}
+	}
+}
+
+// A quotient is a·d / b·c, cross-reduced: an inverse that does not fit
+// does not make a quotient that does fail.
+func TestARatioQuotientNeedsNoInverse(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct{ left, right, want Ratio }{
+		"by MinInt64":        {ratio(2147483648, 3531), ratio(math.MinInt64, 1), ratio(-1, 15165529522176)},
+		"zero by MinInt64/3": {Ratio{}, ratio(math.MinInt64, 3), Ratio{}},
+		"MinInt64 by -1/2":   {ratio(math.MinInt64, 4), ratio(-1, 2), ratio(1<<62, 1)},
+	} {
+		if got, err := test.left.Div(test.right); err != nil || got != test.want {
+			t.Errorf("%s: %s ÷ %s = %s, %v, want %s", name, test.left, test.right, got, err, test.want)
 		}
 	}
 }
@@ -265,10 +281,11 @@ func TestRatiosDoNotAllocate(t *testing.T) {
 	}
 }
 
-// A sum or a difference is exact, 128 bits wide in between, and overflows
-// only when the reduced result does not fit: each one agrees with math/big,
-// at the edges of int64 and between them.
-func TestRatioSumsAgreeWithBigRat(t *testing.T) {
+// A sum, a difference, a product or a quotient is exact, and overflows only
+// when the reduced result does not fit, whatever an intermediate would have
+// been: each one agrees with math/big, at the edges of int64 and between
+// them.
+func TestRatioArithmeticAgreesWithBigRat(t *testing.T) {
 	t.Parallel()
 	edges := []int64{0, 1, -1, 2, 8, 1 << 32, math.MaxInt64, -math.MaxInt64, math.MinInt64, math.MaxInt64 / 8, 1257006497109667597}
 	random := rand.New(rand.NewPCG(1, 2))
@@ -285,16 +302,18 @@ func TestRatioSumsAgreeWithBigRat(t *testing.T) {
 			}
 		}
 	}
+	steps := map[string]struct {
+		exact func(Ratio, Ratio) (Ratio, error)
+		big   func(z, x, y *big.Rat) *big.Rat
+	}{"+": {Ratio.Add, (*big.Rat).Add}, "-": {Ratio.Sub, (*big.Rat).Sub}, "×": {Ratio.Mul, (*big.Rat).Mul}, "÷": {Ratio.Div, (*big.Rat).Quo}}
 	for range 20_000 {
 		left, right := ratio(pick(), positive()), ratio(pick(), positive())
-		for name, op := range map[string]func(Ratio) (Ratio, error){"+": left.Add, "-": left.Sub} {
-			got, err := op(right)
-			want := new(big.Rat)
-			if name == "+" {
-				want.Add(bigRat(left), bigRat(right))
-			} else {
-				want.Sub(bigRat(left), bigRat(right))
+		for name, step := range steps {
+			got, err := step.exact(left, right)
+			if name == "÷" && right.IsZero() {
+				continue // TestARatioPastInt64IsArithmetic divides by zero
 			}
+			want := step.big(new(big.Rat), bigRat(left), bigRat(right))
 			fits := want.Num().IsInt64() && want.Denom().IsInt64()
 			if fits && (err != nil || bigRat(got).Cmp(want) != 0) || !fits && !errors.Is(err, ErrArithmetic) {
 				t.Fatalf("%s %s %s = %s, %v, want %s", left, name, right, got, err, want.RatString())

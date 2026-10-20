@@ -269,7 +269,7 @@ func (c *bytecodeCompiler) compileVariable(node *syntax.VariableExpr) error {
 }
 
 func (c *bytecodeCompiler) compileArray(node *syntax.ArrayExpr) error {
-	return c.compileMake(node.ID, machine.ArrayKind, node.Items,
+	return c.compileMake(node, node.ID, machine.ArrayKind, node.Items,
 		machine.Instruction{Op: machine.OpMakeArray, A: len(node.Items)}, "cannot compile array with unresolved type")
 }
 
@@ -277,7 +277,7 @@ func (c *bytecodeCompiler) compileArray(node *syntax.ArrayExpr) error {
 // and the ExprJSON import keep a dictionary's entries in.
 func (c *bytecodeCompiler) compileDict(node *syntax.DictExpr) error {
 	keys := kit.Map(node.Entries, func(entry syntax.DictEntryExpr) string { return entry.Key })
-	return c.compileMake(node.ID, machine.DictKind, dictValues(node),
+	return c.compileMake(node, node.ID, machine.DictKind, dictValues(node),
 		machine.Instruction{Op: machine.OpMakeDict, A: len(keys), Keys: keys}, "cannot compile dictionary with unresolved type")
 }
 
@@ -285,20 +285,21 @@ func (c *bytecodeCompiler) compileDict(node *syntax.DictExpr) error {
 // them; compileField turns the name into the index it resolved to, so reading
 // a field is one instruction and no name survives into the bytecode.
 func (c *bytecodeCompiler) compileRecord(node *syntax.RecordExpr) error {
-	return c.compileMake(node.ID, machine.RecordKind, fieldValues(node.Fields),
+	return c.compileMake(node, node.ID, machine.RecordKind, fieldValues(node.Fields),
 		machine.Instruction{Op: machine.OpMakeRecord, A: len(node.Fields)}, "cannot compile record with unresolved type")
 }
 
 // compileMake pushes values in order and packs them into one value of the
 // node's type with instruction. A record's type is always known, so only a
-// container's can be unresolved.
-func (c *bytecodeCompiler) compileMake(id int, kind machine.Kind, values []syntax.Expr, instruction machine.Instruction, unresolved string) error {
+// container's can be unresolved: [] that nothing gives a type is refused
+// where it is written.
+func (c *bytecodeCompiler) compileMake(node syntax.Expr, id int, kind machine.Kind, values []syntax.Expr, instruction machine.Instruction, unresolved string) error {
 	if err := c.compileAll(values); err != nil {
 		return err
 	}
 	typ, ok := c.inferred.nodeType(id)
 	if !ok || typ.Kind() != kind || (kind != machine.RecordKind && !hasElem(typ)) {
-		return errors.New(unresolved)
+		return syntax.Around(node, "%s", unresolved)
 	}
 	instruction.Type = &typ
 	c.emit(instruction)
@@ -572,7 +573,7 @@ func (c *bytecodeCompiler) compileFor(node *syntax.ForExpr) error {
 	resultType, ok := c.inferred.nodeType(node.ID)
 	if !ok || !hasElem(resultType) ||
 		(resultType.Kind() != machine.ArrayKind && resultType.Kind() != machine.DictKind) {
-		return errors.New("cannot compile for with unresolved result type")
+		return syntax.Around(node, "cannot compile for with unresolved result type")
 	}
 	return c.compileLoop(loopShape{
 		key: node.KeyVariable, value: node.Variable, where: node.Where, result: &resultType,
@@ -681,7 +682,7 @@ func (c *bytecodeCompiler) unbindLocal(name string) {
 func (c *bytecodeCompiler) compileReduce(node *syntax.ReduceExpr) error {
 	resultType, ok := c.inferred.nodeType(node.ID)
 	if !ok || !resultType.IsConcrete() {
-		return errors.New("cannot compile reduce with unresolved result type")
+		return syntax.Around(node, "cannot compile reduce with unresolved result type")
 	}
 	if err := c.compile(node.Source); err != nil {
 		return err

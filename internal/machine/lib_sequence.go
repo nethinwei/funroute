@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -164,8 +165,9 @@ func joined[T any](left []T, right Value) Value {
 
 // uniqueItems is an array's items, in order, each once: a native array's by
 // a set — a float's zero and negative zero are one key, as they are one
-// value, and a NaN, equal to nothing, is kept every time — any other's by
-// Equal.
+// value, and a NaN, equal to nothing, is kept every time — an amount's and
+// a record of scalars' by a set of keys that are equal when they are, and
+// any other's by Equal.
 func uniqueItems(_ context.Context, args []Value) (Value, error) {
 	switch box := args[0].box.(type) {
 	case *bool:
@@ -176,8 +178,13 @@ func uniqueItems(_ context.Context, args []Value) (Value, error) {
 		return arrayOf(distinctOf(itemsAt(box, args[0].i))), nil
 	case *string:
 		return arrayOf(distinctOf(itemsAt(box, args[0].i))), nil
+	case *money.Money:
+		return arrayOf(distinctAmounts(itemsAt(box, args[0].i))), nil
 	}
 	items, _ := args[0].Array()
+	if out, keyed := distinctRecords(items); keyed {
+		return packArray(args[0].elemType(), out), nil
+	}
 	out := make([]Value, 0, len(items))
 	for _, item := range items {
 		if !slices.ContainsFunc(out, item.Equal) {
@@ -185,6 +192,77 @@ func uniqueItems(_ context.Context, args []Value) (Value, error) {
 		}
 	}
 	return packArray(args[0].elemType(), out), nil
+}
+
+// distinctAmounts is distinctOf for amounts, whose zeros are one amount in
+// any currency and none.
+func distinctAmounts(amounts []money.Money) []money.Money {
+	out, seen := []money.Money{}, make(map[money.Money]bool, len(amounts))
+	for _, amount := range amounts {
+		key := amount
+		if amount.IsZero() {
+			key = money.Money{}
+		}
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, amount)
+		}
+	}
+	return out
+}
+
+// distinctRecords is the records each once, by recordKey, and true; false
+// for records it cannot key, which are left to Equal.
+func distinctRecords(items []Value) ([]Value, bool) {
+	out, seen := []Value{}, make(map[string]bool, len(items))
+	var key []byte
+	for _, item := range items {
+		var keyed bool
+		if key, keyed = recordKey(item, key[:0]); !keyed {
+			return nil, false
+		}
+		if !seen[string(key)] {
+			seen[string(key)] = true
+			out = append(out, item)
+		}
+	}
+	return out, true
+}
+
+// recordKey appends a record of scalars and amounts to key as bytes two
+// records share exactly when they are Equal: a float's zeros as one, an
+// amount's zero in any currency as one, a string by its length then itself.
+// It is false for anything else — a container, exact money, a NaN, which is
+// equal to nothing — and Equal decides those.
+func recordKey(item Value, key []byte) ([]byte, bool) {
+	record, ok := item.box.(*recordValue)
+	if !ok {
+		return key, false
+	}
+	for _, field := range record.fields {
+		key = append(key, byte(field.kind))
+		switch {
+		case field.kind == BoolKind && field.b:
+			key = append(key, 1)
+		case field.kind == BoolKind:
+			key = append(key, 0)
+		case field.kind == IntKind:
+			key = strconv.AppendInt(key, field.i, 10)
+		case field.kind == FloatKind && !math.IsNaN(field.f):
+			key = strconv.AppendUint(key, math.Float64bits(field.f+0), 16) // -0 + 0 is 0
+		case field.kind == StringKind:
+			key = append(strconv.AppendInt(key, int64(len(field.s)), 10), ':')
+			key = append(key, field.s...)
+		case field.kind == MoneyKind && !IsExact(field) && field.i == 0:
+			key = append(key, '0')
+		case field.kind == MoneyKind && !IsExact(field):
+			key = append(strconv.AppendInt(key, field.i, 10), field.s...)
+		default:
+			return key, false
+		}
+		key = append(key, '|')
+	}
+	return key, true
 }
 
 func distinctOf[T comparable](items []T) []T {

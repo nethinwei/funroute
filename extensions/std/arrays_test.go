@@ -37,6 +37,7 @@ func TestConvenienceShortcuts(t *testing.T) {
 		{"相邻差", `first(deltas(fees))`, int64(-20)},
 		{"k 超过长度就取完", `len(bottom_k(channels, fees, 99))`, int64(3)},
 		{"窗口比数组宽就没有", `len(windows(fees, 9))`, int64(0)},
+		{"再宽没有窗口、只有一批", `len(windows(fees, 9223372036854775807)) * 10 + len(chunk(fees, 9223372036854775807))`, int64(1)},
 		{"一项没有相邻差", `len(deltas([1]))`, int64(0)},
 	} {
 		t.Run(test.name, func(t *testing.T) {

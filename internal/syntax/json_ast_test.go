@@ -17,6 +17,7 @@ func TestImportEnforcesTheNodeDefinitions(t *testing.T) {
 		{`{"version":1,"expr":{"node":"dict","entries":[{"key":"a","value":{"node":"int","int":1}},{"key":"a","value":{"node":"int","int":2}}]}}`, `duplicate dictionary key "a"`},
 		{`{"version":1,"expr":{"node":"reduce","source":{"node":"var","name":"xs"},"variable":"x","accumulator":"x","init":{"node":"int","int":0},"body":{"node":"var","name":"x"}}}`, `"x" is bound twice`},
 		{`{"version":1,"expr":{"node":"for","source":{"node":"var","name":"xs"},"variable":"in","yield":{"node":"var","name":"x"}}}`, `invalid local variable name "in"`},
+		{`{"version":1,"expr":{"node":"for","source":{"node":"var","name":"xs"},"variable":"x","yield_key":{"node":"string","string":"k"},"yield":{"node":"var","name":"x"},"flatten":true}}`, "takes one 'for' clause"},
 		{`{"version":1,"expr":{"node":"float","float":"nan"}}`, `"nan" is not a decimal`},
 		{`{"version":1,"expr":{"node":"float","float":"1e400"}}`, "out of float64's range"},
 		// A reserved word would print as syntax and read back as something else.

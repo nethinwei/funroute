@@ -547,6 +547,9 @@ func (c *codec) storeRecord(p unsafe.Pointer, v Value) error {
 }
 
 func (c *codec) storeSlice(p unsafe.Pointer, v Value) error {
+	// An answer built in a frame's slot is read item by item here: as the
+	// ordinary array it is.
+	v = unarena(v)
 	if v.kind != ArrayKind {
 		return fmt.Errorf("value is %s, want an array", v.Type().Summary())
 	}
@@ -566,7 +569,7 @@ func (c *codec) storeSlice(p unsafe.Pointer, v Value) error {
 }
 
 func (c *codec) storeBoxed(p unsafe.Pointer, v Value) error {
-	converted, err := c.intoGo(v)
+	converted, err := c.intoGo(unarena(v))
 	if err != nil {
 		return err
 	}

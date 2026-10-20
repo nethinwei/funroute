@@ -84,6 +84,7 @@ var elementwise = map[rop]bool{
 	rMoveI: true, rMoveF: true, rAddI: true, rSubI: true, rMulI: true, rDivI: true, rModI: true,
 	rAddF: true, rSubF: true, rMulF: true, rDivF: true,
 	rLtI: true, rLeI: true, rLtF: true, rLeF: true, rEqI: true, rEqF: true, rIntToF: true,
+	rMinI: true, rMaxI: true, rMinF: true, rMaxF: true, rAbsI: true, rAbsF: true,
 }
 
 // vectorOp is an operation as a column computes it: a move and an equality

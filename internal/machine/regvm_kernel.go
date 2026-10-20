@@ -47,6 +47,16 @@ func modInt(a, b int64) (int64, bool) {
 	return a % b, true
 }
 
+// absI is the kernel's abs of an int: the smallest int has none, and the
+// function says so (fault).
+func absI(ints []int64, in *rinstr) bool {
+	value, err := absInt(ints[in.a])
+	if err == nil {
+		ints[in.c] = value
+	}
+	return err == nil
+}
+
 func addI(ints []int64, in *rinstr) bool {
 	sum, ok := addInt(ints[in.a], ints[in.b])
 	if ok {

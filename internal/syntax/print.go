@@ -148,13 +148,13 @@ func (p *printer) operatorSource(match operatorMatch, parent int) string {
 // that ends in a number or a code is parenthesised, or the lexer would read
 // the . or [ into it: (1).x is not 1.x, (@a).b is not the qualified member
 // @a.b, and so for (USD 1).x, (2.9%)[0] and (150 JPY / USD).x; (.a).b is
-// not the selector .a.b.
+// not the selector .a.b, and (true).x is no name true.x.
 func (p *printer) postfixBase(expr Expr) string {
 	switch expr.(type) {
 	case *EnumExpr, *RatioExpr, *MoneyExpr, *FxRateExpr, *CurrencyExpr, *SelectorExpr:
 		return "(" + p.inline(expr, 0) + ")"
 	}
-	if isNumber(expr) {
+	if literal, ok := expr.(*LiteralExpr); ok && literal.Value.Kind() == machine.BoolKind || isNumber(expr) {
 		return "(" + p.inline(expr, 0) + ")"
 	}
 	return p.inline(expr, postfixPrecedence)

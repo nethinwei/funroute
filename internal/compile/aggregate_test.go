@@ -74,6 +74,38 @@ func TestAFoldOfAComprehensionAnswersAsTheCall(t *testing.T) {
 	}
 }
 
+// A fold whose step is no kernel instruction — add(float, int) — calls it
+// with its arguments in registers of its own: a field read out of a record
+// argument before the loop, on either side of the fold, keeps its value.
+func TestAFoldLeavesThePromotedFieldsAlone(t *testing.T) {
+	t.Parallel()
+	registry := aggregateRegistry(t)
+	total := func(items []int64) float64 {
+		sum := 0.0
+		for _, item := range items {
+			sum += float64(item)
+		}
+		return sum
+	}
+	err := registry.Register(machine.FunctionSpec{Name: "t.total_v1", Go: total, Fold: &machine.Fold{Step: "add", Init: machine.Float(0)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := machine.RecordOf(machine.FieldOf("rate", machine.FloatType))
+	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}, {Name: "order", Type: order}}}
+	args := map[string]any{"xs": []any{1, 2, 3}, "order": map[string]any{"rate": 100.0}}
+	for _, source := range []string{
+		`t.total_v1([x for x in xs]) + order.rate`,
+		`order.rate + t.total_v1([x for x in xs])`,
+	} {
+		fused, plain := compileBoth(t, source, registry, options)
+		assertFusedAnswersAsPlain(t, source, fused, plain, args)
+		if got, err := fused.Run(t.Context(), args); err != nil || got.Any() != 106.0 {
+			t.Errorf("%s = %v, %v; want 106", source, got.Any(), err)
+		}
+	}
+}
+
 // compileBoth is the program fused and as written; the fused one calls no
 // fold on an array.
 func compileBoth(t *testing.T, source string, registry *machine.Registry, options CompileOptions) (fused, plain *machine.Runtime) {
@@ -228,6 +260,35 @@ func TestAnInvariantInnerSourceIsComputedOnce(t *testing.T) {
 			if hoistedCalls != wantCalls {
 				t.Errorf("%s with %v: the inner source computed %d times, as written %d; want %d", test.source, xs, hoistedCalls, plainCalls, wantCalls)
 			}
+		}
+	}
+}
+
+// A first of a comprehension of records fuses too, its seed a record of
+// zeros: the record found is the only one built, and the answer and the
+// failure are those of the call on the array built.
+func TestAFirstOfRecordsBuildsOnlyItsAnswer(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}}
+	source := `first([{n: x, name: string(x), big: x > 2, half: float(x) / 2.0} for x in xs if x > 1])`
+	artifact, err := CompileExpr(source, registry, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded, _ := json.Marshal(artifact); !strings.Contains(string(encoded), "loop_break") {
+		t.Fatalf("%s does not stop at its record: %s", source, encoded)
+	}
+	fused, plain := compileHoisted(t, source, registry, options)
+	for _, xs := range [][]any{{}, {1, 2, 3}, {0}, {5}} {
+		args := map[string]any{"xs": xs}
+		got, gotErr := fused.Run(t.Context(), args)
+		want, wantErr := plain.Run(t.Context(), args)
+		if (gotErr == nil) != (wantErr == nil) || gotErr == nil && !got.Equal(want) || gotErr != nil && gotErr.Error() != wantErr.Error() {
+			t.Errorf("%s with %v: fused %v, %v; as written %v, %v", source, xs, got.Any(), gotErr, want.Any(), wantErr)
 		}
 	}
 }

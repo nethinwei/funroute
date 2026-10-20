@@ -180,8 +180,13 @@ func valuesOutcome(ctx context.Context, runtime *funroute.Runtime, in *request) 
 	return encoded(value)
 }
 
+// encoded is value's JSON, or what JSON has no form for: the value alone,
+// since the wording around it is encoding/json's and changes with Go.
 func encoded(value any) string {
 	text, err := json.Marshal(value)
+	if unsupported := (*json.UnsupportedValueError)(nil); errors.As(err, &unsupported) {
+		return "unencodable: " + unsupported.Str
+	}
 	if err != nil {
 		return "unencodable: " + err.Error()
 	}

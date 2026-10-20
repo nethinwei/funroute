@@ -157,6 +157,9 @@ func verify(artifact *Artifact, functions []*RegisteredFunction) (proof, error) 
 	for pc := range v.depths {
 		v.depths[pc] = -1
 	}
+	if err := circles(instructions); err != nil {
+		return proof{}, err
+	}
 	v.states[0] = &vstate{stack: make([]Type, 0, 8), locals: make([]*Type, artifact.parts.Locals)}
 	v.work = []int{0}
 	for len(v.work) > 0 {
@@ -275,6 +278,56 @@ func (v *verifier) step(pc int, s *vstate) ([]edge, error) {
 		return v.loopBreak(in, s)
 	}
 	return v.to(edge{pc + 1, s}), v.straight(in, s)
+}
+
+// circles finds a path that comes back to where it was without a loop_next
+// on it. A loop_next's turns are counted and end with its source; any other
+// circle would run until the process does, the deadline unheard. Without one,
+// every run reaches the end or fails.
+func circles(instructions []Instruction) error {
+	const (
+		unseen = iota
+		open
+		done
+	)
+	state := make([]uint8, len(instructions)+1)
+	type visit struct{ pc, next int }
+	stack := []visit{{0, 0}}
+	state[0] = open
+	for len(stack) > 0 {
+		top := &stack[len(stack)-1]
+		next, ok := successor(instructions, top.pc, top.next)
+		if !ok {
+			state[top.pc] = done
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		top.next++
+		switch state[next] {
+		case open:
+			return fmt.Errorf("invalid bytecode at %d: a path goes back to %d without a loop_next", top.pc, next)
+		case unseen:
+			state[next] = open
+			stack = append(stack, visit{next, 0})
+		}
+	}
+	return nil
+}
+
+// successor is the i-th place the instruction at pc goes on to, a
+// loop_next's turn back to its body aside.
+func successor(instructions []Instruction, pc, i int) (int, bool) {
+	if pc == len(instructions) {
+		return 0, false
+	}
+	in := instructions[pc]
+	switch in.Op {
+	case OpJump, OpLoopBreak:
+		return in.A, i == 0
+	case OpJumpIfFalse, OpBeginFallback, OpLoopInit:
+		return [2]int{pc + 1, in.A}[min(i, 1)], i < 2
+	}
+	return pc + 1, i == 0
 }
 
 // finish holds the end of the program: its result, and nothing open.

@@ -105,9 +105,7 @@ func (f *frame) rateBetween(table *money.Currencies, from, to string) (money.FxR
 	if err != nil {
 		return money.FxRate{}, err
 	}
-	_, ratio := money.FxRateParts(rate)
-	inverse, err := money.RatioFromParts(1, 1).Div(ratio)
-	return money.FxRateFrom(pair, inverse), err
+	return money.InverseFxRate(pair, rate)
 }
 
 // fxScopeKey is the context key a conversion finds the frame under.

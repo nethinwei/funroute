@@ -128,7 +128,7 @@ func (s *Server) namedExamples(name string) []machine.Example {
 // orders them by kind, nearest first — locals, arguments, functions, forms,
 // currencies — then by name.
 func (s *Server) completion(doc *document, offset int) (any, error) {
-	if offset > 0 && doc.text[offset-1] == '@' {
+	if typingEnum(doc, offset) {
 		return s.enumMembers(), nil
 	}
 	// Where only a field can be named — of the record being updated, or of
@@ -300,6 +300,17 @@ func markdown(text string) *markupContent {
 	return &markupContent{Kind: "markdown", Value: text}
 }
 
+// typingEnum reports a cursor at the end of an @ or of an @member being
+// typed — @, @half_e — and not of an @ inside a string or a comment.
+func typingEnum(doc *document, offset int) bool {
+	for _, lexeme := range lexemesOf(doc) {
+		if lexeme.Start < offset && offset <= lexeme.End {
+			return lexeme.Class == syntax.ClassEnum || lexeme.Class == syntax.ClassInvalid && doc.text[lexeme.Start] == '@'
+		}
+	}
+	return false
+}
+
 // signatureHelp names the call the cursor is in and which argument it is on.
 // A call being typed does not parse yet, so it is found from the lexemes,
 // which the lexer produces for any text.
@@ -311,8 +322,10 @@ func (s *Server) signatureHelp(doc *document, offset int) (any, error) {
 		return null, nil
 	}
 	// The active signature is the first that has the argument being typed.
-	first := slices.IndexFunc(overloads, func(function *machine.RegisteredFunction) bool { return len(function.Params) > active })
-	help := signatureHelp{ActiveSignature: max(first, 0), ActiveParameter: active}
+	first := max(slices.IndexFunc(overloads, func(function *machine.RegisteredFunction) bool { return len(function.Params) > active }), 0)
+	// Past the last parameter of every signature, the last one is the one
+	// being typed into: the index stays inside the signature shown.
+	help := signatureHelp{ActiveSignature: first, ActiveParameter: max(min(active, len(overloads[first].Params)-1), 0)}
 	for _, function := range overloads {
 		help.Signatures = append(help.Signatures, signatureOf(function))
 	}

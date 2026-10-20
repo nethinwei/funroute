@@ -31,7 +31,8 @@ type Fold struct {
 	// First makes the first item the answer, and ends the fold there: first.
 	// With no item the function itself is called on an empty array, and
 	// fails as it does. The function answers its array's element type; the
-	// fold fuses where that is a bool, an int, a float or a string.
+	// fold fuses where that is a bool, an int, a float, a string, an amount
+	// or a record of them.
 	First bool
 }
 

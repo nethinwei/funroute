@@ -67,6 +67,36 @@ func TestLoadingRefusesBytecodeThatDoesNotType(t *testing.T) {
 	}
 }
 
+// Loading also holds an artifact to what makes every run end without a
+// panic: the only way back is a loop_next, whose turns are counted, and a
+// loop's names are bound in slots of their own.
+func TestLoadingRefusesBytecodeThatMightNotEnd(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, source, contract string
+		forge                  func(*testing.T, *machine.ArtifactParts)
+	}{
+		{"a circle with no loop_next on it", "a + 1", "a: int", func(_ *testing.T, p *machine.ArtifactParts) {
+			p.Instructions = []machine.Instruction{{Op: machine.OpJump, A: 0}}
+		}},
+		{"a jump back into straight code", "if(f, a, a + 1)", "f: bool; a: int", func(t *testing.T, p *machine.ArtifactParts) {
+			op(t, p, machine.OpJumpIfFalse).A = 0
+		}},
+		{"a loop's item and key in one slot", "[v + 1 for k, v in d]", "d: dict<int>", func(t *testing.T, p *machine.ArtifactParts) {
+			loop := op(t, p, machine.OpLoopInit)
+			loop.D = loop.B
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := forgedLoad(t, test.source, test.contract, func(p *machine.ArtifactParts) { test.forge(t, p) })
+			if err == nil || !strings.Contains(err.Error(), "invalid") {
+				t.Fatalf("Instantiate of %s with %s = %v, want it refused", test.source, test.name, err)
+			}
+		})
+	}
+}
+
 // A fallback's handler starts from the state at begin_fallback, which is
 // what a failure cuts the run back to. A candidate that changes what was
 // there before it failed would hand the handler something else under the

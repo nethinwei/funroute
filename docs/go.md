@@ -91,7 +91,7 @@ decision, _ := program.Run(ctx, &request)
 
 程序里的中间数组——只被遍历、取长度或下标的推导式与数组字面量——建在帧自己的内存里，帧跨运行复用，稳定之后 0 次分配。
 
-`program.RunInto(ctx, &request, &out)` 把结果写进 `out`，并在 `out` 已有的切片里建数组结果，宿主拿同一个 `out` 反复运行就不再为结果分配。`out` 里的切片若与参数共用内存，就不在上面建（避免边读边写）；出错时 `out` 的内容不确定。
+`program.RunInto(ctx, &request, &out)` 把结果写进 `out`，并在 `out` 已有的 `[]bool`、`[]int64`、`[]float64`、`[]string` 里建数组结果，宿主拿同一个 `out` 反复运行就不再为结果分配；元素是 struct 或其他类型的数组照 `Run` 的方式另建内存。`out` 里的切片若与参数共用内存，就不在上面建（避免边读边写）；出错时 `out` 的内容不确定。
 
 `Program.Run` 可以在任意多个 goroutine 里同时调用，每次从池里取一个帧、用完还回去。同一个 goroutine 要反复跑同一条规则时，用 `program.Session()`：会话自己持有一个帧，省掉每次取还的开销（`a + b` 从约 19 ns 到约 12 ns）。会话不能并发使用，每个 goroutine 各取一个：
 

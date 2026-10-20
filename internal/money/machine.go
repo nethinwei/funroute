@@ -33,6 +33,12 @@ func FxRateParts(fx FxRate) (*Pair, Ratio) { return fx.pair, fx.rate }
 // FxRateFrom is the exchange rate FxRateParts gave.
 func FxRateFrom(pair *Pair, r Ratio) FxRate { return FxRate{pair: pair, rate: r} }
 
+// InverseFxRate is fx the other way round, on the table's pair for it.
+func InverseFxRate(pair *Pair, fx FxRate) (FxRate, error) {
+	inverse, err := fx.rate.inverse()
+	return FxRate{pair: pair, rate: inverse}, err
+}
+
 // ExactFrom is exact money of minor units in a currency, unchecked.
 func ExactFrom(currency string, minor Ratio) ExactMoney {
 	return ExactMoney{currency: currency, minor: minor}

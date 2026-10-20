@@ -7,8 +7,8 @@ import "testing"
 // row would be a call of nil.
 func TestEveryKernelOpHasAColdStep(t *testing.T) {
 	t.Parallel()
-	for op := range rCall {
-		if coldKernels[op] == nil {
+	for op := range ropCount {
+		if kernelRop(op) && coldKernels[op] == nil {
 			t.Errorf("%s has no row in coldKernels", op)
 		}
 	}

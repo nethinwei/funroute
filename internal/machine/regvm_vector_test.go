@@ -38,6 +38,9 @@ var vectorShapes = []string{
 	`reduce(f in fs, t = 0.0, t + f / 3.0)`,
 	`first([x * 2 for x in xs if x > 3])`,
 	`any([x > 15 for x in xs if x % 2 == 0])`,
+	`[min(x, 10) for x in xs]`,
+	`sum([max(x, a) - abs(x) for x in xs])`,
+	`[min(abs(f), 2.5) for f in fs]`,
 }
 
 func loadVector(t *testing.T, source string, registry *machine.Registry) *machine.Runtime {

@@ -224,6 +224,18 @@ func TestElseLeadsToItsResultWithAnArrow(t *testing.T) {
 	}
 }
 
+// A call is named as ExprJSON names one: what the importer refuses, the
+// parser refuses too, so every program that parses exports and reads back.
+func TestACallTakesNoReservedName(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{`for(x)`, `in(x)`, `case(1)`, `else(1)`, `with(1)`} {
+		expr, err := Parse(source)
+		if err == nil || !strings.Contains(err.Error(), "invalid function name") {
+			t.Errorf("Parse(%s) = %v, %v; want the name refused", source, expr, err)
+		}
+	}
+}
+
 // An expression's tree is at most maxNesting nodes deep — calls, operators,
 // containers and subscripts alike, whether the parser read them by recursion
 // or by a loop — and one deeper is a syntax error at the node that went too

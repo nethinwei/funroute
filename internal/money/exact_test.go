@@ -83,6 +83,35 @@ func TestConvertExactLeavesTheRounding(t *testing.T) {
 	if _, err := table.ConvertExact(Money{currency: "EUR", minor: 100}.Exact(), fx); !errors.Is(err, ErrCurrency) {
 		t.Fatalf("ConvertExact of euros at a dollar rate: error = %v, want ErrCurrency", err)
 	}
+	// The rate in minor units, 10^-20, fits no ratio; the amount cancels it.
+	tiny, err := table.ConvertExact(Money{currency: "USD", minor: 100}.Exact(), fxRate(t, "USD", "JPY", "0.000000000000000001"))
+	if err != nil || tiny.Minor() != ratio(1, 1_000_000_000_000_000_000) {
+		t.Fatalf("ConvertExact(USD 1.00) at 10^-18 = %s, %v, want 10^-18 yen", tiny, err)
+	}
+}
+
+// MulPart is prorate's exact step: the proportion is never a ratio of its
+// own, so a whole of MinInt64 — 1/MinInt64 fits no ratio — takes a share.
+func TestExactMoneyTakesAPart(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		e           ExactMoney
+		part, whole int64
+		want        Ratio
+	}{
+		"a third":            {usd(100).Exact(), 1, 3, ratio(100, 3)},
+		"a negative whole":   {usd(100).Exact(), 1, -4, ratio(-25, 1)},
+		"zero of MinInt64":   {usd(0).Exact(), 1, math.MinInt64, Ratio{}},
+		"MinInt64 of itself": {usd(5).Exact(), math.MinInt64, math.MinInt64, ratio(5, 1)},
+		"half of MinInt64":   {usd(math.MinInt64).Exact(), 1, 2, ratio(math.MinInt64/2, 1)},
+	} {
+		if got, err := test.e.MulPart(test.part, test.whole); err != nil || got.Minor() != test.want {
+			t.Errorf("%s: (%s).MulPart(%d, %d) = %s, %v, want %s", name, test.e, test.part, test.whole, got, err, test.want)
+		}
+	}
+	if _, err := usd(1).Exact().MulPart(1, 0); !errors.Is(err, ErrArithmetic) {
+		t.Fatalf("MulPart(1, 0) error = %v, want ErrArithmetic", err)
+	}
 }
 
 // The sign of exact money is the sign of its minor units, however small a

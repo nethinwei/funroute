@@ -24,7 +24,7 @@ func TestKernelOpsAnswerAsTheirFunctions(t *testing.T) {
 	t.Parallel()
 	registry := CoreRegistry()
 	ints := []int64{0, 1, -1, 2, -2, 3, 7, -7, math.MaxInt64, math.MinInt64, math.MaxInt64 - 1, math.MinInt64 + 1, 1 << 32, -(1 << 31)}
-	floats := []float64{0, math.Copysign(0, -1), 1.5, -1.5, 3, math.MaxFloat64, -math.MaxFloat64, math.SmallestNonzeroFloat64, 1e308, 1e-308}
+	floats := []float64{0, math.Copysign(0, -1), 1.5, -1.5, 3, math.MaxFloat64, -math.MaxFloat64, math.SmallestNonzeroFloat64, 1e308, 1e-308, math.NaN(), math.Inf(1), math.Inf(-1)}
 	strings := []string{"", "a", "b", "ab", "é"}
 	for key, kernel := range kernelOps {
 		function, _ := registry.Resolve(key)

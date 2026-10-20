@@ -1,6 +1,7 @@
 package syntax
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -281,7 +282,14 @@ type ForExpr struct {
 	Flatten bool `json:"flatten,omitempty"`
 }
 
-func (e *ForExpr) check() error { return distinctNames(e.KeyVariable, e.Variable) }
+func (e *ForExpr) check() error {
+	// Splicing dictionaries would have to say what a repeated key means: the
+	// parser takes one clause for a dictionary, and so does ExprJSON.
+	if e.Flatten && e.YieldKey != nil {
+		return errors.New("a dictionary comprehension takes one 'for' clause")
+	}
+	return distinctNames(e.KeyVariable, e.Variable)
+}
 
 // ReduceExpr is reduce(variable in source if where, accumulator = init, body):
 // body folds every item the filter keeps into the accumulator. All three names

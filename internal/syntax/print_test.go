@@ -57,6 +57,8 @@ var printCorpus = []string{
 	// Selectors: a field read off one is not a longer one.
 	`t + 90s`, `2h30m - 1s500ms`, `-2h`, `0 - 2h`, `(30m).x`, `d * 2 > 1h`, `[1ms, 1us, 1ns][0]`,
 	`sort_by(xs, .fee)`, `top_k(xs, .meta.rank, 2)`, `(.a).b`, `(.a)[0]`, `f(xs, .a, .b.c)`,
+	// A bool under a field read is no name true.x.
+	`(true).x`, `(false)[0]`,
 }
 
 // Every printed program parses back to the node it was printed from, on one

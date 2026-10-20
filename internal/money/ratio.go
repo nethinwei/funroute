@@ -43,7 +43,14 @@ func ratioFrom(negative bool, num, den uint64) (Ratio, error) {
 		return Ratio{}, nil
 	}
 	g := gcd(num, den)
-	num, den = num/g, den/g
+	return fitted(negative, num/g, den/g)
+}
+
+// fitted is ±num/den, in lowest terms, held to int64.
+func fitted(negative bool, num, den uint64) (Ratio, error) {
+	if num == 0 {
+		return Ratio{}, nil
+	}
 	if den > math.MaxInt64 || num > math.MaxInt64 && !(negative && num == 1<<63) {
 		return Ratio{}, errRatioOverflow
 	}
@@ -324,25 +331,19 @@ func (x wide) plus(y wide) wide {
 func (r Ratio) Mul(other Ratio) (Ratio, error) {
 	a, b := r.parts()
 	c, d := other.parts()
-	if a == 0 || c == 0 {
-		return Ratio{}, nil
-	}
-	g, h := int64(gcd(magnitude(a), uint64(d))), int64(gcd(magnitude(c), uint64(b)))
-	num, numFits := mul64(a/g, c/h)
-	den, denFits := mul64(b/h, d/g)
-	if !numFits || !denFits {
-		return Ratio{}, errRatioOverflow
-	}
-	return ratioOf(num, den)
+	return fraction((a < 0) != (c < 0), []uint64{magnitude(a), magnitude(c)}, []uint64{uint64(b), uint64(d)})
 }
 
-// Div is r divided by other, exactly; by zero it is ErrArithmetic.
+// Div is r divided by other, exactly; by zero it is ErrArithmetic. It is
+// a·d / b·c cross-reduced, never r times other's inverse: an inverse that
+// does not fit — 1/MinInt64 — says nothing of a quotient that does.
 func (r Ratio) Div(other Ratio) (Ratio, error) {
-	inverse, err := other.inverse()
-	if err != nil {
-		return Ratio{}, err
+	a, b := r.parts()
+	c, d := other.parts()
+	if c == 0 {
+		return Ratio{}, errDivisionByZero
 	}
-	return r.Mul(inverse)
+	return fraction((a < 0) != (c < 0), []uint64{magnitude(a), uint64(d)}, []uint64{uint64(b), magnitude(c)})
 }
 
 func (r Ratio) inverse() (Ratio, error) {
@@ -350,6 +351,40 @@ func (r Ratio) inverse() (Ratio, error) {
 		return Ratio{}, errDivisionByZero
 	}
 	return ratioOf(r.den, r.num)
+}
+
+// fraction is ±(nums[0]·nums[1]·…)/(dens[0]·dens[1]·…), exactly. nums[i] and
+// dens[i] come from one reduced fraction, so crossing every other pair
+// leaves the products in lowest terms: the result fails only when the
+// reduced one does not fit, whatever an intermediate would have been.
+func fraction(negative bool, nums, dens []uint64) (Ratio, error) {
+	for i := range nums {
+		for j := range dens {
+			if i != j {
+				g := gcd(nums[i], dens[j])
+				nums[i], dens[j] = nums[i]/g, dens[j]/g
+			}
+		}
+	}
+	num, numFits := product64(nums)
+	den, denFits := product64(dens)
+	if !numFits || !denFits {
+		return Ratio{}, errRatioOverflow
+	}
+	return fitted(negative, num, den)
+}
+
+// product64 is the factors multiplied, and whether that fits 64 bits.
+func product64(factors []uint64) (uint64, bool) {
+	product := uint64(1)
+	for _, factor := range factors {
+		hi, lo := bits.Mul64(product, factor)
+		if hi != 0 {
+			return 0, false
+		}
+		product = lo
+	}
+	return product, true
 }
 
 // times is minor·r rounded once by mode, 128 bits wide in between.

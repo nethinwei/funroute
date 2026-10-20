@@ -36,7 +36,7 @@ func moneySpecs() []funroute.FunctionSpec {
 		moneySpec("arg_max", []funroute.Type{amounts}, funroute.IntType, "最大值下标", "最大金额的下标；空数组报错。", argExtremeMoney(false)),
 		moneySpec("min_by", []funroute.Type{list, amounts}, item, "金额最小的候选", "金额键最小的那个候选；并列取第一个，空数组报错。", extremeByMoney(true)),
 		moneySpec("max_by", []funroute.Type{list, amounts}, item, "金额最大的候选", "金额键最大的那个候选；并列取第一个，空数组报错。", extremeByMoney(false)),
-	}, roundedMoneySpecs(amounts, c), keyedSpecs(true))
+	}, roundedMoneySpecs(amounts, c), keyedSpecs())
 }
 
 func moneySpec(name string, params []funroute.Type, result funroute.Type, label, description string, eval funroute.EvalFunc) funroute.FunctionSpec {
@@ -80,16 +80,6 @@ func roundedMoneySpecs(amounts, c funroute.Type) []funroute.FunctionSpec {
 				}))
 	}
 	return specs
-}
-
-// uniformKeys checks the money keys at index share a currency before eval.
-func uniformKeys(index int, eval funroute.EvalFunc) funroute.EvalFunc {
-	return func(ctx context.Context, args []funroute.Value) (funroute.Value, error) {
-		if _, _, err := amountsOf(args[index]); err != nil {
-			return funroute.Value{}, err
-		}
-		return eval(ctx, args)
-	}
 }
 
 // amountsOf is an array of money's backing and the zero of the one currency

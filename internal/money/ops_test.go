@@ -447,3 +447,27 @@ func TestRoundToTakesWholeSteps(t *testing.T) {
 		t.Fatalf("a step in another currency: error = %v, want ErrCurrency", err)
 	}
 }
+
+// DivRatio divides by the ratio itself, never by its inverse: dividing by
+// MinInt64, whose inverse fits no ratio, is an answer like any other.
+func TestMoneyDividedByARatioNeedsNoInverse(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		m    Money
+		r    Ratio
+		want Money
+	}{
+		"zero by MinInt64":     {usd(0), ratio(math.MinInt64, 1), usd(0)},
+		"MinInt64 by itself":   {usd(math.MinInt64), ratio(math.MinInt64, 1), usd(1)},
+		"a net of 97.1%":       {usd(9710), ratio(971, 1000), usd(10000)},
+		"by a negative, up":    {usd(1), ratio(-3, 1), usd(-1)},
+		"by a negative, plain": {usd(3), ratio(-3, 2), usd(-2)},
+	} {
+		if got, err := test.m.DivRatio(test.r, RoundUp); err != nil || got != test.want {
+			t.Errorf("%s: %v ÷ %s = %v, %v, want %v", name, test.m, test.r, got, err, test.want)
+		}
+	}
+	if _, err := usd(1).DivRatio(Ratio{}, RoundUp); !errors.Is(err, ErrArithmetic) {
+		t.Fatalf("DivRatio by zero error = %v, want ErrArithmetic", err)
+	}
+}

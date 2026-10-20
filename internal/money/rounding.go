@@ -89,12 +89,17 @@ func mulDivRound(a, b, d int64, mode Rounding) (int64, error) {
 	if a == 0 || b == 0 {
 		return 0, nil
 	}
-	ud := magnitude(d)
-	q, r, err := mulDivParts(magnitude(a), magnitude(b), ud)
+	return roundedQuotient(negative, magnitude(a), magnitude(b), magnitude(d), mode)
+}
+
+// roundedQuotient is ±a·b/d on magnitudes, rounded once by mode, which is
+// one. d is not zero.
+func roundedQuotient(negative bool, a, b, d uint64, mode Rounding) (int64, error) {
+	q, r, err := mulDivParts(a, b, d)
 	if err != nil {
 		return 0, err
 	}
-	if roundsAway(q, r, ud, negative, mode) {
+	if roundsAway(q, r, d, negative, mode) {
 		if q == math.MaxUint64 {
 			return 0, errFixedOverflow
 		}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"time"
 
@@ -184,6 +185,14 @@ func FromValue[T any](value Value) (T, error) {
 		}
 		return out, nil
 	}
+	// An interface takes the value's Go form, never what holds it inside a
+	// Value; a handle's Go form is its payload.
+	if value.kind != HandleKind && reflect.TypeFor[T]().Kind() == reflect.Interface {
+		if converted, ok := value.Any().(T); ok {
+			return converted, nil
+		}
+		return out, fmt.Errorf("argument is %s, want %s", value.Type(), reflect.TypeFor[T]())
+	}
 	if boxed, ok := value.box.(T); ok {
 		return boxed, nil
 	}
@@ -197,7 +206,8 @@ func FromValue[T any](value Value) (T, error) {
 func fromRecord[T any](value Value) (T, error) {
 	var out T
 	target := reflect.ValueOf(&out).Elem()
-	if target.Kind() == reflect.Map || target.Kind() == reflect.Interface {
+	if target.Kind() != reflect.Struct {
+		// A map takes the record's Go form; nothing else but a struct does.
 		converted, ok := value.Any().(T)
 		if !ok {
 			return out, fmt.Errorf("argument is %s, want %T", value.Type().Summary(), out)
@@ -279,6 +289,11 @@ func coerceWith(input any, expected Type, table *money.Currencies) (Value, error
 		if value.hasType(expected) {
 			return value, nil
 		}
+		// A host's struct is matched by name, as Load matches one: the
+		// fields the contract does not declare are left out.
+		if _, isValue := input.(Value); !isValue && value.kind == RecordKind && expected.kind == RecordKind {
+			return projected(value, expected)
+		}
 		// A typed Value of the wrong type is a host bug. A float64 where an
 		// int is expected is a JSON decoder at work, and the lenient path below
 		// takes it — but a []float64 never becomes an array<int>.
@@ -308,6 +323,33 @@ func coerceWith(input any, expected Type, table *money.Currencies) (Value, error
 	default:
 		return Value{}, fmt.Errorf("unsupported expected type %s", expected)
 	}
+}
+
+// projected is the record a host's struct gave, cut to the fields expected
+// declares, in its order, a nested record cut the same way. A field it does
+// not declare is left out; one it declares and the struct lacks is missing.
+func projected(value Value, expected Type) (Value, error) {
+	if value.hasType(expected) {
+		return value, nil
+	}
+	record, ok := value.box.(*recordValue)
+	if !ok || expected.kind != RecordKind {
+		return Value{}, fmt.Errorf("got %s, want %s", value.Type().Summary(), expected.Summary())
+	}
+	given := value.Type().fields
+	fields := make([]Value, len(expected.fields))
+	for i, want := range expected.fields {
+		at := slices.IndexFunc(given, func(field Field) bool { return field.name == want.name })
+		if at < 0 {
+			return Value{}, fmt.Errorf("field %q is missing", want.name)
+		}
+		field, err := projected(record.fields[at], want.typ)
+		if err != nil {
+			return Value{}, fmt.Errorf("field %q: %w", want.name, err)
+		}
+		fields[i] = field
+	}
+	return Record(expected, fields)
 }
 
 // coerceRecord builds a record from the object a host or a JSON decoder hands

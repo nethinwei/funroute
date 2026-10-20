@@ -8,14 +8,10 @@ package std
 
 import (
 	"errors"
-	"fmt"
-	"math"
 	"slices"
 
 	"github.com/nethinwei/funroute"
 )
-
-var errIntegerOverflow = fmt.Errorf("%w: integer overflow in sum", funroute.ErrArithmetic)
 
 // Register adds the pack to a registry. The order is the pack's: the order a
 // name's overloads are registered in is the order the compiler tries them,
@@ -40,17 +36,6 @@ func Register(registry *funroute.Registry) error {
 		}
 	}
 	return nil
-}
-
-func sumInts(items []int64) (int64, error) {
-	total := int64(0)
-	for _, item := range items {
-		if item > 0 && total > math.MaxInt64-item || item < 0 && total < math.MinInt64-item {
-			return 0, errIntegerOverflow
-		}
-		total += item
-	}
-	return total, nil
 }
 
 // logic is a Go function as a spec.

@@ -553,6 +553,11 @@ func (p *parser) parseCall(name token) (Expr, error) {
 		p.mark(name, RoleForm)
 		return form(p, name)
 	}
+	// What ExprJSON refuses to call, the source does too: a call named for
+	// would not read back from the JSON it exports to.
+	if err := validName(name.text, "fn"); err != nil {
+		return nil, p.errorf(name, "%v", err)
+	}
 	args, err := p.parseList(tokenRightParen)
 	if err != nil {
 		return nil, err

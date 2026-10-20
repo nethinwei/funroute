@@ -46,6 +46,15 @@ func TestCompletionOffersWhatThePositionCanName(t *testing.T) {
 	if got := labels(t, s.request("textDocument/completion", position("file:///b.fr", 7))); strings.Join(got, ",") != "adyen,stripe" {
 		t.Errorf("after @ the completion is %v, want [adyen stripe]", got)
 	}
+	// A member half typed is still one; an @ in a string is no member.
+	s.open("file:///c.fr", "ch == @ad")
+	if got := labels(t, s.request("textDocument/completion", position("file:///c.fr", 9))); strings.Join(got, ",") != "adyen,stripe" {
+		t.Errorf("after @ad the completion is %v, want [adyen stripe]", got)
+	}
+	s.open("file:///d.fr", `ch == "@"`)
+	if got := labels(t, s.request("textDocument/completion", position("file:///d.fr", 8))); slices.Contains(got, "adyen") {
+		t.Errorf("inside a string after @ the completion is %v, want no enum member", got)
+	}
 }
 
 // Signature help works on a call still being typed, which does not parse.
@@ -64,7 +73,9 @@ func TestSignatureHelpFindsTheCallBeingTyped(t *testing.T) {
 // reset the count.
 func TestSignatureHelpCountsPastRecordsAndFields(t *testing.T) {
 	t.Parallel()
-	for text, want := range map[string]float64{"if(true, {a: 1}, ": 2, "if(r.a, ": 1, "if(true, [x for x in xs], ": 2} {
+	// Past the last parameter, the last one stays active: the index never
+	// leaves the signature shown.
+	for text, want := range map[string]float64{"if(true, {a: 1}, ": 2, "if(r.a, ": 1, "if(true, [x for x in xs], ": 2, "if(true, 1, 2, 3, ": 2} {
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
 			s := newSession(t, standard(t), `{}`)

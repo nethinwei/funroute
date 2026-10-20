@@ -78,10 +78,11 @@ func destOps(dest map[string]int) string {
 // An array of plain records is handed over in the frame's own slot when the
 // program only walks or measures it — through let, in nested loops, under a
 // filter; an index into it, or the array itself answered or handed on, lets
-// it out. Apart from that, a loop loads its items into the frame's own
-// record when it only reads their fields; an item that goes anywhere else —
-// collected, compared, put in a record — is made a record of its own, and
-// the loop's items do not stay put.
+// it out. Apart from that, a loop loads the fields it reads of its items
+// into registers when it only reads their fields, or collects an item as it
+// is into its own array; an item that goes anywhere else — collected into
+// an outer clause's array or as part of something, compared, put in a record
+// — is made a record of its own, and the loop's items do not stay put.
 func TestAnArrayOfRecordsIsViewedWhileItsItemsStayPut(t *testing.T) {
 	t.Parallel()
 	registry := randomRegistry(t)
@@ -98,7 +99,10 @@ func TestAnArrayOfRecordsIsViewedWhileItsItemsStayPut(t *testing.T) {
 		{`len([c.fee for c in cs for d in cs if d.fee > c.fee])`, true, 2},
 		{`len([let(n = c, n.fee) for c in cs])`, true, 1},
 		{`len([c for c in cs])`, true, 1}, // a count: the items are never collected
-		{`[c for c in cs]`, true, 0},
+		{`[c for c in cs]`, true, 1},
+		{`[c for c in cs if c.ok && c.fee < 50]`, true, 1},
+		{`[d for c in cs for d in cs]`, true, 1},
+		{`[if(c.ok, c, c) for c in cs]`, true, 0},
 		{`len([[c] for c in cs])`, true, 0},
 		{`cs[0].fee`, false, 0},
 		{`len([c == c for c in cs])`, true, 0},

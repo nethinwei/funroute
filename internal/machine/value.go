@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"reflect"
 	"slices"
 	"time"
 
@@ -394,8 +395,26 @@ func (v Value) containerAny() any {
 		}
 		return out
 	default:
-		return nativeAny(v)
+		backing := nativeAny(v)
+		if v.length() == 0 {
+			return nonNil(backing)
+		}
+		return backing
 	}
+}
+
+// nonNil is an empty backing as an empty slice or map where a host handed
+// in a nil one: JSON writes it [] or {}, as MarshalJSON does, never null —
+// the language has no null.
+func nonNil(backing any) any {
+	value := reflect.ValueOf(backing)
+	switch {
+	case value.Kind() == reflect.Slice && value.IsNil():
+		return reflect.MakeSlice(value.Type(), 0, 0).Interface()
+	case value.Kind() == reflect.Map && value.IsNil():
+		return reflect.MakeMap(value.Type()).Interface()
+	}
+	return backing
 }
 
 // MarshalJSON writes a record's fields in the type's order. A Go map would come
@@ -482,6 +501,9 @@ func jsonTree(v Value, walk func(Value) bool, leaf func(Value) any) any {
 // language cannot see into them, and the VM refuses to compare them at all
 // (see compareEqual), so this answer is only a safe default.
 func (v Value) Equal(other Value) bool {
+	if v.kind == HandleKind || other.kind == HandleKind {
+		return false
+	}
 	if equal, native := nativeEqual(v, other); native {
 		return equal
 	}
@@ -546,11 +568,12 @@ func equalItems(left, right Value, same func(a, b Value) (bool, error)) (bool, e
 // compareEqual is the VM's equality: eq and switch both use it. Handles are
 // opaque, so comparing them is an error rather than a guess.
 func compareEqual(left, right Value) (Value, error) {
-	if equal, native := nativeEqual(left, right); native {
-		return Bool(equal), nil
-	}
+	// A handle's payload may be a map nativeEqual would compare.
 	if left.kind == HandleKind || right.kind == HandleKind {
 		return Value{}, errors.New("handles cannot be compared")
+	}
+	if equal, native := nativeEqual(left, right); native {
+		return Bool(equal), nil
 	}
 	if err := sameUnits(left, right); err != nil {
 		return Value{}, err

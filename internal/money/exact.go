@@ -72,6 +72,19 @@ func (e ExactMoney) MulRatio(r Ratio) (ExactMoney, error) {
 	return ExactMoney{currency: e.currency, minor: product}, err
 }
 
+// MulPart is e times part/whole, exactly: prorate's step. The proportion is
+// never a ratio of its own, which might not fit where the product does.
+func (e ExactMoney) MulPart(part, whole int64) (ExactMoney, error) {
+	if whole == 0 {
+		return ExactMoney{}, errDivisionByZero
+	}
+	p, w := magnitude(part), magnitude(whole)
+	g := gcd(p, w)
+	a, b := e.minor.parts()
+	product, err := fraction((a < 0) != ((part < 0) != (whole < 0)), []uint64{magnitude(a), p / g}, []uint64{uint64(b), w / g})
+	return ExactMoney{currency: e.currency, minor: product}, err
+}
+
 // DivRatio is e divided by a ratio, exactly; by zero it is ErrArithmetic.
 func (e ExactMoney) DivRatio(r Ratio) (ExactMoney, error) {
 	quotient, err := e.minor.Div(r)
@@ -107,10 +120,13 @@ func (c *Currencies) ConvertExact(m ExactMoney, fx FxRate) (ExactMoney, error) {
 
 // convertExactAt is m converted at fx, whose currencies are declared.
 func (c *Currencies) convertExactAt(m ExactMoney, fx FxRate) (ExactMoney, error) {
-	factor, err := c.rateFactor(m.currency, fx)
+	up, down, err := c.rescaling(m.currency, fx)
 	if err != nil {
 		return ExactMoney{}, err
 	}
-	converted, err := m.minor.Mul(factor)
+	a, b := m.minor.parts()
+	num, den := fx.rate.parts()
+	nums, dens := [3]uint64{magnitude(a), uint64(num), up}, [3]uint64{uint64(b), uint64(den), down}
+	converted, err := fraction(a < 0, nums[:], dens[:])
 	return ExactMoney{currency: fx.pair.Quote, minor: converted}, err
 }

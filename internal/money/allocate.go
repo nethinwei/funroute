@@ -73,6 +73,9 @@ func (m Money) AllocateBy(strategy AllocationStrategy, weights ...int64) ([]Mone
 	if strategy.String() == "invalid" {
 		return nil, fmt.Errorf("%w: allocation strategy %d is not one", ErrArithmetic, strategy)
 	}
+	if len(weights) > maxAllocation {
+		return nil, fmt.Errorf("%w: allocate needs 1 to %d shares, got %d", ErrArithmetic, maxAllocation, len(weights))
+	}
 	total, err := allocationTotal(weights)
 	if err != nil {
 		return nil, err

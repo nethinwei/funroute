@@ -289,21 +289,62 @@ func (c *Currencies) convertAt(m Money, fx FxRate, mode Rounding) (Money, error)
 	if err := m.wellFormed(); err != nil {
 		return Money{}, err
 	}
-	factor, err := c.rateFactor(m.currency, fx)
+	if mode < RoundHalfEven || mode > RoundFloor {
+		return Money{}, fmt.Errorf("%w: rounding %d is not a mode", ErrArithmetic, mode)
+	}
+	up, down, err := c.rescaling(m.currency, fx)
 	if err != nil {
 		return Money{}, err
 	}
-	minor, err := factor.times(m.minor, mode)
+	num, den := fx.rate.parts()
+	nums, dens := [3]uint64{magnitude(m.minor), uint64(num), up}, [3]uint64{1, uint64(den), down}
+	minor, err := roundedFraction(m.minor < 0, nums[:], dens[:], mode)
 	return Money{currency: fx.pair.Quote, minor: minor}, err
 }
 
-// rateFactor is the factor fx converts money in currency by: currency is
-// fx's base, or none for the currency-less zero.
-func (c *Currencies) rateFactor(currency string, fx FxRate) (Ratio, error) {
+// rescaling is the powers of ten fx's rate is multiplied and divided by to
+// take minor units of money in currency to minor units of the quote:
+// currency is fx's base, or none for the currency-less zero. One of the two
+// is 1. They are kept apart from the rate, never multiplied into it: the
+// amount may cancel what the rate alone could not hold.
+func (c *Currencies) rescaling(currency string, fx FxRate) (up, down uint64, err error) {
 	if currency != "" && currency != fx.pair.Base {
-		return Ratio{}, fmt.Errorf("%w: %s converted at %s→%s", ErrCurrency, currency, fx.pair.Base, fx.pair.Quote)
+		return 0, 0, fmt.Errorf("%w: %s converted at %s→%s", ErrCurrency, currency, fx.pair.Base, fx.pair.Quote)
 	}
-	return c.factor(fx.pair.Base, fx.pair.Quote, fx.rate)
+	fromDigits, _ := c.Places(fx.pair.Base)
+	toDigits, _ := c.Places(fx.pair.Quote)
+	shift := toDigits - fromDigits
+	if shift < 0 {
+		return 1, uint64(pow10(-shift)), nil
+	}
+	return uint64(pow10(shift)), 1, nil
+}
+
+// roundedFraction is ±(nums[0]·nums[1]·nums[2])/(dens[0]·dens[1]·dens[2])
+// rounded once by mode, crossed as fraction crosses them: it fails only when
+// the rounded result, or the reduced denominator, does not fit.
+func roundedFraction(negative bool, nums, dens []uint64, mode Rounding) (int64, error) {
+	for i := range nums {
+		for j := range dens {
+			if i != j {
+				g := gcd(nums[i], dens[j])
+				nums[i], dens[j] = nums[i]/g, dens[j]/g
+			}
+		}
+	}
+	den, fits := product64(dens)
+	if !fits {
+		return 0, errFixedOverflow
+	}
+	// Two of the three factors in one word, the third beside them: the
+	// product is 128 bits wide on the way to the one rounding step.
+	for k := range nums {
+		rest := [2]uint64{nums[(k+1)%3], nums[(k+2)%3]}
+		if pair, fits := product64(rest[:]); fits {
+			return roundedQuotient(negative, nums[k], pair, den, mode)
+		}
+	}
+	return 0, errFixedOverflow
 }
 
 // factor is what minor units of from are multiplied by to be minor units of

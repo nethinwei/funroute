@@ -18,10 +18,8 @@ type regLoop struct {
 	// body ran the ones before it (scalarFirst); 0 when it does not.
 	vecAt int
 	site  *rloop
-	// view is an array of plain records in the host's memory, and item the
-	// frame's record each of its items is loaded into.
+	// view is an array of plain records in the host's memory.
 	view *recordsView
-	item *recordValue
 	// out is where the comprehension's items go: its own output, or, for
 	// the inner clause of a nested one, the outer clause's. A frame's loops
 	// never move — the slice is made as deep as the program nests — so the
@@ -49,13 +47,6 @@ func (f *frame) regLoopInit(pc int, in *rinstr) (int, error) {
 			f.regs[site.dst] = f.emptyResult(site)
 		}
 		return int(site.exit), nil
-	}
-	// A view is walked into the frame's own record when the value flow
-	// proved the loop's items are only read.
-	if loop.view != nil && site.itemsInPlace {
-		loop.item, f.walked = &f.items[in.c], true
-		loop.view.shape(loop.item)
-		f.regs[site.item] = Value{kind: RecordKind, box: loop.item}
 	}
 	f.startOutput(loop, in)
 	switch {
@@ -135,9 +126,13 @@ func (f *frame) startOutput(loop *regLoop, in *rinstr) {
 	case site.typ.kind == DictKind:
 		loop.dict = newDictBuilder(*site.typ.elem, loop.length)
 	default:
-		if slot := f.slotFor(site.built); slot != nil {
+		switch slot := f.slotFor(site.built); {
+		case slot != nil:
 			loop.output = builderIn(slot, *site.typ.elem, loop.length)
-		} else {
+		case site.collectsItem && loop.view != nil:
+			// The items stay where they are: what is built is which.
+			loop.output = arrayBuilder{elem: *site.typ.elem, of: loop.view, picked: make([]int32, 0, loop.length)}
+		default:
 			loop.output = newArrayBuilder(*site.typ.elem, loop.length)
 		}
 		loop.out = &loop.output
@@ -180,8 +175,8 @@ func (f *frame) emptyResult(site *rloop) Value {
 // of its kind.
 func (f *frame) bindRegs(loop *regLoop, index int) {
 	switch item := loop.site.item; {
-	case loop.item != nil:
-		loop.view.load(index, loop.item, loop.site.fields)
+	case loop.site.itemsInPlace:
+		f.loadItem(loop, index)
 	case loop.ints != nil:
 		f.ints[item] = loop.ints[index]
 	case loop.floats != nil:
@@ -201,6 +196,22 @@ func (f *frame) bindRegs(loop *regLoop, index int) {
 	}
 }
 
+// loadItem loads the fields the body reads of the item at index into their
+// registers: out of the host's memory for a view, and out of the record
+// otherwise. The value flow proved the item is read for those alone, so no
+// record is made of it.
+func (f *frame) loadItem(loop *regLoop, index int) {
+	site := loop.site
+	if loop.view != nil {
+		loop.view.loadInto(index, site.fields, site.promoted, &f.banks)
+		return
+	}
+	record, _ := loop.source.at(index).box.(*recordValue)
+	for i, field := range site.fields {
+		f.setValue(site.promoted[i], record.fields[field])
+	}
+}
+
 // collect adds register value to what the comprehension builds, under the
 // key in register key unless it is -1: a dictionary's entry, of kind, out
 // of its file.
@@ -213,6 +224,21 @@ func (f *frame) collect(value, key int32, kind Kind) {
 	// An int, a bool or a float is collected out of its file (collectInt,
 	// collectFloat): what reaches here is in the values.
 	loop.out.add(f.regs[value])
+}
+
+// collectItem adds the innermost loop's item as it is: where it is in the
+// host's slice, for a loop over a view, and otherwise the record itself.
+func (f *frame) collectItem() {
+	loop := &f.loops[len(f.loops)-1]
+	if loop.view == nil {
+		loop.out.add(loop.source.at(loop.index))
+		return
+	}
+	at := int32(loop.index)
+	if loop.view.perm != nil {
+		at = loop.view.perm[at]
+	}
+	loop.out.picked = append(loop.out.picked, at)
 }
 
 // collectInt adds the int or the bool in register value to the array the

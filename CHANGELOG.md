@@ -2,6 +2,52 @@
 
 版本号按[语义化版本](https://semver.org/lang/zh-CN/)。v0.x 期间，公开 API、语法、ExprJSON、Artifact 与签名清单的形状在两个次版本之间都可能不兼容地改变；每次改变写在这里。
 
+## v0.1.2（未发布）
+
+一次专门的修正与优化：外部评审报告逐条核实后的修复，以及有实测支撑的性能改进。
+
+### 修正
+
+- **非原生元素的数组结果不再全为零**：`Out` 是 `[]int`、`[]int32`、`[]float32`、命名数值切片，或 record 里这类字段时，`Run`、`RunInto`、`Session` 原来静默得到全零；`[]int64` 等原生切片不受影响。
+- **自定义折叠不再改掉被提升的字段**：注册了 `Fold` 且步骤不是内核专用指令的函数（如 `array<int> -> float` 按 `add` 折叠），与读 record 参数字段的表达式写在一起时，字段的值会被折叠的临时寄存器覆盖。
+- **外来 artifact 不再能挂死或打崩宿主**：装载时要求去掉 `loop_next` 回边后控制流无环，`loop_init` 的项目、键与累加器槽互不相同。原来一条往回跳的 `jump` 能让运行无视 `ctx` 永不返回，槽位重合能在不设 recover 的程序里 panic。
+- **句柄永不相等**：payload 是 map 的句柄原来能被 `==` 比较出 `true`。
+- **金额只在结果放不下时才报 `ErrArithmetic`**：`Ratio.Div` 不再先求倒数，换汇不再先把汇率按位数缩放成一个比例，`round(prorate(m, part, whole), …)` 不再先构造 `part/whole`。`x / MinInt64`、极小汇率的换汇、`prorate(m, 1, MinInt64)` 现在有答案。
+- **混合 int/float 比较遇 NaN 按 IEEE 754**：`NaN < 1` 与 `NaN < 1.0` 一样为 false，原来前者为 true。
+- **`FromValue`**：目标是指向 struct 的指针时返回错误而不是 panic；目标是接口时给出 Go 形式（record 是 map），不再交出内部类型。
+- **格式化**：`(true).x` 不再被打印成无法解析的 `true.x`；`funroute fmt` 不再多输出一个换行。
+- **编译**：`if(true, 1, 1 / 0)` 与 `if(f, 1, 1 / 0)` 一样是编译错误（文档一直这样写）；`let(x = [], 1)` 的错误带位置；重载的候选全部失败时报出真正的原因，不再是 `ambiguous here ()`；ExprJSON 拒绝同时带 `flatten` 与 `yield_key` 的推导式；源码里以保留字为名的调用（`for(x)`）是语法错误，与 ExprJSON 一致。
+- **标准库**：`rank` 遇 NaN 按排序的顺序给名次；`allocate(m, [权重])` 执行 10000 份的上限；`windows`、`chunk` 的尺寸在 32 位平台上不再截断；`cumsum` 溢出时报 `in cumsum`。
+- **ISO 4217 表**：按 SIX 2026-09-17 的现行表，加入 `XCG`（加勒比盾）与 `VED`，去掉已退出的 `ANG` 与 `BGN`。
+- **语言服务**：`signatureHelp` 的 `activeParameter` 不再超出所选签名的参数个数；`@` 后输入了几个字母时仍补全枚举成员，字符串里的 `@` 不再触发。
+- 空的原生容器（宿主交来的 nil 切片或 map）的 `Any()` 给空切片或空 map，与 JSON 一致，不再是 nil。
+
+### 行为变化
+
+- `if(true, 1, 1 / 0)` 这类整体可折叠、未走分支里有闭合失败的程序从能编译变为编译错误。
+- `Run(map)` 收到宿主 struct 时按名字匹配：struct 多出的 tag 字段被忽略，与 `Load` 相同；原来报契约错误。
+- 混合 int/float 比较遇 NaN 的结果见上。
+- `cumsum` 溢出的错误文案从 `integer overflow in sum` 改为 `integer overflow in cumsum`。
+- 能用 `-currencies iso` 写 `XCG 1`、`VED 1`，不能再写 `ANG 1`、`BGN 1`。
+
+### 性能
+
+- 金额键的 `top_k`/`bottom_k` 只在大小为 k 的堆里留候选：4096 个渠道取 10 个从 1.1 ms 到 0.19 ms。
+- `unique` 对金额与字段都是标量或金额的 record 按键去重：4096 笔金额从 70.6 ms 到 0.19 ms，4096 个 record 从 728 ms 到 0.39 ms。
+- `first([…])` 对字段都有零值的 record 也融合：找到就停，只建出找到的那一个。
+- `windows`、`chunk`、`take_while`、`drop_while` 共享原数组的内存：4096 笔金额的 `windows(…, 10)` 从 8194 次分配到 18 次。
+- 编译时金额、比例、汇率、币种与枚举字面量不再先在嵌套编译器里折叠一遍：400 个金额分支的 `switch` 从 60 ms 到 3 ms。
+- std 的 `pad_left`/`pad_right` 等标量形状直接从寄存器调用；直调表与按 Go 签名的直调表由测试保持一致。
+- 帧交还后不再留着向量循环读过的宿主切片。
+- 循环项不再建 record：遍历宿主 struct 切片、只读字段的循环把字段直接装进寄存器（500 个渠道的费用之和从 4.6 µs 到 3.5 µs）；按字段筛选后原样收集的渠道（`[c for c in channels if c.ok && c.fee < 50]`）只记下标，结果是宿主切片的视图（约 34 µs、504 次分配到 5.7 µs、4 次）；以循环项为基底的 `with` 从字段寄存器构造。
+- 推导式里直接收集的 record（投影与 `with`）按块分配：500 个渠道的 `[c with {fee: 0} …]` 从 57 µs、1004 次分配到 38 µs、16 次，投影从 504 次分配到 16 次。
+- `min`/`max`/`abs` 有专用指令，带它们的循环可以进向量：`[min(x, 10) for x in xs]`（500 个）从 5.4 µs 到 1.4 µs。
+
+### 工程
+
+- 行为金库只记录 JSON 写不出的那个值，不记录 `encoding/json` 随 Go 版本变化的错误文案，Go 1.26 与 1.27 下结果相同。
+- `make perf` 新增金额与 record 的选择场景，以及路由规则常见形状（字段求和、按字段筛选、投影、`with`、封顶、按下标遍历）。
+
 ## v0.1.1（2026-09-28）
 
 ### 修正

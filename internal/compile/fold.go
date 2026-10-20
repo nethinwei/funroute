@@ -46,6 +46,44 @@ func (c *bytecodeCompiler) tryFold(expr syntax.Expr) (bool, error) {
 	return ok, nil
 }
 
+// untaken folds what the fold of expr may have stepped over — the branches
+// of an if, a fallback's backups, a switch's cases — so that a closed
+// failure is a compile error whichever branch it is written in, as when the
+// branch is compiled on its own: if(true, 1, 1 / 0) as much as if(f, 1, 1 / 0).
+func (c *bytecodeCompiler) untaken(expr syntax.Expr) error {
+	for node := range syntax.Nodes(expr) {
+		for _, branch := range c.branches(node) {
+			if !c.foldable(branch) {
+				continue
+			}
+			if _, _, err := c.evaluate(branch); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// branches is what node may not evaluate.
+func (c *bytecodeCompiler) branches(node syntax.Expr) []syntax.Expr {
+	switch node := node.(type) {
+	case *syntax.CallExpr:
+		if function, found := c.registry.Resolve(c.inferred.Selections[node.ID]); found && (function.IsLazyIf() || function.IsLazyFallback()) {
+			return node.Args[1:]
+		}
+	case *syntax.SwitchExpr:
+		var parts []syntax.Expr
+		for _, branch := range node.Cases {
+			parts = append(append(parts, branch.Match...), branch.Result)
+		}
+		if node.Default != nil {
+			parts = append(parts, node.Default)
+		}
+		return parts
+	}
+	return nil
+}
+
 // constexprOnly reports whether every call in expr may run while compiling.
 // The kernel's functions always may; a host function only if it says so. This
 // is what keeps folding from reaching an engine or a clock, and it is also
@@ -103,7 +141,11 @@ func (c *bytecodeCompiler) foldValue(expr syntax.Expr) (machine.Value, bool, err
 	if !c.foldable(expr) {
 		return machine.Value{}, false, nil
 	}
-	return c.evaluate(expr)
+	value, ok, err := c.evaluate(expr)
+	if err == nil && ok {
+		err = c.untaken(expr)
+	}
+	return value, ok, err
 }
 
 // foldable reports whether expr is worth trying to fold. It must read nothing
@@ -112,14 +154,17 @@ func (c *bytecodeCompiler) foldValue(expr syntax.Expr) (machine.Value, bool, err
 // resolves to a binding that folded to a constant itself. That is what makes
 // folding transitive — with `@let a = 250`, `a * 4` folds to 1000.
 //
-// Literals and plain variables are skipped because they already compile to a
-// single instruction; folding them would only cost a compile-time run.
+// Literals — money, ratios, rates, currencies and enum members among them —
+// and plain variables are skipped because they already compile to a single
+// instruction; folding them would only cost a compile-time run, a nested
+// compiler and a VM for each amount a long switch names.
 func (c *bytecodeCompiler) foldable(expr syntax.Expr) bool {
 	if c.folding {
 		return false
 	}
 	switch expr.(type) {
-	case *syntax.LiteralExpr, *syntax.VariableExpr:
+	case *syntax.LiteralExpr, *syntax.VariableExpr, *syntax.EnumExpr,
+		*syntax.MoneyExpr, *syntax.RatioExpr, *syntax.FxRateExpr, *syntax.CurrencyExpr:
 		return false
 	}
 	return c.constantExpr(expr) && c.callsConstexpr(expr)

@@ -302,6 +302,36 @@ type arrayBuilder struct {
 	monies  []money.Money
 	fxRates []money.FxRate
 	values  []Value
+	// of is the view a loop picks its items out of (rCollectItem), and
+	// picked where each is in the host's slice: the array is a view of
+	// them.
+	of     *recordsView
+	picked []int32
+	// slab and slabFields are the records a loop builds as it collects them
+	// and their fields, a block at a time, rather than one allocation each
+	// (record).
+	slab       []recordValue
+	slabFields []Value
+}
+
+// firstSlab is how many records the first block of a slab holds; each
+// after it holds twice as many, but never more than the items left.
+const firstSlab = 16
+
+// record is a record of typ with n fields, out of the slab: a block twice
+// the size of the last once the last is full, and no bigger than what is
+// still to come — so a loop that keeps few items keeps little memory.
+func (b *arrayBuilder) record(typ *Type, n int) *recordValue {
+	if len(b.slab) == cap(b.slab) || len(b.slabFields)+n > cap(b.slabFields) {
+		room := min(max(firstSlab, 2*cap(b.slab)), max(cap(b.values)-len(b.values), 1))
+		b.slab, b.slabFields = make([]recordValue, 0, room), make([]Value, 0, room*n)
+	}
+	b.slab = b.slab[:len(b.slab)+1]
+	start := len(b.slabFields)
+	b.slabFields = b.slabFields[:start+n]
+	record := &b.slab[len(b.slab)-1]
+	*record = recordValue{typ: typ, fields: b.slabFields[start : start+n : start+n]}
+	return record
 }
 
 func newArrayBuilder(elem Type, capacity int) arrayBuilder {
@@ -356,6 +386,9 @@ func (b *arrayBuilder) addAll(value Value) {
 }
 
 func (b *arrayBuilder) finish() Value {
+	if b.of != nil {
+		return viewed(&recordsView{data: b.of.data, length: len(b.picked), plan: b.of.plan, perm: b.picked})
+	}
 	switch b.elem.kind {
 	case BoolKind:
 		return arrayOf(b.bools)

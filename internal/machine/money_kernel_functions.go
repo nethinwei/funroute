@@ -112,11 +112,7 @@ func (k moneyKernel) registerProportions(registry *Registry) {
 	byInts := moneyDoc("prorate", "按比例取金额：prorate(m, part, whole) 是 m × part / whole，中间精确、只舍入一次。", "金额", "分子", "分母")
 	registerRounded(registry, FunctionSpec{Name: "prorate", Params: []Type{MoneyType, IntType, IntType}, Result: MoneyType, Doc: byInts},
 		func(_ context.Context, args []Value) (money.ExactMoney, error) {
-			part, err := proportion(args[1].i, args[2].i)
-			if err != nil {
-				return money.ExactMoney{}, err
-			}
-			return exactOf(args[0]).MulRatio(part)
+			return exactOf(args[0]).MulPart(args[1].i, args[2].i)
 		},
 		func(_ context.Context, args []Value, mode money.Rounding) (Value, error) {
 			return moneyResult(moneyOf(args[0]).Prorate(args[1].i, args[2].i, mode))
@@ -141,14 +137,6 @@ func (k moneyKernel) registerProportions(registry *Registry) {
 		}
 		return moneyResult(moneyOf(args[0]).RoundTo(moneyOf(args[1]), mode))
 	})
-}
-
-// proportion is part / whole as a ratio; a whole of zero is no proportion.
-func proportion(part, whole int64) (money.Ratio, error) {
-	if whole == 0 {
-		return money.Ratio{}, errDivisionByZero
-	}
-	return money.RatioOf(part, whole)
 }
 
 func registerRatioConversions(registry *Registry) {

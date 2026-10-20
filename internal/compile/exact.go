@@ -26,6 +26,10 @@ type exactness struct {
 }
 
 func checkExact(expr syntax.Expr, inferred *inference, registry *machine.Registry) error {
+	// A registry with no money has no exact money: nothing to walk.
+	if _, declared := registry.Money(); !declared {
+		return nil
+	}
 	walk := exactness{inferred: inferred, registry: registry, locals: scoped[bool]{}, rounds: new(int)}
 	return walk.plain(expr, "the program's result")
 }

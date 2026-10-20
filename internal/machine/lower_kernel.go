@@ -46,4 +46,10 @@ var kernelOps = map[string]kernelOp{
 	"int(float)->int":              {op: rFloatToI, unary: true},
 	"int(int)->int":                {op: rMoveI, unary: true},
 	"float(float)->float":          {op: rMoveF, unary: true},
+	"min(int,int)->int":            {op: rMinI},
+	"max(int,int)->int":            {op: rMaxI},
+	"min(float,float)->float":      {op: rMinF},
+	"max(float,float)->float":      {op: rMaxF},
+	"abs(int)->int":                {op: rAbsI, unary: true},
+	"abs(float)->float":            {op: rAbsF, unary: true},
 }

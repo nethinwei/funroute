@@ -48,7 +48,7 @@ unary          = ( "!" | "-" ) unary | postfix      // -USD 1.70 是对金额取
 postfix        = primary { "[" expression "]" | "." word | "with" "{" word ":" expression { "," word ":" expression } [ "," ] "}" }  // 字段更新：order with {fee: 0}
 primary        = number | ratio | money | fxrate | code | string | "true" | "false" | enum
                | name                               // 变量；第一个点之后是字段读取：order.amount
-               | name "(" [ args ] ")"              // 函数调用，名字可带点：route.score_v1(x)
+               | name "(" [ args ] ")"              // 函数调用，名字可带点：route.score_v1(x)；不能是保留字，for(x) 是语法错误
                | "switch" "(" [ expression "," ] case { "," case } ( [ "," ] ")" | "," "else" "=>" expression ")" )
                | "reduce" "(" locals "in" expression [ "if" expression ] "," word "=" expression "," expression ")"
                | "let" "(" binding { binding } expression ")"

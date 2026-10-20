@@ -150,7 +150,7 @@ func (r *vecRun) resolveOp(in rinstr, kinds opKinds, cols vecCols) (vecOp, bool)
 		return vecOp{}, false
 	}
 	b := a
-	if in.op != rMove && in.op != rIntToF {
+	if !unaryVecOp[in.op] {
 		if b, ok = r.operand(in.b, cols.b, kinds.b); !ok {
 			return vecOp{}, false
 		}
@@ -174,16 +174,23 @@ func (r *vecRun) resolveOp(in rinstr, kinds opKinds, cols vecCols) (vecOp, bool)
 	return vecOp{op: in.op, a: a, b: b, dst: &r.cols[c], outKind: kind}, true
 }
 
+// unaryVecOp are the operations of one operand, a: b is not read.
+var unaryVecOp = map[rop]bool{rMove: true, rIntToF: true, rAbsI: true, rAbsF: true}
+
 // resultKind is what an operation of operands of kinds a and b makes, and
 // false for operands it does not take.
 func resultKind(op rop, a, b vecKind) (vecKind, bool) {
 	switch op {
 	case rMove:
 		return a, true
-	case rAddI, rSubI, rMulI, rDivI, rModI:
+	case rAddI, rSubI, rMulI, rDivI, rModI, rMinI, rMaxI:
 		return vecInt, a == vecInt && b == vecInt
-	case rAddF, rSubF, rMulF, rDivF:
+	case rAddF, rSubF, rMulF, rDivF, rMinF, rMaxF:
 		return vecFloat, a == vecFloat && b == vecFloat
+	case rAbsI:
+		return vecInt, a == vecInt
+	case rAbsF:
+		return vecFloat, a == vecFloat
 	case rIntToF:
 		return vecFloat, a == vecInt
 	case rLtI, rLeI:
@@ -274,7 +281,8 @@ func fill(mask []bool, value bool) {
 	}
 }
 
-// finish writes the answer folded so far back into its register.
+// finish writes the answer folded so far back into its register, and lets
+// go of the loop.
 func (r *vecRun) finish() {
 	switch {
 	case r.plan.acc < 0:
@@ -283,4 +291,7 @@ func (r *vecRun) finish() {
 	default:
 		r.f.floats[r.plan.acc] = r.acc.f
 	}
+	// The run stays with the frame, which goes back to its pool: it keeps
+	// none of the loop's items, which may be the host's memory.
+	r.item, r.loop, r.out = vecValue{}, nil, nil
 }

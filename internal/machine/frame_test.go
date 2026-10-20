@@ -3,6 +3,7 @@ package machine_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -173,7 +174,8 @@ func TestAnIdleFrameKeepsNothingOfTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := &wideRequest{A: 7, B: 3, Name: "adyen", Xs: []int64{1, 2}, Rates: map[string]int64{"k": 1},
+	// Long enough for the vector, which keeps a run of its own in the frame.
+	in := &wideRequest{A: 7, B: 3, Name: "adyen", Xs: slices.Repeat([]int64{1, 2}, 32), Rates: map[string]int64{"k": 1},
 		Order: wideOrder{Fee: 5, Tags: []string{"vip"}}, Items: []wideItem{{Name: "a", Fee: 1}, {Name: "bc", Fee: 2}}}
 	args := binding.Options().Args
 	itemType, _ := args[6].Type.Elem()
@@ -183,7 +185,8 @@ func TestAnIdleFrameKeepsNothingOfTheRun(t *testing.T) {
 			must(machine.Record(itemType, []machine.Value{machine.String("a"), machine.Int(1)})),
 			must(machine.Record(itemType, []machine.Value{machine.String("bc"), machine.Int(2)})),
 		}))}
-	sources := []string{"a + b", "a + len(xs)", "len(name) + b", "order.fee + len(order.tags)", "reduce(i in items, total = 0, total + i.fee + len(i.name))"}
+	sources := []string{"a + b", "a + len(xs)", "len(name) + b", "order.fee + len(order.tags)", "reduce(i in items, total = 0, total + i.fee + len(i.name))",
+		"reduce(x in xs, total = 0, total + x * 2)"}
 	for _, source := range sources {
 		program, err := binding.Compile(source)
 		if err != nil {

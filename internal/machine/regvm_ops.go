@@ -101,6 +101,9 @@ const (
 	rCollect // adds register a, under the key in b unless b is -1: of kind c
 	rCollectI
 	rCollectF
+	// rCollectItem adds the item of the innermost loop as it is: of a view,
+	// where it is in the host's slice (rloop.collectsItem).
+	rCollectItem
 	rSpread // adds the items of the array in a
 	// rLoopBreak ends loops[c] with register a as its answer, and goes to
 	// b: the loop's exit, or wherever the stack instruction went on to.
@@ -109,6 +112,17 @@ const (
 	rEndFallback
 	rFxPush // opens a using of the b quotes from a
 	rFxPop
+	// The kernel operations added after the hot loop's range was laid out:
+	// placed before rCall they would push the hot ones after it up, and the
+	// hot loop measurably slower. cold runs them by coldKernels too
+	// (kernelRop). The extremes of two values and an absolute value:
+	// min(fee, cap).
+	rMinI
+	rMaxI
+	rMinF
+	rMaxF
+	rAbsI // c = |a|, refusing the smallest int, which has none
+	rAbsF
 	ropCount
 )
 
@@ -122,11 +136,12 @@ var ropNames = [ropCount]string{
 	rBranchLeF: "branch_le_f", rBranchLtS: "branch_lt_s", rBranchLeS: "branch_le_s", rBranchEq: "branch_eq",
 	rBranchEqI: "branch_eq_i", rBranchEqF: "branch_eq_f", rEq: "eq", rEqI: "eq_i", rEqF: "eq_f",
 	rLen: "len", rAt: "at", rAtI: "at_i", rAtF: "at_f", rAtB: "at_b",
-	rAtD: "at_d", rAtDI: "at_d_i", rAtDF: "at_d_f", rAtDB: "at_d_b", rIntToF: "int_to_f", rFloatToI: "float_to_i", rAtA: "at_a", rTake: "take", rCall: "call",
+	rAtD: "at_d", rAtDI: "at_d_i", rAtDF: "at_d_f", rAtDB: "at_d_b", rIntToF: "int_to_f", rFloatToI: "float_to_i", rAtA: "at_a", rTake: "take",
+	rMinI: "min_i", rMaxI: "max_i", rMinF: "min_f", rMaxF: "max_f", rAbsI: "abs_i", rAbsF: "abs_f", rCall: "call",
 	rField: "field", rFieldI: "field_i", rFieldF: "field_f", rFieldB: "field_b", rBranchField: "branch_field", rHasKey: "has_key",
 	rMakeArray: "make_array", rMakeDict: "make_dict", rMakeRecord: "make_record", rRecordWith: "record_with",
 	rLoopInit: "loop_init", rCollect: "collect", rSpread: "spread", rLoopNext: "loop_next", rLoopBreak: "loop_break", rCollectNext: "collect_next",
-	rCollectI: "collect_i", rCollectF: "collect_f", rCollectNextI: "collect_next_i", rCollectNextF: "collect_next_f",
+	rCollectI: "collect_i", rCollectF: "collect_f", rCollectItem: "collect_item", rCollectNextI: "collect_next_i", rCollectNextF: "collect_next_f",
 	rBeginFallback: "begin_fallback", rEndFallback: "end_fallback", rFxPush: "fx_push", rFxPop: "fx_pop",
 	rHalt: "halt",
 }
@@ -233,6 +248,12 @@ type rloop struct {
 	// fields the body reads: each item loads those alone.
 	itemsInPlace bool
 	fields       []int32
+	// promoted is the register each of fields is loaded into, in the file
+	// of its kind: a read of the field reads the register. collectsItem says
+	// the loop collects its item as it is (rCollectItem): over a view, the
+	// array it makes is a view of the items it collected.
+	promoted     []int32
+	collectsItem bool
 	built
 	// vec is the plan a vector runs the loop's body by, when it can.
 	vec *vecPlan
@@ -255,6 +276,13 @@ type rmake struct {
 	boxes []scalarArg
 	built
 	// answer marks the record the program answers, built in the frame's
-	// own record when the host reads it before the frame goes.
+	// own record when the host reads it before the frame goes; sink a
+	// record a loop collects as soon as it is made, built in its array's
+	// slab (arrayBuilder.record).
 	answer bool
+	sink   bool
+	// base is, for an update of a loop's item whose fields are in registers
+	// of their own (itemRegsOf), the register of each field: the update
+	// starts from those.
+	base []int32
 }
