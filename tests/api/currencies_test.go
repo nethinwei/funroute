@@ -294,4 +294,44 @@ func TestAChainedRateConvertsAsTheRuleHops(t *testing.T) {
 	if home, err := eurUSD.Chain(usdEUR); !errors.Is(err, funroute.ErrArithmetic) {
 		t.Errorf("EUR→USD then USD→EUR with a spread = %v, %v, want ErrArithmetic", home, err)
 	}
+	assertTheRuleHopsHomeWhereChainRefuses(t, registry, contract)
+}
+
+// Through three currencies back to the first, a rule converts at the product
+// of the rates, 1.2 here, spreads and all; Chain has no rate of a currency to
+// itself but 1, and says so.
+func assertTheRuleHopsHomeWhereChainRefuses(t *testing.T, registry *funroute.Registry, contract funroute.CompileOptions) {
+	t.Helper()
+	table, _ := registry.Currencies()
+	rates := make([]funroute.FxRate, 0, 3)
+	for _, quote := range [][3]string{{"EUR", "USD", "1.25"}, {"USD", "JPY", "160"}, {"JPY", "EUR", "0.006"}} {
+		fx, err := table.FxRate(quote[0], quote[1], quote[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		rates = append(rates, fx)
+	}
+	artifact, err := funroute.CompileExpr("using(market, round(amount -> USD -> JPY -> EUR, @half_even))", registry, contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := funroute.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	euros, err := table.Parse("EUR 100.00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := runtime.RunValues(t.Context(), []funroute.Value{valueOf(euros), valueOf(rates)})
+	if got, _ := value.Money(); err != nil || got.Minor() != 12000 || got.Currency() != "EUR" {
+		t.Errorf("EUR 100.00 through USD and JPY home = %v, %v, want EUR 120.00", got, err)
+	}
+	toYen, err := rates[0].Chain(rates[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if home, err := toYen.Chain(rates[2]); !errors.Is(err, funroute.ErrArithmetic) {
+		t.Errorf("EUR→USD→JPY→EUR chained = %v, %v, want ErrArithmetic", home, err)
+	}
 }

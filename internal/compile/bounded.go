@@ -11,8 +11,9 @@ import (
 // produces is sized by its arguments, so those arguments must have a size the
 // inputs already bound. Three things do: a literal, the length of a container
 // (that length *is* part of the input size), and the two combined by
-// arithmetic; a let's name for one of them is as good. An argument that could be any scalar at run time does not, and
-// that is the one docs/termination.md rules out.
+// arithmetic; a let's name for one of them is as good. An argument that could
+// be any scalar at run time does not, and that is the one docs/termination.md
+// rules out.
 func (c *bytecodeCompiler) requireBoundedArgs(node *syntax.CallExpr) error {
 	for i, arg := range node.Args {
 		// Only an integer can stand for a length; the amount allocate splits

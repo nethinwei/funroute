@@ -31,6 +31,16 @@
 - **ExprJSON 与源码等价**（宪章 S7）：`flatten` 的推导式必须产出下一个 `for`，原来能导入一个源码写不出、格式化后变成另一个程序的形状；ExprJSON 的 fuzz 对导入成功的都做格式化往返。
 - **多子句推导式的位置**：第二个及以后的 `for` 里的变量名，语法树的 `text_span`、悬停与作用域原来都指向整个推导式的开头。
 - `repeat` 的上限按结果长度：`repeat("", 20000)` 是空串，原来报超出上限。
+- **向量循环不再打崩进程**：循环体先在 int 组里算、再收集成 bool（`[x * 2 > 5 for x in xs]`、`len([x % 3 == 0 for x in xs])`），16 项以上时原来 panic；不调宿主函数的程序不设 recover，宿主进程随之崩溃，调了的则被当成 `ErrExtension` 交给 `fallback`。
+- **伪造的 artifact 不再能在装载时 panic**：`loop_collect` 的操作数原来不校验，A 改成 2、-1 等就打崩 `Instantiate`；现在 A 只能是 0 或 1，其余操作数为 0。
+- **格式化**：`a -> (-1)`（即 `convert(a, -1)`）原来打印成解析不回的 `a -> -1`，以 bool 为键的推导式 `{(true): 1 for x in xs}` 打印成 `{true: …}`。
+- **`ConstArgs` 不再在编译期调用宿主**：`matches(s, host.pattern_v1())` 原来在编译时真的调用了未标 Constexpr 的宿主函数。
+- **编译错误的位置**：`[]`、`x`、`first([])`、`at(d, "k")` 这类结果类型推不出的程序报错不带位置；`switch` 的 case 与主体类型不符时报在分支结果上，现在报在那个 case 上。
+- **`FxRate.Chain` 串回起点不再丢掉点差**：原来一律得 1，与规则里照乘积换出的答案不同。
+- **精确金额不会被写成宿主的 `Money`**：伪造 artifact 让 `round` 之外的精确金额到达宿主时，原来把分子当作最小单位写进去（半分钱写成 USD 0.01），现在是错误。
+- `allocate(m, n)` 的 n 在 32 位平台上先在 int64 上比较上限，不会被截断绕过 10000。
+- **批处理**：被拒绝的请求原来不计入"不再等待"，其余请求都不等了也不取消引擎调用；全部被拒的批次仍以零条调用引擎。
+
 
 ### 行为变化
 
@@ -44,6 +54,14 @@
 - 批处理共享的引擎调用：截止时间取批内最晚的（有请求没设就不设），只在批内所有请求都不再等待时取消；一条请求的 ctx 结束，它自己立即返回，同批其他请求照常完成。
 - `RunBatch` 的 `n` 小于零时什么也不做，原来 panic。
 - 签名清单与目录的 JSON 新增 `fold`、`short_circuit` 字段。
+- `FxRate.Chain` 串回起点：乘积恰为 1 仍是同币种汇率，带点差的是 `ErrArithmetic`（原来一律是 1）。
+- `ParseRounding` 的错误归入 `ErrArithmetic`，与 `ParseAllocation` 一致，文案多了 `arithmetic failed: ` 前缀。
+- `ConstArgs` 的实参是宿主函数调用时从能编译变为编译错误。
+- `let(n = len(xs), range(n))`、`let(n = len(fees), allocate(m, n))` 这类 let 别名从编译错误变为合法程序。
+- 上面那些编译错误新增位置与 `type error:` 前缀。
+- `funroute fmt` 与 `Format` 输出 `a -> (-1)`、`{(true): …}`。
+- 目录与签名清单里 `sort_by`、`top_k`、`min_by`、`arg_max` 等的 `description` 写明了遇 NaN 的顺序。
+
 
 ### 性能
 
@@ -60,17 +78,24 @@
 - 循环项不再建 record：遍历宿主 struct 切片、只读字段的循环把字段直接装进寄存器（500 个渠道的费用之和从 4.6 µs 到 3.5 µs）；按字段筛选后原样收集的渠道（`[c for c in channels if c.ok && c.fee < 50]`）只记下标，结果是宿主切片的视图（约 34 µs、504 次分配到 5.7 µs、4 次）；以循环项为基底的 `with` 从字段寄存器构造。
 - 推导式里直接收集的 record（投影与 `with`）按块分配：500 个渠道的 `[c with {fee: 0} …]` 从 57 µs、1004 次分配到 38 µs、16 次，投影从 504 次分配到 16 次。
 - `min`/`max`/`abs` 有专用指令，带它们的循环可以进向量：`[min(x, 10) for x in xs]`（500 个）从 5.4 µs 到 1.4 µs。
+- 金额的 `==`、`!=`、`in`、`index_of` 与 `dict<money>` 的相等不再分配（500 笔金额原来 2–3 次）；容器的 `Equal` 不再为比较类型新建 `Type`，字典的相等不再排序键。
+- 编译时找自由变量从平方变为线性：4 万个不同的自由变量从 826 ms 到 4.4 ms。
+
 
 ### 文档
 
 - 新增 [`docs/semantics.md`](docs/semantics.md)（语义宪章）；README、language.md、money.md、go.md、contracts.md 改为引用它：首页的"强类型"改为"结构强类型"，"同一输入同一答案"限定为同一环境，Artifact 冻结的是签名绑定而不是行为，扩展函数的纯度是宿主的承诺。
 - termination.md 的定理 B 改正：多项式的次数按语法归纳（循环相加、调用乘以函数的代价次数），原证明说内核函数都是线性的；新增内核与 std 的代价表。
 - go.md 原来把 `any`/`all`/`first` 的融合写成"不改变结果的改写"，它们是短路形式（宪章 S4）。
+- money.md 写明多跳换汇与 `FxRate.Chain` 只在起点与终点币种不同时相同；termination.md 写明 let 别名不改变有界性。
+
 
 ### 工程
 
 - 行为金库只记录 JSON 写不出的那个值，不记录 `encoding/json` 随 Go 版本变化的错误文案，Go 1.26 与 1.27 下结果相同。
 - `make perf` 新增金额与 record 的选择场景，以及路由规则常见形状（字段求和、按字段筛选、投影、`with`、封顶、按下标遍历）。
+- 随机循环体的向量与标量逐项对照，随机程序生成器补上 bool 数组；伪造 artifact 的操作数变异 fuzz。
+
 
 ## v0.1.1（2026-09-28）
 

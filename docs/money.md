@@ -100,7 +100,7 @@ using(market, using(fx(EUR, USD) * 103.5%, round(amount -> USD, @half_even)))   
 
 - **汇率是参数**。`using(报价, …, 主体)` 的每个报价是一个 `fxrate` 或一个 `array<fxrate>`。宿主的行情、清算价、协议价，就是契约里声明的参数（Go 传 `[]funroute.FxRate`，零拷贝）；要几套汇率就声明几个参数，每个 `using` 只用它列出的那些。
 - **`using` 永远隔离**：主体只用它自己列出的报价，外层 `using` 不参与，所以规则换汇用的是哪条汇率，看 `using` 本身就知道。要沿用外层的某个汇率就用 `fx(基准, 报价)` 读出来写进去：报价在进入主体之前、在 `using` 外面求值，所以 `fx` 读的是外层。
-- **单跳**：每个 `->` 只用这一对货币的汇率：这个方向的报价，或者反方向报价的倒数；同一货币对出现多次时后写的为准。它从不自己找中转货币，要经过别的货币就连写：`amount -> USD -> EUR`。`->` 左结合，每一跳只用自己那一对货币的汇率；和 `round` 里的其他运算一样，中间的 USD 保持精确，不落到最小单位，`round` 在最后只舍入一次，结果与在 Go 里用 `FxRate.Chain` 把交叉汇率乘好再换一次相同。清算里中间币种是一笔要各自入账的真实金额时，就一跳一跳写出舍入方式：`convert(convert(amount, USD, @half_even), EUR, @half_even)`。
+- **单跳**：每个 `->` 只用这一对货币的汇率：这个方向的报价，或者反方向报价的倒数；同一货币对出现多次时后写的为准。它从不自己找中转货币，要经过别的货币就连写：`amount -> USD -> EUR`。`->` 左结合，每一跳只用自己那一对货币的汇率；和 `round` 里的其他运算一样，中间的 USD 保持精确，不落到最小单位，`round` 在最后只舍入一次；起点与终点币种不同时，结果与在 Go 里用 `FxRate.Chain` 把交叉汇率乘好再换一次相同。串回起点（`amount -> USD -> EUR` 而 amount 是欧元）时规则照各跳汇率的乘积换，点差照算；`Chain` 只在乘积恰为 1 时给出同币种汇率，否则是 `ErrArithmetic`。清算里中间币种是一笔要各自入账的真实金额时，就一跳一跳写出舍入方式：`convert(convert(amount, USD, @half_even), EUR, @half_even)`。
 
 ```text
 using(150.5 JPY / USD, 0.5 EUR / JPY, round(USD 0.01 -> JPY -> EUR, @half_even))   // EUR 0.75：精确值 0.7525 欧元，只舍入一次
