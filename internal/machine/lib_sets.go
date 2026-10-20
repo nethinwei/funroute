@@ -12,7 +12,7 @@ import (
 // Each keeps the first list's order, an item once, by the equality == asks
 // — money meets first (money_meet.go) — found by a set where the items have
 // keys: a native array's own items, an amount's minor units, a record's
-// recordKey. Anything else is compared item by item.
+// itemKey. Anything else is compared item by item.
 func setSpecs() []FunctionSpec {
 	list := ArrayOf(TypeVar("T"))
 	held := func(name, label, description, result string, eval EvalFunc) FunctionSpec {
@@ -60,8 +60,8 @@ func keptAgainst(array, other Value, shared bool) []int {
 		// Met, two amounts are one when their minor units are.
 		return keptBy(minorsOf(itemsAt(items, array.i)), minorsOf(mustItems[money.Money](other)), shared)
 	}
-	if keys, keyed := recordKeys(array); keyed {
-		if others, keyed := recordKeys(other); keyed {
+	if keys, keyed := itemKeys(array); keyed {
+		if others, keyed := itemKeys(other); keyed {
 			return keptBy(keys, others, shared)
 		}
 	}
@@ -83,15 +83,15 @@ func minorsOf(amounts []money.Money) []int64 {
 	return minors
 }
 
-// recordKeys is the recordKey of each item of an array of records, and
-// false when one has none.
-func recordKeys(array Value) ([]string, bool) {
+// itemKeys is the itemKey of each item of an array, and false when one has
+// none.
+func itemKeys(array Value) ([]string, bool) {
 	items := valuesOf(array)
 	keys := make([]string, len(items))
 	var key []byte
 	for i, item := range items {
 		var keyed bool
-		if key, keyed = recordKey(item, key[:0]); !keyed {
+		if key, keyed = itemKey(item, key[:0]); !keyed {
 			return nil, false
 		}
 		keys[i] = string(key)

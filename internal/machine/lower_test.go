@@ -26,6 +26,8 @@ func TestLoweringFusesTheCommonShapes(t *testing.T) {
 		{`a * b / 10000 + a`, "mul_i div_i add_i halt"},
 		{`if(a < b, a, b)`, "branch_lt_i move_i jump move_i halt"},
 		{`let(c = a * b, c + a)`, "mul_i add_i halt"},
+		{`let(c = min(a, b), c + a)`, "min_i add_i halt"},
+		{`let(c = abs(f), c * f)`, "abs_f mul_f halt"},
 		{`reduce(x in xs, t = 0, t + x)`, "loop_init add_i loop_next halt"},
 		{`[x + 1 for x in xs]`, "loop_init add_i collect_next_i halt"},
 		{`[x for x in xs if x > 0]`, "loop_init branch_lt_i collect_next_i loop_next halt"},

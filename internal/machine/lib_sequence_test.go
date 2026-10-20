@@ -17,31 +17,15 @@ import (
 func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 	t.Parallel()
 	random := rand.New(rand.NewPCG(5, 6))
-	floats := []float64{0, math.Copysign(0, -1), 1.5}
-	order := RecordOf(FieldOf("ok", BoolType), FieldOf("n", IntType), FieldOf("f", FloatType), FieldOf("s", StringType), FieldOf("fee", MoneyType))
-	amounts := make([]money.Money, 200)
-	records := make([]Value, 200)
-	for i := range records {
-		amounts[i] = money.Make([]string{"USD", "", "USD"}[random.IntN(3)], int64(random.IntN(3)))
-		if amounts[i].Currency() == "" {
-			amounts[i] = money.Make("", 0)
-		}
-		fields := []Value{Bool(random.IntN(2) == 0), Int(int64(random.IntN(2))), Float(floats[random.IntN(3)]),
-			String([]string{"a", "ab", "b|"}[random.IntN(3)]), MoneyValue(amounts[i].Minor(), amounts[i].Currency())}
-		record, err := Record(order, fields)
-		if err != nil {
-			t.Fatal(err)
-		}
-		records[i] = record
-	}
-	recordArray, err := Array(order, records)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, keyed := distinctRecords(records); !keyed {
+	amounts, records, recordArray := scalarRecords(t, random)
+	if _, keyed := distinctKeyed(records); !keyed {
 		t.Fatal("records of scalars and amounts are not keyed")
 	}
-	for _, array := range []Value{arrayOf(amounts), recordArray} {
+	nested, held := nestedArrays(t, random)
+	if _, keyed := distinctKeyed(valuesOf(nested)); !keyed {
+		t.Fatal("arrays of ints are not keyed")
+	}
+	for _, array := range []Value{arrayOf(amounts), recordArray, nested, held} {
 		got, err := uniqueItems(t.Context(), []Value{array})
 		if err != nil {
 			t.Fatal(err)
@@ -62,4 +46,62 @@ func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 			t.Errorf("unique of %v = %v, %v; want ErrCurrency", mixed, got.Any(), err)
 		}
 	}
+}
+
+// scalarRecords is 200 amounts in dollars or none, and 200 records of a
+// field of each scalar kind and one of those amounts, as values and as an
+// array.
+func scalarRecords(t *testing.T, random *rand.Rand) ([]money.Money, []Value, Value) {
+	t.Helper()
+	floats := []float64{0, math.Copysign(0, -1), 1.5}
+	order := RecordOf(FieldOf("ok", BoolType), FieldOf("n", IntType), FieldOf("f", FloatType), FieldOf("s", StringType), FieldOf("fee", MoneyType))
+	amounts := make([]money.Money, 200)
+	records := make([]Value, 200)
+	for i := range records {
+		amounts[i] = money.Make([]string{"USD", "", "USD"}[random.IntN(3)], int64(random.IntN(3)))
+		if amounts[i].Currency() == "" {
+			amounts[i] = money.Make("", 0)
+		}
+		fields := []Value{Bool(random.IntN(2) == 0), Int(int64(random.IntN(2))), Float(floats[random.IntN(3)]),
+			String([]string{"a", "ab", "b|"}[random.IntN(3)]), MoneyValue(amounts[i].Minor(), amounts[i].Currency())}
+		record, err := Record(order, fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records[i] = record
+	}
+	array, err := Array(order, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return amounts, records, array
+}
+
+// nestedArrays is 200 arrays of up to two small ints, the same items more
+// than once and the empty array among them, and 200 records that hold one.
+func nestedArrays(t *testing.T, random *rand.Rand) (Value, Value) {
+	t.Helper()
+	held := RecordOf(FieldOf("n", IntType), FieldOf("xs", ArrayOf(IntType)))
+	arrays, records := make([]Value, 200), make([]Value, 200)
+	for i := range arrays {
+		items := make([]int64, random.IntN(3))
+		for j := range items {
+			items[j] = int64(random.IntN(2))
+		}
+		arrays[i] = arrayOf(items)
+		record, err := Record(held, []Value{Int(int64(random.IntN(2))), arrays[i]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		records[i] = record
+	}
+	nested, err := Array(ArrayOf(IntType), arrays)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holding, err := Array(held, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nested, holding
 }

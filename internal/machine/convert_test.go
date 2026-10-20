@@ -2,9 +2,13 @@ package machine
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
+
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 func sameBacking[T any](a, b []T) bool {
@@ -65,6 +69,25 @@ func TestBoundaryKeepsTheInvariants(t *testing.T) {
 	}
 	if _, err := FromValue[[]int64](Float(1)); err == nil || !strings.Contains(err.Error(), "want []int64") {
 		t.Fatalf("FromValue[[]int64](Float(1)) error = %v, want one containing %q", err, "want []int64")
+	}
+}
+
+// A Go value of the language's own that is not one says why itself: the
+// zero FxRate is a currency error, a time past the years a time holds is out
+// of the domain — not a mismatch of types the lenient path then reports.
+func TestCoerceKeepsWhatTheGoValueSays(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		input    any
+		expected Type
+		want     error
+	}{
+		"the zero FxRate":       {[]money.FxRate{{}}, ArrayOf(FxRateType), ErrCurrency},
+		"a time past its years": {time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC), TimeType, ErrDomain},
+	} {
+		if value, err := coerce(test.input, test.expected); !errors.Is(err, test.want) {
+			t.Errorf("coerce(%s) = %v, %v, want %v", name, value.Any(), err, test.want)
+		}
 	}
 }
 

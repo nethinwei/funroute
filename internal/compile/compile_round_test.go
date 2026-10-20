@@ -207,9 +207,11 @@ func TestRoundNeedsAStepAndAWrittenMode(t *testing.T) {
 		"round(fees.avg(ms), @up)":      "nothing inside round",
 		"let(x = round(USD 1.00 * 0.025, @half_even), round(x + amount, @up))": "nothing inside round",
 		"round(round(amount + amount, @down) + amount * 0.025, @up)":           "nothing inside round",
-		"round(amount * 0.025, if(f, @up, @down))":                             "mode written out",
-		`round(amount * 0.025, "up")`:                                          "no overload",
-		"round(amount * 0.025, USD)":                                           "no overload",
+		// A step whose answer only a comparison reads does not reach the round.
+		"round(if(amount * 0.025 > amount, amount, amount), @up)": "nothing inside round",
+		"round(amount * 0.025, if(f, @up, @down))":                "mode written out",
+		`round(amount * 0.025, "up")`:                             "no overload",
+		"round(amount * 0.025, USD)":                              "no overload",
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()

@@ -99,7 +99,7 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 		return inferred, nil, compileError(err)
 	}
 	if limit := cmp.Or(options.MaxInstructions, 10_000); len(compiler.instructions) > limit {
-		return inferred, nil, compileError(fmt.Errorf("compiled program has %d instructions, limit is %d", len(compiler.instructions), limit))
+		return inferred, nil, compileError(syntax.Around(expr, "compiled program has %d instructions, limit is %d", len(compiler.instructions), limit))
 	}
 	return inferred, compiler, nil
 }
@@ -155,10 +155,6 @@ type bytecodeCompiler struct {
 	// recurses into another fold. folded counts what was folded away.
 	folding bool
 	folded  int
-	// inRound is set inside a round(…), where the steps that land between
-	// minor units are exact; roundSteps counts the ones in the innermost.
-	inRound    bool
-	roundSteps int
 	// usingDepth is how many using bodies the compiler is inside: a
 	// conversion outside every one has no rates to convert at.
 	usingDepth int
@@ -347,9 +343,6 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	if err := c.requireConstantArgs(node, function); err != nil {
 		return err
 	}
-	if err := c.exactStep(node, function); err != nil {
-		return err
-	}
 	if fused, err := c.compileAggregate(node, function); fused || err != nil {
 		return err
 	}
@@ -419,32 +412,6 @@ func (c *bytecodeCompiler) compileSwitch(node *syntax.SwitchExpr) error {
 		}
 	}
 	c.patch(endJumps, len(c.instructions))
-	return nil
-}
-
-// requireConstantArgs holds a call to the arguments its function wants
-// fixed at compile time (Doc.ConstArgs): each must be a constant expression,
-// and the function must take its value. A nested compiler, folding, leaves
-// the check to the compile it folds for.
-func (c *bytecodeCompiler) requireConstantArgs(node *syntax.CallExpr, function *machine.RegisteredFunction) error {
-	for _, at := range function.Doc.ConstArgs {
-		if c.folding {
-			return nil
-		}
-		arg := node.Args[at]
-		// A clock or an engine is not fixed when the rule is compiled, and
-		// is not called to find out.
-		if !c.constantExpr(arg) || !c.callsConstexpr(arg) {
-			return syntax.Around(arg, "%s needs argument %d fixed when the rule is compiled: a literal, or what folds to one", node.Name, at+1)
-		}
-		value, ok, err := c.evaluate(arg)
-		if err != nil {
-			return err
-		}
-		if err := machine.CheckConstantArg(function, value); ok && err != nil {
-			return syntax.AroundError(arg, err)
-		}
-	}
 	return nil
 }
 

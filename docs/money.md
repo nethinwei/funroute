@@ -81,7 +81,7 @@ mul(mul(USD 0.05, 50%, @half_up), 50%, @half_up)  // USD 0.02：每一步各舍�
 round(amount * (interchange + scheme + markup), @half_even)   // 三段比例先相加，整体只舍入一次
 ```
 
-- `round` 里没有这类运算是编译错误（`round(amount, @up)` 什么也没舍入）；嵌套时每一层只管自己的：`round(round(m * 50%, @up), @down)` 的外层同样是编译错误。
+- `round` 拿到的值里没有这类运算的结果是编译错误（`round(amount, @up)` 什么也没舍入；`round(if(amount * 2.9% > cap, amount, cap), @up)` 里的乘比例只拿去比较，也没到 `round` 手里）；嵌套时每一层只管自己的：`round(round(m * 50%, @up), @down)` 的外层同样是编译错误。
 - **精确值不出 `round`**：`round` 里的中间金额可以相加减、取负、乘整数、比较、进 `if`/`switch`/`let`/`fallback` 的分支，但不能进数组、字典、记录、推导式，不能交给宿主函数或 `minor`、`allocate`，也不能直接作结果——编译错误会指到那个位置。所以 `round` 外面看到的金额永远是整数个最小单位。
 - `round_to(m, 粒度, @mode)`、std 的 `avg(xs, @mode)`、`median(xs, @mode)` 本身就是一次舍入，只有写出舍入方式的形式。
 - 方式有 `half_even`、`half_up`、`half_down`、`down`、`up`、`ceiling`、`floor`，是注册表提供的枚举 `rounding` 的成员，所以契约不能再声明叫 `rounding` 的枚举。

@@ -1,10 +1,10 @@
 package compile
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -13,8 +13,10 @@ import (
 // program through the host contract, so this map is the whole set a bare
 // @member can refer to — which is why resolution needs no type context.
 func collectEnums(dst map[string]machine.Type, hints map[string]machine.Type, ret *machine.Type) error {
-	for _, hint := range hints {
-		if err := collectEnum(dst, hint); err != nil {
+	// By argument name, so a conflict is said, and Enums keeps, the same
+	// every time.
+	for _, name := range kit.SortedKeys(hints) {
+		if err := collectEnum(dst, hints[name]); err != nil {
 			return err
 		}
 	}
@@ -44,7 +46,7 @@ func collectEnum(dst map[string]machine.Type, typ machine.Type) error {
 			return nil
 		}
 		if existing, ok := dst[inner.Name()]; ok && !existing.Equal(inner) {
-			return fmt.Errorf("the contract declares %s and %s under the same name", existing.Summary(), inner.Summary())
+			return kit.Errorf(machine.ErrContract, "the contract declares %s and %s under the same name", existing.Summary(), inner.Summary())
 		}
 		dst[inner.Name()] = inner
 		return nil

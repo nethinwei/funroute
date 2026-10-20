@@ -230,8 +230,12 @@ func (p *Program[In, Out]) Run(ctx context.Context, in *In) (Out, error) {
 // the []bool, []int64, []float64 or []string out has there, so a host that
 // runs a program again with the same out allocates nothing for it. An array
 // of other items, structs among them, is built in memory of its own, as Run
-// builds it. The slices in out must not be the arguments' memory; one that is, is
-// not built into. On a failure *out is left in no particular state.
+// builds it. Where out points is the caller's: RunInto writes there. What it
+// keeps from is building where the program reads — a slice in out that is the
+// memory of an argument the program reads is not built into, so the answer
+// is never written over what it is computed from; one that shares an
+// argument the program does not read is written as any other. On a failure
+// *out is left in no particular state.
 func (p *Program[In, Out]) RunInto(ctx context.Context, in *In, out *Out) error {
 	if out == nil {
 		return fmt.Errorf("%w: the result's place is nil", ErrContract)

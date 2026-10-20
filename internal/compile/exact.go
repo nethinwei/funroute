@@ -179,6 +179,11 @@ func (w exactness) call(node *syntax.CallExpr) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if function.IsRoundingScope() && !exact {
+		// A step written inside, whose answer only a comparison reads, does
+		// not reach the round: it would round nothing.
+		return false, syntax.Around(node, "type error: nothing inside round(…) lands between minor units; only money times or over a ratio, a conversion and prorate do")
+	}
 	return resultStaysExact(function, exact), nil
 }
 

@@ -152,7 +152,7 @@ func evalArrayMember(_ context.Context, args []Value) (Value, error) {
 // indexOfValue is where item first is in array, or -1, by the equality ==
 // asks: the two meet first, wherever item is (money_meet.go), and a handle
 // is never compared. Met, two amounts at one place are equal when their
-// minor units are, and two rates when their ratios are.
+// minor units are, and two rates as == has them.
 func indexOfValue(array, item Value) (int, error) {
 	if item.kind == HandleKind {
 		return -1, errHandleEquality
@@ -164,12 +164,8 @@ func indexOfValue(array, item Value) (int, error) {
 	case *money.Money:
 		return slices.IndexFunc(itemsAt(first, array.i), func(amount money.Money) bool { return amount.Minor() == item.i }), nil
 	case *money.FxRate:
-		rate, _ := item.FxRate()
-		_, want := money.FxRateParts(rate)
-		return slices.IndexFunc(itemsAt(first, array.i), func(fx money.FxRate) bool {
-			_, rate := money.FxRateParts(fx)
-			return rate == want
-		}), nil
+		// As == has two rates equal: pair and rate, whatever meeting checked.
+		return slices.IndexFunc(itemsAt(first, array.i), func(fx money.FxRate) bool { return FxRateValue(fx).equalUnits(item) }), nil
 	}
 	return slices.IndexFunc(valuesOf(array), item.Equal), nil
 }

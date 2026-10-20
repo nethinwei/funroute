@@ -297,7 +297,8 @@ type ArtifactParts struct {
 // Artifact is a compiled program, frozen: its bytecode, its contract and the
 // digest over both. A host gets one from a compile, stores and loads it as
 // JSON, and reads its contract through the methods; nothing else can change
-// it, and Instantiate checks every part again anyway.
+// it, and Instantiate checks every part again anyway: what makes it safe to
+// run, not every proof of the compiler's (docs/semantics.md S7).
 type Artifact struct{ parts ArtifactParts }
 
 // SealArtifact freezes parts into an artifact: the version, the money stamp

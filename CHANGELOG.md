@@ -44,6 +44,12 @@
 - **编译出的 artifact 一定能装载**：宿主的 Constexpr 函数返回含 handle 的 record 或数组时，原来被折成一个装载时读不回的常量；现在含 handle 的类型一律不折叠。
 - `repeat("", n)` 在 32 位平台上不再因 n 回绕而 panic；宿主切片视图的置换下标不再用 int32。
 - 内核专用的取下标指令与 `reverse`/`sort_by` 的重排遇到不认识的存储时交给通用路径，不再静默给出旧值或原数组（目前不可达，防将来新增存储时出错）。
+- **float 数组的相等不再取决于是否共用内存**：`let(xs = [0.0 / 0.0], xs == xs)` 原来是 `true`（同一个 backing 走了捷径），`xs == [0.0 / 0.0]` 却是 `false`；现在都逐项按 IEEE 754，NaN 不等于任何值。`switch` 的值匹配、`unique` 同理。
+- **`ConstArgs` 的实参在折叠预算内求不出值时是编译错误**：原来静默放过，`matches` 写错的模式要到运行时才报。
+- `Run(map)` 收到零值 `FxRate` 或超出年份的 `time.Time` 时报 `ErrCurrency`、`ErrDomain`，原来被报成类型不符。
+- 契约里两个同名不同的枚举报 `ErrContract`，文案每次相同；`CompileOptions.Enums()` 每次保留同一个。指令数超过 `MaxInstructions` 的编译错误带位置。
+- 向量循环在失败或停止处交回循环体时，已结算的项计入 `ctx` 的检查与折叠预算。
+- 已关闭的 `Batch` 收到的请求归还池中。
 
 
 ### 行为变化
@@ -67,6 +73,8 @@
 - 目录与签名清单里 `sort_by`、`top_k`、`min_by`、`arg_max` 等的 `description` 写明了遇 NaN 的顺序。
 - `Currency{}` 的 `MarshalJSON` 报 `ErrCurrency`（与零值 `FxRate` 一样），原来写出读不回的 `""`。
 - `Manifest.Apply` 遇到注册表里已有、但 `Fold`、`BoundedArgs`、`ConstArgs` 或内核身份与清单不同的函数时报错，原来静默保留注册表的。
+- `round` 拿到的值里没有落到最小单位之间的结果是编译错误，按值的去向判断：`round(if(amount * 2.9% > cap, amount, cap), @up)` 里的乘比例只拿去比较，原来能编译，现在报 `nothing inside round(…)`。
+- `RunInto` 的说明收窄为"不在程序读到的参数内存上建结果"：`out` 与程序不读的参数共用内存时照常写入，这是调用者的选择。
 
 
 ### 性能
@@ -90,6 +98,8 @@
 - `bool`、`string`、金额与 record 值的字典推导式只建一份 map（10 项的 `dict<bool>` 从 8 次分配到 4 次）；字典字面量走同一个构造器。
 - 批处理按合批的调用点保存答案，不再按程序的全部调用：20 个宿主调用、1 个合批模型的 64 条请求从每批 131 KB 到 30 KB。
 - `using` 记住最近一次找到的货币对：150 个报价里循环换 500 笔从 430 µs 到 71 µs，与报价数基本无关。
+- `unique`、`intersect`、`except` 对数组的数组、含数组的 record 也按键去重：4000 个 `[i, i + 1]` 的 `unique` 从 61 ms 到 0.39 ms。
+- `min`、`max`、`abs` 与 arena 数组的取下标直接写进 let 的寄存器，少一条 `move`。
 
 
 ### 文档
@@ -98,6 +108,7 @@
 - termination.md 的定理 B 改正：多项式的次数按语法归纳（循环相加、调用乘以函数的代价次数），原证明说内核函数都是线性的；新增内核与 std 的代价表。
 - go.md 原来把 `any`/`all`/`first` 的融合写成"不改变结果的改写"，它们是短路形式（宪章 S4）。
 - money.md 写明多跳换汇与 `FxRate.Chain` 只在起点与终点币种不同时相同；termination.md 写明 let 别名不改变有界性。
+- 语义宪章 S7 写明装载期验证器保证的是安全（不崩溃、不挂起、类型正确），不重做编译器的其他证明，例如精确金额只在 `round` 里；go.md 说明宿主直接调的 `Value.Equal` 与规则里的 `==` 对两种币种的区别。
 
 
 ### 工程

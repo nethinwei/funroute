@@ -130,16 +130,27 @@ func (f *frame) vectorLoop(loop *regLoop, plan *vecPlan, start int) (int, int, b
 		limit := run.columns(n)
 		if settled := run.settle(limit); settled < n {
 			run.finish()
-			return base + settled, int(plan.body), false, nil
-		}
-		if f.watching() {
-			if err := f.turn(n); err != nil {
-				run.finish()
+			// The items settled are turns of the loop as any others are.
+			if err := f.vectorTurns(settled); err != nil {
 				return 0, start, false, err
 			}
+			return base + settled, int(plan.body), false, nil
+		}
+		if err := f.vectorTurns(n); err != nil {
+			run.finish()
+			return 0, start, false, err
 		}
 		base += n
 	}
 	run.finish()
 	return loop.length, int(plan.body), true, nil
+}
+
+// vectorTurns counts n items the vector settled as n turns of the loop, when
+// the run is watching its turns at all.
+func (f *frame) vectorTurns(n int) error {
+	if n == 0 || !f.watching() {
+		return nil
+	}
+	return f.turn(n)
 }

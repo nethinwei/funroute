@@ -91,7 +91,7 @@ Artifact 冻结的是**签名绑定**与**币种表的 stamp**：用到的每个
 
 - 源码经 `Parse` 得 ExprJSON，ExprJSON 经 `Format` 得源码，两者往返得同一个 ExprJSON（`FuzzFormatRoundTrip`）；
 - **ExprJSON 能导入，当且仅当有源码打印得出它**：导入时每个节点的 `check` 拒绝源码写不出的形状（如带 `flatten` 却不是嵌套 `for` 的推导式），`FuzzImportExprJSON` 对导入成功的每个 ExprJSON 做 Format → Parse 往返；
-- 字节码由 ExprJSON 编译得出，装载时由验证器再证明一次类型与终止性，不重新解析 ExprJSON。
+- 字节码由 ExprJSON 编译得出，装载时由验证器再证明一次类型与终止性，不重新解析 ExprJSON。验证器保证的是**安全**：一份不是编译器写出的字节码（存储里被改写、手写的）装载后不会打崩宿主、不会无视 `ctx` 不返回、类型都对；它不重做编译器的其他证明——精确金额只在 `round` 里（S1）由编译器保证，伪造的字节码可以算出错的金额，就像它可以写出错的算式。
 
 ## 术语表
 

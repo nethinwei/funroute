@@ -443,6 +443,48 @@ func TestProgramRunsIntoTheHostsResult(t *testing.T) {
 	}
 }
 
+// FeedIn holds an order whose fees a program may or may not read.
+type FeedIn struct {
+	Order struct {
+		Amount int64   `funroute:"amount"`
+		Fees   []int64 `funroute:"fees"`
+	} `funroute:"order"`
+}
+
+// Where RunInto's out points is the caller's. It never builds the answer in
+// the memory of an argument the program reads — the answer would be written
+// over what it is computed from — and builds it, as anywhere, in the memory
+// of one the program does not read.
+func TestRunIntoWritesWhereOutPoints(t *testing.T) {
+	t.Parallel()
+	registry := funroute.CoreRegistry()
+	if err := registry.EnableForm(funroute.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := funroute.Bind[FeedIn, []int64](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for source, want := range map[string][2][]int64{
+		"[fee * 2 for fee in order.fees]": {{14, 16, 18}, {7, 8, 9}},
+		"[order.amount, order.amount]":    {{42, 42}, {42, 42, 9}},
+	} {
+		program, err := binding.Compile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var in FeedIn
+		in.Order.Amount, in.Order.Fees = 42, []int64{7, 8, 9}
+		out := in.Order.Fees[:1]
+		if err := program.RunInto(t.Context(), &in, &out); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(out, want[0]) || !slices.Equal(in.Order.Fees, want[1]) {
+			t.Errorf("%s into the fees' memory = %v, fees %v; want %v, fees %v", source, out, in.Order.Fees, want[0], want[1])
+		}
+	}
+}
+
 // Percent is a named number: a Go type the language reads by its shape.
 type Percent float64
 

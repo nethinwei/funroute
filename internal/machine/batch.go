@@ -69,9 +69,14 @@ func planBatch(r *Runtime) batchPlan {
 		return batchPlan{}
 	}
 	plan := batchPlan{slots: slices.Repeat([]int32{-1}, len(r.reg.calls))}
+	callAt := make(map[int32]int, len(r.reg.calls))
+	for i, call := range r.reg.calls {
+		callAt[call.pc] = i
+	}
 	for _, site := range PrefetchSites(r.artifact) {
-		function, call := r.functions[site.Call], r.callAt(site.PC)
-		if function.EvalBatch == nil || call < 0 {
+		function := r.functions[site.Call]
+		call, found := callAt[int32(site.PC)]
+		if function.EvalBatch == nil || !found {
 			continue
 		}
 		plan.slots[call] = int32(len(plan.sites))
@@ -166,6 +171,8 @@ func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, er
 	}
 	request := b.newRequest(ctx, args, typed)
 	if err := b.enqueue(request); err != nil {
+		// A closed batch never took it: it goes back as it came.
+		b.releaseRequest(request)
 		return Value{}, err
 	}
 	select {

@@ -90,14 +90,8 @@ func (c *bytecodeCompiler) branches(node syntax.Expr) []syntax.Expr {
 // what makes a failure found here a certainty rather than a circumstance.
 func constexprOnly(expr syntax.Expr, inferred *inference, registry *machine.Registry) bool {
 	for node := range syntax.Nodes(expr) {
-		switch node := node.(type) {
-		case *syntax.UsingExpr:
-			// A using is only there for the conversions in it, which read the run.
+		if !ownConstexpr(node, inferred, registry) {
 			return false
-		case *syntax.CallExpr:
-			if function, found := machine.ResolveOf(registry, inferred.Selections[node.ID]); !found || !function.IsConstexpr() {
-				return false
-			}
 		}
 	}
 	return true
@@ -225,7 +219,6 @@ func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (machine.Value, bool, erro
 	if machine.IsExact(value) {
 		return machine.Value{}, false, nil
 	}
-	c.roundSteps += sub.roundSteps
 	return value, true, nil
 }
 
@@ -243,7 +236,6 @@ func (c *bytecodeCompiler) compileNested(expr syntax.Expr) (*bytecodeCompiler, b
 	sub.names = c.names
 	sub.reads = c.reads
 	sub.constexpr = c.constexpr
-	sub.inRound = c.inRound
 	sub.plain = c.plain
 	return sub, sub.compile(expr) == nil
 }

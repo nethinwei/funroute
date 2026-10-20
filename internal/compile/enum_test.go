@@ -3,6 +3,7 @@ package compile
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -355,5 +356,25 @@ func TestTheEnumWildcardIsFilledByTheContractsEnum(t *testing.T) {
 	}
 	if err := state.unify(wildcard, state.concrete(channel)); err != nil || state.describe(wildcard) != channel.String() {
 		t.Fatalf("the wildcard filled by %s = %v, reads %s", channel, err, state.describe(wildcard))
+	}
+}
+
+// Two enums under one name are a contract's error, said the same every time:
+// the arguments are walked by name, and Enums keeps the same one of them.
+func TestTwoEnumsOfOneNameAreAContractError(t *testing.T) {
+	t.Parallel()
+	options := CompileOptions{Args: []ArgSpec{
+		{Name: "b", Type: machine.EnumOf("status", "paid")},
+		{Name: "a", Type: machine.EnumOf("status", "open")},
+	}}
+	const want = "the contract declares enum<status>{open} and enum<status>{paid} under the same name"
+	for range 50 {
+		_, err := CompileExpr("1", machine.CoreRegistry(), options)
+		if !errors.Is(err, machine.ErrContract) || !strings.Contains(err.Error(), want) {
+			t.Fatalf("CompileExpr with two status enums: error = %v, want ErrContract saying %q", err, want)
+		}
+		if got := options.Enums()["status"]; !slices.Equal(got.Values(), []string{"open"}) {
+			t.Fatalf("Enums()[status] = %v, want the one a declares", got)
+		}
 	}
 }

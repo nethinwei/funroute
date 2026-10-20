@@ -68,6 +68,7 @@ func TestEveryCompileErrorHasAPosition(t *testing.T) {
 		{`[]`, CompileOptions{}, `[]`},
 		{`first([])`, CompileOptions{}, `first([])`},
 		{`x`, CompileOptions{}, `x`},
+		{`1 + a`, CompileOptions{MaxInstructions: 1, Args: []ArgSpec{{Name: "a", Type: machine.IntType}}}, `1 + a`},
 		{`at(d, "k")`, CompileOptions{}, `at(d, "k")`},
 	}
 	for _, item := range cases {

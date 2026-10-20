@@ -192,7 +192,7 @@ func uniqueItems(_ context.Context, args []Value) (Value, error) {
 		return arrayOf(distinctAmounts(itemsAt(box, args[0].i))), nil
 	}
 	items, _ := args[0].Array()
-	if out, keyed := distinctRecords(items); keyed {
+	if out, keyed := distinctKeyed(items); keyed {
 		return packArray(args[0].elemType(), out), nil
 	}
 	out := make([]Value, 0, len(items))
@@ -218,14 +218,14 @@ func distinctAmounts(amounts []money.Money) []money.Money {
 	return out
 }
 
-// distinctRecords is the records each once, by recordKey, and true; false
-// for records it cannot key, which are left to Equal.
-func distinctRecords(items []Value) ([]Value, bool) {
+// distinctKeyed is the items each once, by itemKey, and true; false for
+// items it cannot key, which are left to Equal.
+func distinctKeyed(items []Value) ([]Value, bool) {
 	out, seen := []Value{}, make(map[string]bool, len(items))
 	var key []byte
 	for _, item := range items {
 		var keyed bool
-		if key, keyed = recordKey(item, key[:0]); !keyed {
+		if key, keyed = itemKey(item, key[:0]); !keyed {
 			return nil, false
 		}
 		if !seen[string(key)] {
@@ -236,39 +236,60 @@ func distinctRecords(items []Value) ([]Value, bool) {
 	return out, true
 }
 
-// recordKey appends a record of scalars and amounts that meet to key as
-// bytes two records share exactly when they are Equal: a float's zeros as
-// one, an amount by its minor units — its currency is the place's one, or
-// none for a zero — a string by its length then itself.
-// It is false for anything else — a container, exact money, a NaN, which is
-// equal to nothing — and Equal decides those.
-func recordKey(item Value, key []byte) ([]byte, bool) {
-	record, ok := item.box.(*recordValue)
-	if !ok {
+// itemKey appends item to key as bytes two items of one type share exactly
+// when they are Equal: a float's zeros as one, an amount by its minor units —
+// its currency is the place's one, or none for a zero — a string by its
+// length then itself, a record field by field and an array by its length
+// then item by item, each written whole before the next.
+// It is false for anything else — a dictionary, a rate, exact money, a NaN,
+// which is equal to nothing — and Equal decides those.
+func itemKey(item Value, key []byte) ([]byte, bool) {
+	key = append(key, byte(item.kind))
+	switch {
+	case item.kind == BoolKind && item.b:
+		key = append(key, 1)
+	case item.kind == BoolKind:
+		key = append(key, 0)
+	case item.kind == IntKind:
+		key = strconv.AppendInt(key, item.i, 10)
+	case item.kind == FloatKind && !math.IsNaN(item.f):
+		key = strconv.AppendUint(key, math.Float64bits(item.f+0), 16) // -0 + 0 is 0
+	case item.kind == StringKind:
+		key = append(strconv.AppendInt(key, int64(len(item.s)), 10), ':')
+		key = append(key, item.s...)
+	case item.kind == MoneyKind && !IsExact(item):
+		key = strconv.AppendInt(key, item.i, 10)
+	case item.kind == RecordKind || item.kind == ArrayKind:
+		return partsKey(item, key)
+	default:
 		return key, false
 	}
-	for _, field := range record.fields {
-		key = append(key, byte(field.kind))
-		switch {
-		case field.kind == BoolKind && field.b:
-			key = append(key, 1)
-		case field.kind == BoolKind:
-			key = append(key, 0)
-		case field.kind == IntKind:
-			key = strconv.AppendInt(key, field.i, 10)
-		case field.kind == FloatKind && !math.IsNaN(field.f):
-			key = strconv.AppendUint(key, math.Float64bits(field.f+0), 16) // -0 + 0 is 0
-		case field.kind == StringKind:
-			key = append(strconv.AppendInt(key, int64(len(field.s)), 10), ':')
-			key = append(key, field.s...)
-		case field.kind == MoneyKind && !IsExact(field):
-			key = strconv.AppendInt(key, field.i, 10)
-		default:
+	return append(key, '|'), true
+}
+
+// partsKey is itemKey of a record or an array: its fields, or its length and
+// its items.
+func partsKey(item Value, key []byte) ([]byte, bool) {
+	record, isRecord := item.box.(*recordValue)
+	n := item.length()
+	if isRecord {
+		n = len(record.fields)
+	} else {
+		key = append(strconv.AppendInt(key, int64(n), 10), ':')
+	}
+	for i := range n {
+		var part Value
+		if isRecord {
+			part = record.fields[i]
+		} else {
+			part = item.at(i)
+		}
+		var keyed bool
+		if key, keyed = itemKey(part, key); !keyed {
 			return key, false
 		}
-		key = append(key, '|')
 	}
-	return key, true
+	return append(key, '|'), true
 }
 
 func distinctOf[T comparable](items []T) []T {

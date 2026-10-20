@@ -716,27 +716,6 @@ func TestLetEvaluatesABindingOnce(t *testing.T) {
 	}
 }
 
-// An argument a function wants fixed when the rule is compiled is not found
-// by calling a host's function that is not constexpr: a clock or an engine
-// is neither fixed nor called while compiling.
-func TestConstantArgumentsDoNotCallTheHost(t *testing.T) {
-	t.Parallel()
-	registry := machine.CoreRegistry()
-	var calls atomic.Int64
-	pattern := func() string { calls.Add(1); return "^4" }
-	if err := registry.Register(machine.FunctionSpec{Name: "t.pattern_v1", Go: pattern}); err != nil {
-		t.Fatal(err)
-	}
-	source := `matches(s, t.pattern_v1())`
-	_, err := CompileExpr(source, registry, CompileOptions{Args: []ArgSpec{{Name: "s", Type: machine.StringType}}})
-	if err == nil || !strings.Contains(err.Error(), "fixed when the rule is compiled") {
-		t.Errorf("CompileExpr(%s) error = %v, want the argument not fixed when the rule is compiled", source, err)
-	}
-	if got := calls.Load(); got != 0 {
-		t.Errorf("CompileExpr(%s) called the host %d times, want 0", source, got)
-	}
-}
-
 // Several for clauses in one comprehension are the cartesian product: each
 // loops inside the one before it, and every clause but the innermost splices
 // what it yields, so the result is one flat array. The nesting lives in the

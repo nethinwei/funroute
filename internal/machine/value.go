@@ -630,7 +630,9 @@ func nativeEqual(left, right Value) (equal, native bool) {
 	case *int64:
 		return sameSlice(itemsAt(a, left.i), right)
 	case *float64:
-		return sameSlice(itemsAt(a, left.i), right)
+		// Item by item even over one backing: a NaN is not equal to itself.
+		b, ok := nativeItems[float64](right)
+		return ok && slices.Equal(itemsAt(a, left.i), b), ok
 	case *string:
 		return sameSlice(itemsAt(a, left.i), right)
 	case *bool:

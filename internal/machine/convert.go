@@ -287,7 +287,13 @@ func coerce(input any, expected Type) (Value, error) {
 // coerceWith is coerce with the registry's currency table, which reading
 // money written as "USD 1.70" needs: the places belong to the currency.
 func coerceWith(input any, expected Type, table *money.Currencies) (Value, error) {
-	if value, err := fromGo(input); err == nil {
+	value, err := fromGo(input)
+	if err != nil && !errors.Is(err, errUnsupportedGoType) {
+		// A Go value of the language's own that is not one — the zero
+		// FxRate, a time past the years a time spans — says so itself.
+		return Value{}, err
+	}
+	if err == nil {
 		if value.hasType(expected) {
 			return value, nil
 		}

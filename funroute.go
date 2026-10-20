@@ -173,7 +173,7 @@ const ExprJSONVersion = syntax.ExprJSONVersion
 // Compilation produces an artifact: immutable bytecode with a digest over
 // everything that is contract. A host stores and ships it as JSON and reads
 // its contract through Args, Result and Digest; its bytecode is the
-// machine's, and Instantiate checks every part of it again.
+// machine's, and Instantiate checks again that every part is safe to run.
 type (
 	Artifact       = machine.Artifact
 	Parameter      = machine.Parameter
