@@ -322,9 +322,10 @@ func (v Value) Dict() (map[string]Value, bool) {
 		return nested.entries, true
 	}
 	out := make(map[string]Value, v.length())
-	for _, key := range v.keys() {
-		out[key], _ = v.lookup(key)
-	}
+	_ = v.eachEntry(func(key string, entry Value) error {
+		out[key] = entry
+		return nil
+	})
 	return out, true
 }
 
@@ -456,7 +457,7 @@ func opensForJSON(v Value) bool {
 	case *nestedArray, *nestedDict:
 		return true
 	}
-	return v.kind == RecordKind || (v.kind == ArrayKind || v.kind == DictKind) && TypeContains(v.Type(), RecordKind)
+	return v.kind == RecordKind || (v.kind == ArrayKind || v.kind == DictKind) && TypeContains(v.elemType(), RecordKind)
 }
 
 // jsonTree is v as the tree json.Marshal writes. The values walk accepts are
@@ -488,10 +489,10 @@ func jsonTree(v Value, walk func(Value) bool, leaf func(Value) any) any {
 		return items
 	case DictKind:
 		entries := make(map[string]any, v.length())
-		for _, key := range v.keys() {
-			entry, _ := v.lookup(key)
+		_ = v.eachEntry(func(key string, entry Value) error {
 			entries[key] = jsonTree(entry, walk, leaf)
-		}
+			return nil
+		})
 		return entries
 	}
 	return leaf(v)

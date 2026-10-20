@@ -150,8 +150,8 @@ func TestBatchFlushesOnTheTimerAndCloses(t *testing.T) {
 			t.Fatalf("lone result = %v, batched = %d, want 6 and 1", got, batched.Load())
 		}
 		quick.Close()
-		if _, err := quick.Run(t.Context(), []machine.Value{value}); err == nil {
-			t.Fatal("a closed batch accepted a request")
+		if _, err := quick.Run(t.Context(), []machine.Value{value}); !errors.Is(err, machine.ErrContract) {
+			t.Fatalf("a closed batch's answer to a request = %v, want ErrContract", err)
 		}
 	})
 }

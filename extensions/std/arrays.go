@@ -61,7 +61,7 @@ func groupsOf(args []funroute.Value, name string, windows bool) (funroute.Value,
 	if windows {
 		stride, starts = 1, count-width+1
 	}
-	var groups []funroute.Value
+	groups := make([]funroute.Value, 0, max(0, (starts+stride-1)/stride))
 	for start := 0; start < starts; start += stride {
 		group, err := part(args[0], start, min(start+width, count))
 		if err != nil {

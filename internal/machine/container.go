@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"unsafe"
 
 	"github.com/nethinwei/funroute/internal/kit"
@@ -437,4 +438,57 @@ func mapEntries[T any](entries map[string]Value, get func(Value) T) map[string]T
 		out[key] = get(value)
 	}
 	return out
+}
+
+// owned is v with every container in it copied, so that nothing it holds is
+// memory another may change: the host's, which it may reuse once a run
+// returns. A string cannot change, and a handle's payload is the host's own;
+// neither is copied.
+func owned(v Value) Value {
+	switch box := v.box.(type) {
+	case *nestedArray:
+		return nestedOf(box.elem, ownedValues(box.items))
+	case *recordsView:
+		items, _ := v.Array()
+		return nestedOf(v.elemType(), ownedValues(items))
+	case *nestedDict:
+		entries := make(map[string]Value, len(box.entries))
+		for key, entry := range box.entries {
+			entries[key] = owned(entry)
+		}
+		return Value{kind: DictKind, box: &nestedDict{elem: box.elem, entries: entries}}
+	case *recordValue:
+		return Value{kind: RecordKind, box: &recordValue{typ: box.typ, fields: ownedValues(box.fields)}}
+	}
+	return ownedNative(v)
+}
+
+// ownedNative is owned of a native array or dictionary, and v itself for
+// anything else.
+func ownedNative(v Value) Value {
+	switch box := v.box.(type) {
+	case *bool:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case *int64:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case *float64:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case *string:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case *money.Money:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case *money.FxRate:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case map[string]bool:
+		v.box = maps.Clone(box)
+	case map[string]int64:
+		v.box = maps.Clone(box)
+	case map[string]float64:
+		v.box = maps.Clone(box)
+	case map[string]string:
+		v.box = maps.Clone(box)
+	case map[string]money.Money:
+		v.box = maps.Clone(box)
+	}
+	return v
 }

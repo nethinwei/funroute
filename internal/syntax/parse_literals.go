@@ -25,7 +25,8 @@ func (p *parser) negate(operator token) (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	zero := &LiteralExpr{Node: Node{ID: p.id(), Pos: operator.pos, Span: tokenSpan(operator)}, Value: machine.Int(0)}
+	// The zero is the expansion's, written nowhere (boolean).
+	zero := &LiteralExpr{Node: Node{ID: p.id(), Pos: operator.pos, Span: Span{Start: operator.pos, End: operator.pos}}, Value: machine.Int(0)}
 	return p.call(operator, "sub", zero, operand), nil
 }
 

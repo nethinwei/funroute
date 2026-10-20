@@ -52,7 +52,8 @@ func TestCompletionOffersTheFieldsOfARecordBeingUpdated(t *testing.T) {
 }
 
 // In a selector, the fields of the items of the list its call reads are
-// offered, and after a field of theirs, that field's.
+// offered, and after a field of theirs, that field's — with the cursor, |,
+// at the end of the text or in the middle of a name already written.
 func TestCompletionOffersTheFieldsASelectorCanRead(t *testing.T) {
 	t.Parallel()
 	for text, want := range map[string]string{
@@ -60,6 +61,7 @@ func TestCompletionOffersTheFieldsASelectorCanRead(t *testing.T) {
 		"top_k(take(quotes, 2), .fe":  "fee channel meta",
 		"sort_by(quotes, .meta.":      "rank",
 		"let(q = quotes, min_by(q, .": "fee channel meta",
+		"sort_by(quotes, .f|ee)":      "fee channel meta",
 	} {
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
@@ -67,8 +69,13 @@ func TestCompletionOffersTheFieldsASelectorCanRead(t *testing.T) {
 			s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
 				{"name": "quotes", "type": "array<record{fee: int, channel: string, meta: record{rank: int}}>"},
 			}}})
-			s.open("file:///a.fr", text)
-			if got := strings.Join(labels(t, s.request("textDocument/completion", position("file:///a.fr", len(text)))), " "); got != want {
+			cursor := strings.Index(text, "|")
+			source := strings.Replace(text, "|", "", 1)
+			if cursor < 0 {
+				cursor = len(source)
+			}
+			s.open("file:///a.fr", source)
+			if got := strings.Join(labels(t, s.request("textDocument/completion", position("file:///a.fr", cursor))), " "); got != want {
 				t.Errorf("%q: completion is %q, want %q", text, got, want)
 			}
 		})

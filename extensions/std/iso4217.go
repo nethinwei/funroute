@@ -15,30 +15,27 @@ import (
 // precious metals are left out; a host that needs one adds it.
 func ISO4217() []funroute.CurrencySpec {
 	out := make([]funroute.CurrencySpec, len(iso4217Codes))
-	for i, code := range iso4217Codes {
-		digits, listed := iso4217Places[code]
-		if !listed {
-			digits = 2
+	for i, entry := range iso4217Codes {
+		code, places, odd := strings.Cut(entry, ":")
+		digits := 2
+		if odd {
+			digits = int(places[0] - '0')
 		}
 		out[i] = funroute.CurrencySpec{Code: code, Digits: digits}
 	}
 	return out
 }
 
+// iso4217Codes is every code, in code order, and its places after a colon
+// where the minor unit is not a hundredth: JPY:0, KWD:3. One list, so no
+// code can have places listed apart from it.
 var iso4217Codes = strings.Fields(`
-	AED AFN ALL AMD AOA ARS AUD AWG AZN BAM BBD BDT BHD BIF BMD BND BOB BRL BSD BTN
-	BWP BYN BZD CAD CDF CHF CLP CNY COP CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB
-	EUR FJD FKP GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR
-	ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD
-	MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR NZD OMR
-	PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE
-	SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD UYU
-	UZS VED VES VND VUV WST XAF XCD XCG XOF XPF YER ZAR ZMW ZWG
+	AED AFN ALL AMD AOA ARS AUD AWG AZN BAM BBD BDT BHD:3 BIF:0 BMD BND BOB BRL BSD BTN
+	BWP BYN BZD CAD CDF CHF CLP:0 CNY COP CRC CUP CVE CZK DJF:0 DKK DOP DZD EGP ERN ETB
+	EUR FJD FKP GBP GEL GHS GIP GMD GNF:0 GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD:3 IRR
+	ISK:0 JMD JOD:3 JPY:0 KES KGS KHR KMF:0 KPW KRW:0 KWD:3 KYD KZT LAK LBP LKR LRD LSL LYD:3 MAD
+	MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR NZD OMR:3
+	PAB PEN PGK PHP PKR PLN PYG:0 QAR RON RSD RUB RWF:0 SAR SBD SCR SDG SEK SGD SHP SLE
+	SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND:3 TOP TRY TTD TWD TZS UAH UGX:0 USD UYU
+	UZS VED VES VND:0 VUV:0 WST XAF:0 XCD XCG XOF:0 XPF:0 YER ZAR ZMW ZWG
 `)
-
-// iso4217Places are the currencies whose minor unit is not a hundredth.
-var iso4217Places = map[string]int{
-	"BIF": 0, "CLP": 0, "DJF": 0, "GNF": 0, "ISK": 0, "JPY": 0, "KMF": 0, "KRW": 0, "PYG": 0,
-	"RWF": 0, "UGX": 0, "VND": 0, "VUV": 0, "XAF": 0, "XOF": 0, "XPF": 0,
-	"BHD": 3, "IQD": 3, "JOD": 3, "KWD": 3, "LYD": 3, "OMR": 3, "TND": 3,
-}

@@ -7,13 +7,11 @@ import (
 
 // requireConstantArgs holds a call to the arguments its function wants
 // fixed at compile time (Doc.ConstArgs): each must be a constant expression,
-// and the function must take its value. A nested compiler, folding, leaves
-// the check to the compile it folds for.
+// and the function must take its value. A nested compiler checks as well:
+// a call it folds away is never compiled again, and its argument is held to
+// the rule as one that is — matches("abc", "(") as matches(s, "(").
 func (c *bytecodeCompiler) requireConstantArgs(node *syntax.CallExpr, function *machine.RegisteredFunction) error {
 	for _, at := range function.Doc.ConstArgs {
-		if c.folding {
-			return nil
-		}
 		arg := node.Args[at]
 		// A clock or an engine is not fixed when the rule is compiled, and
 		// is not called to find out.

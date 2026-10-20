@@ -2,6 +2,7 @@ package compile
 
 import (
 	"errors"
+	"slices"
 
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
@@ -49,17 +50,45 @@ func (c *bytecodeCompiler) tryFold(expr syntax.Expr) (bool, error) {
 // untaken folds what the fold of expr may have stepped over — the branches
 // of an if, a fallback's backups, a switch's cases — so that a closed
 // failure is a compile error whichever branch it is written in, as when the
-// branch is compiled on its own: if(true, 1, 1 / 0) as much as if(f, 1, 1 / 0).
+// branch is compiled on its own: if(true, 1, 1 / 0) as much as if(f, 1, 1 / 0),
+// and the 1 / 0 of a branch that reads a loop's item as much as of one that
+// reads nothing. The deepest branches go first, and each closed part that
+// evaluates is known after (bytecodeCompiler.known): the branch around it
+// compiles it as its value, so a chain of n ifs is evaluated in n steps, not
+// n² of them.
 func (c *bytecodeCompiler) untaken(expr syntax.Expr) error {
-	for node := range syntax.Nodes(expr) {
+	nodes := slices.Collect(syntax.Nodes(expr))
+	for _, node := range slices.Backward(nodes) {
 		for _, branch := range c.branches(node) {
-			if !c.foldable(branch) {
-				continue
-			}
-			if _, _, err := c.evaluate(branch); err != nil {
+			if err := c.closedParts(branch); err != nil {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// closedParts evaluates expr when it is closed, and otherwise each of its
+// parts that is: the largest ones, each once.
+func (c *bytecodeCompiler) closedParts(expr syntax.Expr) error {
+	if _, done := c.known[expr.NodeID()]; done {
+		return nil
+	}
+	if !c.foldable(expr) {
+		var err error
+		syntax.EachChild(expr, func(child syntax.Expr) {
+			if err == nil {
+				err = c.closedParts(child)
+			}
+		})
+		return err
+	}
+	value, ok, err := c.evaluate(expr)
+	if err != nil || !ok {
+		return err
+	}
+	if constant, has := machine.ConstantOf(value, c.inferred.typeOf(expr.NodeID())); has {
+		c.known[expr.NodeID()] = constant
 	}
 	return nil
 }
@@ -229,13 +258,14 @@ func (c *bytecodeCompiler) compileNested(expr syntax.Expr) (*bytecodeCompiler, b
 	sub := newBytecodeCompiler(c.registry, c.inferred)
 	sub.folding = true
 	// The nested compiler inherits the constant pool and the names in scope,
-	// so a name that already folded resolves to its value here too — and the
-	// round(…) it sits in. Only a closed expression gets here, so every free
-	// name it reads is a constant; the local slots it binds are its own.
+	// so a name that already folded resolves to its value here too. Only a
+	// closed expression gets here, so every free name it reads is a constant;
+	// the local slots it binds are its own.
 	sub.constants = c.constants
 	sub.names = c.names
 	sub.reads = c.reads
 	sub.constexpr = c.constexpr
+	sub.known = c.known
 	sub.plain = c.plain
 	return sub, sub.compile(expr) == nil
 }

@@ -96,6 +96,9 @@ func checkBacking(t *testing.T, registry *Registry, container reflect.Value, typ
 	if !ok || !one.Equal(item) {
 		t.Fatalf("the item of %s reads %v, want %v", container.Type(), one, item)
 	}
+	if copied := owned(value); reflect.ValueOf(nativeAny(copied)).UnsafePointer() == container.UnsafePointer() || !copied.Equal(value) {
+		t.Fatalf("owned(%s) shares its memory or differs from it", container.Type())
+	}
 	checkCodec(t, registry, container, typ, want)
 }
 

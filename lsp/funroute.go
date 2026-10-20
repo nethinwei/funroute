@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -214,7 +215,8 @@ const runTimeout = time.Second
 // which parsing it in JavaScript first would not.
 func decodeArgs(raw json.RawMessage) (map[string]any, error) {
 	args := map[string]any{}
-	if len(raw) == 0 {
+	if len(raw) == 0 || string(bytes.TrimSpace(raw)) == "null" {
+		// No arguments, written as none or as null.
 		return args, nil
 	}
 	var text string

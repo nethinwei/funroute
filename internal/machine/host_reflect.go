@@ -159,14 +159,25 @@ func intoMap(registry *Registry, value Value, typ reflect.Type) (reflect.Value, 
 		return reflect.Value{}, fmt.Errorf("argument is %s, want a dictionary", value.Type())
 	}
 	out := reflect.MakeMapWithSize(typ, value.length())
-	for _, key := range value.keys() {
-		entry, _ := value.lookup(key)
+	put := func(key string, entry Value) error {
 		item, err := intoGo(registry, entry, typ.Elem())
 		if err != nil {
-			return reflect.Value{}, fmt.Errorf("entry %q: %w", key, err)
+			return fmt.Errorf("entry %q: %w", key, err)
 		}
 		// A named key type (map[Code]T) takes the key converted, not as a string.
 		out.SetMapIndex(reflect.ValueOf(key).Convert(typ.Key()), item)
+		return nil
+	}
+	// In the map's order, which costs nothing; an entry that does not fit is
+	// found again in key order, so the error names the same one every time.
+	if value.eachEntry(put) == nil {
+		return out, nil
+	}
+	for _, key := range value.keys() {
+		entry, _ := value.lookup(key)
+		if err := put(key, entry); err != nil {
+			return reflect.Value{}, err
+		}
 	}
 	return out, nil
 }

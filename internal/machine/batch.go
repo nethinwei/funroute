@@ -2,7 +2,6 @@ package machine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -218,7 +217,7 @@ func (b *Batch) enqueue(request *batchRequest) error {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
-		return errors.New("batch is closed")
+		return kit.Errorf(ErrContract, "batch is closed")
 	}
 	b.pending = append(b.pending, request)
 	if len(b.pending) >= b.options.MaxSize {
@@ -435,6 +434,10 @@ func invokeBatch(ctx context.Context, function *RegisteredFunction, calls [][]Va
 	var results []Value
 	var err error
 	if function.Doc.Detached {
+		// Each request's own, as a single detached call's are (callDetached).
+		for i, call := range calls {
+			calls[i] = ownedValues(call)
+		}
 		results, err = detached(ctx, function, calls, callBatchSafely)
 	} else {
 		results, err = callBatchSafely(ctx, function, calls)

@@ -324,6 +324,11 @@ func tens(shift int) (up, down uint64) {
 	return uint64(pow10(shift)), 1
 }
 
+// errDenominatorOverflow is a conversion whose reduced denominator — the
+// rate's, times the places one currency has past the other — is past 64
+// bits: the rate is too fine for the currencies, whatever the amount.
+var errDenominatorOverflow = fmt.Errorf("%w: the exchange rate is finer than a conversion between these currencies can hold", ErrArithmetic)
+
 // roundedFraction is ±(nums[0]·nums[1]·nums[2])/(dens[0]·dens[1]·dens[2])
 // rounded once by mode, crossed as fraction crosses them: the numerator is
 // 192 bits wide in between, so it fails only when the reduced denominator,
@@ -332,7 +337,7 @@ func roundedFraction(negative bool, nums, dens []uint64, mode Rounding) (int64, 
 	crossReduce(nums, dens)
 	den, fits := product64(dens)
 	if !fits {
-		return 0, errFixedOverflow
+		return 0, errDenominatorOverflow
 	}
 	q, r, err := mulDiv3Parts(nums[0], nums[1], nums[2], den)
 	if err != nil {

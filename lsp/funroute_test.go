@@ -514,3 +514,13 @@ func TestArgumentsCarryASampleOfTheirJSON(t *testing.T) {
 		}
 	}
 }
+
+// Arguments written as null are none, as arguments not written are.
+func TestNullArgumentsAreNone(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"", "null", " null ", "{}", `"{}"`} {
+		if args, err := decodeArgs(json.RawMessage(raw)); err != nil || len(args) != 0 {
+			t.Errorf("decodeArgs(%q) = %v, %v, want no arguments", raw, args, err)
+		}
+	}
+}

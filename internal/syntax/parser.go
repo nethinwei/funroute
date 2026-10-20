@@ -344,8 +344,11 @@ func (p *parser) pick(at token, condition, whenTrue, whenFalse Expr) Expr {
 	return p.call(at, "if", condition, whenTrue, whenFalse)
 }
 
+// boolean is a bool an operator's expansion writes in: a message about it
+// points at the operator, but it covers no source, so the node a cursor is
+// in and the tree of what was written never find it there.
 func (p *parser) boolean(at token, value bool) Expr {
-	return &LiteralExpr{Node: Node{ID: p.id(), Pos: at.pos, Span: tokenSpan(at)}, Value: machine.Bool(value)}
+	return &LiteralExpr{Node: Node{ID: p.id(), Pos: at.pos, Span: Span{Start: at.pos, End: at.pos}}, Value: machine.Bool(value)}
 }
 
 func tokenSpan(tok token) Span { return Span{Start: tok.pos, End: tok.end} }

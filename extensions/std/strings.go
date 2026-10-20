@@ -52,9 +52,10 @@ func repeatText(_ context.Context, args []funroute.Value) (funroute.Value, error
 	count, _ := args[1].Int()
 	// What is bounded is what is built: an empty text repeated any number
 	// of times is empty, and is never handed a count past an int.
-	if text == "" && count >= 0 {
+	if count >= 0 && text == "" {
 		return funroute.String(""), nil
 	}
+	// Past the empty text, runes is at least one.
 	if runes := int64(utf8.RuneCountInString(text)); count < 0 || count > maxPadWidth/runes {
 		return funroute.Value{}, fmt.Errorf("%w: repeat builds 0 to %d characters, %d times %q is not", funroute.ErrArithmetic, maxPadWidth, count, text)
 	}

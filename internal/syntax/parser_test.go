@@ -7,7 +7,9 @@ import (
 )
 
 // Every node's span lies inside its parent's, and the root covers the
-// program from its first token to its last.
+// program from its first token to its last. A literal an operator's
+// expansion writes in — the false of &&, the zero of a minus — covers no
+// source: its span is empty, at the operator.
 func TestSpansNest(t *testing.T) {
 	t.Parallel()
 	for _, source := range lexemeCorpus {
@@ -29,7 +31,8 @@ func TestSpansNest(t *testing.T) {
 func checkNested(t *testing.T, source string, parent Expr) {
 	t.Helper()
 	outer := parent.Extent()
-	if outer.Start < 0 || outer.End > len(source) || outer.End <= outer.Start {
+	_, literal := parent.(*LiteralExpr)
+	if outer.Start < 0 || outer.End > len(source) || outer.End < outer.Start || outer.End == outer.Start && !literal {
 		t.Fatalf("%q: %T has span %+v", source, parent, outer)
 	}
 	for _, child := range Children(parent) {

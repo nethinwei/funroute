@@ -14,12 +14,20 @@ import (
 )
 
 func (s *Server) formatting(doc *document) (any, error) {
-	if formatted, err := syntax.FormatSource(doc.text); err == nil && formatted != doc.text {
+	formatted, err := syntax.FormatSource(doc.text)
+	switch {
+	case err == nil && formatted != doc.text:
 		return []textEdit{{Range: doc.whole(s.encoding), NewText: formatted}}, nil
+	case err != nil:
+		// A text that does not parse is left as it is, like one already
+		// formatted: the diagnostics already say why, and a failed request
+		// would only add a popup. One that parses has nothing in the
+		// diagnostics to say why — a comment inside the expression — so the
+		// request says it.
+		if _, parsed := syntax.Parse(doc.text); parsed == nil {
+			return nil, err
+		}
 	}
-	// A text that cannot be formatted is left as it is, like one already
-	// formatted: the diagnostics already say why, and a failed request would
-	// only add a popup.
 	return []textEdit{}, nil
 }
 

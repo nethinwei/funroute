@@ -2,6 +2,7 @@ package syntax
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 )
 
@@ -77,5 +78,48 @@ func TestEveryClauseOfAComprehensionLocatesItsName(t *testing.T) {
 	}
 	if inner.Span != outer.Span {
 		t.Errorf("the inner clause covers %v, the comprehension %v; want the same", inner.Span, outer.Span)
+	}
+}
+
+// An operator's tree holds the operands that were written, and only them:
+// the false that a && b expands to, the zero of -b, are no one's source.
+func TestAnOperatorsTreeHoldsWhatWasWritten(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string][]string{
+		"a && b": {"a", "b"},
+		"a || b": {"a", "b"},
+		"!a":     {"a"},
+		"a != b": {"a != b"}, // the == it negates, written as the !=
+		"-(b)":   {"(b)"},
+	} {
+		tree, err := SyntaxTree(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, field := range tree.Fields {
+			for _, node := range field.Nodes {
+				got = append(got, source[node.Span.Start:node.Span.End])
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: the operands in the tree are %q, want %q", source, got, want)
+		}
+	}
+}
+
+// A selector's path is located whole, one name or several.
+func TestASelectorsPathIsLocated(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{"sort_by(xs, .fee)", "sort_by(xs, .customer.fee)"} {
+		tree, err := SyntaxTree(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		selector := tree.Fields[1].Nodes[1]
+		path := selector.Fields[0]
+		if path.TextSpan == nil || source[path.TextSpan.Start:path.TextSpan.End] != path.Text {
+			t.Errorf("%s: the selector's path %q is at %v, want where it is written", source, path.Text, path.TextSpan)
+		}
 	}
 }

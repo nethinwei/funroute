@@ -266,6 +266,10 @@ func TestClosedFailuresAreCompileErrors(t *testing.T) {
 		`switch(case true => 2, else => 1 / 0)`,
 		`fallback(1, 1 / 0)`,
 		`let(v = if(true, 1, 1 / 0), v)`,
+		// A closed part of a branch that is not itself closed, in a whole
+		// that folds: as it is when the whole reads an argument.
+		`sum([if(true, x, 1 / 0 + x) for x in [1, 2]])`,
+		`if(true, 1, if(use_bad, 2, 1 / 0))`,
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()

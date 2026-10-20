@@ -135,7 +135,7 @@ table, _ := registry.Currencies()   // *funroute.Currencies，或 funroute.NewCu
 
 | 类别 | 入口 |
 |---|---|
-| 造金额 | `table.Parse("USD 1.70")`、`table.Of("USD", "1.70")`、`table.Minor("USD", 170)`；`table.Format(m)` 写回 `"USD 1.70"`，`table.Places("USD")` 是小数位 |
+| 造金额 | `table.Parse("USD 1.70")`（代码与数之间是一个或几个空格，不收 Tab）、`table.Of("USD", "1.70")`、`table.Minor("USD", 170)`；`table.Format(m)` 写回 `"USD 1.70"`，`table.Places("USD")` 是小数位 |
 | 读金额 | `m.Currency()`、`m.Minor()`、`m.Sign()`、`m.IsZero()` |
 | 加减比较 | `m.Add(o)`、`m.Sub(o)`、`m.Neg()`、`m.Abs()`、`m.Cmp(o)` |
 | 乘除（当场舍入） | `m.MulInt(n)`、`m.MulRatio(r, mode)`、`m.DivRatio(r, mode)`、`m.Ratio(o)`（同币种之比，得比例）、`m.Prorate(part, whole, mode)`、`m.ProrateBy(part, whole, mode)`（按比例取，只舍入一次）、`m.RoundTo(step, mode)`（现金舍入） |

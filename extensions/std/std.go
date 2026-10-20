@@ -22,7 +22,7 @@ func Register(registry *funroute.Registry) error {
 		return errors.New("registry is required")
 	}
 	specs := slices.Concat(paddingSpecs(), sequenceSpecs(), whileSpecs(), groupSpecs())
-	if _, declared := registry.Money(); declared {
+	if _, declared := registry.Currencies(); declared {
 		specs = append(specs, moneySpecs()...)
 	}
 	for _, spec := range specs {

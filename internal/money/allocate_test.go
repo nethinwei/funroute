@@ -300,3 +300,32 @@ func TestAllocationStrategiesAreNamed(t *testing.T) {
 		t.Fatalf("UnmarshalText(all_last) = %v, %v", strategy, err)
 	}
 }
+
+// Splitting into n equal shares is AllocateBy of n weights of one, share for
+// share and error for error, by every strategy: the extremes of int64, the
+// currency-less zero and counts up to the bound.
+func TestSplitAnswersAsEqualWeights(t *testing.T) {
+	t.Parallel()
+	random := rand.New(rand.NewPCG(9, 10))
+	minors := []int64{0, 1, -1, 7, -7, 100, math.MaxInt64, math.MinInt64, math.MinInt64 + 1}
+	for range 2000 {
+		minor := random.Int64N(2_000_001) - 1_000_000
+		if random.IntN(3) == 0 {
+			minor = minors[random.IntN(len(minors))]
+		}
+		n := 1 + random.IntN(40)
+		if random.IntN(50) == 0 {
+			n = maxAllocation
+		}
+		m := usd(minor)
+		if minor == 0 && random.IntN(2) == 0 {
+			m = Money{}
+		}
+		strategy := AllocationStrategy(random.IntN(int(AllocateAllLast) + 2)) // one past the last is no strategy
+		got, gotErr := m.SplitBy(strategy, n)
+		want, wantErr := m.AllocateBy(strategy, slices.Repeat([]int64{1}, n)...)
+		if !slices.Equal(got, want) || (gotErr == nil) != (wantErr == nil) || gotErr != nil && gotErr.Error() != wantErr.Error() {
+			t.Fatalf("%v.SplitBy(%s, %d) = %v, %v; AllocateBy of ones = %v, %v", m, strategy, n, got, gotErr, want, wantErr)
+		}
+	}
+}

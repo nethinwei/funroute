@@ -1,7 +1,9 @@
 package syntax
 
 import (
+	"cmp"
 	"reflect"
+	"slices"
 )
 
 // Tree is a program as it was written: every node with the source it covers
@@ -44,14 +46,18 @@ func SyntaxTree(source string) (*Tree, error) {
 	return &tree, nil
 }
 
-// nameSpans lists where each local or field name is written, by name, in no
-// particular order: spanWithin takes the first place by offset.
+// nameSpans lists where each local or field name is written, by name, in
+// source order, so spanWithin finds a node's places without reading the
+// others.
 func nameSpans(source string, roles map[int]roleMark) map[string][]Span {
 	out := map[string][]Span{}
 	for start, mark := range roles {
 		if mark.role == RoleLocal || mark.role == RoleField {
 			out[source[start:mark.end]] = append(out[source[start:mark.end]], Span{start, mark.end})
 		}
+	}
+	for _, spans := range out {
+		slices.SortFunc(spans, func(a, b Span) int { return cmp.Compare(a.Start, b.Start) })
 	}
 	return out
 }
@@ -67,6 +73,11 @@ func treeOf(expr Expr, names map[string][]Span) Tree {
 		own := ownSource{node: tree.Span}
 		EachChild(expr, func(child Expr) { own.children = append(own.children, ownedBy(expr, child)...) })
 		tree.Fields = fieldsOf(reflect.ValueOf(expr).Elem(), plan, own, names)
+	}
+	if _, selector := expr.(*SelectorExpr); selector && len(tree.Fields) == 1 {
+		// A selector's path is one lexeme after its dot, however many
+		// names it reads: .fee as much as .customer.fee.
+		tree.Fields[0].TextSpan = &Span{Start: tree.Span.Start + 1, End: tree.Span.End}
 	}
 	return tree
 }
@@ -126,7 +137,13 @@ func fieldOf(value reflect.Value, field fieldPlan, within ownSource, names map[s
 	out := TreeField{Name: field.name}
 	switch field.kind {
 	case fieldExpr, fieldExprs:
-		visitField(value, field.kind, nil, func(child Expr, _ scope) { out.Nodes = append(out.Nodes, treeOf(child, names)) })
+		visitField(value, field.kind, nil, func(child Expr, _ scope) {
+			// An operator's expansion writes in operands of its own — the
+			// false of &&, the zero of a minus — which cover no source.
+			if span := child.Extent(); span.Start < span.End {
+				out.Nodes = append(out.Nodes, treeOf(child, names))
+			}
+		})
 	case fieldList:
 		for i := range value.Len() {
 			out.Items = append(out.Items, fieldsOf(value.Index(i), field.item, within, names))
@@ -144,12 +161,11 @@ func fieldOf(value reflect.Value, field fieldPlan, within ownSource, names map[s
 // writes a name once — its own rules refuse binding one twice — so the first
 // such place is the one.
 func spanWithin(spans []Span, within ownSource) *Span {
-	var found *Span
-	for i := range spans {
-		span := spans[i]
-		if within.holds(span) && (found == nil || span.Start < found.Start) {
-			found = &span
+	from, _ := slices.BinarySearchFunc(spans, within.node.Start, func(span Span, start int) int { return cmp.Compare(span.Start, start) })
+	for i := from; i < len(spans) && spans[i].Start < within.node.End; i++ {
+		if span := spans[i]; within.holds(span) {
+			return &span
 		}
 	}
-	return found
+	return nil
 }

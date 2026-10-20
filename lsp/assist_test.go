@@ -29,6 +29,24 @@ func TestFormattingAndHover(t *testing.T) {
 	}
 }
 
+// A program formatting would lose a comment of is refused with the reason,
+// which no diagnostic gives; one that does not parse is left as it is, its
+// diagnostics saying why.
+func TestFormattingSaysWhyItCannot(t *testing.T) {
+	t.Parallel()
+	s := newSession(t, standard(t), `{}`)
+	s.notify("funroute/setContract", contract("fee:int"))
+	s.open("file:///a.fr", "let(rate = fee, // the fee\n rate)")
+	failure := as[map[string]any](t, s.request("textDocument/formatting", docParams("file:///a.fr")))
+	if message, _ := failure["message"].(string); !strings.Contains(message, "comment inside the expression") {
+		t.Errorf("formatting a comment inside the expression answers %v, want the reason", failure)
+	}
+	s.open("file:///b.fr", "let(")
+	if edits := as[[]any](t, s.request("textDocument/formatting", docParams("file:///b.fr"))); len(edits) != 0 {
+		t.Errorf("formatting a text that does not parse gives %v, want no edit", edits)
+	}
+}
+
 func TestCompletionOffersWhatThePositionCanName(t *testing.T) {
 	t.Parallel()
 	s := newSession(t, standard(t), `{}`)

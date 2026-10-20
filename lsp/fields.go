@@ -66,13 +66,15 @@ func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(sy
 		if err != nil {
 			continue
 		}
+		// Either text may be the one whose fields are found: the one kept
+		// as typed, or the one closed after the cursor.
 		base, around, record, written, ok := find(tree)
 		if !ok {
-			return nil, false
+			continue
 		}
 		typ, ok := s.baseType(candidate, base, around, record)
 		if !ok {
-			return nil, false
+			continue
 		}
 		return fieldItems(typ, written), true
 	}

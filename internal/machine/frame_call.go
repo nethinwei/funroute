@@ -234,12 +234,21 @@ func keepsIdentity(err error) bool {
 }
 
 // callDetached runs the function on its own goroutine and stops waiting at the
-// deadline. The arguments are copied first: the stack window they live in is
-// reused once this returns, and the abandoned call may still be reading them.
+// deadline. The arguments are copied first, containers and all: the stack
+// window they live in is reused once this returns, the host may reuse the
+// memory of its own once the run does (docs/semantics.md S5), and the
+// abandoned call may still be reading either.
 func callDetached(ctx context.Context, function *RegisteredFunction, args []Value) (Value, error) {
-	owned := make([]Value, len(args))
-	copy(owned, args)
-	return detached(ctx, function, owned, callSafely)
+	return detached(ctx, function, ownedValues(args), callSafely)
+}
+
+// ownedValues is owned of each of values, in a slice of its own.
+func ownedValues(values []Value) []Value {
+	out := make([]Value, len(values))
+	for i, value := range values {
+		out[i] = owned(value)
+	}
+	return out
 }
 
 // detached makes call on its own goroutine and stops waiting when ctx is done;
