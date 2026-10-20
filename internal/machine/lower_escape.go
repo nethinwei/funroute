@@ -397,6 +397,18 @@ func (w *flower) recordsArg(o origin) bool {
 	return argument && plainRecords(w.args[i].typ)
 }
 
+// flowRules is every opcode the walk has a rule for — step's, straight's or
+// consume's; end_fallback and fx_pop move no value, and their rule is to
+// leave the state be. TestEveryOpcodeHasAFlowRule holds the opcode table to
+// it: one added without a rule would leave the walk's stack out of step.
+var flowRules = map[OpCode]bool{
+	OpJump: true, OpJumpIfFalse: true, OpBeginFallback: true, OpEndFallback: true,
+	OpLoopInit: true, OpLoopNext: true, OpLoopBreak: true, OpLoopCollect: true, OpLoopSpread: true, OpLoopFold: true,
+	OpConstant: true, OpLoadArg: true, OpLoadLocal: true, OpStoreLocal: true,
+	OpMakeArray: true, OpMakeDict: true, OpMakeRecord: true, OpRecordWith: true,
+	OpField: true, OpCall: true, OpEqual: true, OpFxPush: true, OpFxPop: true,
+}
+
 // consume follows the instructions that take values and make none.
 func (w *flower) consume(pc int, in Instruction, s *fstate) {
 	switch in.Op {

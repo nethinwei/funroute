@@ -68,7 +68,7 @@ func (c *bytecodeCompiler) untaken(expr syntax.Expr) error {
 func (c *bytecodeCompiler) branches(node syntax.Expr) []syntax.Expr {
 	switch node := node.(type) {
 	case *syntax.CallExpr:
-		if function, found := c.registry.Resolve(c.inferred.Selections[node.ID]); found && (function.IsLazyIf() || function.IsLazyFallback()) {
+		if function, found := machine.ResolveOf(c.registry, c.inferred.Selections[node.ID]); found && (function.IsLazyIf() || function.IsLazyFallback()) {
 			return node.Args[1:]
 		}
 	case *syntax.SwitchExpr:
@@ -95,7 +95,7 @@ func constexprOnly(expr syntax.Expr, inferred *inference, registry *machine.Regi
 			// A using is only there for the conversions in it, which read the run.
 			return false
 		case *syntax.CallExpr:
-			if function, found := registry.Resolve(inferred.Selections[node.ID]); !found || !function.IsConstexpr() {
+			if function, found := machine.ResolveOf(registry, inferred.Selections[node.ID]); !found || !function.IsConstexpr() {
 				return false
 			}
 		}

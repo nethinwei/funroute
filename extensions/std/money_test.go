@@ -226,6 +226,8 @@ func TestCurrencylessZeroGoesWithAnyCurrency(t *testing.T) {
 		{"arg_max 指向零", "arg_max(fees)", with("EUR -0.05", zero), "1"},
 		{"二元 min", "min(fees[0], fees[1])", with("EUR -0.05", zero), "{EUR -5}"},
 		{"二元 max", "max(fees[0], fees[1])", with("EUR -0.05", zero), "{EUR 0}"},
+		{"二元 max 零在前", "max(fees[0], fees[1])", with(zero, "EUR -0.05"), "{EUR 0}"},
+		{"二元 min 全是零", "min(fees[0], fees[1])", with(zero, zero), "{ 0}"},
 		{"abs 零", "abs(fees[0])", with(zero), "{ 0}"},
 		{"avg 零参与平均", "avg(fees, @half_even)", with(zero, "EUR 0.05"), "{EUR 2}"},
 		{"median 单个零", "median(fees, @half_even)", with(zero), "{ 0}"},
@@ -531,10 +533,14 @@ func TestDeclaringMoneyAfterThePackAddsNoPackOverloads(t *testing.T) {
 	if err := late.DeclareMoney(funroute.MoneySpec{Currencies: std.ISO4217()}); err != nil {
 		t.Fatalf("DeclareMoney after std.Register: %v, want it accepted", err)
 	}
-	if _, err := funroute.CompileExpr("USD 1 + USD 2", late, funroute.CompileOptions{}); err != nil {
-		t.Fatalf("kernel money after a late declaration: %v", err)
+	// The kernel's money, keyed sorts by amounts among it, comes with the
+	// declaration whenever it is made.
+	for _, source := range []string{"USD 1 + USD 2", `sort_by(["a"], fees)`} {
+		if _, err := funroute.CompileExpr(source, late, funroute.CompileOptions{Args: []funroute.ArgSpec{unknownFees}}); err != nil {
+			t.Fatalf("kernel money %s after a late declaration: %v", source, err)
+		}
 	}
-	for _, source := range []string{"sum(fees)", "avg(fees, @half_even)", "sort(fees)", "abs(fees[0])", `sort_by(["a"], fees)`} {
+	for _, source := range []string{"sum(fees)", "avg(fees, @half_even)", "sort(fees)", "abs(fees[0])"} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			_, err := funroute.CompileExpr(source, late, funroute.CompileOptions{Args: []funroute.ArgSpec{unknownFees}})

@@ -199,6 +199,31 @@ func TestAFirstOfAComprehensionStopsAtItsItem(t *testing.T) {
 	}
 }
 
+// any, all and first on a comprehension are short-circuit forms, and let is
+// strict: binding the comprehension first builds every item, so the items
+// after the one that decides the answer are computed — and fail — there.
+// That is the language's meaning (docs/semantics.md S4), not an accident of
+// the fusion.
+func TestAShortCircuitFormIsNotItsLetBinding(t *testing.T) {
+	t.Parallel()
+	registry := aggregateRegistry(t)
+	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}}
+	args := map[string]any{"xs": []any{1, 0}}
+	for _, pair := range [][2]string{
+		{`t.any_v1([10 / x > 2 for x in xs])`, `let(big = [10 / x > 2 for x in xs], t.any_v1(big))`},
+		{`t.all_v1([10 / x > 20 for x in xs])`, `let(big = [10 / x > 20 for x in xs], t.all_v1(big))`},
+	} {
+		short, _ := compileHoisted(t, pair[0], registry, options)
+		if _, err := short.Run(t.Context(), args); err != nil {
+			t.Errorf("%s with %v fails: %v; it stops at the first item", pair[0], args, err)
+		}
+		bound, _ := compileHoisted(t, pair[1], registry, options)
+		if got, err := bound.Run(t.Context(), args); !errors.Is(err, machine.ErrArithmetic) {
+			t.Errorf("%s with %v: %v, %v; want the division by zero let computes", pair[1], args, got.Any(), err)
+		}
+	}
+}
+
 // A fold must fold for the function it is declared on: one array in, a step
 // the kernel has, a stop only of bools, a count of an int.
 func TestAFoldIsHeldToItsFunction(t *testing.T) {

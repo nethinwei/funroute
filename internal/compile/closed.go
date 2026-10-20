@@ -43,7 +43,7 @@ func ownConstexpr(expr syntax.Expr, inferred *inference, registry *machine.Regis
 		// A using is only there for the conversions in it, which read the run.
 		return false
 	case *syntax.CallExpr:
-		function, found := registry.Resolve(inferred.Selections[node.ID])
+		function, found := machine.ResolveOf(registry, inferred.Selections[node.ID])
 		return found && function.IsConstexpr()
 	}
 	return true

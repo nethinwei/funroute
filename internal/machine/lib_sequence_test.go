@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"errors"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -10,8 +11,9 @@ import (
 )
 
 // unique keeps an amount or a record by a key where it can, and answers as
-// keeping each item that Equal finds nowhere before it does: zeros of any
-// currency are one amount, a float's zeros one field.
+// keeping each item that Equal finds nowhere before it does: a currency's
+// zero and the currency-less zero are one amount, a float's zeros one field.
+// Amounts in two currencies have no answer, in whichever order.
 func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 	t.Parallel()
 	random := rand.New(rand.NewPCG(5, 6))
@@ -20,7 +22,7 @@ func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 	amounts := make([]money.Money, 200)
 	records := make([]Value, 200)
 	for i := range records {
-		amounts[i] = money.Make([]string{"USD", "", "USD", "EUR"}[random.IntN(4)], int64(random.IntN(3)))
+		amounts[i] = money.Make([]string{"USD", "", "USD"}[random.IntN(3)], int64(random.IntN(3)))
 		if amounts[i].Currency() == "" {
 			amounts[i] = money.Make("", 0)
 		}
@@ -53,6 +55,11 @@ func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 		}
 		if kept, _ := got.Array(); !slices.EqualFunc(kept, want, Value.Equal) {
 			t.Errorf("unique of %s kept %d items, Equal keeps %d", array.Type(), len(kept), len(want))
+		}
+	}
+	for _, mixed := range [][]money.Money{{money.Make("USD", 1), money.Make("EUR", 2)}, {money.Make("EUR", 0), money.Make("USD", 0)}} {
+		if got, err := uniqueItems(t.Context(), []Value{arrayOf(mixed)}); !errors.Is(err, ErrCurrency) {
+			t.Errorf("unique of %v = %v, %v; want ErrCurrency", mixed, got.Any(), err)
 		}
 	}
 }

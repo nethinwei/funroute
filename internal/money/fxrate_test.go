@@ -3,6 +3,9 @@ package money
 import (
 	"encoding/json"
 	"errors"
+	"math"
+	"math/big"
+	"math/rand/v2"
 	"strings"
 	"testing"
 )
@@ -459,5 +462,74 @@ func TestAnFxRatePastInt64IsRefused(t *testing.T) {
 	}
 	if _, err := a.MulRatio(ratio(1<<40, 1)); !errors.Is(err, ErrArithmetic) {
 		t.Fatalf("a markup past int64 = %v, want ErrArithmetic", err)
+	}
+}
+
+// A conversion is exact in between — the amount, the rate and the places'
+// power of ten in one fraction, its numerator 192 bits wide — and rounds
+// once: it agrees with math/big, rounded toward and away from zero, and
+// fails only when the answer does not fit, whatever the rate.
+func TestConvertAgreesWithBigRat(t *testing.T) {
+	t.Parallel()
+	table := rateCurrencies(t)
+	random := rand.New(rand.NewPCG(7, 8))
+	pick := func() int64 { return random.Int64() >> random.IntN(63) }
+	pairs := [][2]string{{"USD", "JPY"}, {"JPY", "USD"}, {"USD", "BTC"}, {"BTC", "KWD"}, {"KWD", "VND"}}
+	for range 20_000 {
+		pair := pairs[random.IntN(len(pairs))]
+		num, den := max(pick(), 1), max(pick(), 1)
+		fx := pairRate(pair[0], pair[1], num, den)
+		fx, err := table.FxRate(pair[0], pair[1], fx.rate.String())
+		if err != nil {
+			continue
+		}
+		amount := Money{currency: pair[0], minor: pick() * []int64{1, -1}[random.IntN(2)]}
+		for _, mode := range []Rounding{RoundDown, RoundUp} {
+			got, err := table.Convert(amount, fx, mode)
+			want, fits := convertedExactly(t, table, amount, fx, mode == RoundUp)
+			if fits && (err != nil || got.minor != want) || !fits && !errors.Is(err, ErrArithmetic) {
+				t.Fatalf("Convert(%v, %s, %s) = %v, %v; want %d (fits %v)", amount, fx, mode, got, err, want, fits)
+			}
+		}
+	}
+	// The rate in minor units fits no ratio here, nor two of the three
+	// factors one word: the answer, about 8.9e18, fits all the same.
+	wide, err := NewCurrencies(MoneySpec{Currencies: []CurrencySpec{{Code: "AAA"}, {Code: "BBB", Digits: 8}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx := FxRate{pair: &Pair{Base: "AAA", Quote: "BBB"}, rate: ratio(274877906944, 847288609443)}
+	if got, err := wide.Convert(Money{currency: "AAA", minor: 1 << 38}, fx, RoundDown); err != nil || got.minor <= 0 {
+		t.Fatalf("Convert(AAA 2^38) = %v, %v; want about 8.9e18", got, err)
+	}
+}
+
+// convertedExactly is the conversion in math/big, toward zero or away from
+// it, and whether it fits an int64.
+func convertedExactly(t *testing.T, table *Currencies, m Money, fx FxRate, away bool) (int64, bool) {
+	t.Helper()
+	from, _ := table.Places(fx.pair.Base)
+	to, _ := table.Places(fx.pair.Quote)
+	exact := new(big.Rat).Mul(new(big.Rat).SetInt64(m.minor), bigRat(fx.rate))
+	scale := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(abs(to-from))), nil))
+	if to >= from {
+		exact.Mul(exact, scale)
+	} else {
+		exact.Quo(exact, scale)
+	}
+	quotient, remainder := new(big.Int).QuoRem(exact.Num(), exact.Denom(), new(big.Int))
+	if away && remainder.Sign() != 0 {
+		quotient.Add(quotient, big.NewInt(int64(exact.Sign())))
+	}
+	return quotient.Int64(), quotient.IsInt64()
+}
+
+// An implied rate is one fraction too: over / under alone may not fit where
+// the rate does — BTC MinInt64 for JPY -1.
+func TestImpliedNeedsNoRatioOfTheAmounts(t *testing.T) {
+	t.Parallel()
+	fx, err := rateCurrencies(t).Implied(Money{currency: "BTC", minor: math.MinInt64}, Money{currency: "JPY", minor: -1})
+	if err != nil || fx.rate != ratio(1<<55, 390625) {
+		t.Fatalf("Implied(BTC MinInt64, JPY -1) = %s, %v; want 2^55/390625", fx, err)
 	}
 }

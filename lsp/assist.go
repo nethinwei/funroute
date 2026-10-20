@@ -50,7 +50,7 @@ func (s *Server) hover(doc *document, offset int) (any, error) {
 
 func (s *Server) explain(doc *document, fact compile.NodeFact, name string) []string {
 	var out []string
-	if function, ok := s.registry.Resolve(fact.Signature); ok {
+	if function, ok := machine.ResolveOf(s.registry, fact.Signature); ok {
 		out = append(out, "`"+fact.Signature+"`", describe(function.Doc)+examples(function.Doc.Examples))
 	}
 	if fact.Reference == "argument" {
@@ -112,7 +112,7 @@ func examples(list []machine.Example) string {
 // a name the kernel and a pack share has examples from both.
 func (s *Server) namedExamples(name string) []machine.Example {
 	var out []machine.Example
-	for _, function := range s.registry.Overloads(name) {
+	for _, function := range machine.OverloadsOf(s.registry, name) {
 		for _, example := range function.Doc.Examples {
 			if !slices.Contains(out, example) {
 				out = append(out, example)
@@ -244,7 +244,7 @@ func (s *Server) buildCallables() []completionItem {
 			continue
 		}
 		seen[function.Name()] = true
-		overloads := len(s.registry.Overloads(function.Name()))
+		overloads := len(machine.OverloadsOf(s.registry, function.Name()))
 		detail := function.Signature()
 		if overloads > 1 {
 			detail = fmt.Sprintf("%s（共 %d 个签名）", detail, overloads)
@@ -317,7 +317,7 @@ func typingEnum(doc *document, offset int) bool {
 func (s *Server) signatureHelp(doc *document, offset int) (any, error) {
 	lexemes := lexemesOf(doc)
 	name, active, ok := enclosingCall(doc.text, lexemes, offset)
-	overloads := s.registry.Overloads(name)
+	overloads := machine.OverloadsOf(s.registry, name)
 	if !ok || len(overloads) == 0 {
 		return null, nil
 	}

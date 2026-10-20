@@ -264,7 +264,7 @@ func loadConstants(artifact *Artifact) ([]Value, error) {
 func bindFunctions(artifact *Artifact, registry *Registry) ([]*RegisteredFunction, error) {
 	functions := make([]*RegisteredFunction, len(artifact.parts.Calls))
 	for i, call := range artifact.parts.Calls {
-		function, ok := registry.Resolve(call.Signature)
+		function, ok := ResolveOf(registry, call.Signature)
 		if !ok {
 			return nil, fmt.Errorf("required function is not registered: %s", call.Signature)
 		}

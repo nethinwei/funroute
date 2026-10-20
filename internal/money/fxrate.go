@@ -251,13 +251,15 @@ func (c *Currencies) Implied(over, under Money) (FxRate, error) {
 		return FxRate{}, fmt.Errorf("%w: %s %d and %s %d minor units imply no exchange rate: the amounts must be non-zero and of one sign",
 			ErrArithmetic, over.currency, over.minor, under.currency, under.minor)
 	}
-	ratio, err := ratioOf(over.minor, under.minor)
-	if err != nil {
-		return FxRate{}, err
-	}
 	// Minor units to major ones: over / 10^over's places, under / 10^under's,
-	// which is the factor from over's minor units to under's.
-	r, err := c.factor(over.currency, under.currency, ratio)
+	// one fraction reduced as a whole, so that it fails only when the rate
+	// does not fit — not when over / under alone would not.
+	o, u := magnitude(over.minor), magnitude(under.minor)
+	g := gcd(o, u)
+	overDigits, _ := c.Places(over.currency)
+	underDigits, _ := c.Places(under.currency)
+	up, down := tens(underDigits - overDigits)
+	r, err := fraction(false, []uint64{o / g, up}, []uint64{u / g, down})
 	if err != nil {
 		return FxRate{}, err
 	}
@@ -289,8 +291,8 @@ func (c *Currencies) convertAt(m Money, fx FxRate, mode Rounding) (Money, error)
 	if err := m.wellFormed(); err != nil {
 		return Money{}, err
 	}
-	if mode < RoundHalfEven || mode > RoundFloor {
-		return Money{}, fmt.Errorf("%w: rounding %d is not a mode", ErrArithmetic, mode)
+	if err := checkMode(mode); err != nil {
+		return Money{}, err
 	}
 	up, down, err := c.rescaling(m.currency, fx)
 	if err != nil {
@@ -313,46 +315,33 @@ func (c *Currencies) rescaling(currency string, fx FxRate) (up, down uint64, err
 	}
 	fromDigits, _ := c.Places(fx.pair.Base)
 	toDigits, _ := c.Places(fx.pair.Quote)
-	shift := toDigits - fromDigits
+	up, down = tens(toDigits - fromDigits)
+	return up, down, nil
+}
+
+// tens is 10^shift as a multiplier and a divisor, one of them 1.
+func tens(shift int) (up, down uint64) {
 	if shift < 0 {
-		return 1, uint64(pow10(-shift)), nil
+		return 1, uint64(pow10(-shift))
 	}
-	return uint64(pow10(shift)), 1, nil
+	return uint64(pow10(shift)), 1
 }
 
 // roundedFraction is ±(nums[0]·nums[1]·nums[2])/(dens[0]·dens[1]·dens[2])
-// rounded once by mode, crossed as fraction crosses them: it fails only when
-// the rounded result, or the reduced denominator, does not fit.
+// rounded once by mode, crossed as fraction crosses them: the numerator is
+// 192 bits wide in between, so it fails only when the reduced denominator,
+// or the rounded result, does not fit.
 func roundedFraction(negative bool, nums, dens []uint64, mode Rounding) (int64, error) {
-	for i := range nums {
-		for j := range dens {
-			if i != j {
-				g := gcd(nums[i], dens[j])
-				nums[i], dens[j] = nums[i]/g, dens[j]/g
-			}
-		}
-	}
+	crossReduce(nums, dens)
 	den, fits := product64(dens)
 	if !fits {
 		return 0, errFixedOverflow
 	}
-	// Two of the three factors in one word, the third beside them: the
-	// product is 128 bits wide on the way to the one rounding step.
-	for k := range nums {
-		rest := [2]uint64{nums[(k+1)%3], nums[(k+2)%3]}
-		if pair, fits := product64(rest[:]); fits {
-			return roundedQuotient(negative, nums[k], pair, den, mode)
-		}
+	q, r, err := mulDiv3Parts(nums[0], nums[1], nums[2], den)
+	if err != nil {
+		return 0, err
 	}
-	return 0, errFixedOverflow
-}
-
-// factor is what minor units of from are multiplied by to be minor units of
-// to at rate: the rate rescaled between the two currencies' places.
-func (c *Currencies) factor(from, to string, r Ratio) (Ratio, error) {
-	fromDigits, _ := c.Places(from)
-	toDigits, _ := c.Places(to)
-	return r.scaleTen(toDigits - fromDigits)
+	return rounded(negative, q, r, den, mode)
 }
 
 // pairOf is the table's one fxPair for two declared currencies, made the

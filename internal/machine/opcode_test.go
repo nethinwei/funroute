@@ -65,3 +65,14 @@ func verifierTypes(op OpCode) (typed bool) {
 	_, err := v.step(0, &vstate{})
 	return err == nil || !strings.Contains(err.Error(), "unknown opcode")
 }
+
+// The value flow has a rule for every opcode (flowRules): an opcode added
+// without one would leave the stack it keeps out of step with the program's.
+func TestEveryOpcodeHasAFlowRule(t *testing.T) {
+	t.Parallel()
+	for code := 1; code < len(opcodes); code++ {
+		if !flowRules[OpCode(code)] {
+			t.Errorf("opcode %s has no rule in the value flow (lower_escape.go)", opcodes[code].name)
+		}
+	}
+}

@@ -36,7 +36,7 @@ func moneySpecs() []funroute.FunctionSpec {
 		moneySpec("arg_max", []funroute.Type{amounts}, funroute.IntType, "最大值下标", "最大金额的下标；空数组报错。", argExtremeMoney(false)),
 		moneySpec("min_by", []funroute.Type{list, amounts}, item, "金额最小的候选", "金额键最小的那个候选；并列取第一个，空数组报错。", extremeByMoney(true)),
 		moneySpec("max_by", []funroute.Type{list, amounts}, item, "金额最大的候选", "金额键最大的那个候选；并列取第一个，空数组报错。", extremeByMoney(false)),
-	}, roundedMoneySpecs(amounts, c), keyedSpecs())
+	}, roundedMoneySpecs(amounts, c))
 }
 
 func moneySpec(name string, params []funroute.Type, result funroute.Type, label, description string, eval funroute.EvalFunc) funroute.FunctionSpec {
@@ -190,13 +190,27 @@ func extremeMoneyIndex(amounts []funroute.Money, smallest bool) (int, error) {
 	return at, nil
 }
 
+// pairMoney is extremeMoney over two amounts, compared where they are: the
+// currency-less zero takes the other's currency, as it would in a list.
 func pairMoney(smallest bool) funroute.EvalFunc {
 	return func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-		pair, err := funroute.Array(funroute.MoneyType, args)
-		if err != nil {
-			return funroute.Value{}, err
+		first, _ := args[0].Money()
+		second, _ := args[1].Money()
+		if first.Currency() != "" && second.Currency() != "" && first.Currency() != second.Currency() {
+			return funroute.Value{}, fmt.Errorf("%w: %s and %s in one list", funroute.ErrCurrency, first.Currency(), second.Currency())
 		}
-		return extremeMoney(smallest)(context.Background(), []funroute.Value{pair})
+		best, other := first, second
+		if smallest && second.Minor() < first.Minor() || !smallest && second.Minor() > first.Minor() {
+			best, other = second, first
+		}
+		if best.Currency() == "" && other.Currency() != "" {
+			zero, err := other.MulInt(0)
+			if err != nil {
+				return funroute.Value{}, err
+			}
+			best = zero
+		}
+		return funroute.ToValue(best)
 	}
 }
 

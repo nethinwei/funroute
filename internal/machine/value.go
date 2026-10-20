@@ -518,8 +518,7 @@ func (v Value) Equal(other Value) bool {
 		// A scalar's other fields are zero, so they match too.
 		return v.b == other.b && v.i == other.i && v.f == other.f && v.s == other.s
 	case ArrayKind, DictKind, RecordKind:
-		equal, _ := equalItems(v, other, func(a, b Value) (bool, error) { return a.Equal(b), nil })
-		return equal
+		return equalItems(v, other)
 	case RatioKind:
 		return ratioFrom(v).Cmp(ratioFrom(other)) == 0
 	default:
@@ -527,10 +526,10 @@ func (v Value) Equal(other Value) bool {
 	}
 }
 
-// equalItems compares two containers or records of one type item by item
-// with same. The first difference or error decides; containers of different
-// sizes, and a key only one dictionary has, are simply unequal.
-func equalItems(left, right Value, same func(a, b Value) (bool, error)) (bool, error) {
+// equalItems compares two containers or records of one type item by item.
+// Containers of different sizes, and a key only one dictionary has, are
+// simply unequal.
+func equalItems(left, right Value) bool {
 	n, m := left.length(), right.length()
 	pair := func(i int) (Value, Value, bool) { return left.at(i), right.at(i), true }
 	switch left.kind {
@@ -545,32 +544,32 @@ func equalItems(left, right Value, same func(a, b Value) (bool, error)) (bool, e
 		a, aOK := left.box.(*recordValue)
 		b, bOK := right.box.(*recordValue)
 		if !aOK || !bOK {
-			return false, nil
+			return false
 		}
 		n, m = len(a.fields), len(b.fields)
 		pair = func(i int) (Value, Value, bool) { return a.fields[i], b.fields[i], true }
 	}
 	if n != m {
-		return false, nil
+		return false
 	}
 	for i := range n {
-		a, b, ok := pair(i)
-		if !ok {
-			return false, nil
-		}
-		if equal, err := same(a, b); err != nil || !equal {
-			return false, err
+		if a, b, ok := pair(i); !ok || !a.Equal(b) {
+			return false
 		}
 	}
-	return true, nil
+	return true
 }
+
+// errHandleEquality is an equality asked of a handle, which the language
+// cannot see into.
+var errHandleEquality = errors.New("handles cannot be compared")
 
 // compareEqual is the VM's equality: eq and switch both use it. Handles are
 // opaque, so comparing them is an error rather than a guess.
 func compareEqual(left, right Value) (Value, error) {
 	// A handle's payload may be a map nativeEqual would compare.
 	if left.kind == HandleKind || right.kind == HandleKind {
-		return Value{}, errors.New("handles cannot be compared")
+		return Value{}, errHandleEquality
 	}
 	if equal, native := nativeEqual(left, right); native {
 		return Bool(equal), nil
@@ -585,9 +584,11 @@ func compareEqual(left, right Value) (Value, error) {
 	if !left.hasType(typ) {
 		return Value{}, fmt.Errorf("equality requires one type, got %s and %s", left.Type(), typ)
 	}
-	if (typ.kind == ArrayKind || typ.kind == DictKind || typ.kind == RecordKind) && containsUnits(typ) {
-		equal, err := equalInUnits(left, right)
-		return Bool(equal), err
+	// Two containers that hold money meet first, whatever else differs.
+	if typ.kind == ArrayKind || typ.kind == DictKind || typ.kind == RecordKind {
+		if err := meetAll(typ, left, right); err != nil {
+			return Value{}, err
+		}
 	}
 	return Bool(left.Equal(right)), nil
 }

@@ -3,7 +3,7 @@
 [![ci](https://github.com/nethinwei/funroute/actions/workflows/ci.yml/badge.svg)](https://github.com/nethinwei/funroute/actions/workflows/ci.yml)
 [![在线工作台](https://img.shields.io/badge/在线工作台-打开-2ea44f)](https://nethinwei.github.io/funroute/)
 
-FunRoute 是一门给**支付路由规则**用的小语言：强类型、纯表达式、必然终止。一条规则就是一个表达式：
+FunRoute 是一门给**支付路由规则**用的小语言：结构强类型、纯表达式、必然终止（每个词的准确含义见[语义宪章](docs/semantics.md)）。一条规则就是一个表达式：
 
 ```text
 switch(country,
@@ -26,10 +26,10 @@ switch(country,
 
 支付规则由运营编写、由平台执行，出错就是资损。每条设计都服务于"规则可审查、可预测、改不坏"：
 
-- **只有表达式**：没有语句与可变状态，也没有隐式的网络、时钟、数据库；程序**必然终止**，最坏成本可由输入规模静态估出。
+- **只有表达式**：没有语句与可变状态，也没有隐式的网络、时钟、数据库；程序**必然终止**，语言部分的最坏成本可由输入规模静态估出（扩展函数的代价由宿主承诺）。
 - **契约归宿主**：参数、类型与返回类型由调用方给出（或直接用 Go struct），规则文本不写声明；没给的由推导补上。
-- **金额精确**：`USD 1.70` 是最小单位的整数，从不经过 float；没有默认舍入，换汇只在 `using` 里。
-- **产物不漂移**：Artifact 带 digest、冻结了用到的每个函数签名；运行环境变了，旧产物拒绝装载。
+- **金额精确**：`USD 1.70` 是最小单位的整数，从不经过 float；没有默认舍入，换汇只在 `using` 里；币种是值，在两笔钱相遇的运算处检查。
+- **产物不漂移**：Artifact 带 digest、冻结了用到的每个函数签名与币种表的 stamp；签名或币种变了，旧产物拒绝装载。同名同签名的函数实现由宿主负责。
 - **能力由宿主开关**：一个注册表就是一个控制台，形式、金额与扩展函数按需打开。
 - **执行快、边界零拷贝**：装载时翻译成寄存器形式执行，Go 切片原样交进交出；与 expr 同机对照，执行的 100 行里 92 行更快（[perf.md](docs/perf.md)）。
 
@@ -109,6 +109,7 @@ go run ./cmd/funroute fmt -expr 'let(a=1,a+2)'
 | 文档 | 内容 |
 |---|---|
 | [语言导览](docs/language.md) | 值与类型、运算符、`if`/`switch`、`let`、推导式、聚合与 `reduce`、记录、时间 |
+| [语义宪章](docs/semantics.md) | 相等与金额的代数、确定性、成本、求值策略、批处理、Artifact 身份、三种表示的等价 |
 | [金额](docs/money.md) | `money`/`ratio`/`fxrate`/`currency`、`round(…, @mode)`、换汇 `->` 与 `using`、分摊 |
 | [契约与类型推导](docs/contracts.md) | 契约、类型别名、枚举、类型从哪里来、编译期求值 |
 | [在 Go 中使用](docs/go.md) | 编译与运行、类型化绑定、注册扩展函数、句柄与模型批处理、超时与错误、按控制台开放能力 |

@@ -18,6 +18,7 @@ func TestImportEnforcesTheNodeDefinitions(t *testing.T) {
 		{`{"version":1,"expr":{"node":"reduce","source":{"node":"var","name":"xs"},"variable":"x","accumulator":"x","init":{"node":"int","int":0},"body":{"node":"var","name":"x"}}}`, `"x" is bound twice`},
 		{`{"version":1,"expr":{"node":"for","source":{"node":"var","name":"xs"},"variable":"in","yield":{"node":"var","name":"x"}}}`, `invalid local variable name "in"`},
 		{`{"version":1,"expr":{"node":"for","source":{"node":"var","name":"xs"},"variable":"x","yield_key":{"node":"string","string":"k"},"yield":{"node":"var","name":"x"},"flatten":true}}`, "takes one 'for' clause"},
+		{`{"version":1,"expr":{"node":"for","source":{"node":"var","name":"xs"},"variable":"x","yield":{"node":"array","items":[{"node":"int","int":1}]},"flatten":true}}`, "yields its next 'for' clause"},
 		{`{"version":1,"expr":{"node":"float","float":"nan"}}`, `"nan" is not a decimal`},
 		{`{"version":1,"expr":{"node":"float","float":"1e400"}}`, "out of float64's range"},
 		// A reserved word would print as syntax and read back as something else.
@@ -73,6 +74,7 @@ func FuzzImportExprJSON(f *testing.F) {
 		`{"version":1,"expr":{"node":"currency","code":"U"}}`,
 		`{"version":1,"expr":{"node":"using","quotes":[],"body":{"node":"var","name":"a"}}}`,
 		`{"version":1,"expr":{"node":"using","outer":true,"quotes":[{"node":"fxrate","rate":"150","quote":"JPY","base":"USD"}],"body":{"node":"var","name":"a"}}}`,
+		`{"version":1,"expr":{"node":"for","source":{"node":"var","name":"xs"},"variable":"x","yield":{"node":"array","items":[{"node":"int","int":1}]},"flatten":true}}`,
 	} {
 		f.Add([]byte(document))
 	}
@@ -90,6 +92,7 @@ func FuzzImportExprJSON(f *testing.F) {
 			t.Fatalf("ImportExprJSON(%q) exports to %s after another round trip, want %s", data, got, want)
 		}
 		checkReparses(t, "Inline", string(data), Inline(expr), want)
+		checkReparses(t, "Format", string(data), Format(expr), want)
 	})
 }
 

@@ -7,8 +7,9 @@ import (
 // Tree is a program as it was written: every node with the source it covers
 // and its fields, in the shape ExprJSON gives them, so an editor can show the
 // structure of a text and turn an edit to the structure back into an edit to
-// the text. Like ExprJSON it is read off the node plans, so no node is named
-// here.
+// the text. Like ExprJSON it is read off the node plans; the one node told
+// apart is a comprehension's next clause, which covers its parent's source
+// (ownedBy).
 type Tree struct {
 	Node string `json:"node"`
 	Span Span   `json:"span"`
@@ -64,10 +65,30 @@ func treeOf(expr Expr, names map[string][]Span) Tree {
 	if plan != nil {
 		tree.Form = plan.isForm
 		own := ownSource{node: tree.Span}
-		EachChild(expr, func(child Expr) { own.children = append(own.children, child.Extent()) })
+		EachChild(expr, func(child Expr) { own.children = append(own.children, ownedBy(expr, child)...) })
 		tree.Fields = fieldsOf(reflect.ValueOf(expr).Elem(), plan, own, names)
 	}
 	return tree
+}
+
+// ownedBy is the source child holds within expr: its extent, but of a
+// comprehension's next clause only its own for on and the yield written
+// before all of them, so that the clause's names stay its parent's.
+func ownedBy(expr, child Expr) []Span {
+	if !continues(expr, child) {
+		return []Span{child.Extent()}
+	}
+	// continues holds child to a comprehension, and import a flattened one
+	// to a yield that is the next.
+	innermost, _ := child.(*ForExpr)
+	for innermost.Flatten {
+		next, ok := innermost.Yield.(*ForExpr)
+		if !ok {
+			break
+		}
+		innermost = next
+	}
+	return []Span{{Start: child.Position(), End: child.Extent().End}, innermost.Yield.Extent()}
 }
 
 // ownSource is a node's source less its children's: where the names the node

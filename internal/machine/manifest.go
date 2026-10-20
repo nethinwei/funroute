@@ -68,6 +68,22 @@ type ManifestFunction struct {
 	Constexpr   bool   `json:"constexpr,omitempty"`
 	BoundedArgs bool   `json:"bounded_args,omitempty"`
 	ConstArgs   []int  `json:"const_args,omitempty"`
+	// Fold is the function's fold, which changes how a call of it on a
+	// comprehension runs — a stop or a first ends it early, the items after
+	// neither computed nor failing — so a program compiled against the
+	// manifest runs as one compiled against the registry.
+	Fold *ManifestFold `json:"fold,omitempty"`
+}
+
+// ManifestFold is a Fold as data: its Init as the constant of the
+// function's result type it is.
+type ManifestFold struct {
+	Step   string          `json:"step,omitempty"`
+	Init   json.RawMessage `json:"init,omitempty"`
+	Stops  bool            `json:"stops,omitempty"`
+	Stop   bool            `json:"stop,omitempty"`
+	Counts bool            `json:"counts,omitempty"`
+	First  bool            `json:"first,omitempty"`
 }
 
 // ErrUnavailable is what a function known only by its signature returns when
@@ -89,11 +105,30 @@ func (r *Registry) Manifest() Manifest {
 }
 
 func manifestFunction(function *RegisteredFunction) ManifestFunction {
-	return ManifestFunction{
+	described := ManifestFunction{
 		Name: function.Name, Params: function.Params, Result: function.Result, Special: function.special.String(),
 		Doc: cloneDoc(function.Doc), Constexpr: function.IsConstexpr(), BoundedArgs: function.Doc.BoundedArgs,
 		ConstArgs: slices.Clone(function.Doc.ConstArgs),
 	}
+	if fold := function.Fold; fold != nil {
+		described.Fold = &ManifestFold{Step: fold.Step, Stops: fold.Stops, Stop: fold.Stop, Counts: fold.Counts, First: fold.First}
+		if init, ok := ConstantOf(fold.Init, function.Result); ok {
+			described.Fold.Init = init.Value
+		}
+	}
+	return described
+}
+
+// fold is the Fold the manifest describes, its Init read as the function's
+// result type.
+func (m *ManifestFold) fold(result Type) (*Fold, error) {
+	fold := &Fold{Step: m.Step, Stops: m.Stops, Stop: m.Stop, Counts: m.Counts, First: m.First}
+	if len(m.Init) == 0 {
+		return fold, nil
+	}
+	init, err := Constant{Type: result, Value: m.Init}.value()
+	fold.Init = init
+	return fold, err
 }
 
 // Apply adds what the manifest describes and r lacks: its forms, its handle
@@ -146,7 +181,7 @@ func (r *Registry) applyMoney(spec *money.MoneySpec) error {
 func (r *Registry) applyFunction(function ManifestFunction) error {
 	spec := FunctionSpec{Name: function.Name, Params: function.Params, Result: function.Result, Doc: function.Doc}
 	spec.Doc.BoundedArgs, spec.Doc.ConstArgs = function.BoundedArgs, function.ConstArgs
-	if _, ok := r.Resolve(spec.Signature()); ok {
+	if _, ok := ResolveOf(r, spec.Signature()); ok {
 		return nil
 	}
 	if function.Special != "" {
@@ -155,6 +190,13 @@ func (r *Registry) applyFunction(function ManifestFunction) error {
 	// There is nothing here to call, so folding must not try.
 	spec.Doc.Constexpr = false
 	spec.Eval = unavailable(function.Name)
+	if function.Fold != nil {
+		fold, err := function.Fold.fold(function.Result)
+		if err != nil {
+			return fmt.Errorf("%s: fold: %w", function.Name, err)
+		}
+		spec.Fold = fold
+	}
 	return r.Register(spec)
 }
 

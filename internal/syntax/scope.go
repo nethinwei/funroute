@@ -33,11 +33,25 @@ func childAt(expr Expr, bound scope, offset int) (Expr, scope) {
 	var found Expr
 	var inner scope
 	walkChildren(expr, bound, func(child Expr, names scope) {
-		if found == nil && child.Extent().HoldsCursor(offset) {
+		if found == nil && child.Extent().HoldsCursor(offset) && (!continues(expr, child) || ownsCursor(expr, child, offset)) {
 			found, inner = child, names
 		}
 	})
 	return found, inner
+}
+
+// continues reports the next clause of a comprehension: it covers the whole
+// comprehension, as its parent does, though only its own for on, and the
+// yield written before them all, are its own.
+func continues(parent, child Expr) bool {
+	clause, isFor := parent.(*ForExpr)
+	return isFor && clause.Flatten && child == clause.Yield
+}
+
+// ownsCursor reports whether the next clause holds offset: from its for on,
+// or before its parent's for — in the yield its innermost clause writes.
+func ownsCursor(parent, child Expr, offset int) bool {
+	return offset >= child.Position() || offset < parent.Position()
 }
 
 // LocalReferences reports, for each variable reference by node ID, whether a

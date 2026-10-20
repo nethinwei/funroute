@@ -156,7 +156,7 @@ func (w exactness) any(exprs []syntax.Expr) (bool, error) {
 }
 
 func (w exactness) call(node *syntax.CallExpr) (bool, error) {
-	function, ok := w.registry.Resolve(w.inferred.Selections[node.ID])
+	function, ok := machine.ResolveOf(w.registry, w.inferred.Selections[node.ID])
 	switch {
 	case !ok:
 		return false, w.children(node, "a call")

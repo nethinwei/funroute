@@ -65,7 +65,10 @@ func indexOfItem(_ context.Context, args []Value) (Value, error) {
 	case *bool:
 		at = slices.Index(itemsAt(first, args[0].i), wanted.b)
 	default:
-		at = slices.IndexFunc(valuesOf(args[0]), wanted.Equal)
+		var err error
+		if at, err = indexOfValue(args[0], wanted); err != nil {
+			return Value{}, err
+		}
 	}
 	if at < 0 {
 		return Value{}, errNotInArray
@@ -81,10 +84,15 @@ func valuesOf(array Value) []Value {
 
 // keyedSpecs are the keyed sorts, both ways, and the keyed cuts: sort_by
 // with a direction and a count, because "the three cheapest" and "the three
-// best" are what a rule asks for. A key is a fee, a rate or a name; the
-// money keys are money's (the standard pack's).
-func keyedSpecs() []FunctionSpec {
-	keys := []Type{IntType, FloatType, StringType}
+// best" are what a rule asks for. A key is a fee, a rate or a name; money
+// keys are registered with money (moneyKeyedSpecs).
+func keyedSpecs() []FunctionSpec { return keyedOn(IntType, FloatType, StringType) }
+
+// moneyKeyedSpecs are the keyed sorts and cuts by amounts, in one currency:
+// the cheapest channels by fee.
+func moneyKeyedSpecs() []FunctionSpec { return keyedOn(MoneyType) }
+
+func keyedOn(keys ...Type) []FunctionSpec {
 	specs := make([]FunctionSpec, 0, 4*len(keys))
 	for _, keyed := range []keyedFunction{
 		{"sort_by", "按键排序", "按第二个数组的键把第一个数组升序排好，两者长度必须相同；相等的保持原顺序。取最便宜的三个写 take(sort_by(channels, fees), 3)。", true, false},
@@ -106,11 +114,11 @@ type keyedFunction struct {
 
 func (k keyedFunction) spec(key Type) FunctionSpec {
 	list := ArrayOf(TypeVar("T"))
-	ascending := k.ascending
+	ascending, name := k.ascending, k.name
 	spec := FunctionSpec{
 		Name: k.name, Params: []Type{list, ArrayOf(key)}, Result: list,
 		Eval: func(_ context.Context, args []Value) (Value, error) {
-			return sortedBy(args, ascending)
+			return sortedBy(name, args, ascending)
 		},
 		Doc: Doc{
 			Label: k.label, Category: "选择", Description: k.description,
@@ -120,7 +128,7 @@ func (k keyedFunction) spec(key Type) FunctionSpec {
 	if k.ranked {
 		spec.Params = append(spec.Params, IntType)
 		spec.Eval = func(_ context.Context, args []Value) (Value, error) {
-			return rankedBy(args, ascending)
+			return rankedBy(name, args, ascending)
 		}
 		spec.Doc.Params, spec.Doc.Result = []string{"候选", "键", "个数"}, "选出的候选"
 	}
@@ -129,12 +137,12 @@ func (k keyedFunction) spec(key Type) FunctionSpec {
 
 // sortedBy is the candidates in the order of their keys, ties in place: an
 // order worked out on the keys' own backing, the candidates rearranged by it.
-func sortedBy(args []Value, ascending bool) (Value, error) {
-	items, keys := args[0], args[1]
-	n := items.length()
-	if count := keys.length(); count != n {
-		return Value{}, fmt.Errorf("%w: sort_by has %d candidates and %d keys", ErrDomain, n, count)
+func sortedBy(name string, args []Value, ascending bool) (Value, error) {
+	items, keys, err := keyedArgs(name, args)
+	if err != nil {
+		return Value{}, err
 	}
+	n := items.length()
 	var order []int
 	switch box := keys.box.(type) {
 	case *int64:
@@ -151,12 +159,12 @@ func sortedBy(args []Value, ascending bool) (Value, error) {
 
 // rankedBy is the count first candidates in the order of their keys, ties
 // in place: sortedBy's first count, found without sorting the rest.
-func rankedBy(args []Value, ascending bool) (Value, error) {
-	items, keys, count := args[0], args[1], args[2].i
-	n := items.length()
-	if m := keys.length(); m != n {
-		return Value{}, fmt.Errorf("%w: sort_by has %d candidates and %d keys", ErrDomain, n, m)
+func rankedBy(name string, args []Value, ascending bool) (Value, error) {
+	items, keys, err := keyedArgs(name, args)
+	if err != nil {
+		return Value{}, err
 	}
+	n, count := items.length(), args[2].i
 	if count < 0 {
 		return Value{}, fmt.Errorf("%w: a count of candidates cannot be negative, got %d", ErrArithmetic, count)
 	}
@@ -173,6 +181,22 @@ func rankedBy(args []Value, ascending bool) (Value, error) {
 		return Value{}, fmt.Errorf("internal error: keys of %s", keys.Type())
 	}
 	return rearranged(items, k, func(i int) int { return order[i] }), nil
+}
+
+// keyedArgs is a keyed function's candidates and keys, as many as each
+// other: amounts as their minor units, once they are in one currency.
+func keyedArgs(name string, args []Value) (items, keys Value, err error) {
+	items, keys = args[0], args[1]
+	if n, m := items.length(), keys.length(); n != m {
+		return Value{}, Value{}, fmt.Errorf("%w: %s has %d candidates and %d keys", ErrDomain, name, n, m)
+	}
+	if amounts, ok := nativeItems[money.Money](keys); ok {
+		if err := meetAll(keys.Type(), keys); err != nil {
+			return Value{}, Value{}, err
+		}
+		keys = arrayOf(minorsOf(amounts))
+	}
+	return items, keys, nil
 }
 
 // firstOf is the positions of the k first keys in order, ties by position —

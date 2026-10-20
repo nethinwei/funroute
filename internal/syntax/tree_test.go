@@ -41,3 +41,41 @@ func TestSyntaxTreeLocatesNodesAndNames(t *testing.T) {
 		t.Errorf("SyntaxTree(%q) error = nil, want an error", `let(x = 1)`)
 	}
 }
+
+// Every clause of a nested comprehension covers what was written, and each
+// clause's name is found where its own clause writes it: the outer x as
+// well as the inner y.
+func TestEveryClauseOfAComprehensionLocatesItsName(t *testing.T) {
+	t.Parallel()
+	source := `[x + y for x in xs for y in ys]`
+	tree, err := SyntaxTree(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := func(node Tree, name string) *Span {
+		for _, field := range node.Fields {
+			if field.Name == "variable" && field.Text == name {
+				return field.TextSpan
+			}
+		}
+		return nil
+	}
+	outer := *tree
+	var inner Tree
+	for _, field := range outer.Fields {
+		if field.Name == "yield" {
+			inner = field.Nodes[0]
+		}
+	}
+	for node, want := range map[string]struct {
+		tree Tree
+		at   int
+	}{"x": {outer, len("[x + y for ")}, "y": {inner, len("[x + y for x in xs for ")}} {
+		if span := named(want.tree, node); span == nil || span.Start != want.at {
+			t.Errorf("%s is at %v, want %d", node, span, want.at)
+		}
+	}
+	if inner.Span != outer.Span {
+		t.Errorf("the inner clause covers %v, the comprehension %v; want the same", inner.Span, outer.Span)
+	}
+}

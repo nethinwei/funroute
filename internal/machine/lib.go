@@ -22,7 +22,7 @@ func librarySpecs() []FunctionSpec {
 	return slices.Concat(
 		sumSpecs(), extremeSpecs(), quantifierSpecs(), rangeSpecs(),
 		caseSpecs(), testSpecs(), partSpecs(), searchSpecs(),
-		shapeSpecs(), sortSpecs(), numericSpecs(),
+		shapeSpecs(), setSpecs(), sortSpecs(), numericSpecs(),
 		selectSpecs(), keyedSpecs(), positionSpecs(), extremeBySpecs(), dictSpecs(),
 		timeSpecs(),
 	)

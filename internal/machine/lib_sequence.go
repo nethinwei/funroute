@@ -167,8 +167,12 @@ func joined[T any](left []T, right Value) Value {
 // a set — a float's zero and negative zero are one key, as they are one
 // value, and a NaN, equal to nothing, is kept every time — an amount's and
 // a record of scalars' by a set of keys that are equal when they are, and
-// any other's by Equal.
+// any other's by Equal. Money meets first (money_meet.go): an array of two
+// currencies has no answer.
 func uniqueItems(_ context.Context, args []Value) (Value, error) {
+	if err := meetAll(args[0].Type(), args[0]); err != nil {
+		return Value{}, err
+	}
 	switch box := args[0].box.(type) {
 	case *bool:
 		return arrayOf(distinctOf(itemsAt(box, args[0].i))), nil
@@ -194,17 +198,14 @@ func uniqueItems(_ context.Context, args []Value) (Value, error) {
 	return packArray(args[0].elemType(), out), nil
 }
 
-// distinctAmounts is distinctOf for amounts, whose zeros are one amount in
-// any currency and none.
+// distinctAmounts is distinctOf for amounts that meet: in one currency, or
+// the currency-less zero, which equals that currency's zero — so two are
+// one amount when their minor units are.
 func distinctAmounts(amounts []money.Money) []money.Money {
-	out, seen := []money.Money{}, make(map[money.Money]bool, len(amounts))
+	out, seen := []money.Money{}, make(map[int64]bool, len(amounts))
 	for _, amount := range amounts {
-		key := amount
-		if amount.IsZero() {
-			key = money.Money{}
-		}
-		if !seen[key] {
-			seen[key] = true
+		if !seen[amount.Minor()] {
+			seen[amount.Minor()] = true
 			out = append(out, amount)
 		}
 	}
@@ -229,9 +230,10 @@ func distinctRecords(items []Value) ([]Value, bool) {
 	return out, true
 }
 
-// recordKey appends a record of scalars and amounts to key as bytes two
-// records share exactly when they are Equal: a float's zeros as one, an
-// amount's zero in any currency as one, a string by its length then itself.
+// recordKey appends a record of scalars and amounts that meet to key as
+// bytes two records share exactly when they are Equal: a float's zeros as
+// one, an amount by its minor units — its currency is the place's one, or
+// none for a zero — a string by its length then itself.
 // It is false for anything else — a container, exact money, a NaN, which is
 // equal to nothing — and Equal decides those.
 func recordKey(item Value, key []byte) ([]byte, bool) {
@@ -253,10 +255,8 @@ func recordKey(item Value, key []byte) ([]byte, bool) {
 		case field.kind == StringKind:
 			key = append(strconv.AppendInt(key, int64(len(field.s)), 10), ':')
 			key = append(key, field.s...)
-		case field.kind == MoneyKind && !IsExact(field) && field.i == 0:
-			key = append(key, '0')
 		case field.kind == MoneyKind && !IsExact(field):
-			key = append(strconv.AppendInt(key, field.i, 10), field.s...)
+			key = strconv.AppendInt(key, field.i, 10)
 		default:
 			return key, false
 		}

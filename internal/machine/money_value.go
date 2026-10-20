@@ -80,7 +80,8 @@ func (v Value) Currency() (money.Currency, bool) {
 func (v Value) hasUnits() bool { return v.kind != MoneyKind || v.s != "" || v.i == 0 }
 
 // equalUnits compares two values of one unit-carrying kind. A currency-less
-// zero equals any currency's zero.
+// zero equals any currency's zero; USD 0 and EUR 0 are two currencies'
+// values, and are not equal (docs/semantics.md).
 func (v Value) equalUnits(other Value) bool {
 	switch v.kind {
 	case MoneyKind:
@@ -88,7 +89,7 @@ func (v Value) equalUnits(other Value) bool {
 			order, err := exactOf(v).Cmp(exactOf(other))
 			return err == nil && order == 0
 		}
-		return v.i == other.i && (v.s == other.s || v.i == 0)
+		return v.i == other.i && sameCurrency(v.s, other.s)
 	case FxRateKind:
 		first, _ := v.FxRate()
 		second, _ := other.FxRate()
@@ -125,21 +126,6 @@ func sameUnits(left, right Value) error {
 		return fmt.Errorf("%w: cannot compare %s with %s", ErrCurrency, left.s, right.s)
 	}
 	return nil
-}
-
-// equalInUnits compares two values of one type that hold money somewhere:
-// amounts in different currencies are an ErrCurrency, not unequal, inside a
-// container as on their own. Items are compared in order and the first
-// difference decides (equalItems).
-func equalInUnits(left, right Value) (bool, error) {
-	switch left.kind {
-	case MoneyKind, CurrencyKind, FxRateKind:
-		return left.Equal(right), sameUnits(left, right)
-	case ArrayKind, DictKind, RecordKind:
-		return equalItems(left, right, equalInUnits)
-	default:
-		return left.Equal(right), nil
-	}
 }
 
 // pairText is an exchange rate's pair as its literal writes it: JPY / USD is

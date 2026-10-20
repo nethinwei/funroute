@@ -327,7 +327,7 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	if !ok {
 		return fmt.Errorf("internal error: no selected overload for %s", node.Name)
 	}
-	function, ok := c.registry.Resolve(key)
+	function, ok := machine.ResolveOf(c.registry, key)
 	if !ok {
 		return fmt.Errorf("function disappeared during compilation: %s", key)
 	}
@@ -492,7 +492,7 @@ func (c *bytecodeCompiler) boundedCall(node *syntax.CallExpr) bool {
 	if !ok {
 		return false
 	}
-	function, ok := c.registry.Resolve(key)
+	function, ok := machine.ResolveOf(c.registry, key)
 	if !ok || !function.IsBuiltin() {
 		return false
 	}

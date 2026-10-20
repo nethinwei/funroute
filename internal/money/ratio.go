@@ -358,6 +358,18 @@ func (r Ratio) inverse() (Ratio, error) {
 // leaves the products in lowest terms: the result fails only when the
 // reduced one does not fit, whatever an intermediate would have been.
 func fraction(negative bool, nums, dens []uint64) (Ratio, error) {
+	crossReduce(nums, dens)
+	num, numFits := product64(nums)
+	den, denFits := product64(dens)
+	if !numFits || !denFits {
+		return Ratio{}, errRatioOverflow
+	}
+	return fitted(negative, num, den)
+}
+
+// crossReduce divides every numerator factor and every denominator factor
+// of another pair by what they share: nums[i]/dens[i] is reduced already.
+func crossReduce(nums, dens []uint64) {
 	for i := range nums {
 		for j := range dens {
 			if i != j {
@@ -366,12 +378,6 @@ func fraction(negative bool, nums, dens []uint64) (Ratio, error) {
 			}
 		}
 	}
-	num, numFits := product64(nums)
-	den, denFits := product64(dens)
-	if !numFits || !denFits {
-		return Ratio{}, errRatioOverflow
-	}
-	return fitted(negative, num, den)
 }
 
 // product64 is the factors multiplied, and whether that fits 64 bits.

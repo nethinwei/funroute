@@ -104,6 +104,9 @@ func (p *Program[In, Out]) loadStraight(f *frame, in *In) error {
 	for _, at := range p.plain.ints {
 		f.ints[at.reg] = *(*int64)(unsafe.Add(base, at.offset))
 	}
+	for _, at := range p.plain.goInts {
+		f.ints[at.reg] = int64(*(*int)(unsafe.Add(base, at.offset)))
+	}
 	for _, at := range p.plain.floats {
 		f.floats[at.reg] = *(*float64)(unsafe.Add(base, at.offset))
 	}
@@ -118,9 +121,12 @@ func (p *Program[In, Out]) loadStraight(f *frame, in *In) error {
 
 // plainLoads is where each argument a straight program reads sits in the
 // host's struct and which register it goes in, by kind: what loading them
-// is when every one is an int64, a float64, a bool or a string field.
+// is when every one is an int64, an int, a float64, a bool or a string
+// field.
 type plainLoads struct {
 	ints, floats, bools, strings []plainLoad
+	// goInts are Go int fields, as wide as the platform makes them.
+	goInts []plainLoad
 }
 
 type plainLoad struct {
@@ -139,6 +145,8 @@ func plainLoadsOf(reads []argRead, args int32) *plainLoads {
 			return nil
 		case read.kind == reflect.Int64:
 			loads.ints = append(loads.ints, at)
+		case read.kind == reflect.Int:
+			loads.goInts = append(loads.goInts, at)
 		case read.kind == reflect.Float64:
 			loads.floats = append(loads.floats, at)
 		case read.kind == reflect.Bool:

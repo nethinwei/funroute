@@ -102,7 +102,7 @@ func lower(artifact *Artifact, constants []Value, functions []*RegisteredFunctio
 	l.out.promotions = promotionsOf(parts, l.leaders, l.localBase+l.locals)
 	l.out.args, l.out.size = nconst, l.localBase+l.locals+int32(len(l.out.promotions))
 	l.out.scalar, l.out.scalarReads = scalarProgram(parts, nil, false), scalarProgram(parts, l.out.promotions, true)
-	l.flow, l.slots = flowOf(parts, functions), map[int]int32{}
+	l.flow, l.slots, l.out.hidesArrays = flowOf(parts, functions), map[int]int32{}, argsHideArrays(parts.Args)
 	l.itemRegs, l.out.size = itemRegsOf(l.flow, l.out.size)
 	l.scratch = l.out.size
 	l.out.fieldOnly, l.out.viewOnly = l.flow.fieldOnly, l.flow.viewOnly
@@ -134,6 +134,36 @@ func lower(artifact *Artifact, constants []Value, functions []*RegisteredFunctio
 	}
 	l.vectorize()
 	return l.out, nil
+}
+
+// argsHideArrays reports an argument that may hold a native array where a
+// lent out cannot be checked against it (hidesArrays).
+func argsHideArrays(args []Parameter) bool {
+	return slices.ContainsFunc(args, func(arg Parameter) bool { return hidesArrays(arg.typ) })
+}
+
+// hidesArrays reports a type that may hold a native array where overlapsAny
+// does not look — an array of them, an array in a dictionary, in a record
+// inside a record — whose memory a host's out could share. Telling would
+// mean walking every such argument on every run; refusing to lend is O(1).
+func hidesArrays(typ Type) bool {
+	switch typ.kind {
+	case RecordKind:
+		return slices.ContainsFunc(typ.fields, func(field Field) bool { return !nativeElem(field.typ) && holdsArrays(field.typ) })
+	case ArrayKind, DictKind:
+		return !nativeElem(typ) && holdsArrays(*typ.elem)
+	}
+	return false
+}
+
+// holdsArrays reports a type with a native array anywhere in it.
+func holdsArrays(typ Type) bool {
+	found := false
+	_ = WalkTypes(typ, func(inner Type) error {
+		found = found || nativeElem(inner)
+		return nil
+	})
+	return found
 }
 
 // scalarProgram reports a program whose every value is a bool, an int or a

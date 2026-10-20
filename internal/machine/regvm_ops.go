@@ -176,6 +176,10 @@ type regProgram struct {
 	calls   []rcall
 	loops   []rloop
 	makes   []rmake
+	// hidesArrays says an argument may hold a native array deeper than the
+	// answer's slots are checked against (overlapsAny): RunInto then builds
+	// in memory of its own rather than in what the host lent.
+	hidesArrays bool
 	// args is where the arguments start, and size how many registers there
 	// are.
 	args, size int32

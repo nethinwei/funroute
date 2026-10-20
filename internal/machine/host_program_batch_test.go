@@ -356,3 +356,18 @@ func runSlice[In, Out any](ctx context.Context, program *machine.Program[In, Out
 func runInto[In, Out any](ctx context.Context, program *machine.Program[In, Out], in []In, out []*Out, failed func(int, error)) {
 	program.RunBatch(ctx, len(in), func(i int) *In { return &in[i] }, func(i int) *Out { return out[i] }, failed)
 }
+
+// A batch of no requests — n zero or less — reads, writes and reports
+// nothing.
+func TestRunBatchOfNoRequestsDoesNothing(t *testing.T) {
+	t.Parallel()
+	type in struct {
+		X int64 `funroute:"x"`
+	}
+	program := bindProgram[in, int64](t, machine.CoreRegistry(), `x + 1`)
+	touched := func(int) bool { t.Error("a request of a batch of none was touched"); return false }
+	for _, n := range []int{0, -1} {
+		program.RunBatch(t.Context(), n, func(i int) *in { touched(i); return nil }, func(i int) *int64 { touched(i); return nil },
+			func(i int, _ error) { touched(i) })
+	}
+}

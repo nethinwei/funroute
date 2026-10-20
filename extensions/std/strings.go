@@ -50,7 +50,9 @@ const maxPadWidth = 10_000
 func repeatText(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 	text, _ := args[0].String()
 	count, _ := args[1].Int()
-	if count < 0 || count > maxPadWidth || count*int64(utf8.RuneCountInString(text)) > maxPadWidth {
+	// What is bounded is what is built: an empty text repeated any number
+	// of times is empty.
+	if runes := int64(utf8.RuneCountInString(text)); count < 0 || runes > 0 && count > maxPadWidth/runes {
 		return funroute.Value{}, fmt.Errorf("%w: repeat builds 0 to %d characters, %d times %q is not", funroute.ErrArithmetic, maxPadWidth, count, text)
 	}
 	return funroute.String(strings.Repeat(text, int(count))), nil

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -166,5 +167,38 @@ func TestAHostFoldFoldsTheComprehension(t *testing.T) {
 	value, err := mustInstantiate(t, artifact, registry).Run(t.Context(), map[string]any{"fees": []any{5, 20, 30}})
 	if got, _ := value.Int(); err != nil || got != 100 || handed != 0 {
 		t.Fatalf("the fold = %v, %v, the function handed %d arrays; want 100 and none", value.Any(), err, handed)
+	}
+}
+
+// A registry keeps what it was given, and gives out copies: changing the
+// spec after registering it, or what Overloads and Resolve hand back,
+// changes nothing it compiles or lists.
+func TestARegistryKeepsWhatItIsGiven(t *testing.T) {
+	t.Parallel()
+	registry := funroute.CoreRegistry()
+	spec := funroute.FunctionSpec{
+		Name: "text.cut_v1", Go: func(s string, n int64) string { return s[:min(int(n), len(s))] },
+		Doc: funroute.Doc{Label: "截取", ConstArgs: []int{1}, Examples: []funroute.Example{{Source: `text.cut_v1("abc", 2)`, Result: `"ab"`}}},
+	}
+	if err := registry.Register(spec); err != nil {
+		t.Fatal(err)
+	}
+	spec.Doc.ConstArgs[0], spec.Doc.Examples[0].Result, spec.Doc.Label = 5, `"x"`, "changed"
+	for _, function := range registry.Overloads("add") {
+		function.Params, function.Doc.Label = nil, "changed"
+	}
+	if resolved, ok := registry.Resolve(`text.cut_v1(string,int)->string`); ok {
+		resolved.Doc.Label = "changed"
+	}
+	if _, err := funroute.CompileExpr(`text.cut_v1("abc", 2) + "d"`, registry, funroute.CompileOptions{}); err != nil {
+		t.Fatalf("compiling after the host changed what it holds: %v", err)
+	}
+	for _, function := range registry.Catalog().Functions() {
+		if doc := function.Doc(); doc.Label == "changed" || function.Name() == "text.cut_v1" && doc.Examples[0].Result != `"ab"` {
+			t.Errorf("the catalog lists %s as %+v, changed by the host", function.Signature(), doc)
+		}
+	}
+	if at := slices.IndexFunc(registry.Catalog().Functions(), func(f funroute.FunctionDescriptor) bool { return f.Name() == "any" && f.ShortCircuit() }); at < 0 {
+		t.Error("the catalog does not say any short-circuits")
 	}
 }

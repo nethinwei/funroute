@@ -288,6 +288,12 @@ func (e *ForExpr) check() error {
 	if e.Flatten && e.YieldKey != nil {
 		return errors.New("a dictionary comprehension takes one 'for' clause")
 	}
+	// What flattens is the next clause of one comprehension, as the source
+	// writes it: anything else would print as a program without the flatten
+	// (docs/semantics.md).
+	if inner, isClause := e.Yield.(*ForExpr); e.Flatten && (!isClause || inner.YieldKey != nil) {
+		return errors.New("a flattened comprehension yields its next 'for' clause, an array comprehension")
+	}
 	return distinctNames(e.KeyVariable, e.Variable)
 }
 

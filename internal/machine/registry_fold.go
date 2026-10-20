@@ -93,6 +93,6 @@ func (r *Registry) validateFolding(spec *FunctionSpec, fold Fold, fail failFunc)
 // with, if the registry has one: for the compiler, which lays the fold out.
 func FoldStep(r *Registry, name string, answer, item Type) (*RegisteredFunction, bool) {
 	key := FunctionSpec{Name: name, Params: []Type{answer, item}, Result: answer}.Signature()
-	function, ok := r.Resolve(key)
+	function, ok := ResolveOf(r, key)
 	return function, ok && function.builtin
 }

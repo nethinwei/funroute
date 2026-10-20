@@ -2,6 +2,7 @@ package syntax
 
 import (
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -246,7 +247,13 @@ func (p *parser) fxRateLiteral(figure token) (Expr, error) {
 // one thing and compute another.
 func (e *LiteralExpr) Float() (machine.Value, error) {
 	number, _ := e.Value.Float()
-	if nearest := strconv.FormatFloat(number, 'g', -1, 64); nearest != e.Decimal.String() {
+	// As written is as a number, not as text: 0.1 is the float64 whose
+	// shortest text is 0.1, and 2^60 written out in full is a float64
+	// exactly, though strconv writes it shorter.
+	nearest := strconv.FormatFloat(number, 'g', -1, 64)
+	written, _ := new(big.Rat).SetString(e.Decimal.String())
+	shortest, _ := new(big.Rat).SetString(nearest)
+	if written == nil || written.Cmp(shortest) != 0 && written.Cmp(new(big.Rat).SetFloat64(number)) != 0 {
 		return machine.Value{}, Around(e, "type error: float %s is not a float64 as written: the nearest one is %s", e.Decimal, nearest)
 	}
 	return e.Value, nil

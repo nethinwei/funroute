@@ -638,6 +638,9 @@ func (s resultSink) deliver(value Value) error {
 // said they may be built into and none shares memory with an argument: an
 // answer built over its own input would read what it had written.
 func (s resultSink) lend(f *frame, args []Value) {
+	if f.runtime.reg.hidesArrays {
+		return
+	}
 	for dest := range f.dest {
 		p, plan := s.out, s.plan
 		if dest > 0 {

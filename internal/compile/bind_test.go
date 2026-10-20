@@ -3,6 +3,7 @@ package compile
 import (
 	"errors"
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/machine"
@@ -340,6 +341,63 @@ func TestRunIntoDoesNotBuildOverItsArguments(t *testing.T) {
 	if err := program.RunInto(t.Context(), &in, nil); !errors.Is(err, machine.ErrContract) {
 		t.Fatalf("RunInto into nil = %v, want ErrContract", err)
 	}
+}
+
+type groupsIn struct {
+	Groups [][]int64 `funroute:"groups"`
+}
+
+type byKeyIn struct {
+	ByKey map[string][]int64 `funroute:"by_key"`
+}
+
+type innerXs struct {
+	Xs []int64 `funroute:"xs"`
+}
+
+type outerXs struct {
+	Inner innerXs `funroute:"inner"`
+}
+
+type nestedIn struct {
+	Outer outerXs `funroute:"outer"`
+}
+
+// Nor is a slice lent that is the memory of an array an argument holds
+// deeper — in an array of arrays, a dictionary, a record in a record — where
+// a run could not tell without walking it: the answer is built in memory of
+// its own, read backwards from what it is built over.
+func TestRunIntoDoesNotBuildOverWhatItsArgumentsHold(t *testing.T) {
+	t.Parallel()
+	registry := forRegistry(t)
+	backwards := func(t *testing.T, xs []int64, run func(out *[]int64) error) {
+		t.Helper()
+		out := xs
+		if err := run(&out); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(out, []int64{3, 2, 1}) || !slices.Equal(xs, []int64{1, 2, 3}) {
+			t.Fatalf("RunInto over what an argument holds = %v, the argument now %v; want [3 2 1] and [1 2 3]", out, xs)
+		}
+	}
+	t.Run("an array of arrays", func(t *testing.T) {
+		t.Parallel()
+		program := bindProgram[groupsIn, []int64](t, registry, `[groups[0][i] for i in reverse(indices(groups[0]))]`)
+		in := groupsIn{Groups: [][]int64{{1, 2, 3}}}
+		backwards(t, in.Groups[0], func(out *[]int64) error { return program.RunInto(t.Context(), &in, out) })
+	})
+	t.Run("a dictionary of arrays", func(t *testing.T) {
+		t.Parallel()
+		program := bindProgram[byKeyIn, []int64](t, registry, `[by_key["k"][i] for i in reverse(indices(by_key["k"]))]`)
+		in := byKeyIn{ByKey: map[string][]int64{"k": {1, 2, 3}}}
+		backwards(t, in.ByKey["k"], func(out *[]int64) error { return program.RunInto(t.Context(), &in, out) })
+	})
+	t.Run("a record in a record", func(t *testing.T) {
+		t.Parallel()
+		program := bindProgram[nestedIn, []int64](t, registry, `[outer.inner.xs[i] for i in reverse(indices(outer.inner.xs))]`)
+		in := nestedIn{Outer: outerXs{Inner: innerXs{Xs: []int64{1, 2, 3}}}}
+		backwards(t, in.Outer.Inner.Xs, func(out *[]int64) error { return program.RunInto(t.Context(), &in, out) })
+	})
 }
 
 // A binding loads what it compiles without copying it or checking its

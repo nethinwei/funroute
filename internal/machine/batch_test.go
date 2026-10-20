@@ -400,3 +400,96 @@ func TestABatchedCurrencyMismatchIsNotAnExtensionFailure(t *testing.T) {
 		t.Fatalf("batch.Run = %v, %v, want ErrCurrency and not ErrExtension", got.Any(), err)
 	}
 }
+
+// One engine call serves the batch under the first request's values, and no
+// request ends it for another: a request canceled while the call is under
+// way fails alone, and the others get their answers from the same call.
+func TestABatchedCallServesEveryWaitingRequest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		engine := blockingEngine(t)
+		valued := context.WithValue(t.Context(), traceKey{}, "trace-1")
+		canceled, cancel := context.WithCancel(valued)
+		answers := engine.serve([]context.Context{canceled, valued}, cancel)
+		if !errors.Is(answers[0], machine.ErrDeadline) || answers[1] != nil {
+			t.Fatalf("the canceled request = %v, the other = %v; want ErrDeadline and an answer", answers[0], answers[1])
+		}
+		if engine.trace.Load() != "trace-1" || engine.endedEarly.Load() {
+			t.Fatalf("the engine saw value %v and was canceled %v; want the request's value and no cancellation", engine.trace.Load(), engine.endedEarly.Load())
+		}
+	})
+}
+
+// Once no request of the batch is waiting, the engine call is canceled.
+func TestABatchedCallEndsWhenNoRequestWaits(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		engine := blockingEngine(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		answers := engine.serve([]context.Context{ctx, ctx}, cancel)
+		if !errors.Is(answers[0], machine.ErrDeadline) || !errors.Is(answers[1], machine.ErrDeadline) {
+			t.Fatalf("the requests = %v; want ErrDeadline for both", answers)
+		}
+		if !engine.endedEarly.Load() {
+			t.Fatal("the engine call went on with no request waiting for it")
+		}
+	})
+}
+
+// heldEngine is a batch of two whose engine call holds until released, and
+// says what context it ran under.
+type heldEngine struct {
+	batch      *machine.Batch
+	release    chan struct{}
+	trace      atomic.Value
+	endedEarly atomic.Bool
+}
+
+func blockingEngine(t *testing.T) *heldEngine {
+	t.Helper()
+	engine := &heldEngine{release: make(chan struct{})}
+	registry := machine.CoreRegistry()
+	score := func(features []float64) (float64, error) { return features[0], nil }
+	scoreBatch := func(ctx context.Context, features [][]float64) ([]float64, error) {
+		engine.trace.Store(fmt.Sprint(ctx.Value(traceKey{})))
+		<-engine.release
+		engine.endedEarly.Store(ctx.Err() != nil)
+		out := make([]float64, len(features))
+		for i, row := range features {
+			out[i] = row[0]
+		}
+		return out, nil
+	}
+	if err := registry.Register(machine.FunctionSpec{Name: "model.score_v1", Go: score, GoBatch: scoreBatch}); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := compile.CompileExpr(`model.score_v1(features)`, registry, compile.CompileOptions{
+		Args: []compile.ArgSpec{{Name: "features", Type: machine.ArrayOf(machine.FloatType)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.batch = machine.NewBatch(runtime, machine.BatchOptions{MaxSize: 2, MaxWait: time.Second})
+	return engine
+}
+
+// serve runs one request under each context, cancels once the engine call
+// is under way, then lets it finish: what each Run returned.
+func (e *heldEngine) serve(contexts []context.Context, cancel context.CancelFunc) []error {
+	answers := make([]error, len(contexts))
+	var wg sync.WaitGroup
+	for i, ctx := range contexts {
+		wg.Go(func() {
+			value, _ := machine.ToValue([]float64{float64(i)})
+			_, answers[i] = e.batch.Run(ctx, []machine.Value{value})
+		})
+	}
+	synctest.Wait()
+	cancel()
+	synctest.Wait()
+	close(e.release)
+	wg.Wait()
+	return answers
+}

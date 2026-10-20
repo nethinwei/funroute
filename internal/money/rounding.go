@@ -79,8 +79,8 @@ func mulDivRound(a, b, d int64, mode Rounding) (int64, error) {
 	if d == 0 {
 		return 0, errDivisionByZero
 	}
-	if mode < RoundHalfEven || mode > RoundFloor {
-		return 0, fmt.Errorf("%w: rounding %d is not a mode", ErrArithmetic, mode)
+	if err := checkMode(mode); err != nil {
+		return 0, err
 	}
 	negative := (a < 0) != (b < 0)
 	if d < 0 {
@@ -92,6 +92,14 @@ func mulDivRound(a, b, d int64, mode Rounding) (int64, error) {
 	return roundedQuotient(negative, magnitude(a), magnitude(b), magnitude(d), mode)
 }
 
+// checkMode refuses a Rounding that is none of the seven.
+func checkMode(mode Rounding) error {
+	if mode < RoundHalfEven || mode > RoundFloor {
+		return fmt.Errorf("%w: rounding %d is not a mode", ErrArithmetic, mode)
+	}
+	return nil
+}
+
 // roundedQuotient is ±a·b/d on magnitudes, rounded once by mode, which is
 // one. d is not zero.
 func roundedQuotient(negative bool, a, b, d uint64, mode Rounding) (int64, error) {
@@ -99,6 +107,11 @@ func roundedQuotient(negative bool, a, b, d uint64, mode Rounding) (int64, error
 	if err != nil {
 		return 0, err
 	}
+	return rounded(negative, q, r, d, mode)
+}
+
+// rounded is the quotient q, remainder r of d, rounded once by mode.
+func rounded(negative bool, q, r, d uint64, mode Rounding) (int64, error) {
 	if roundsAway(q, r, d, negative, mode) {
 		if q == math.MaxUint64 {
 			return 0, errFixedOverflow
@@ -116,6 +129,21 @@ func mulDivParts(a, b, d uint64) (quotient, remainder uint64, err error) {
 		return 0, 0, errFixedOverflow
 	}
 	quotient, remainder = bits.Div64(hi, lo, d)
+	return quotient, remainder, nil
+}
+
+// mulDiv3Parts is a·b·c/d on magnitudes, 192 bits wide in between: the
+// quotient and the remainder, when the quotient fits 64 bits. d is not zero.
+func mulDiv3Parts(a, b, c, d uint64) (quotient, remainder uint64, err error) {
+	hi, lo := bits.Mul64(a, b)
+	carry, w0 := bits.Mul64(lo, c)
+	w2, mid := bits.Mul64(hi, c)
+	w1, overflowed := bits.Add64(mid, carry, 0)
+	w2 += overflowed
+	if w2 != 0 || w1 >= d {
+		return 0, 0, errFixedOverflow
+	}
+	quotient, remainder = bits.Div64(w1, w0, d)
 	return quotient, remainder, nil
 }
 

@@ -20,6 +20,14 @@ func TestScopeAtFollowsTheBindsTags(t *testing.T) {
 		{`let(a = 1, b = a * 2, c = b, a + c)`, "a * 2", []string{"a"}},
 		{`let(a = 1, b = a * 2, c = b, a + c)`, "a + c", []string{"a", "b", "c"}},
 		{`let(a = 1, [a + y for y in ys])`, "a + y", []string{"a", "y"}},
+		// A clause's name is bound from its own clause on: before it, in the
+		// clause outside, it is not yet.
+		{`[x + y for x in xs for y in ys]`, "x in", []string{}},
+		{`[x + y for x in xs for y in ys]`, "xs", []string{}},
+		{`[x + y for x in xs for y in ys]`, "ys", []string{"x"}},
+		{`[x + y for x in xs for y in ys]`, "x + y", []string{"x", "y"}},
+		{`[x + y + z for x in xs for y in ys for z in zs if z > y]`, "ys", []string{"x"}},
+		{`[x + y + z for x in xs for y in ys for z in zs if z > y]`, "z > y", []string{"x", "y", "z"}},
 	}
 	for _, c := range cases {
 		t.Run(c.source+" at "+c.at, func(t *testing.T) {

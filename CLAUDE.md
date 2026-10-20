@@ -6,7 +6,7 @@ FunRoute：面向支付路由的强类型、纯表达式、必然终止的语言
 
 本文件只写**读代码看不出来、违反了会出事**的约束。其余去这些地方找：
 
-- 语言用法与文法：`docs/language.md`、`docs/money.md`、`docs/contracts.md`、`docs/go.md`，文法在 `docs/grammar.md`；README 只是首页。改语义前先读，改完同步。
+- 语言用法与文法：`docs/language.md`、`docs/money.md`、`docs/contracts.md`、`docs/go.md`，文法在 `docs/grammar.md`；README 只是首页。"纯、强类型、必然终止、冻结、相等"的定义只在 `docs/semantics.md`（语义宪章），别处引用它、不另加例外。改语义前先读，改完同步。
 - 设计取舍与**否决过的方案**：`docs/roadmap.md` 的「关键设计决策」。改设计前先看，不要把否决过的东西加回来；新决策也记在那里。
 - 终止性论证：`docs/termination.md`。新增形式或能凭空造容器的函数时同步它。
 - 机制细节：代码与注释。本文件里的名字都是定位用的入口。

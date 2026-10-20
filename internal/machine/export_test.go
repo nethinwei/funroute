@@ -178,6 +178,10 @@ func ItemPromotions(r *Runtime) int {
 // Straight reports whether p runs the shorter way (host_straight.go).
 func Straight[In, Out any](p *Program[In, Out]) bool { return p.straight }
 
+// PlainLoads reports whether p loads its arguments field by field into the
+// register files (host_straight.go's plainLoads).
+func PlainLoads[In, Out any](p *Program[In, Out]) bool { return p.plain != nil }
+
 // Identical reports two values that are one value, NaN included
 // (identical).
 var Identical = identical
