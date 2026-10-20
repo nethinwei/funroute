@@ -3,6 +3,7 @@ package machine
 import (
 	"math"
 	"math/bits"
+	"unicode/utf8"
 )
 
 // The kernel's arithmetic on its fast path. Each answers what builtins.go's
@@ -296,4 +297,82 @@ func atF(b *banks, in *rinstr) bool {
 		return false // a backing it does not read: the function answers
 	}
 	return true
+}
+
+// textCursor is where in a text the last s[i] or len(s) of the run was: the
+// text, a character of it and the offset of the byte it starts at, and how
+// many characters the text has once one of them has counted them. The next
+// on the same text goes on from there, forward or back, so a loop down a
+// text, or up it, steps a character a turn, where counting from its start
+// each time would make the loop's work the square of the text's length.
+// Only the run's register operations keep it; the frame lets go of the text
+// when it is released.
+type textCursor struct {
+	text         string
+	char, offset int
+	// count is the text's characters, or -1 while none has counted them.
+	count int
+}
+
+// on is the cursor on text: as it was when it was on text already, and at
+// its start otherwise. Comparing the two is a comparison of their pointers
+// when they are one text, the case that matters; the zero cursor is on "",
+// whose count is 0.
+func (c *textCursor) on(text string) {
+	if c.text != text {
+		*c = textCursor{text: text, count: -1}
+	}
+}
+
+// to moves the cursor to character n, or as near as the text goes, and
+// reports whether the text has one there.
+func (c *textCursor) to(n int64) bool {
+	text := c.text
+	// Back is as far as forward from the start when n is less than half the
+	// way: past that, go back from here.
+	if n < int64(c.char) && n < int64(c.char)-n {
+		c.char, c.offset = 0, 0
+	}
+	for int64(c.char) > n {
+		_, size := utf8.DecodeLastRuneInString(text[:c.offset])
+		c.char, c.offset = c.char-1, c.offset-size
+	}
+	for int64(c.char) < n && c.offset < len(text) {
+		_, size := utf8.DecodeRuneInString(text[c.offset:])
+		c.char, c.offset = c.char+1, c.offset+size
+	}
+	if c.offset == len(text) {
+		c.count = c.char
+		return false
+	}
+	return int64(c.char) == n
+}
+
+// charAt is at(string, int): the character at b of the text in a, the
+// bytes the text has there as evalStringAt reads them. Past the end, or
+// before the start, the function says why.
+func charAt(b *banks, in *rinstr) bool {
+	index := b.ints[in.b]
+	if index < 0 {
+		return false
+	}
+	c := &b.text
+	c.on(b.regs[in.a].s)
+	if !c.to(index) {
+		return false
+	}
+	_, size := utf8.DecodeRuneInString(c.text[c.offset:])
+	b.regs[in.c] = String(c.text[c.offset : c.offset+size])
+	return true
+}
+
+// textLength is len(string) of the text in a, counted once a text: from the
+// cursor on, what it has passed being counted already.
+func textLength(b *banks, in *rinstr) {
+	c := &b.text
+	c.on(b.regs[in.a].s)
+	if c.count < 0 {
+		c.count = c.char + utf8.RuneCountInString(c.text[c.offset:])
+	}
+	b.ints[in.c] = int64(c.count)
 }

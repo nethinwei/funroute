@@ -178,6 +178,9 @@ func (r *Runtime) finishStraight(f *frame) {
 		clear(f.regs[f.argBase:])
 	}
 	f.returnMemory()
+	if f.text.text != "" {
+		f.text = textCursor{}
+	}
 	f.ctx, f.onlyReads = nil, false
 	r.putFrame(f)
 }

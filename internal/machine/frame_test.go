@@ -243,3 +243,24 @@ func TestAPurePanicIsTheCandidatesFailure(t *testing.T) {
 		t.Errorf("p.boom_v1(x) + 1: %v; want ErrExtension", err)
 	}
 }
+
+// A frame given back keeps nothing of the texts the run read by s[i] or
+// len(s): the text cursor lets go of the host's text whichever way the run
+// ends.
+func TestAFrameLetsGoOfTheTextItRead(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	artifact, err := compile.CompileExpr(`s[1]`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "s", Type: machine.StringType}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, straight := range []bool{false, true} {
+		if kept := machine.TextKeptAfter(runtime, "the host's text", straight); kept != "" {
+			t.Errorf("straight %v: the frame keeps %q", straight, kept)
+		}
+	}
+}

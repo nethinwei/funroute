@@ -52,4 +52,6 @@ var kernelOps = map[string]kernelOp{
 	"max(float,float)->float":      {op: rMaxF},
 	"abs(int)->int":                {op: rAbsI, unary: true},
 	"abs(float)->float":            {op: rAbsF, unary: true},
+	"at(string,int)->string":       {op: rAtS},
+	"len(string)->int":             {op: rLenS, unary: true},
 }

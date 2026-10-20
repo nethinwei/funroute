@@ -143,6 +143,8 @@ var coldKernels = [ropCount]kernelStep{
 		b.floats[in.c] = math.Abs(b.floats[in.a])
 		return pc, true
 	},
+	rAtS:  func(b *banks, pc int, in *rinstr) (int, bool) { return pc, charAt(b, in) },
+	rLenS: func(b *banks, pc int, in *rinstr) (int, bool) { textLength(b, in); return pc, true },
 }
 
 // structure runs what builds values and what opens and closes a loop, a

@@ -24,6 +24,19 @@ func OwnRoundTrip(typ reflect.Type, v Value) (Value, error) {
 	return loadOwn(typ, out.UnsafePointer())
 }
 
+// TextKeptAfter is the text a frame of r still holds once a run on it ends,
+// straight or not, its text cursor having been on text.
+func TextKeptAfter(r *Runtime, text string, straight bool) string {
+	f := r.acquireFrame()
+	f.text = textCursor{text: text, count: -1}
+	if straight {
+		r.finishStraight(f)
+	} else {
+		r.releaseFrame(f)
+	}
+	return f.text.text
+}
+
 // LoadOwn is loadOwn, for host_own_test.go to hand it a type it has no
 // reading of.
 var LoadOwn = loadOwn

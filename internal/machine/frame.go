@@ -182,6 +182,9 @@ func (f *frame) release() {
 		clear(f.regs[f.argBase:])
 	}
 	f.onlyReads = false
+	if f.text.text != "" {
+		f.text = textCursor{}
+	}
 	f.ctx = nil
 	f.prefetched = nil
 	f.budget = 0

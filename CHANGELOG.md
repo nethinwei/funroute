@@ -143,6 +143,7 @@
 - ExprJSON 按 token 流一次建出树，不再先校验整段再解码：导入快约 30%，内存少约 15%。
 - `unique`、`intersect`、`except` 遇到含 NaN 的 record、数组或字典不再退回两两比较：NaN 不等于任何值，这样的项每次都有一个只属于它的键。4000 个一半重复的 record 中有一个 NaN 时，`unique` 从 649 ms 到 1.2 ms，`intersect(xs, xs)` 从 1.29 s 到 1.3 ms。time、duration 与币种字段也有了键，原来含它们的 record 同样两两比较。
 - `median`、`percentile` 用三路划分的选择代替整体排序：20 万个 int 的 `median` 从 7.8 ms 到 1.1 ms、`percentile` 从 7.8 ms 到 0.5 ms；1000 个的 `percentile` 从 7.5 µs 到 4.2 µs，`median` 持平（+2.5%）。主元取 Tukey 的九点中值，划分超过两倍位长的深度时改为排序，任何输入都不退化成平方。
+- `s[i]` 与 `len(s)` 有了专用指令，从同一次运行里上一次读到的位置接着走：顺着或倒着读一段文本每步一个字符，原来每次从头数码点，循环是文本长度的平方。8000 个字符的 `[s[i] for i in range(len(s))]` 从 16.8 ms 到 0.12 ms，`len(s)` 写在循环体里从 15.4 ms 到 0.07 ms；折叠与 `fallback` 候选里的调用仍走函数本身。帧交还时放开读过的文本。
 - `Ratio` 加减去掉一次多余的约分；`let` 下的深层未走分支检查是线性的。
 
 
