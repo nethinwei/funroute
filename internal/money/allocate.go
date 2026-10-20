@@ -182,8 +182,14 @@ func (m Money) Split(n int) ([]Money, error) {
 // strategy says: with equal weights the largest remainder and in order both
 // start at the first share, reverse order and all last at the last.
 func (m Money) SplitBy(strategy AllocationStrategy, n int) ([]Money, error) {
+	return m.splitBy(strategy, int64(n))
+}
+
+// splitBy is SplitBy of a count a rule computed, held to the bound before it
+// is an int: on a 32-bit platform an int64 past it would wrap into it.
+func (m Money) splitBy(strategy AllocationStrategy, n int64) ([]Money, error) {
 	if n <= 0 || n > maxAllocation {
 		return nil, fmt.Errorf("%w: allocate needs 1 to %d shares, got %d", ErrArithmetic, maxAllocation, n)
 	}
-	return m.AllocateBy(strategy, slices.Repeat([]int64{1}, n)...)
+	return m.AllocateBy(strategy, slices.Repeat([]int64{1}, int(n))...)
 }

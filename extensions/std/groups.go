@@ -34,7 +34,7 @@ func groupSpecs() []funroute.FunctionSpec {
 		Label: "累计和", Category: "聚合",
 		Description: "逐项累加出的序列：第 i 项是前 i+1 项之和。配下标就能找出累计超限的那一笔：first([i for i in indices(xs) if cumsum(xs)[i] > limit])。",
 		Params:      []string{"数组"}, Result: "累计序列",
-	}, cumulativeInts, cumulativeFloats))
+	}, cumulativeOf(addInts), cumulativeOf(addFloats)))
 }
 
 func groupByKeys(_ context.Context, args []funroute.Value) (funroute.Value, error) {
@@ -77,25 +77,29 @@ func rankOf[T int64 | float64 | string](keys []T) ([]int64, error) {
 	return out, nil
 }
 
-func cumulativeInts(items []int64) ([]int64, error) {
-	out := make([]int64, len(items))
-	total := int64(0)
-	for i, item := range items {
-		if item > 0 && total > math.MaxInt64-item || item < 0 && total < math.MinInt64-item {
-			return nil, fmt.Errorf("%w: integer overflow in cumsum", funroute.ErrArithmetic)
+func cumulativeOf[T int64 | float64](add func(T, T) (T, error)) func([]T) ([]T, error) {
+	return func(items []T) ([]T, error) {
+		out := make([]T, len(items))
+		var total T
+		for i, item := range items {
+			sum, err := add(total, item)
+			if err != nil {
+				return nil, err
+			}
+			total = sum
+			out[i] = total
 		}
-		total += item
-		out[i] = total
+		return out, nil
 	}
-	return out, nil
 }
 
-func cumulativeFloats(items []float64) ([]float64, error) {
-	out := make([]float64, len(items))
-	total := 0.0
-	for i, item := range items {
-		total += item
-		out[i] = total
+func addInts(total, item int64) (int64, error) {
+	if item > 0 && total > math.MaxInt64-item || item < 0 && total < math.MinInt64-item {
+		return 0, fmt.Errorf("%w: integer overflow in cumsum", funroute.ErrArithmetic)
 	}
-	return out, nil
+	return total + item, nil
+}
+
+func addFloats(total, item float64) (float64, error) {
+	return total + item, nil
 }

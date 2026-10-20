@@ -64,11 +64,44 @@ func TestEveryCompileErrorHasAPosition(t *testing.T) {
 		{`1 + 2`, CompileOptions{Result: &machine.StringType}, `1 + 2`},
 		{`let(x = [], 1)`, CompileOptions{}, `[]`},
 		{`let(x = {}, 1)`, CompileOptions{}, `{}`},
+		// A type left open is the whole program's.
+		{`[]`, CompileOptions{}, `[]`},
+		{`first([])`, CompileOptions{}, `first([])`},
+		{`x`, CompileOptions{}, `x`},
+		{`at(d, "k")`, CompileOptions{}, `at(d, "k")`},
 	}
 	for _, item := range cases {
 		t.Run(item.source, func(t *testing.T) {
 			t.Parallel()
 			assertErrorCovers(t, item.source, item.options, item.want)
+		})
+	}
+}
+
+// A switch's case that does not match the subject is where the switch
+// fails, and so is a result of another type.
+func TestASwitchFailsWhereItsCaseDoes(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.SwitchForm); err != nil {
+		t.Fatal(err)
+	}
+	options := CompileOptions{Args: []ArgSpec{{Name: "n", Type: machine.IntType}}}
+	for source, want := range map[string]string{
+		`switch(n, case "a" => 1, else => 2)`:              `"a"`,
+		`switch(n, case 1, "b" => 1, else => 2)`:           `"b"`,
+		`switch(n, case 1 => 1, case 2 => "x", else => 2)`: `"x"`,
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			_, err := CompileExpr(source, registry, options)
+			positioned, ok := errors.AsType[*syntax.PosError](err)
+			if !ok {
+				t.Fatalf("%q: %v has no position", source, err)
+			}
+			if start, end := positioned.Span(); source[start:end] != want {
+				t.Errorf("%q: the error covers %q, want %q (%v)", source, source[start:end], want, err)
+			}
 		})
 	}
 }

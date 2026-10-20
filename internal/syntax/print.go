@@ -136,6 +136,11 @@ func (p *printer) operatorSource(match operatorMatch, parent int) string {
 		// that is not postfix (leftLevel, rightLevel).
 		left := p.inline(match.operands[0], spec.leftLevel())
 		right := p.inline(match.operands[1], spec.rightLevel())
+		if spec.postfixRight && strings.HasPrefix(right, "-") {
+			// A negative number is a literal, not a postfix expression:
+			// a -> -1 does not parse.
+			right = "(" + right + ")"
+		}
 		text = left + " " + spec.token + " " + right
 	}
 	if spec.precedence < parent {

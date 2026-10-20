@@ -180,6 +180,11 @@ func FuzzProgramsNeverPanic(f *testing.F) {
 		}
 		g.rand = rand.New(rand.NewPCG(input, 9))
 		args := g.args()
+		// Past the vector's shortest for a single loop, as the vector's own
+		// random programs are run: short arrays alone never reach it.
+		if xs, _ := args["xs"].([]any); loops(source) == 1 && input%2 == 0 {
+			args["xs"] = longer(g.rand, xs)
+		}
 		if _, err := runtime.Run(t.Context(), args); err != nil && strings.Contains(err.Error(), "panicked") {
 			t.Fatalf("%s with %v: %v", source, args, err)
 		}

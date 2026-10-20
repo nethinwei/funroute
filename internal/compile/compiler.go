@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
@@ -423,29 +422,6 @@ func (c *bytecodeCompiler) compileSwitch(node *syntax.SwitchExpr) error {
 	return nil
 }
 
-// requireBoundedArgs holds a BoundedArgs function to its promise: what it
-// produces is sized by its arguments, so those arguments must have a size the
-// inputs already bound. Three things do: a literal, the length of a container
-// (that length *is* part of the input size), and the two combined by
-// arithmetic. An argument that could be any scalar at run time does not, and
-// that is the one docs/termination.md rules out.
-func (c *bytecodeCompiler) requireBoundedArgs(node *syntax.CallExpr) error {
-	for i, arg := range node.Args {
-		// Only an integer can stand for a length; the amount allocate splits
-		// or anything else of another type says nothing about the size.
-		if typ, ok := c.inferred.nodeType(arg.NodeID()); ok && typ.Kind() != machine.IntKind {
-			continue
-		}
-		if c.boundedExpr(arg) {
-			continue
-		}
-		return syntax.Around(arg,
-			"%s needs arguments whose size the inputs already bound: a literal, len(...) of a container, or those combined by arithmetic — argument %d is neither",
-			node.Name, i+1)
-	}
-	return nil
-}
-
 // requireConstantArgs holds a call to the arguments its function wants
 // fixed at compile time (Doc.ConstArgs): each must be a constant expression,
 // and the function must take its value. A nested compiler, folding, leaves
@@ -456,7 +432,9 @@ func (c *bytecodeCompiler) requireConstantArgs(node *syntax.CallExpr, function *
 			return nil
 		}
 		arg := node.Args[at]
-		if !c.constantExpr(arg) {
+		// A clock or an engine is not fixed when the rule is compiled, and
+		// is not called to find out.
+		if !c.constantExpr(arg) || !c.callsConstexpr(arg) {
 			return syntax.Around(arg, "%s needs argument %d fixed when the rule is compiled: a literal, or what folds to one", node.Name, at+1)
 		}
 		value, ok, err := c.evaluate(arg)
@@ -468,41 +446,6 @@ func (c *bytecodeCompiler) requireConstantArgs(node *syntax.CallExpr, function *
 		}
 	}
 	return nil
-}
-
-func (c *bytecodeCompiler) boundedExpr(expr syntax.Expr) bool {
-	switch node := expr.(type) {
-	case *syntax.LiteralExpr:
-		return true
-	case *syntax.VariableExpr:
-		// A binding that folded to a constant is as good as a literal.
-		return c.foldedName(node.Name)
-	case *syntax.CallExpr:
-		return c.boundedCall(node)
-	}
-	return false
-}
-
-// boundedCall knows two things about the kernel: len hands back a size the
-// input already bound, and arithmetic on bounded sizes stays bounded (the
-// polynomial in docs/termination.md is a polynomial for exactly this reason).
-// Only the kernel's own functions count — a host may register another len.
-func (c *bytecodeCompiler) boundedCall(node *syntax.CallExpr) bool {
-	key, ok := c.inferred.Selections[node.ID]
-	if !ok {
-		return false
-	}
-	function, ok := machine.ResolveOf(c.registry, key)
-	if !ok || !function.IsBuiltin() {
-		return false
-	}
-	switch function.Name {
-	case "len":
-		return true
-	case "add", "sub", "mul", "div", "mod":
-		return !slices.ContainsFunc(node.Args, func(arg syntax.Expr) bool { return !c.boundedExpr(arg) })
-	}
-	return false
 }
 
 func (c *bytecodeCompiler) compileFallback(node *syntax.CallExpr) error {
@@ -718,11 +661,15 @@ func (c *bytecodeCompiler) compileLet(node *syntax.LetExpr) error {
 			c.folded++
 			continue
 		}
+		// Whether the value is a size the inputs bound is asked where it is
+		// bound: a name in it may be hidden later.
+		bounded := c.boundedExpr(binding.Value)
 		if err := c.compile(binding.Value); err != nil {
 			return err
 		}
 		slot := c.bindLocal(binding.Name)
 		defer c.unbindLocal(binding.Name)
+		c.names[binding.Name][len(c.names[binding.Name])-1].bounded = bounded
 		c.emit(machine.Instruction{Op: machine.OpStoreLocal, A: slot})
 	}
 	return c.compile(node.Body)
@@ -751,10 +698,12 @@ func (c *bytecodeCompiler) compileIf(node *syntax.CallExpr) error {
 
 // scoped is names bound in nested scopes, each name's innermost binding last.
 // nameSlot is where a bound name's value is: the local slot index, or, for a
-// constant one, the constant-pool index.
+// constant one, the constant-pool index. bounded says a let bound it to a
+// size the inputs bound (boundedExpr).
 type nameSlot struct {
 	index    int
 	constant bool
+	bounded  bool
 }
 
 // foldedName reports whether name's innermost binding folded to a constant.

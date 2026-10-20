@@ -332,6 +332,9 @@ func validateLoopInstruction(instruction Instruction, artifact *Artifact, fail f
 		return fail("malformed loop type")
 	}
 	if instruction.Op == OpLoopCollect {
+		if instruction.A != 0 && instruction.A != 1 || instruction.B != 0 || instruction.C != 0 || instruction.D != 0 {
+			return fail("malformed loop_collect operands")
+		}
 		return nil
 	}
 	if instruction.A < 0 || instruction.A > len(artifact.parts.Instructions) {

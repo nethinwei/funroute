@@ -339,10 +339,12 @@ func TestBatchHandsTheEngineOnlyAdmittedArguments(t *testing.T) {
 	t.Parallel()
 	registry := moneyRegistry(t)
 	var seen []string
+	batches := 0
 	err := registry.Register(machine.FunctionSpec{
 		Name: "m.score_v1", Params: []machine.Type{machine.MoneyType}, Result: machine.IntType,
 		Eval: func(context.Context, []machine.Value) (machine.Value, error) { return machine.Int(1), nil },
 		EvalBatch: func(_ context.Context, calls [][]machine.Value) ([]machine.Value, error) {
+			batches++
 			out := make([]machine.Value, len(calls))
 			for i, call := range calls {
 				m, _ := call[0].Money()
@@ -375,6 +377,10 @@ func TestBatchHandsTheEngineOnlyAdmittedArguments(t *testing.T) {
 	}
 	if want := []string{"USD 5"}; !slices.Equal(seen, want) {
 		t.Fatalf("the engine saw %q, want only %q", seen, want)
+	}
+	// A batch whose every request was refused calls no engine at all.
+	if batches != 1 {
+		t.Fatalf("the engine was called %d times, want once: never for a batch of none", batches)
 	}
 }
 
@@ -427,6 +433,36 @@ func TestABatchedCallEndsWhenNoRequestWaits(t *testing.T) {
 		answers := engine.serve([]context.Context{ctx, ctx}, cancel)
 		if !errors.Is(answers[0], machine.ErrDeadline) || !errors.Is(answers[1], machine.ErrDeadline) {
 			t.Fatalf("the requests = %v; want ErrDeadline for both", answers)
+		}
+		if !engine.endedEarly.Load() {
+			t.Fatal("the engine call went on with no request waiting for it")
+		}
+	})
+}
+
+// A request the batch answers before the engine calls — its arguments
+// refused — no longer waits either: the engine call ends once the rest stop.
+func TestABatchedCallEndsWhenTheRestOfTheBatchStopsWaiting(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		engine := blockingEngine(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		var refused, abandoned error
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			wrong, _ := machine.ToValue([]int64{1})
+			_, refused = engine.batch.Run(t.Context(), []machine.Value{wrong})
+		})
+		wg.Go(func() {
+			value, _ := machine.ToValue([]float64{1})
+			_, abandoned = engine.batch.Run(ctx, []machine.Value{value})
+		})
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+		close(engine.release)
+		wg.Wait()
+		if !errors.Is(refused, machine.ErrContract) || !errors.Is(abandoned, machine.ErrDeadline) {
+			t.Fatalf("the requests = %v, %v; want ErrContract and ErrDeadline", refused, abandoned)
 		}
 		if !engine.endedEarly.Load() {
 			t.Fatal("the engine call went on with no request waiting for it")

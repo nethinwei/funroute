@@ -110,9 +110,11 @@ func (g *generator) leaf(typ string) string {
 }
 
 func (g *generator) integer(d int) string {
-	switch g.rand.IntN(13) {
+	switch g.rand.IntN(14) {
 	case 0:
 		return fmt.Sprintf("(%s %s %s)", g.of("int", d), g.pick("+", "-", "*", "/", "%"), g.of("int", d))
+	case 12:
+		return fmt.Sprintf("if(%s[%s], %s, %s)", g.flags(d), g.of("int", d), g.of("int", d), g.of("int", d))
 	case 1:
 		return fmt.Sprintf("if(%s, %s, %s)", g.of("bool", d), g.of("int", d), g.of("int", d))
 	case 2:
@@ -254,6 +256,16 @@ func (g *generator) comprehension(d int, filter string) string {
 	}
 	g.ints = g.ints[:len(g.ints)-1]
 	return fmt.Sprintf("[%s for %s in %s%s]", body, item, source, filter)
+}
+
+// flags maps an array to bools: what the body computes in the int file
+// before it compares is collected as another kind.
+func (g *generator) flags(d int) string {
+	source, item := g.of("array", d), g.name()
+	g.ints = append(g.ints, item)
+	body := fmt.Sprintf("(%s %s %s)", g.of("int", d), g.pick("<", "<=", ">", ">=", "==", "!="), g.of("int", d))
+	g.ints = g.ints[:len(g.ints)-1]
+	return fmt.Sprintf("[%s for %s in %s]", body, item, source)
 }
 
 // nested is a comprehension of two clauses.

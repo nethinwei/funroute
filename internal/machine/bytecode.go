@@ -262,6 +262,11 @@ type Instruction struct {
 	Type *Type    `json:"type,omitempty"`
 }
 
+// collectsKey reports a loop_collect of a dictionary comprehension, which
+// takes the key under the value. Its A is 1 then and 0 otherwise
+// (validateLoopInstruction); nothing reads A as a count.
+func (in Instruction) collectsKey() bool { return in.A == 1 }
+
 type CallReference struct {
 	Name      string `json:"name"`
 	Signature string `json:"signature"`

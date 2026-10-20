@@ -41,6 +41,11 @@ var vectorShapes = []string{
 	`[min(x, 10) for x in xs]`,
 	`sum([max(x, a) - abs(x) for x in xs])`,
 	`[min(abs(f), 2.5) for f in fs]`,
+	// A register of the int file that holds an int and then a bool.
+	`[x * 2 > 5 for x in xs]`,
+	`[x % 3 == 0 for x in xs]`,
+	`[float(x) > 2.5 for x in xs]`,
+	`len([x - 1 < 3 for x in xs])`,
 }
 
 func loadVector(t *testing.T, source string, registry *machine.Registry) *machine.Runtime {
@@ -163,4 +168,80 @@ func longer(rng *rand.Rand, items []any) []any {
 		out[i] = items[rng.IntN(len(items))]
 	}
 	return out
+}
+
+// Random loop bodies of the operations a column computes — int and float
+// arithmetic, conversions, comparisons — answer as they do without the
+// vector: collected as each kind, filtered or not. A body computes in one
+// register file what it then collects as another kind.
+func TestTheVectorAnswersRandomBodiesAsTheBody(t *testing.T) {
+	t.Parallel()
+	registry := randomRegistry(t)
+	inputs := make([]map[string]any, 0, 8)
+	rng := rand.New(rand.NewPCG(3, 4))
+	for _, special := range []int64{0, 7, math.MaxInt64, math.MinInt64} {
+		inputs = append(inputs, vectorInput(rng, 300, 150, special), vectorInput(rng, 257, -1, special))
+	}
+	vectorized := 0
+	for seed := range uint64(400) {
+		rng := rand.New(rand.NewPCG(seed, 5))
+		source := columnLoop(rng)
+		vector, err := load(source, registry, randomContract)
+		if err != nil || machine.Vectors(vector) == 0 {
+			continue // a closed part that fails fails to compile
+		}
+		vectorized++
+		body, _ := load(source, registry, randomContract)
+		machine.WithoutVectors(body)
+		for _, args := range inputs {
+			assertVectorAsBody(t, source, vector, body, args)
+		}
+	}
+	if vectorized < 300 {
+		t.Fatalf("only %d random bodies are run by the vector", vectorized)
+	}
+}
+
+// columnLoop is a loop over xs whose body is a column's operations.
+func columnLoop(rng *rand.Rand) string {
+	kind := []string{"int", "float", "bool"}[rng.IntN(3)]
+	filter := ""
+	if rng.IntN(2) == 0 {
+		filter = " if " + columnExpr(rng, "bool", 2)
+	}
+	loop := fmt.Sprintf("[%s for x in xs%s]", columnExpr(rng, kind, 3), filter)
+	if rng.IntN(2) == 0 {
+		return "len(" + loop + ")"
+	}
+	return loop
+}
+
+// columnExpr is an expression of kind the vector computes, of the item x.
+func columnExpr(rng *rand.Rand, kind string, depth int) string {
+	pick := func(options ...string) string { return options[rng.IntN(len(options))] }
+	if depth == 0 {
+		switch kind {
+		case "int":
+			return pick("x", "x", "a", "b", "2", "-1", "9223372036854775807")
+		case "float":
+			return pick("float(x)", "f", "1.5", "0.0")
+		}
+		return pick("(x > a)", "(f <= 1.5)")
+	}
+	sub := func(kind string) string { return columnExpr(rng, kind, depth-1) }
+	switch kind {
+	case "int":
+		if rng.IntN(4) == 0 {
+			return fmt.Sprintf("%s(%s, %s)", pick("min", "max"), sub("int"), sub("int"))
+		}
+		return fmt.Sprintf("(%s %s %s)", sub("int"), pick("+", "-", "*", "/", "%"), sub("int"))
+	case "float":
+		if rng.IntN(4) == 0 {
+			return fmt.Sprintf("abs(%s)", sub("float"))
+		}
+		// No division: a NaN has no JSON to compare the answers by.
+		return fmt.Sprintf("(%s %s %s)", sub("float"), pick("+", "-", "*"), sub("float"))
+	}
+	operand := pick("int", "float")
+	return fmt.Sprintf("(%s %s %s)", sub(operand), pick("<", "<=", ">", ">=", "=="), sub(operand))
 }

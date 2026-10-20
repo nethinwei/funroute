@@ -121,8 +121,10 @@ func (f FxRate) Inverse() (FxRate, error) {
 	return newFxRate(&Pair{Base: f.pair.Quote, Quote: f.pair.Base}, inverse)
 }
 
-// Chain is f and then next: base to quote, then quote onward. The chain from
-// a currency back to itself is no exchange rate.
+// Chain is f and then next: base to quote, then quote onward, the exact
+// product of the two. A chain back to the currency it started from keeps the
+// rule every rate of a currency to itself keeps: it is 1, or it is no
+// exchange rate — the spreads on the way are an ErrArithmetic, not lost.
 func (f FxRate) Chain(next FxRate) (FxRate, error) {
 	if f.pair == nil || next.pair == nil {
 		return FxRate{}, cmp.Or(f.checked(), next.checked())
@@ -131,11 +133,6 @@ func (f FxRate) Chain(next FxRate) (FxRate, error) {
 		return FxRate{}, fmt.Errorf("%w: %s→%s cannot follow %s→%s", ErrCurrency, next.pair.Base, next.pair.Quote, f.pair.Base, f.pair.Quote)
 	}
 	pair := &Pair{Base: f.pair.Base, Quote: next.pair.Quote}
-	if pair.Base == pair.Quote {
-		// Back where it started: a currency to itself is 1, whatever the
-		// spreads on the way cost.
-		return FxRate{pair: pair, rate: ratioOne}, nil
-	}
 	product, err := f.rate.Mul(next.rate)
 	if err != nil {
 		return FxRate{}, err

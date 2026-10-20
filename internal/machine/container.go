@@ -179,24 +179,27 @@ func (v Value) lookup(key string) (Value, bool) {
 // every entry, without sorting or copying the keys as keys does.
 func (v Value) eachEntry(visit func(key string, entry Value) error) error {
 	switch box := v.box.(type) {
+	case map[string]bool:
+		return eachOf(box, Bool, visit)
+	case map[string]int64:
+		return eachOf(box, Int, visit)
+	case map[string]float64:
+		return eachOf(box, Float, visit)
+	case map[string]string:
+		return eachOf(box, String, visit)
 	case map[string]money.Money:
-		for key, amount := range box {
-			if err := visit(key, MoneyValue(amount.Minor(), amount.Currency())); err != nil {
-				return err
-			}
-		}
+		return eachOf(box, moneyValueOf, visit)
 	case *nestedDict:
-		for key, entry := range box.entries {
-			if err := visit(key, entry); err != nil {
-				return err
-			}
-		}
-	default:
-		for _, key := range v.keys() {
-			entry, _ := v.lookup(key)
-			if err := visit(key, entry); err != nil {
-				return err
-			}
+		return eachOf(box.entries, func(entry Value) Value { return entry }, visit)
+	}
+	return nil
+}
+
+// eachOf visits the entries of one backing, each made a value by value.
+func eachOf[T any](entries map[string]T, value func(T) Value, visit func(key string, entry Value) error) error {
+	for key, entry := range entries {
+		if err := visit(key, value(entry)); err != nil {
+			return err
 		}
 	}
 	return nil

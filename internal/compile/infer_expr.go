@@ -123,8 +123,8 @@ func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContex
 	}
 	result := state.fresh()
 	for _, item := range node.Cases {
-		if err := inferSwitchCase(item, subject, result, state, context); err != nil {
-			return typeTerm{}, typeErrorAt(item.Result, err, "switch branches must match the subject and return one type"+memberWrittenAsString(item, context.enums))
+		if at, err := inferSwitchCase(item, subject, result, state, context); err != nil {
+			return typeTerm{}, typeErrorAt(at, err, "switch branches must match the subject and return one type"+memberWrittenAsString(item, context.enums))
 		}
 	}
 	if node.Default != nil {
@@ -137,14 +137,14 @@ func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContex
 }
 
 // inferSwitchCase holds every value of a branch to the subject and its
-// result to the switch's.
-func inferSwitchCase(item syntax.SwitchCaseExpr, subject, result typeTerm, state *inferState, context inferContext) error {
+// result to the switch's, and on a failure is the one that failed.
+func inferSwitchCase(item syntax.SwitchCaseExpr, subject, result typeTerm, state *inferState, context inferContext) (syntax.Expr, error) {
 	for _, match := range item.Match {
 		if err := inferAs(match, subject, state, context); err != nil {
-			return err
+			return match, err
 		}
 	}
-	return inferAs(item.Result, result, state, context)
+	return item.Result, inferAs(item.Result, result, state, context)
 }
 
 // validateEnumSwitch proves a switch over a declared enum exhaustive, and

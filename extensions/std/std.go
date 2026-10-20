@@ -1,6 +1,6 @@
 // Package std is the standard pack: the functions a payment rule writes
-// less often than the kernel's library — sliding windows and batches, set
-// differences, padding, grouping and ranking, cutting a list where a test
+// less often than the kernel's library — sliding windows and batches,
+// padding, grouping and ranking, cutting a list where a test
 // stops holding — and the money overloads of the library's aggregates and
 // selections, for a registry that declares money. It is written against the
 // public package only, as any host's extension is.

@@ -246,3 +246,52 @@ func TestAHostComputesBesideTheRule(t *testing.T) {
 		t.Fatalf("USD 1.00 at 150 JPY / USD = %v, %v, want JPY 150", yen, err)
 	}
 }
+
+// A rule hopping through a currency inside one round, and a host converting
+// once at the rate Chain multiplies, land on the same amount; a chain back
+// where it started with spreads on the way is no rate, and says so.
+func TestAChainedRateConvertsAsTheRuleHops(t *testing.T) {
+	t.Parallel()
+	registry := moneyConsole(t)
+	table, _ := registry.Currencies()
+	eurUSD, err := table.FxRate("EUR", "USD", "1.0837")
+	if err != nil {
+		t.Fatal(err)
+	}
+	usdJPY, err := table.FxRate("USD", "JPY", "151.37")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := funroute.CompileOptions{Args: []funroute.ArgSpec{{Name: "amount", Type: funroute.MoneyType}, {Name: "market", Type: funroute.ArrayOf(funroute.FxRateType)}}}
+	artifact, err := funroute.CompileExpr("using(market, round(amount -> USD -> JPY, @half_even))", registry, contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := funroute.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	euros, err := table.Parse("EUR 123.45")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := runtime.RunValues(t.Context(), []funroute.Value{valueOf(euros), valueOf([]funroute.FxRate{eurUSD, usdJPY})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chained, err := eurUSD.Chain(usdJPY)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := table.Convert(euros, chained, funroute.RoundHalfEven)
+	if rule, _ := value.Money(); err != nil || rule != host {
+		t.Fatalf("EUR 123.45 through USD to JPY: the rule gives %v, Chain and Convert %v, %v", rule, host, err)
+	}
+	usdEUR, err := table.FxRate("USD", "EUR", "0.92")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if home, err := eurUSD.Chain(usdEUR); !errors.Is(err, funroute.ErrArithmetic) {
+		t.Errorf("EUR→USD then USD→EUR with a spread = %v, %v, want ErrArithmetic", home, err)
+	}
+}

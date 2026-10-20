@@ -9,6 +9,12 @@ package money
 // money it already holds as a value.
 func Make(currency string, minor int64) Money { return newMoney(currency, minor) }
 
+// SplitCount is m.SplitBy of a rule's count, an int64 whatever the
+// platform's int.
+func SplitCount(m Money, strategy AllocationStrategy, n int64) ([]Money, error) {
+	return m.splitBy(strategy, n)
+}
+
 // CurrencyOf is a currency code as a Currency, unchecked.
 func CurrencyOf(code string) Currency { return Currency{code: code} }
 

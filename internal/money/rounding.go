@@ -49,7 +49,7 @@ func ParseRounding(name string) (Rounding, error) {
 	if mode, ok := valueOf[Rounding](roundingNames[:], name); ok {
 		return mode, nil
 	}
-	return 0, fmt.Errorf("unknown rounding %q (want one of half_even, half_up, half_down, down, up, ceiling, floor)", name)
+	return 0, fmt.Errorf("%w: unknown rounding %q (want one of half_even, half_up, half_down, down, up, ceiling, floor)", ErrArithmetic, name)
 }
 
 // nameOf is the name of an enumeration's value, "invalid" for one it does

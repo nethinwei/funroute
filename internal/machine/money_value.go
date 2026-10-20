@@ -115,7 +115,7 @@ func sameUnits(left, right Value) error {
 	}
 	if left.kind == FxRateKind {
 		if left.s != right.s || left.quote() != right.quote() {
-			return fmt.Errorf("%w: cannot compare an exchange rate for %s with one for %s", ErrCurrency, pairText(left), pairText(right))
+			return unitsDiffer(pairText(left), pairText(right), true)
 		}
 		return nil
 	}
@@ -123,9 +123,18 @@ func sameUnits(left, right Value) error {
 		return nil
 	}
 	if left.s != right.s {
-		return fmt.Errorf("%w: cannot compare %s with %s", ErrCurrency, left.s, right.s)
+		return unitsDiffer(left.s, right.s, false)
 	}
 	return nil
+}
+
+// unitsDiffer is the error of two currencies, or two exchange rates' pairs,
+// that cannot be compared: one text for == and for everything that meets.
+func unitsDiffer(left, right string, pair bool) error {
+	if pair {
+		return fmt.Errorf("%w: cannot compare an exchange rate for %s with one for %s", ErrCurrency, left, right)
+	}
+	return fmt.Errorf("%w: cannot compare %s with %s", ErrCurrency, left, right)
 }
 
 // pairText is an exchange rate's pair as its literal writes it: JPY / USD is

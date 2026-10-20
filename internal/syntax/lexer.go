@@ -230,20 +230,13 @@ func (l *lexer) operator(start int) (token, bool) {
 }
 
 // enumMember scans "@member" or "@enum.member" as one lexeme, so the dot never
-// reaches expression syntax and stays available for field access later.
+// reaches expression syntax and stays available for field access later: a
+// name's characters include the dot.
 func (l *lexer) enumMember(start int) (token, error) {
 	l.pos++
 	name, err := l.memberName(start)
 	if err != nil {
 		return token{}, err
-	}
-	if l.pos < len(l.source) && l.source[l.pos] == '.' {
-		l.pos++
-		qualified, err := l.memberName(start)
-		if err != nil {
-			return token{}, err
-		}
-		name += "." + qualified
 	}
 	return token{kind: tokenEnum, text: name, pos: start}, nil
 }

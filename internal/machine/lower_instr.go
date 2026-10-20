@@ -186,7 +186,7 @@ func (l *lowerer) collectedNext() bool {
 		return false
 	}
 	in := l.code[next]
-	return in.Op == OpLoopCollect && in.A == 0 && l.out.loops[l.open[len(l.open)-1]].acc < 0
+	return in.Op == OpLoopCollect && !in.collectsKey() && l.out.loops[l.open[len(l.open)-1]].acc < 0
 }
 
 // fieldIndexes is where each field a record update names is in the record.
@@ -383,7 +383,7 @@ func (l *lowerer) collect(in Instruction) {
 		l.emit(rCollectItem, 0, 0, 0)
 		return
 	}
-	if in.A == 1 {
+	if in.collectsKey() {
 		// A dictionary's entry is read out of the file its kind says, c.
 		key := l.pop()
 		l.emitOn(rCollect, value.reg, key.reg, int32(value.kind), opKinds{a: value.kind})

@@ -95,10 +95,10 @@ func moneyKeyedSpecs() []FunctionSpec { return keyedOn(MoneyType) }
 func keyedOn(keys ...Type) []FunctionSpec {
 	specs := make([]FunctionSpec, 0, 4*len(keys))
 	for _, keyed := range []keyedFunction{
-		{"sort_by", "按键排序", "按第二个数组的键把第一个数组升序排好，两者长度必须相同；相等的保持原顺序。取最便宜的三个写 take(sort_by(channels, fees), 3)。", true, false},
-		{"sort_by_desc", "按键降序", "sort_by 的反向：按键从大到小排。相等的保持原顺序。", false, false},
-		{"bottom_k", "取最小的 k 个", "按键升序取前 k 个候选：最便宜的几个渠道。k 大于长度就取完。", true, true},
-		{"top_k", "取最大的 k 个", "按键降序取前 k 个候选：成功率最高的几个渠道。k 大于长度就取完。", false, true},
+		{"sort_by", "按键排序", "按第二个数组的键把第一个数组升序排好，两者长度必须相同；相等的保持原顺序，float 的 NaN 排最前。取最便宜的三个写 take(sort_by(channels, fees), 3)。", true, false},
+		{"sort_by_desc", "按键降序", "sort_by 的反向：按键从大到小排。相等的保持原顺序，float 的 NaN 排最后。", false, false},
+		{"bottom_k", "取最小的 k 个", "按键升序取前 k 个候选：最便宜的几个渠道。k 大于长度就取完；float 的 NaN 排最前。", true, true},
+		{"top_k", "取最大的 k 个", "按键降序取前 k 个候选：成功率最高的几个渠道。k 大于长度就取完；float 的 NaN 排最后。", false, true},
 	} {
 		for _, key := range keys {
 			specs = append(specs, keyed.spec(key))
@@ -289,8 +289,8 @@ func positionSpecs() []FunctionSpec {
 		name, label, description string
 		smallest                 bool
 	}{
-		{"arg_min", "最小值的位置", "最小元素的下标；并列取第一个，空数组报错。channels[arg_min(fees)] 就是最便宜的那个。", true},
-		{"arg_max", "最大值的位置", "最大元素的下标；并列取第一个，空数组报错。", false},
+		{"arg_min", "最小值的位置", "最小元素的下标；并列取第一个，遇 NaN 取它的下标，空数组报错。channels[arg_min(fees)] 就是最便宜的那个。", true},
+		{"arg_max", "最大值的位置", "最大元素的下标；并列取第一个，遇 NaN 取它的下标，空数组报错。", false},
 	} {
 		doc := Doc{
 			Label: extreme.label, Category: "选择",
@@ -313,8 +313,8 @@ func extremeBySpecs() []FunctionSpec {
 		name, label, description string
 		smallest                 bool
 	}{
-		{"min_by", "键最小的候选", "键最小的那个候选；并列取第一个。两者长度必须相同，空数组报错。min_by(channels, .fee) 就是最便宜的渠道。", true},
-		{"max_by", "键最大的候选", "键最大的那个候选；并列取第一个。两者长度必须相同，空数组报错。", false},
+		{"min_by", "键最小的候选", "键最小的那个候选；并列取第一个，float 的键遇 NaN 取它的候选（与 min 相同，而 sort_by 把 NaN 排最前）。两者长度必须相同，空数组报错。min_by(channels, .fee) 就是最便宜的渠道。", true},
+		{"max_by", "键最大的候选", "键最大的那个候选；并列取第一个，float 的键遇 NaN 取它的候选（与 max 相同，而 top_k 把 NaN 排最后）。两者长度必须相同，空数组报错。", false},
 	} {
 		name, smallest := extreme.name, extreme.smallest
 		for _, key := range []Type{IntType, FloatType, StringType} {

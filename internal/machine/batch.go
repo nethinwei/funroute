@@ -67,8 +67,10 @@ type batchRequest struct {
 	// the batch that runs it, or abandoned by a Run whose context ended
 	// first: one the batch has not taken is never read.
 	state atomic.Int32
-	// run is the batch that takes the request, set before it is taken.
-	run *batchRun
+	// run is the batch that takes the request, set before it is taken;
+	// stopped says the request no longer waits for it (stopWaiting).
+	run     *batchRun
+	stopped atomic.Bool
 	// typed says a codec produced args: typed by construction, with the slots
 	// the program never reads left empty (see Runtime.runTyped).
 	typed bool
@@ -81,11 +83,21 @@ const (
 )
 
 func (r *batchRequest) finish(result batchResult) {
+	r.stopWaiting()
 	if r.done == nil {
 		r.result = result
 		return
 	}
 	r.done <- result
+}
+
+// stopWaiting is the request no longer waiting for the batch that took it:
+// answered, or its Run gave up. Either may come first, and the second does
+// nothing, so the batch's count goes down once a request.
+func (r *batchRequest) stopWaiting() {
+	if r.run != nil && r.stopped.CompareAndSwap(false, true) {
+		r.run.stop()
+	}
 }
 
 type batchResult struct {
@@ -148,7 +160,7 @@ func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, er
 		// its arguments. Taken, its run reads them still: Run waits for it,
 		// so the caller may reuse them once Run returns.
 		if !request.state.CompareAndSwap(requestWaiting, requestAbandoned) {
-			request.run.stop()
+			request.stopWaiting()
 			<-request.done
 			b.releaseRequest(request)
 		}
@@ -167,6 +179,7 @@ func (b *Batch) newRequest(ctx context.Context, args []Value, typed bool) *batch
 	}
 	request.ctx, request.args, request.typed = ctx, args, typed
 	request.state.Store(requestWaiting)
+	request.stopped.Store(false)
 	return request
 }
 
@@ -249,8 +262,9 @@ func (b *Batch) execute(requests []*batchRequest) {
 
 // batchRun counts the requests of one batch still waiting for it: each
 // whose context ends stops waiting — a Run that abandons it, or one that
-// finds it taken — and when none is left the engine calls are cancelled. A
-// request whose context never ends waits throughout.
+// finds it taken — and so does each the batch answers, one it refuses before
+// the engine calls among them; when none is left the engine calls are
+// cancelled. A request whose context never ends waits until it is answered.
 type batchRun struct {
 	waiting atomic.Int64
 	cancel  context.CancelFunc
@@ -292,7 +306,9 @@ func (b *Batch) executeShared(ctx context.Context, requests []*batchRequest) {
 // would refuse is answered first and left out: the engine sees only what a
 // run of its own would have handed it.
 func (b *Batch) executeUnder(ctx context.Context, active []*batchRequest) {
-	active = b.admitted(active)
+	if active = b.admitted(active); len(active) == 0 {
+		return
+	}
 	// Every request's answers in one allocation: a share each, one slot
 	// for each call of the program.
 	calls := len(b.runtime.reg.calls)

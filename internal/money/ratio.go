@@ -68,8 +68,8 @@ func (r Ratio) parts() (num, den int64) {
 	return r.num, r.den
 }
 
-// String is the ratio's decimal when it has one of at most 18 places, and
-// its fraction p/q otherwise.
+// String is the ratio's decimal when it has one of at most 18 places whose
+// digits fit an int64, and its fraction p/q otherwise.
 func (r Ratio) String() string {
 	num, den := r.parts()
 	if den == 1 {

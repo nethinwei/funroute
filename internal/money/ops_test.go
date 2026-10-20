@@ -374,6 +374,8 @@ func TestMethodsCheckWhatTheyAreHanded(t *testing.T) {
 			_, err := (Money{currency: "USD", minor: 5}).MulRatio(ratio(1, 3), Rounding(99))
 			return err
 		}, ErrArithmetic},
+		"an unknown rounding's name": {func() error { _, err := ParseRounding("nearest"); return err }, ErrArithmetic},
+		"an unknown strategy's name": {func() error { _, err := ParseAllocation("random"); return err }, ErrArithmetic},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -605,7 +605,11 @@ func inferProgram(expr syntax.Expr, registry *machine.Registry, hints map[string
 	}
 	inferred, err := state.inference(names, context.args, result)
 	if err != nil {
-		return nil, err
+		// A type left open has no place of its own either.
+		if _, placed := errors.AsType[*syntax.PosError](err); placed {
+			return nil, err
+		}
+		return nil, syntax.Around(expr, "type error: %v", err)
 	}
 	if ret != nil {
 		// The declared result is the ABI.

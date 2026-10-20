@@ -191,6 +191,11 @@ func TestFxRateChain(t *testing.T) {
 	// Back where it started, the chain is the currency's own rate: 1.
 	home, err := usdJPY.Chain(back)
 	expectRate(t, home, err, "1 USD / USD")
+	// Spreads on the way make it more or less than 1, which no rate of a
+	// currency to itself is: the chain says so rather than drop them.
+	if lost, err := usdJPY.Chain(fxRate(t, "JPY", "USD", "0.0066")); !errors.Is(err, ErrArithmetic) {
+		t.Errorf("USD/JPY then JPY/USD with a spread = %v, %v, want ErrArithmetic", lost, err)
+	}
 }
 
 func TestFxRateCmp(t *testing.T) {
@@ -397,6 +402,25 @@ func TestCurrenciesConvertRefusesTheWrongCurrency(t *testing.T) {
 	eurUSD := fxRate(t, "EUR", "USD", "1.1")
 	if got, err := testCurrencies(t).Convert(Money{"EUR", 100}, eurUSD, RoundHalfEven); !errors.Is(err, ErrCurrency) {
 		t.Errorf("Convert(EUR 1.00, %s) on a table without EUR = %v, %v, want ErrCurrency", eurUSD, got, err)
+	}
+}
+
+// A conversion multiplies 192 bits wide but divides by the reduced
+// denominator in 64: a rate of 18 places from a currency of 8 places to one
+// of none is a denominator of 10²⁶, which is an ErrArithmetic even where the
+// rounded answer, here 0 yen, would fit.
+func TestAConvertedDenominatorPastUint64IsAnError(t *testing.T) {
+	t.Parallel()
+	table, err := NewCurrencies(MoneySpec{Currencies: []CurrencySpec{{Code: "BTC", Digits: 8}, {Code: "JPY", Digits: 0}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx, err := table.FxRate("BTC", "JPY", "1.000000000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := table.Convert(Money{"BTC", 1}, fx, RoundHalfEven); !errors.Is(err, ErrArithmetic) {
+		t.Errorf("Convert(BTC 0.00000001, %s) = %v, %v, want ErrArithmetic", fx, got, err)
 	}
 }
 

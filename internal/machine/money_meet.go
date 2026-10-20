@@ -1,7 +1,7 @@
 package machine
 
 import (
-	"fmt"
+	"strings"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -21,34 +21,124 @@ type unitsMeet struct {
 	at []string
 }
 
+// fewPlaces is how many places a caller's own array holds, so a type of
+// that many asks without allocating.
+type fewPlaces [4]string
+
+// meeting is a unitsMeet of n places, in few when they fit.
+func meeting(few *fewPlaces, n int) unitsMeet {
+	if n <= len(few) {
+		return unitsMeet{at: few[:n]}
+	}
+	return unitsMeet{at: make([]string, n)}
+}
+
 // meetAll checks that values of typ meet. A type that holds no money has
 // nothing to check.
 func meetAll(typ Type, values ...Value) error {
 	if !containsUnits(typ) {
 		return nil
 	}
-	plan, places := planUnits(typ, 0)
-	m := unitsMeet{at: make([]string, places)}
+	plan, places := plansOf(typ)
+	var few fewPlaces
+	m := meeting(&few, places)
 	for _, v := range values {
-		if err := m.meet(&plan, v); err != nil {
+		if err := m.meet(plan, v); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// meetIn checks that item meets the items of array, of its type.
-func meetIn(item, array Value) error {
-	typ := array.Type()
-	if !containsUnits(typ) {
+// meetPair checks that two values of one type, right's, meet: what == asks.
+func meetPair(left, right Value) error {
+	plan, places, units := planOfValue(right)
+	if !units {
 		return nil
 	}
-	plan, places := planUnits(typ, 0)
-	m := unitsMeet{at: make([]string, places)}
+	var few fewPlaces
+	m := meeting(&few, places)
+	if err := m.meet(plan, left); err != nil {
+		return err
+	}
+	return m.meet(plan, right)
+}
+
+// meetIn checks that item meets the items of array, of its type.
+func meetIn(item, array Value) error {
+	plan, places, units := planOfValue(array)
+	if !units {
+		return nil
+	}
+	var few fewPlaces
+	m := meeting(&few, places)
 	if err := m.meet(plan.elem, item); err != nil {
 		return err
 	}
-	return m.meet(&plan, array)
+	return m.meet(plan, array)
+}
+
+// The plans of the types of one place that equalities read most — an
+// amount, a rate, an array or a dictionary of either — made once.
+var (
+	amountPlan = unitPlan{kind: MoneyKind}
+	ratePlan   = unitPlan{kind: FxRateKind}
+	itemPlans  = [...][2]unitPlan{
+		ArrayKind: {{kind: ArrayKind, elem: &amountPlan}, {kind: ArrayKind, elem: &ratePlan}},
+		DictKind:  {{kind: DictKind, elem: &amountPlan}, {kind: DictKind, elem: &ratePlan}},
+	}
+)
+
+// itemsPlan is the plan made once of an array or a dictionary, kind, of
+// amounts or rates, elem; nil for any other.
+func itemsPlan(kind, elem Kind) *unitPlan {
+	switch {
+	case kind != ArrayKind && kind != DictKind:
+		return nil
+	case elem == MoneyKind:
+		return &itemPlans[kind][0]
+	case elem == FxRateKind:
+		return &itemPlans[kind][1]
+	}
+	return nil
+}
+
+// plansOf is typ's plan and how many places it has: one made once for the
+// common types, a new one for any other.
+func plansOf(typ Type) (*unitPlan, int) {
+	switch {
+	case typ.kind == MoneyKind:
+		return &amountPlan, 1
+	case typ.kind == FxRateKind:
+		return &ratePlan, 1
+	case typ.elem != nil:
+		if plan := itemsPlan(typ.kind, typ.elem.kind); plan != nil {
+			return plan, 1
+		}
+	}
+	plan, places := planUnits(typ, 0)
+	return &plan, places
+}
+
+// planOfValue is plansOf of v's type, and false when it holds no money. An
+// array's or a dictionary's type is built only when its items hold money
+// and are not amounts or rates.
+func planOfValue(v Value) (*unitPlan, int, bool) {
+	if v.kind == ArrayKind || v.kind == DictKind {
+		elem := v.elemType()
+		if !containsUnits(elem) {
+			return nil, 0, false
+		}
+		if plan := itemsPlan(v.kind, elem.kind); plan != nil {
+			return plan, 1, true
+		}
+	}
+	typ := v.Type()
+	if !containsUnits(typ) {
+		return nil, 0, false
+	}
+	plan, places := plansOf(typ)
+	return plan, places, true
 }
 
 // unitPlan is where a type holds money, worked out once for every value
@@ -100,6 +190,9 @@ func (m *unitsMeet) meet(plan *unitPlan, v Value) error {
 	case ArrayKind:
 		return m.meetItems(plan, v)
 	case DictKind:
+		if amounts, ok := v.box.(map[string]money.Money); ok && m.amountsMeet(plan.elem.place, amounts) {
+			return nil
+		}
 		// In key order, so a failure names the same two every run.
 		return v.eachPart(true, func(entry Value) error { return m.meet(plan.elem, entry) })
 	case RecordKind:
@@ -132,6 +225,24 @@ func (m *unitsMeet) meetItems(plan *unitPlan, v Value) error {
 	return nil
 }
 
+// amountsMeet adds the currencies of a dictionary of amounts, in the map's
+// order, when they meet; when they do not it changes nothing, and the
+// dictionary is walked again in key order to say which two.
+func (m *unitsMeet) amountsMeet(place int, amounts map[string]money.Money) bool {
+	seen := m.at[place]
+	for _, amount := range amounts {
+		switch unit := amount.Currency(); {
+		case unit == "" || unit == seen:
+		case seen == "":
+			seen = unit
+		default:
+			return false
+		}
+	}
+	m.at[place] = seen
+	return true
+}
+
 // see adds one unit at place: the currency-less zero's, "", meets any.
 func (m *unitsMeet) see(place int, unit string, pair bool) error {
 	seen := m.at[place]
@@ -141,8 +252,9 @@ func (m *unitsMeet) see(place int, unit string, pair bool) error {
 	case seen == "":
 		m.at[place] = unit
 		return nil
-	case pair:
-		return fmt.Errorf("%w: cannot compare an exchange rate for %s with one for %s", ErrCurrency, seen, unit)
 	}
-	return fmt.Errorf("%w: cannot compare %s with %s", ErrCurrency, seen, unit)
+	// A copy of the unit seen, so the error holds nothing of m: what m
+	// holds would otherwise be taken to leave with it, and m, on the
+	// caller's stack, would be moved to the heap on every call.
+	return unitsDiffer(strings.Clone(seen), unit, pair)
 }

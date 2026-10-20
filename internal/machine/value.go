@@ -510,7 +510,7 @@ func (v Value) Equal(other Value) bool {
 	if IsUnitKind(v.kind) {
 		return v.kind == other.kind && v.equalUnits(other)
 	}
-	if !v.hasType(other.Type()) {
+	if !v.sameTypeAs(other) {
 		return false
 	}
 	switch v.kind {
@@ -534,12 +534,14 @@ func equalItems(left, right Value) bool {
 	pair := func(i int) (Value, Value, bool) { return left.at(i), right.at(i), true }
 	switch left.kind {
 	case DictKind:
-		keys := left.keys()
-		pair = func(i int) (Value, Value, bool) {
-			a, _ := left.lookup(keys[i])
-			b, ok := right.lookup(keys[i])
-			return a, b, ok
-		}
+		// Whether they are equal does not hang on the order the entries are
+		// compared in: the map's, without sorting the keys.
+		return n == m && left.eachEntry(func(key string, a Value) error {
+			if b, ok := right.lookup(key); !ok || !a.Equal(b) {
+				return errUnequal
+			}
+			return nil
+		}) == nil
 	case RecordKind:
 		a, aOK := left.box.(*recordValue)
 		b, bOK := right.box.(*recordValue)
@@ -559,6 +561,10 @@ func equalItems(left, right Value) bool {
 	}
 	return true
 }
+
+// errUnequal stops a walk over a dictionary at the first entry the other
+// does not have alike.
+var errUnequal = errors.New("unequal")
 
 // errHandleEquality is an equality asked of a handle, which the language
 // cannot see into.
@@ -580,17 +586,26 @@ func compareEqual(left, right Value) (Value, error) {
 	if IsUnitKind(left.kind) && left.kind == right.kind {
 		return Bool(left.Equal(right)), nil
 	}
-	typ := right.Type()
-	if !left.hasType(typ) {
-		return Value{}, fmt.Errorf("equality requires one type, got %s and %s", left.Type(), typ)
+	if !left.sameTypeAs(right) {
+		return Value{}, fmt.Errorf("equality requires one type, got %s and %s", left.Type(), right.Type())
 	}
 	// Two containers that hold money meet first, whatever else differs.
-	if typ.kind == ArrayKind || typ.kind == DictKind || typ.kind == RecordKind {
-		if err := meetAll(typ, left, right); err != nil {
+	if right.kind == ArrayKind || right.kind == DictKind || right.kind == RecordKind {
+		if err := meetPair(left, right); err != nil {
 			return Value{}, err
 		}
 	}
 	return Bool(left.Equal(right)), nil
+}
+
+// sameTypeAs is v.hasType(other.Type()), without building the type of an
+// array or a dictionary, which allocates: two are of one type when their
+// elements are.
+func (v Value) sameTypeAs(other Value) bool {
+	if v.kind == other.kind && (v.kind == ArrayKind || v.kind == DictKind) {
+		return v.elemType().Equal(other.elemType())
+	}
+	return v.hasType(other.Type())
 }
 
 // CheckedFloat builds a float value, refusing the non-finite ones: what a

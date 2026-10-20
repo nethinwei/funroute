@@ -143,8 +143,8 @@ table, _ := registry.Currencies()   // *funroute.Currencies，或 funroute.NewCu
 | 分摊与统计 | `m.Allocate(权重...)`、`m.Split(n)`（一分不丢，剩下的最小单位按最大余数法发出；n 为 1–10000，与规则里的 `allocate` 相同）、`m.AllocateBy(strategy, 权重...)`、`m.SplitBy(strategy, n)`（按 `funroute.AllocateAllLast` 等策略发）、`funroute.AverageMoney(ms, mode)`、`funroute.MedianMoney(ms, mode)`（与 std 的 `avg`/`median` 相同） |
 | 比例 | `funroute.ParseRatio("0.029")`（也读分数 `"1/3"`）、`funroute.Percent("2.9")`、`funroute.BasisPoints("25")`；`r.Add`/`Sub`/`Mul`/`Div`、`r.Cmp`、`r.Sign`、`r.IsZero`、`r.String()` |
 | 币种 | `table.Currency("USD")`，`c.Code()` |
-| 汇率 | `table.FxRate("USD", "JPY", "150.25")`、`table.Implied(over, under)`；`fx.Base()`、`fx.Quote()`、`fx.String()`（`150.25 JPY / USD`，与规则里的字面量同一写法）、`fx.Decimal(places)`（半偶舍入后的展示文本，汇率本身不变）、`fx.Inverse()`、`fx.Chain(next)`（串联，前一个的报价币种必须是后一个的基准币种）、`fx.MulRatio(r)`（加点，与规则里的 `fx * 101%` 相同）、`fx.Cmp(other)` |
-| 换汇 | `table.Convert(m, fx, mode)`：按一个汇率换并舍入一次，与规则里的 `convert(m, JPY, @mode)` 相同 |
+| 汇率 | `table.FxRate("USD", "JPY", "150.25")`、`table.Implied(over, under)`；`fx.Base()`、`fx.Quote()`、`fx.String()`（`150.25 JPY / USD`，与规则里的字面量同一写法）、`fx.Decimal(places)`（半偶舍入后的展示文本，汇率本身不变）、`fx.Inverse()`、`fx.Chain(next)`（串联，前一个的报价币种必须是后一个的基准币种；串回起点时乘积必须恰为 1，带点差的回环是 `ErrArithmetic`）、`fx.MulRatio(r)`（加点，与规则里的 `fx * 101%` 相同）、`fx.Cmp(other)` |
+| 换汇 | `table.Convert(m, fx, mode)`：把 fx 基准币种的 m 按这个汇率换成报价币种并舍入一次，与规则里的 `convert(m, JPY, @mode)` 相同；m 是别的币种（不是不带币种的零）就是 `ErrCurrency` |
 
 汇率是精确比值：`"150.25"` 就是 601/4，`fx.Chain(next)` 是精确的乘积，只有换出来的金额舍入一次。同一币种之间恒为 1：`table.FxRate("USD", "USD", "1")` 合法，别的数是 `ErrArithmetic`。`table.Implied(over, under)` 是一笔交易隐含的汇率——over 是为 under 付出的：`Implied(JPY 15000, USD 100.00)` 是 `150 JPY / USD`，与规则里的 `implied(settled, paid)` 相同；两笔金额必须非零、同号、币种不同。
 

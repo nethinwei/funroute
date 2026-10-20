@@ -413,12 +413,16 @@ var flowRules = map[OpCode]bool{
 func (w *flower) consume(pc int, in Instruction, s *fstate) {
 	switch in.Op {
 	case OpLoopCollect:
-		values := s.pop(1 + in.A)
+		n := 1
+		if in.collectsKey() {
+			n = 2
+		}
+		values := s.pop(n)
 		// A loop's own item, loaded and collected as it is into the loop's
 		// own array, is kept where it is: the array is made of where the
 		// items are. Loaded just before, in the same block, it is in the
 		// item's own register when lowered, never moved through another.
-		if loop, item := values[0].item(); item && in.A == 0 && s.loops[len(s.loops)-1] == loop && w.code[loop].C == NoAccumulator &&
+		if loop, item := values[0].item(); item && !in.collectsKey() && s.loops[len(s.loops)-1] == loop && w.code[loop].C == NoAccumulator &&
 			!w.joins[pc] && w.code[pc-1].Op == OpLoadLocal && w.code[pc-1].A == w.code[loop].B {
 			w.facts[loop].collectsItem = true
 			w.use(pc, values[0], true)

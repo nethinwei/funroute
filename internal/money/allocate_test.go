@@ -1,6 +1,7 @@
 package money
 
 import (
+	"errors"
 	"math"
 	"math/big"
 	"math/rand/v2"
@@ -108,6 +109,13 @@ func TestAllocateRefusesWeightsThatShareNothing(t *testing.T) {
 	for _, n := range []int{0, -1, math.MinInt} {
 		if shares, err := usd(100).Split(n); err == nil || shares != nil {
 			t.Fatalf("Split(%d) = %v, %v, want an error", n, shares, err)
+		}
+	}
+	// A rule's count is an int64, held to the bound before it is an int:
+	// 2³² + 1 is not one share on a platform whose int is 32 bits.
+	for _, n := range []int64{1<<32 + 1, math.MaxInt64, math.MinInt64} {
+		if shares, err := usd(100).splitBy(AllocateLargestRemainder, n); !errors.Is(err, ErrArithmetic) || shares != nil {
+			t.Fatalf("splitBy(%d) = %v, %v, want ErrArithmetic", n, shares, err)
 		}
 	}
 }

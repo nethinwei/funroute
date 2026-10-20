@@ -2,6 +2,7 @@ package machine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -211,7 +212,13 @@ func storeOwn(typ reflect.Type, p unsafe.Pointer, v Value) error {
 	}
 	switch typ {
 	case moneyGoType:
-		*(*money.Money)(p) = money.Make(v.s, v.i)
+		amount, ok := v.Money()
+		if !ok {
+			// Only a program not from the compiler hands over an amount
+			// between minor units: the compiler keeps it inside round.
+			return errors.New("value is an exact amount, which has no Go form until it is rounded")
+		}
+		*(*money.Money)(p) = amount
 	case ratioGoType:
 		*(*money.Ratio)(p) = ratioFrom(v)
 	case fxRateGoType:
@@ -227,10 +234,12 @@ func storeOwn(typ reflect.Type, p unsafe.Pointer, v Value) error {
 }
 
 // newOwnGo is a new Go value of one of those types, typ, holding v, whose kind is typ's.
-func newOwnGo(typ reflect.Type, v Value) reflect.Value {
+func newOwnGo(typ reflect.Type, v Value) (reflect.Value, error) {
 	out := reflect.New(typ)
-	_ = storeOwn(typ, out.UnsafePointer(), v)
-	return out.Elem()
+	if err := storeOwn(typ, out.UnsafePointer(), v); err != nil {
+		return reflect.Value{}, err
+	}
+	return out.Elem(), nil
 }
 
 // loadScalar also holds a string to the enum it carries: a member name is the

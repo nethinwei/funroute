@@ -554,7 +554,7 @@ func (v *verifier) loopCollect(in Instruction, s *vstate) error {
 	if err != nil {
 		return err
 	}
-	keyed := in.A == 1
+	keyed := in.collectsKey()
 	fits := in.Type.Equal(loop.result) && !keyed
 	if !loop.folds {
 		fits = keyed == (loop.result.kind == DictKind) && in.Type.Equal(*loop.result.elem)

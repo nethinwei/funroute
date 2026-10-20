@@ -14,12 +14,14 @@ import (
 	"github.com/nethinwei/funroute/internal/money"
 )
 
-// The host boundary, in both directions, with one list of Go types.
+// The host boundary, in both directions.
 //
-// fromGo is that list. ToValue, the Go functions a FunctionSpec names in Go
-// and Run's argument binding all go through it, and goType derives a function's
-// signature from it, so a Go type is supported everywhere or nowhere. A
-// container is wrapped, not converted: the Value holds the caller's slice.
+// fromGo is the Go values that are a Value as they are: ToValue and Run's
+// argument binding go through it. A container is wrapped, not converted: the
+// Value holds the caller's slice. A Go function a FunctionSpec names in Go,
+// and a type Bind takes, are read by reflection instead (reflectType), which
+// also takes Go's narrower integers, uint up to uint32 and float32, and
+// containers of them, each element converted to an int64 or a float64.
 
 // errUnsupportedGoType is a sentinel so the by-name path, which tries fromGo
 // first on every argument, pays nothing when it has to fall through.

@@ -12,6 +12,9 @@ var printCorpus = []string{
 	// A negated exchange rate and a negated item: a minus before a number
 	// is a literal only when the number stands alone.
 	`-150 JPY / USD`, `-2[0]`, `-(1.5)`,
+	// A negative number after ->, and a bool as a comprehension's key: the
+	// one is no postfix expression, the other no field name.
+	`a -> (-1)`, `convert(a, -1.5)`, `{(true): 1 for x in xs}`, `{(-1): 1 for x in xs}`,
 	// A call without arguments, fields read off a field, and a field read off
 	// an enum member — each once printed as something that did not read back.
 	`f()`, `route.now_v1()`, `f(x).a.b`, `xs[0].a.b`, `{a: {b: 1}}.a.b`, `(@A).A`, `(@A).a.b`,

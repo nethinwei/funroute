@@ -101,7 +101,7 @@ func allocateEvenly(_ context.Context, args []Value) (Value, error) {
 		return Value{}, err
 	}
 	amount, _ := args[0].Money()
-	shares, err := amount.SplitBy(strategy, int(args[1].i))
+	shares, err := money.SplitCount(amount, strategy, args[1].i)
 	return arrayOf(shares), err
 }
 
