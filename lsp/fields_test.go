@@ -17,6 +17,7 @@ func TestCompletionOffersTheFieldsOfARecordBeingUpdated(t *testing.T) {
 		"order with {cu":                  "amount fee currency",
 		"let(o = order, o with {":         "amount fee currency",
 		"order with {amount: order.fee, ": "fee currency",
+		"if(true, order with {fee: 0, ":   "amount currency",
 	}
 	for text, want := range cases {
 		t.Run(text, func(t *testing.T) {

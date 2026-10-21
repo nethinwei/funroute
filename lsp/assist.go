@@ -166,7 +166,7 @@ func (s *Server) completion(doc *document, offset int) (any, error) {
 	for _, arg := range s.arguments(doc) {
 		items = append(items, completionItem{Label: arg.Name(), Kind: kindVariable, SortText: "1" + arg.Name(), Detail: arg.Type().String(), Documentation: markdown(arg.Doc())})
 	}
-	for _, name := range localsAt(doc.text, offset) {
+	for _, name := range localsAt(doc, offset) {
 		items = append(items, completionItem{Label: name, Kind: kindVariable, SortText: "0" + name, Detail: "局部名"})
 	}
 	return withCallables(items, s.callables())
@@ -217,9 +217,9 @@ const placeholder = "funroute_completion"
 // parses, so when it does not, the text is tried again with a name at the
 // cursor and the brackets still open there closed, the way the parser would
 // need to see it: let(rate = fee, | becomes let(rate = fee, funroute_completion).
-func localsAt(text string, offset int) []string {
-	for _, candidate := range completionCandidates(text, offset) {
-		if tree, err := syntax.Parse(candidate); err == nil {
+func localsAt(doc *document, offset int) []string {
+	for _, candidate := range completionCandidates(doc.text, offset) {
+		if tree, err := doc.parse(candidate); err == nil {
 			return syntax.ScopeAt(tree, offset)
 		}
 	}

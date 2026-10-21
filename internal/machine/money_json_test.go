@@ -71,6 +71,29 @@ func TestEncodeJSONWritesEveryMoneyShape(t *testing.T) {
 
 // Without a table money has no places to be written in, so it is the machine
 // form; the other money kinds need no table and read the same.
+// Money between minor units has no places to be written in: alone or in a
+// record it is written as MarshalJSON writes it, never as the minor unit its
+// numerator would be.
+func TestEncodeJSONWritesExactMoneyAsMarshalJSON(t *testing.T) {
+	t.Parallel()
+	registry := declared(t, money.CurrencySpec{Code: "USD", Digits: 2})
+	half := exactValue(money.ExactFrom("USD", ratio(1, 2)))
+	alone, err := json.Marshal(half)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := Record(RecordOf(Field{name: "fee", typ: MoneyType}), []Value{half})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for value, want := range map[*Value]string{&half: string(alone), &record: `{"fee":` + string(alone) + `}`} {
+		encoded, err := registry.EncodeJSON(*value)
+		if err != nil || string(encoded) != want || string(alone) == `"USD 0.01"` {
+			t.Errorf("EncodeJSON of half a cent = %s, %v, want %s as MarshalJSON writes it", encoded, err, want)
+		}
+	}
+}
+
 func TestEncodeJSONWithoutATableWritesTheMachineForm(t *testing.T) {
 	t.Parallel()
 	var none *Registry

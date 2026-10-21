@@ -41,3 +41,28 @@ func TestOverloadsRankAlikeOnEveryPlatform(t *testing.T) {
 		t.Errorf("the sum of 2048 zeros under money answers %s, want int", got)
 	}
 }
+
+// A trial leaves the variables as it found them: the ones it made are gone,
+// and the ones made before it keep what they were, whatever the trial bound
+// them to.
+func TestATrialDropsTheVariablesItMade(t *testing.T) {
+	t.Parallel()
+	s := newInferState()
+	before := s.fresh()
+	s.endTrial(func() (int, int) {
+		trail, vars := s.trial()
+		made := s.fresh()
+		s.bind(before.id, made)
+		s.bind(made.id, scalarTerm(machine.IntKind))
+		return trail, vars
+	}())
+	if len(s.vars) != before.id+1 {
+		t.Fatalf("after a trial that made a variable, len(vars) = %d, want %d", len(s.vars), before.id+1)
+	}
+	if slot := s.vars[before.id]; slot.bound {
+		t.Errorf("variable %d made before the trial is still bound to %s, want it open", before.id, s.describe(slot.term))
+	}
+	if s.probing != 0 {
+		t.Errorf("after the trial, probing = %d, want 0", s.probing)
+	}
+}

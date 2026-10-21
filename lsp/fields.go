@@ -93,7 +93,7 @@ func itemRecord(path []string) reach {
 func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool)) ([]completionItem, bool) {
 	kept, closed := repaired(doc.text, offset, filler)
 	for _, candidate := range []string{kept, closed} {
-		tree, err := syntax.Parse(candidate)
+		tree, err := doc.parse(candidate)
 		if err != nil {
 			continue
 		}
@@ -103,7 +103,7 @@ func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(sy
 		if !ok {
 			continue
 		}
-		typ, ok := s.baseType(candidate, base, around, record)
+		typ, ok := s.baseType(doc, candidate, base, around, record)
 		if !ok {
 			continue
 		}
@@ -119,8 +119,10 @@ type reach func(machine.Type) (machine.Type, bool)
 func recordOf(typ machine.Type) (machine.Type, bool) { return typ, typ.Kind() == machine.RecordKind }
 
 // baseType is the record reached from a base's type, read off the program
-// with "(base)" where around was.
-func (s *Server) baseType(candidate string, base, around syntax.Span, record reach) (machine.Type, bool) {
+// with "(base)" where around was, or, when that program does not compile —
+// the base stood in for the body a let or an if still lacks, let(x = (order))
+// — off "(base)" alone.
+func (s *Server) baseType(doc *document, candidate string, base, around syntax.Span, record reach) (machine.Type, bool) {
 	stand := "(" + candidate[base.Start:base.End] + ")"
 	text := candidate[:around.Start] + stand + candidate[around.End:]
 	// The base's type follows from the arguments alone. A declared result is
@@ -128,18 +130,36 @@ func (s *Server) baseType(candidate string, base, around syntax.Span, record rea
 	// to one would lose the answer for no reason.
 	options := s.contract
 	options.Result, options.ResultDoc = nil, ""
-	analysis, _ := compile.Analyze(text, s.registry, options)
+	analysis, err := doc.analyze(text, s.registry, options)
+	if typ, ok := wholeType(analysis, around.Start, len(stand)); ok || err == nil {
+		return reached(typ, ok, record)
+	}
+	analysis, _ = doc.analyze(stand, s.registry, options)
+	typ, ok := wholeType(analysis, 0, len(stand))
+	return reached(typ, ok, record)
+}
+
+// reached is the record reached from typ, when there is a type to reach it
+// from.
+func reached(typ machine.Type, ok bool, record reach) (machine.Type, bool) {
+	if !ok {
+		return machine.Type{}, false
+	}
+	return record(typ)
+}
+
+// wholeType is the type of the node over the whole of the size bytes at
+// start — its span may take in the parentheses — never a part of it: in
+// order.fee with {…} the base is an int, whatever order is.
+func wholeType(analysis *compile.Analysis, start, size int) (machine.Type, bool) {
 	if analysis == nil {
 		return machine.Type{}, false
 	}
-	// The base is the node over the whole of it — its span may take in the
-	// parentheses — never a part of it: in order.fee with {…} the base is
-	// an int, whatever order is.
-	end := around.Start + len(stand)
+	end := start + size
 	for _, node := range analysis.Nodes {
-		whole := node.Span.Start >= around.Start && node.Span.Start <= around.Start+1 && node.Span.End >= end-1 && node.Span.End <= end
+		whole := node.Span.Start >= start && node.Span.Start <= start+1 && node.Span.End >= end-1 && node.Span.End <= end
 		if whole && node.Type != nil {
-			return record(*node.Type)
+			return *node.Type, true
 		}
 	}
 	return machine.Type{}, false

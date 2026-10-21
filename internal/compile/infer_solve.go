@@ -73,15 +73,19 @@ func (s *inferState) fits(c *choice, function *machine.RegisteredFunction) bool 
 }
 
 // trial starts a change to be taken back, and is where endTrial takes it
-// back to.
-func (s *inferState) trial() int {
+// back to: the trail's mark and how many variables there were.
+func (s *inferState) trial() (trail, vars int) {
 	s.probing++
-	return s.mark()
+	return s.mark(), len(s.vars)
 }
 
-// endTrial takes back every change since mark, and ends the trial.
-func (s *inferState) endTrial(mark int) {
-	s.undoTo(mark)
+// endTrial takes back every change since trail, drops the variables the
+// trial made, and ends the trial. Nothing outlives a trial that could name
+// them: its bindings are on the trail, and a trial spreads no watchers.
+func (s *inferState) endTrial(trail, vars int) {
+	s.undoTo(trail)
+	clear(s.vars[vars:])
+	s.vars = s.vars[:vars]
 	s.probing--
 }
 

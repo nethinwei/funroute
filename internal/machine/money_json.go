@@ -32,6 +32,11 @@ func readableLeaf(t *money.Currencies) func(Value) any {
 		if value.kind != MoneyKind {
 			return value
 		}
+		if IsExact(value) {
+			// Between minor units: no places can write it, so it keeps the
+			// form MarshalJSON gives it.
+			return exactOf(value)
+		}
 		if value.s == "" && value.i == 0 {
 			return value.i
 		}

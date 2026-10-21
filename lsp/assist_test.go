@@ -1,10 +1,12 @@
 package lsp
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/nethinwei/funroute/internal/compile"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -426,6 +428,43 @@ func TestCompletionOffersNothingInsideTextOrAComment(t *testing.T) {
 		got := labels(t, s.request("textDocument/completion", map[string]any{"textDocument": map[string]string{"uri": "file:///a.fr"}, "position": map[string]int{"line": line, "character": character}}))
 		if offered != slices.Contains(got, "len") {
 			t.Errorf("%q: completion offers %d names, want them offered %v", text, len(got), offered)
+		}
+	}
+}
+
+// A completion in a rule of some 3 KB, in the fields of an update and among
+// the locals: on a version just opened, as after every keystroke, and again
+// on the same version, which reads what the first request worked out.
+func BenchmarkCompletionInALongRule(b *testing.B) {
+	var rule strings.Builder
+	rule.WriteString("let(\n")
+	for i := 0; rule.Len() < 3000; i++ {
+		fmt.Fprintf(&rule, "  b%d = order.fee * %d + order.amount,\n", i, i+1)
+	}
+	head := rule.String()
+	for name, text := range map[string]string{
+		"update": head + "  order with {fee: 0, ",
+		"locals": head + "  o = order with {fee: 1},\n  o.fee + ",
+	} {
+		s := New(standard(b), func([]byte) {})
+		s.applyContract(&compile.TextContract{Args: []compile.TextArg{{Name: "order", Type: "record{amount: int, fee: int, currency: string}"}}})
+		same := newDocument("x", 0, text)
+		b.Run(name+"/fresh", func(b *testing.B) {
+			completeAtEnd(b, s, func() *document { return newDocument("x", 0, text) })
+		})
+		b.Run(name+"/same", func(b *testing.B) {
+			completeAtEnd(b, s, func() *document { return same })
+		})
+	}
+}
+
+// completeAtEnd completes at the end of the document doc gives, once a loop.
+func completeAtEnd(b *testing.B, s *Server, doc func() *document) {
+	b.Helper()
+	for b.Loop() {
+		d := doc()
+		if _, err := s.completion(d, len(d.text)); err != nil {
+			b.Fatal(err)
 		}
 	}
 }
