@@ -3,7 +3,6 @@ package lsp
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/nethinwei/funroute/internal/compile"
 	"github.com/nethinwei/funroute/internal/kit"
@@ -21,13 +20,45 @@ import (
 // program with the update replaced by its base, which is the one thing it
 // does not need to see finished.
 func (s *Server) updateFields(doc *document, offset int) ([]completionItem, bool) {
-	if !strings.Contains(doc.text[:offset], "with") {
+	if !inUpdate(doc, offset) {
 		return nil, false
 	}
 	return s.fieldsAt(doc, offset, placeholder+": 0", func(tree syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool) {
 		base, around, written, ok = syntax.UpdatedRecordAt(tree, offset, placeholder)
 		return base, around, recordOf, written, ok
 	})
+}
+
+// inUpdate reports a cursor inside the braces of an update, order with {|:
+// the innermost brace still open before it follows a with. Only there is the
+// text parsed to look for the update's fields.
+func inUpdate(doc *document, offset int) bool {
+	lexemes, depth := lexemesOf(doc), 0
+	for i, lexeme := range slices.Backward(lexemes) {
+		if lexeme.End > offset || lexeme.Class != syntax.ClassPunctuation {
+			continue
+		}
+		switch doc.text[lexeme.Start:lexeme.End] {
+		case "}":
+			depth++
+		case "{":
+			if depth == 0 {
+				return followsWith(doc, lexemes[:i])
+			}
+			depth--
+		}
+	}
+	return false
+}
+
+// followsWith reports that the last of lexemes, past comments, is a with.
+func followsWith(doc *document, lexemes []syntax.Lexeme) bool {
+	for _, lexeme := range slices.Backward(lexemes) {
+		if lexeme.Class != syntax.ClassComment {
+			return lexeme.Class == syntax.ClassIdentifier && doc.text[lexeme.Start:lexeme.End] == "with"
+		}
+	}
+	return false
 }
 
 // selectorFields is what a selector being written can name, sort_by(xs, .|):
@@ -92,7 +123,7 @@ func itemRecord(path []string) reach {
 // the base's type, and the fields already written.
 func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool)) ([]completionItem, bool) {
 	kept, closed := repaired(doc.text, offset, filler)
-	for _, candidate := range []string{kept, closed} {
+	for i, candidate := range []string{kept, closed} {
 		tree, err := doc.parse(candidate)
 		if err != nil {
 			continue
@@ -103,6 +134,13 @@ func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(sy
 		if !ok {
 			continue
 		}
+		// The closed text has lost what follows the cursor, where a
+		// comprehension binds the names its yield reads, [order with {|}
+		// for order in xs]: it would read the argument for the local. It
+		// is asked only when no name the base reads is written there.
+		if i > 0 && namedAfter(doc, offset, candidate[base.Start:base.End]) {
+			continue
+		}
 		typ, ok := s.baseType(doc, candidate, syntax.ScopeAt(tree, base.Start), base, around, record)
 		if !ok {
 			continue
@@ -110,6 +148,22 @@ func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(sy
 		return fieldItems(typ, written), true
 	}
 	return nil, false
+}
+
+// namedAfter reports a name expr reads written after offset in the document
+// — in code, not in a string or a comment — and an expr that does not parse.
+func namedAfter(doc *document, offset int, expr string) bool {
+	tree, err := syntax.Parse(expr)
+	if err != nil {
+		return true
+	}
+	names := syntax.FreeVariables(tree)
+	for _, lexeme := range lexemesOf(doc) {
+		if lexeme.Start >= offset && lexeme.Class == syntax.ClassIdentifier && slices.Contains(names, doc.text[lexeme.Start:lexeme.End]) {
+			return true
+		}
+	}
+	return false
 }
 
 // reach is how a record is found from a type: the record, and false when the

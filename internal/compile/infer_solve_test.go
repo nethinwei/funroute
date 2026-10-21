@@ -130,3 +130,30 @@ func TestADroppedCandidateLeavesNoVariables(t *testing.T) {
 		t.Errorf("after the dropped candidate, len(vars) = %d and len(queue) = %d, want %d and 0", len(s.vars), len(s.queue), vars)
 	}
 }
+
+// A last candidate taken without a trial and failing after all leaves
+// nothing behind: not its bindings, not the variables it made, not a choice
+// queued.
+func TestAFailedLastCandidateLeavesNoVariables(t *testing.T) {
+	t.Parallel()
+	registry := machine.NewRegistry()
+	typeT := machine.TypeVar("T")
+	spec := machine.FunctionSpec{Name: "t.pair_v1", Params: []machine.Type{machine.ArrayOf(typeT), machine.ArrayOf(typeT)}, Result: typeT,
+		Eval: func(context.Context, []machine.Value) (machine.Value, error) { return machine.Value{}, nil }}
+	if err := registry.Register(spec); err != nil {
+		t.Fatal(err)
+	}
+	s := newInferState()
+	ints, texts := containerTerm(machine.ArrayKind, scalarTerm(machine.IntKind)), containerTerm(machine.ArrayKind, scalarTerm(machine.StringKind))
+	waiting := &choice{node: &syntax.CallExpr{Name: "t.pair_v1"}, args: []typeTerm{s.fresh(), s.fresh()}, result: s.fresh(), queued: true}
+	s.queue = append(s.queue, waiting)
+	c := &choice{node: &syntax.CallExpr{Name: "t.pair_v1"}, args: []typeTerm{ints, texts}, result: s.fresh()}
+	vars, trail := len(s.vars), s.mark()
+	if err := s.offer(c, machine.OverloadsOf(registry, "t.pair_v1")); err == nil {
+		t.Fatal("offer(t.pair_v1(array<int>, array<string>)) = nil, want no overload")
+	}
+	if len(s.vars) != vars || s.mark() != trail || len(s.queue) != 0 || waiting.queued {
+		t.Errorf("after the last candidate failed, len(vars) = %d, trail = %d, len(queue) = %d, queued = %v; want %d, %d, 0, false",
+			len(s.vars), s.mark(), len(s.queue), waiting.queued, vars, trail)
+	}
+}

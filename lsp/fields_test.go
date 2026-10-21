@@ -50,6 +50,12 @@ func TestCompletionOffersTheFieldsOfARecordBeingUpdated(t *testing.T) {
 	if got := labels(t, s.request("textDocument/completion", position("file:///a.fr", 20))); !slices.Contains(got, "fee") {
 		t.Errorf("a field's value is offered %v, want fee among them", got)
 	}
+	// Past an update, a with written before the cursor offers no fields.
+	text := "let(o = order with {fee: 1}, o.fee + "
+	s.open("file:///b.fr", text)
+	if got := labels(t, s.request("textDocument/completion", position("file:///b.fr", len(text)))); !slices.Contains(got, "o") || !slices.Contains(got, "fee") {
+		t.Errorf("%q: completion is %v, want the local o and the argument fee among them", text, got)
+	}
 }
 
 // In a selector, the fields of the items of the list its call reads are
@@ -110,14 +116,20 @@ func TestCompletionOffersTheFieldsOfTheWholeBase(t *testing.T) {
 }
 
 // A local named as an argument hides it: where the rule has a type error
-// elsewhere, so the base's type cannot be read off it, the argument's fields
-// are not offered for the local's — no fields rather than the wrong ones —
-// whether the local is updated or a selector reads it.
+// elsewhere, or does not parse past the cursor, so the base's type cannot be
+// read off it, the argument's fields are not offered for the local's — no
+// fields rather than the wrong ones — whether the local is updated or a
+// selector reads it, and whether it is bound before the cursor or, by a
+// comprehension, after it. The cursor, |, is at the end of the text where
+// none is written.
 func TestCompletionOffersNoArgumentsFieldsForALocal(t *testing.T) {
 	t.Parallel()
 	for _, text := range []string{
 		`let(x = 1 + "s", let(order = {a: 1, b: 2}, order with {a: 3, `,
 		`let(x = 1 + "s", let(quotes = [{a: 1}], sort_by(quotes, .`,
+		`[order with {fee: 0, | } for order in [{a: 1}]] + `,
+		`let(x = 1 + "s", [order with {fee: 0, | } for order in [{a: 1}]])`,
+		`[sort_by(quotes, .| ) for quotes in [[{a: 1}]]] + `,
 	} {
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
@@ -126,8 +138,13 @@ func TestCompletionOffersNoArgumentsFieldsForALocal(t *testing.T) {
 				{"name": "order", "type": "record{amount: int, fee: int, currency: string}"},
 				{"name": "quotes", "type": "array<record{amount: int, currency: string}>"},
 			}}})
-			s.open("file:///a.fr", text)
-			got := labels(t, s.request("textDocument/completion", position("file:///a.fr", len(text))))
+			cursor := strings.Index(text, "|")
+			source := strings.Replace(text, "|", "", 1)
+			if cursor < 0 {
+				cursor = len(source)
+			}
+			s.open("file:///a.fr", source)
+			got := labels(t, s.request("textDocument/completion", position("file:///a.fr", cursor)))
 			if slices.Contains(got, "amount") || slices.Contains(got, "currency") {
 				t.Errorf("%q: completion is %v, want none of the argument's fields", text, got)
 			}
@@ -153,6 +170,29 @@ func TestTypingSelectorIsAfterTheDot(t *testing.T) {
 	} {
 		if got := typingSelector(&document{text: text}, len(text)); got != want {
 			t.Errorf("typingSelector(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+// An update's fields are looked for only inside the braces after its with,
+// wherever a with was written before.
+func TestInUpdateIsInsideTheBracesAfterAWith(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]bool{
+		"order with {":                         true,
+		"order with {fee: 0, ":                 true,
+		"order with {cu":                       true,
+		"order with // c\n{":                   true,
+		"order with {meta: {rank: 1}, ":        true,
+		"order with {fee: {a: 1, ":             false,
+		"o = order with {fee: 1},\n  o.fee + ": false,
+		"{a: 1, ":                              false,
+		"\"with {\" + ":                        false,
+		"// with {\n":                          false,
+		"":                                     false,
+	} {
+		if got := inUpdate(&document{text: text}, len(text)); got != want {
+			t.Errorf("inUpdate(%q) = %v, want %v", text, got, want)
 		}
 	}
 }

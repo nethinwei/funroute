@@ -19,14 +19,21 @@ func TestKernelOpsAreTheKernels(t *testing.T) {
 }
 
 // Every kernel operation's function takes no more operands than fault hands
-// it when the operation refuses: a wider one needs fault taught where the
-// rest are before it gets an operation.
+// it when the operation refuses — a third only for slice, whose end fault
+// knows is in c: a wider one needs fault taught where the rest are before it
+// gets an operation.
 func TestKernelOpsCarryWhatFaultKnows(t *testing.T) {
 	t.Parallel()
 	registry := CoreRegistry()
-	for key := range kernelOps {
-		if function, ok := registry.Resolve(key); ok && len(function.Params) > faultOperands {
+	for key, kernel := range kernelOps {
+		function, ok := registry.Resolve(key)
+		switch {
+		case !ok:
+			continue
+		case len(function.Params) > faultOperands:
 			t.Errorf("kernelOps has %s, of %d parameters: fault hands a function at most %d", key, len(function.Params), faultOperands)
+		case len(function.Params) == faultOperands && (kernel.op != rSliceS || key != "slice(string,int,int)->string"):
+			t.Errorf("kernelOps has %s, of %d parameters: fault knows where the third operand is only for slice(string,int,int)->string", key, faultOperands)
 		}
 	}
 }

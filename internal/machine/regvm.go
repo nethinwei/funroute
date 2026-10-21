@@ -129,10 +129,10 @@ func (f *frame) fault(pc int) error {
 	}
 	function := f.runtime.functions[source.A]
 	// The arguments follow the function's parameters, which are the
-	// operation's operands: a function with more than fault knows of would
-	// be asked with zeros for the rest, and answer for them. A fault is the
-	// cold path, which may allocate.
-	if len(function.Params) > faultOperands {
+	// operation's operands: a function with more than fault knows of — a
+	// third anywhere but rSliceS's — would be asked with zeros for the rest,
+	// and answer for them. A fault is the cold path, which may allocate.
+	if len(function.Params) > faultOperands || len(function.Params) == faultOperands && in.op != rSliceS {
 		return fmt.Errorf("internal error: %s carries %d operands, fault knows at most %d", function.key, len(function.Params), faultOperands)
 	}
 	args := make([]Value, len(function.Params))

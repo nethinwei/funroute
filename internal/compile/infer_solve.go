@@ -127,7 +127,8 @@ func (s *inferState) offer(c *choice, functions []*machine.RegisteredFunction) e
 // narrowChoice drops the candidates that no longer fit, taking the last one
 // standing. What the kinds already rule out is dropped without a trial, and
 // a last candidate is taken without one: if it does not fit after all, what
-// it changed is taken back, and nothing fits.
+// it changed is taken back — its bindings, what they queued and the
+// variables it made — and nothing fits.
 func (s *inferState) narrowChoice(c *choice) error {
 	open := kept(c.open, func(function *machine.RegisteredFunction) bool { return s.mayFit(c, function) })
 	if len(open) > 1 {
@@ -137,9 +138,11 @@ func (s *inferState) narrowChoice(c *choice) error {
 	case len(open) == 0:
 		return noOverloadError(c.node, s, c.args)
 	case len(open) == 1:
-		mark := s.mark()
+		mark, vars := s.mark(), len(s.vars)
 		if s.commit(c, open[0]) != nil {
 			s.undoTo(mark)
+			s.dropQueue()
+			s.dropVars(vars)
 			return noOverloadError(c.node, s, c.args)
 		}
 	case len(open) < len(c.open):
