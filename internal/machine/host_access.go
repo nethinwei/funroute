@@ -100,19 +100,20 @@ func encodeArgs[In any](plan *argsCodec, reads []argRead, args []Value, in *In, 
 }
 
 // load reads the argument at p: into the frame's record when the program
-// only reads its fields.
+// only reads its fields. Without a frame — a batch's arguments, encoded
+// before any runs — an array of records is still a view of its own: like a
+// native slice, it holds the host's backing, not the host's struct.
 // Nothing in the frame points into the host's struct — it may be on the
 // host's stack — only at what its fields point at.
 func (read *argRead) load(p unsafe.Pointer, f *frame) (Value, error) {
 	switch {
-	case f == nil:
-	case read.fieldOnly:
+	case f != nil && read.fieldOnly:
 		f.borrows = append(f.borrows, read.index)
 		return read.codec.loadRecordInto(p, &f.records[read.index])
-	case read.view:
+	case f != nil && read.view:
 		f.borrows = append(f.borrows, read.index)
 		return viewIn(&f.views[read.index], read.codec.native, p), nil
-	case read.inPlace:
+	case f != nil && read.inPlace:
 		f.borrows = append(f.borrows, read.index)
 		return viewRecords(&f.recordViews[read.index], read.codec, p, true), nil
 	case read.records:
@@ -610,7 +611,7 @@ func (s resultSink) lend(f *frame, args []Value) {
 // memory overlaps it.
 func lendSlot(slot *arenaSlot, kind native, p unsafe.Pointer, args []Value) {
 	header := (*sliceHeader)(p)
-	if header.cap == 0 || overlapsAny(header, args) {
+	if header.cap == 0 || overlapsAny(header, kind, args) {
 		return
 	}
 	switch kind {
@@ -626,9 +627,9 @@ func lendSlot(slot *arenaSlot, kind native, p unsafe.Pointer, args []Value) {
 }
 
 // overlapsAny reports an argument, or a field of a record argument, whose
-// native slice shares memory with the one header describes.
-func overlapsAny(header *sliceHeader, args []Value) bool {
-	meets := func(v Value) bool { return overlaps(header, v) }
+// native slice shares memory with the one header describes, a slice of kind.
+func overlapsAny(header *sliceHeader, kind native, args []Value) bool {
+	meets := func(v Value) bool { return overlaps(header, kind, v) }
 	for _, arg := range args {
 		if record, ok := arg.box.(*recordValue); ok && slices.ContainsFunc(record.fields, meets) || meets(arg) {
 			return true
@@ -637,30 +638,31 @@ func overlapsAny(header *sliceHeader, args []Value) bool {
 	return false
 }
 
-// overlaps reports a native array v whose items meet header's memory.
-func overlaps(header *sliceHeader, v Value) bool {
+// overlaps reports a native array v whose items meet the memory of header,
+// a slice of kind. A slice of another kind never shares memory with it, and
+// is not measured: in v's items, header's span would be the wrong length,
+// and could take in an array merely next to it.
+func overlaps(header *sliceHeader, kind native, v Value) bool {
 	var other sliceHeader
 	var size uintptr
+	var of native
 	// An argument handed over in place points at the host's slice.
 	v = unarena(v)
 	switch first := v.box.(type) {
 	case *bool:
-		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(false)
+		other, size, of = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(false), nativeBools
 	case *int64:
-		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(int64(0))
+		other, size, of = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(int64(0)), nativeInts
 	case *float64:
-		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(float64(0))
+		other, size, of = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(float64(0)), nativeFloats
 	case *string:
-		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof("")
+		other, size, of = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(""), nativeStrings
 	default:
 		return false
 	}
-	if other.cap == 0 {
+	if of != kind || other.cap == 0 {
 		return false
 	}
-	// Both are measured in the other's items: a slice of a different kind
-	// never shares memory with an array of this one, so sizes only matter
-	// for slices of one kind.
 	lo, hi := uintptr(header.data), uintptr(header.data)+uintptr(header.cap)*size
 	otherLo, otherHi := uintptr(other.data), uintptr(other.data)+uintptr(other.cap)*size
 	return lo < otherHi && otherLo < hi

@@ -94,10 +94,25 @@ func TestAViewedArrayAnswersAsItsRecords(t *testing.T) {
 			if text, _ := byRecords.String(); text != byStruct {
 				t.Errorf("from the struct %q, from the records %q; want the same", byStruct, text)
 			}
+			assertBatchAnswersAsRun(t, program, in, byStruct)
 			if machine.IdleFrameHoldsPointers(program.Runtime()) {
 				t.Error("the idle frame still points at the run; want nothing")
 			}
 		})
+	}
+}
+
+// assertBatchAnswersAsRun checks that RunBatch, which encodes every request
+// before any runs and has no frame to hold a view, answers as Run did.
+func assertBatchAnswersAsRun(t *testing.T, program *machine.Program[viewedIn, string], in *viewedIn, want string) {
+	t.Helper()
+	batched := make([]string, 2)
+	program.RunBatch(t.Context(), len(batched), func(int) *viewedIn { return in }, func(i int) *string { return &batched[i] },
+		func(i int, err error) { t.Errorf("RunBatch request %d: %v", i, err) })
+	for i, text := range batched {
+		if text != want {
+			t.Errorf("RunBatch request %d is %q, Run %q; want the same", i, text, want)
+		}
 	}
 }
 
@@ -423,6 +438,11 @@ func TestAViewOfPricedRecordsIsCheckedAsItsRecords(t *testing.T) {
 		_, recordsErr := byRecords.Run(t.Context(), timed)
 		if !errors.Is(viewErr, machine.ErrContract) || recordsErr == nil || viewErr.Error() != recordsErr.Error() {
 			t.Errorf("%s: the view is refused with %v, the records with %v; want the same contract error", name, viewErr, recordsErr)
+		}
+		var batchErr error
+		byView.RunBatch(t.Context(), 1, func(int) *pricedIn { return in }, func(int) *int64 { return new(int64) }, func(_ int, err error) { batchErr = err })
+		if batchErr == nil || batchErr.Error() != viewErr.Error() {
+			t.Errorf("%s: RunBatch refuses the view with %v, Run with %v; want the same", name, batchErr, viewErr)
 		}
 	}
 }

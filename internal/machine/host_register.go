@@ -130,6 +130,11 @@ type reflected struct {
 	goTypes []reflect.Type
 }
 
+// errVariadic is a variadic Go function, which a call of fixed arity
+// cannot reach: reflection would have to be handed the last parameter's
+// slice spread out.
+var errVariadic = errors.New("variadic Go functions are not supported")
+
 var (
 	contextType = reflect.TypeFor[context.Context]()
 	errorType   = reflect.TypeFor[error]()
@@ -140,6 +145,9 @@ func reflectSignature(registry *Registry, fn any) (*reflected, error) {
 	typ := value.Type()
 	if typ.Kind() != reflect.Func {
 		return nil, fmt.Errorf("want a func, got %T", fn)
+	}
+	if typ.IsVariadic() {
+		return nil, errVariadic
 	}
 	fails, ok := resultShape(typ)
 	if !ok {
@@ -172,6 +180,9 @@ func reflectSignature(registry *Registry, fn any) (*reflected, error) {
 func reflectBatch(batch any, single *reflected) (*reflected, error) {
 	value := reflect.ValueOf(batch)
 	typ := value.Type()
+	if typ.Kind() == reflect.Func && typ.IsVariadic() {
+		return nil, errVariadic
+	}
 	fails, ok := resultShape(typ)
 	if !ok {
 		return nil, errors.New("must be a func returning results, or (results, error)")

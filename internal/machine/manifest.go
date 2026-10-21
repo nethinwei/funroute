@@ -162,7 +162,9 @@ func (m *ManifestFold) fold(result Type) (*Fold, error) {
 // Apply adds what the manifest describes and r lacks: its forms, its handle
 // types, and each function r has no implementation of, as its signature
 // alone. A function r does have must cost what the manifest says, or an
-// artifact compiled against one would not bind to the other.
+// artifact compiled against one would not bind to the other. Apply is not
+// atomic: what it added before an error stays, so a registry it failed on
+// is one to discard, not to retry on.
 func (m Manifest) Apply(r *Registry) error {
 	if m.parts.Version != ManifestVersion {
 		return fmt.Errorf("unsupported manifest version %d", m.parts.Version)

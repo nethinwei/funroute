@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"unsafe"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -231,4 +232,19 @@ func ConstantBothWays(c Constant) (quick Value, ok bool, decoded Value, err erro
 	quick, ok = c.scalar()
 	decoded, err = c.decoded()
 	return quick, ok, decoded, err
+}
+
+// OverlapsBools reports whether v's memory meets out's: a []bool the host
+// lends for an answer.
+func OverlapsBools(out *[]bool, v Value) bool {
+	return overlaps((*sliceHeader)(unsafe.Pointer(out)), nativeBools, v)
+}
+
+// ExpireStale fires the timer of a batch already taken, as one that fired
+// while the take held the lock.
+func ExpireStale(b *Batch) {
+	b.mu.Lock()
+	epoch := b.epoch
+	b.mu.Unlock()
+	b.expire(epoch - 1)
 }

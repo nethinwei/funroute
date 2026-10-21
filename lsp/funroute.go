@@ -1,7 +1,6 @@
 package lsp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -214,11 +213,6 @@ const runTimeout = time.Second
 // page that passes along what was typed keeps every digit of a large integer,
 // which parsing it in JavaScript first would not.
 func decodeArgs(raw json.RawMessage) (map[string]any, error) {
-	args := map[string]any{}
-	if len(raw) == 0 || string(bytes.TrimSpace(raw)) == "null" {
-		// No arguments, written as none or as null.
-		return args, nil
-	}
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
 		raw = json.RawMessage(text)

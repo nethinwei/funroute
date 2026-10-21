@@ -158,7 +158,7 @@ func (s *Server) completion(doc *document, offset int) (any, error) {
 	for _, name := range localsAt(doc.text, offset) {
 		items = append(items, completionItem{Label: name, Kind: kindVariable, SortText: "0" + name, Detail: "局部名"})
 	}
-	return append(append(items, s.callables()...), s.currencies()...), nil
+	return append(items, s.callables()...), nil
 }
 
 // currencies are the registry's declared currencies, written as their codes.
@@ -239,8 +239,8 @@ func openBrackets(prefix string) string {
 	return string(closers)
 }
 
-// callables is every function and form the registry offers. The registry is
-// fixed for the session, so the list is built once.
+// callables is every function, form and currency the registry offers. The
+// registry is fixed for the session, so the list is built once.
 func (s *Server) callables() []completionItem {
 	if s.callableItems == nil {
 		s.callableItems = s.buildCallables()
@@ -271,7 +271,7 @@ func (s *Server) buildCallables() []completionItem {
 			items = append(items, completionItem{Label: name, Kind: kindKeyword, SortText: "3" + name, Documentation: markdown(describe(doc) + examples(doc.Examples))})
 		}
 	}
-	return items
+	return append(items, s.currencies()...)
 }
 
 // enumMembers lists every member of every enum the contract declares, and
@@ -333,10 +333,11 @@ func (s *Server) signatureHelp(doc *document, offset int) (any, error) {
 	if !ok || len(overloads) == 0 {
 		return null, nil
 	}
-	// The active signature is the first that has the argument being typed.
+	// The active signature is the first that has the argument being typed,
+	// or the first of all when none has.
 	first := max(slices.IndexFunc(overloads, func(function *machine.RegisteredFunction) bool { return len(function.Params) > active }), 0)
-	// Past the last parameter of every signature, the last one is the one
-	// being typed into: the index stays inside the signature shown.
+	// Past the last parameter of the signature shown, its last parameter is
+	// the one being typed into: the index stays inside that signature.
 	help := signatureHelp{ActiveSignature: first, ActiveParameter: max(min(active, len(overloads[first].Params)-1), 0)}
 	for _, function := range overloads {
 		help.Signatures = append(help.Signatures, signatureOf(function))

@@ -32,11 +32,13 @@ func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 	}
 	// A NaN anywhere in a record makes it equal to nothing, which keys as
 	// well: kept each time, the others still by key.
-	alone := aloneRecords(t, random)
-	if _, keyed := distinctKeyed(valuesOf(alone)); !keyed {
-		t.Fatal("records holding a NaN, a time or a currency are not keyed")
+	alone, ratios := aloneRecords(t, random), ratioRecords(t, random)
+	for _, records := range []Value{alone, ratios} {
+		if _, keyed := distinctKeyed(valuesOf(records)); !keyed {
+			t.Fatalf("records of %s are not keyed", records.Type())
+		}
 	}
-	for _, array := range []Value{arrayOf(amounts), recordArray, nested, held, rates, dicts, alone} {
+	for _, array := range []Value{arrayOf(amounts), recordArray, nested, held, rates, dicts, alone, ratios} {
 		got, err := uniqueItems(t.Context(), []Value{array})
 		if err != nil {
 			t.Fatal(err)
@@ -62,6 +64,31 @@ func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 			t.Errorf("unique of %v = %v, %v; want ErrCurrency", mixed, got.Any(), err)
 		}
 	}
+}
+
+// ratioRecords is 200 records of a ratio, a few of them the same, and the
+// zero in both the forms it is held in.
+func ratioRecords(t *testing.T, random *rand.Rand) Value {
+	t.Helper()
+	typ := RecordOf(FieldOf("r", RatioType))
+	records := make([]Value, 200)
+	for i := range records {
+		r, err := money.RatioOf(random.Int64N(7)-3, random.Int64N(4)+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if random.IntN(10) == 0 {
+			r = money.RatioFromParts(0, 1)
+		}
+		if records[i], err = Record(typ, []Value{RatioValue(r)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	array, err := Array(typ, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return array
 }
 
 // aloneRecords is 200 records of an int, a float that may be a NaN, a

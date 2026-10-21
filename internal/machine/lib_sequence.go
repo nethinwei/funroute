@@ -191,6 +191,9 @@ func uniqueItems(_ context.Context, args []Value) (Value, error) {
 	case *money.Money:
 		return arrayOf(distinctAmounts(itemsAt(box, args[0].i))), nil
 	}
+	if holdsHandle(args[0]) {
+		return Value{}, errHandleEquality
+	}
 	items, _ := args[0].Array()
 	if out, keyed := distinctKeyed(items); keyed {
 		return packArray(args[0].elemType(), out), nil
@@ -248,28 +251,27 @@ const (
 	// keyFound is a key two items of one type share exactly when they are
 	// Equal.
 	keyFound keyState = iota
-	// keyAlone is an item Equal to nothing, itself neither: a NaN or a
-	// handle, or a record, array or dictionary holding one. It has no key
-	// to share, and needs none: a set keeps it each time, and finds it
-	// nowhere.
+	// keyAlone is an item Equal to nothing, itself neither: a NaN, or a
+	// record, array or dictionary holding one — a handle never gets here,
+	// refused before (holdsHandle). It has no key to share, and needs none:
+	// a set keeps it each time, and finds it nowhere.
 	keyAlone
-	// keyNone is an item with no key, exact money or a ratio: Equal decides
-	// it.
+	// keyNone is an item with no key, exact money: Equal decides it.
 	keyNone
 )
 
 // itemKey appends item to key as bytes two items of one type share exactly
 // when they are Equal: a float's zeros as one, an amount by its minor units —
 // its currency is the place's one, or none for a zero — a string by its
-// length then itself, a rate by its pair and its ratio, a time, a duration
-// and a currency by what Equal reads of them, a record field by field, an
-// array by its length then item by item and a dictionary by its size then
-// its entries in key order, each written whole before the next. A ratio has
-// no key yet: its zero is written two ways.
+// length then itself, a ratio by its parts in lowest terms, a rate by its
+// pair and its ratio, a time, a duration and a currency by what Equal reads
+// of them, a record field by field, an array by its length then item by item
+// and a dictionary by its size then its entries in key order, each written
+// whole before the next.
 func itemKey(item Value, key []byte) ([]byte, keyState) {
 	key = append(key, byte(item.kind))
 	switch {
-	case item.kind == HandleKind, item.kind == FloatKind && math.IsNaN(item.f):
+	case item.kind == FloatKind && math.IsNaN(item.f):
 		return key, keyAlone
 	case item.kind == BoolKind && item.b:
 		key = append(key, 1)
@@ -284,6 +286,14 @@ func itemKey(item Value, key []byte) ([]byte, keyState) {
 		key = append(key, item.s...)
 	case item.kind == MoneyKind && !IsExact(item):
 		key = strconv.AppendInt(key, item.i, 10)
+	case item.kind == RatioKind:
+		// Every ratio is made in lowest terms (money's ratioOf), so its parts
+		// are it — but for zero's denominator, which says nothing.
+		num, den := money.RatioParts(ratioFrom(item))
+		if num == 0 {
+			den = 0
+		}
+		key = strconv.AppendInt(append(strconv.AppendInt(key, num, 10), '/'), den, 10)
 	case item.kind == FxRateKind:
 		// A rate is its pair and its ratio, as == has two equal.
 		rate, _ := item.FxRate()

@@ -193,8 +193,20 @@ func floatLiteral(text string) string {
 	return text + ".0"
 }
 
-// quote writes a string with JSON escapes, which the lexer reads back.
+// quote writes a string with JSON escapes, which the lexer reads back. Most
+// text needs none, and is only put between quotes.
 func quote(text string) string {
+	for i := range len(text) {
+		if b := text[i]; b < 0x20 || b >= 0x80 || b == '"' || b == '\\' {
+			return escaped(text)
+		}
+	}
+	return `"` + text + `"`
+}
+
+// escaped is quote of a text that needs escapes: as JSON writes it, without
+// escaping HTML.
+func escaped(text string) string {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)

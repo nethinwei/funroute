@@ -571,11 +571,36 @@ var errUnequal = errors.New("unequal")
 // cannot see into.
 var errHandleEquality = errors.New("handles cannot be compared")
 
+// holdsHandle reports a value a handle is or may be in: its type says so,
+// not its items, so an empty array of handles does too, and nothing is
+// walked but the type.
+func holdsHandle(v Value) bool {
+	switch v.kind {
+	case HandleKind:
+		return true
+	case ArrayKind, DictKind:
+		return typeHoldsHandle(v.elemType())
+	case RecordKind:
+		return typeHoldsHandle(v.Type())
+	}
+	return false
+}
+
+// typeHoldsHandle is TypeContains(t, HandleKind) without the closure the
+// walk takes, which would allocate on every comparison.
+func typeHoldsHandle(t Type) bool {
+	if t.kind == HandleKind || t.elem != nil && typeHoldsHandle(*t.elem) {
+		return true
+	}
+	return slices.ContainsFunc(t.fields, func(field Field) bool { return typeHoldsHandle(field.typ) })
+}
+
 // compareEqual is the VM's equality: eq and switch both use it. Handles are
-// opaque, so comparing them is an error rather than a guess.
+// opaque, so comparing them — or anything holding one — is an error rather
+// than a guess.
 func compareEqual(left, right Value) (Value, error) {
 	// A handle's payload may be a map nativeEqual would compare.
-	if left.kind == HandleKind || right.kind == HandleKind {
+	if holdsHandle(left) || holdsHandle(right) {
 		return Value{}, errHandleEquality
 	}
 	if equal, native := nativeEqual(left, right); native {

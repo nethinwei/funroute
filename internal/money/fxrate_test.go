@@ -403,6 +403,14 @@ func TestCurrenciesConvertRefusesTheWrongCurrency(t *testing.T) {
 	if got, err := testCurrencies(t).Convert(Money{"EUR", 100}, eurUSD, RoundHalfEven); !errors.Is(err, ErrCurrency) {
 		t.Errorf("Convert(EUR 1.00, %s) on a table without EUR = %v, %v, want ErrCurrency", eurUSD, got, err)
 	}
+	// The machine's entries trust a checked rate, yet still refuse one the
+	// table does not know rather than reading no places for it.
+	if got, err := ConvertAt(testCurrencies(t), Money{"EUR", 100}, eurUSD, RoundHalfEven); !errors.Is(err, ErrCurrency) {
+		t.Errorf("ConvertAt(EUR 1.00, %s) on a table without EUR = %v, %v, want ErrCurrency", eurUSD, got, err)
+	}
+	if got, err := ConvertExactAt(testCurrencies(t), Money{"EUR", 100}.Exact(), eurUSD); !errors.Is(err, ErrCurrency) {
+		t.Errorf("ConvertExactAt(EUR 1.00, %s) on a table without EUR = %v, %v, want ErrCurrency", eurUSD, got, err)
+	}
 }
 
 // A conversion multiplies 192 bits wide but divides by the reduced

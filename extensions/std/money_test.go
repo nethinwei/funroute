@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 
@@ -639,6 +640,17 @@ func TestRankedMoneyIsTheFirstOfTheSort(t *testing.T) {
 			if err != nil || got != want {
 				t.Errorf("%s(ids, fees, %d) = %s, %v; want %s", ranked, k, got, err, want)
 			}
+		}
+	}
+}
+
+// Every function of the pack names its parameters, the money overloads as
+// the others: a signature never reads "参数 1".
+func TestEveryOverloadNamesItsParameters(t *testing.T) {
+	t.Parallel()
+	for _, function := range moneyPack(t).Catalog().Functions() {
+		if params := function.Doc().Params; slices.ContainsFunc(params, func(name string) bool { return strings.HasPrefix(name, "参数 ") }) {
+			t.Errorf("%s names its parameters %q, want names of their own", function.Signature(), params)
 		}
 	}
 }

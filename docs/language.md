@@ -67,7 +67,7 @@ add_days(start_of_day(now, "Asia/Shanghai"), 1, "Asia/Shanghai")   // 上海明�
 
 `in` 有三种用法：`x in xs` 查数组元素，`"k" in d` 查字典键，`"b" in text` 查子串。字符串按 UTF-8 码点处理，`s[i]` 返回单字符字符串。
 
-**相等**：`==`、`!=`、`in`、`switch` 的值匹配、`index_of`、`unique`、`intersect`、`except` 用同一个相等关系。float 按 IEEE 754（NaN 不等于任何值）；金额先检查币种再比较，两种币种的金额没有相等的答案（`ErrCurrency`），检查与元素的顺序无关，见[语义宪章 S1](semantics.md#s1-金额的代数)。句柄不能比较。
+**相等**：`==`、`!=`、`in`、`switch` 的值匹配、`index_of`、`unique`、`intersect`、`except` 用同一个相等关系。float 按 IEEE 754（NaN 不等于任何值）；金额先检查币种再比较，两种币种的金额没有相等的答案（`ErrCurrency`），检查与元素的顺序无关，见[语义宪章 S1](semantics.md#s1-金额的代数)。句柄不能比较，装着句柄的数组、字典与 record 也不能（按类型判断，空数组也一样），这些运算一律报错。
 
 注释用 `//`，数字可以写 `1_000_000`，列表可以带尾随逗号。
 

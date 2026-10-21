@@ -151,10 +151,10 @@ func evalArrayMember(_ context.Context, args []Value) (Value, error) {
 
 // indexOfValue is where item first is in array, or -1, by the equality ==
 // asks: the two meet first, wherever item is (money_meet.go), and a handle
-// is never compared. Met, two amounts at one place are equal when their
+// is never compared, nor anything holding one. Met, two amounts at one place are equal when their
 // minor units are, and two rates as == has them.
 func indexOfValue(array, item Value) (int, error) {
-	if item.kind == HandleKind {
+	if holdsHandle(item) {
 		return -1, errHandleEquality
 	}
 	if err := meetIn(item, array); err != nil {

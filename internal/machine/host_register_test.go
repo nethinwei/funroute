@@ -67,12 +67,49 @@ func assertHandlesAreOpaque(t *testing.T, registry *machine.Registry) {
 			t.Fatalf("handle of %T Equal itself, want never", payload)
 		}
 	}
+	assertNestedHandlesAreOpaque(t, registry, handle)
 	_, err = compile.CompileExpr(`model.fraud_v1(x)`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "x", Type: machine.HandleOf("other.thing")}}})
 	if err == nil || !strings.Contains(err.Error(), "handle<other.thing>") {
 		t.Fatalf("wrong handle error = %v, want one naming handle<other.thing>", err)
 	}
 	if got, err := machine.ParseType(" handle<demo.embedding> "); err != nil || !got.Equal(handle) {
 		t.Fatalf("ParseType(%q) = %s, %v, want %s", " handle<demo.embedding> ", got, err, handle)
+	}
+}
+
+// assertNestedHandlesAreOpaque checks that a handle inside a record or an
+// array is refused by every equality as a handle alone is, never silently
+// unequal to itself.
+func assertNestedHandlesAreOpaque(t *testing.T, registry *machine.Registry, handle machine.Type) {
+	t.Helper()
+	carrier := machine.RecordOf(machine.FieldOf("t", handle), machine.FieldOf("fee", machine.IntType))
+	h := machine.NewHandle("demo.embedding", &embedding{})
+	r, err := machine.Record(carrier, []machine.Value{h, machine.Int(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs, err := machine.Array(handle, []machine.Value{h, h})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []compile.ArgSpec{{Name: "r", Type: carrier}, {Name: "hs", Type: machine.ArrayOf(handle)}}
+	for _, source := range []string{
+		`r == r`, `r != r`, `[r] == [r]`, `hs == hs`, `r in [r]`, `[r] in [[r]]`, `index_of([r], r)`,
+		`len(unique([r, r]))`, `len(unique(hs))`, `len(except([r, r], [r]))`, `len(intersect(hs, hs))`,
+	} {
+		t.Run(source, func(t *testing.T) {
+			artifact, err := compile.CompileExpr(source, registry, compile.CompileOptions{Args: args})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rt, err := machine.Instantiate(artifact, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := rt.RunValues(t.Context(), []machine.Value{r, hs}); err == nil || !strings.Contains(err.Error(), "cannot be compared") {
+				t.Fatalf("%s = %v, %v, want an error containing cannot be compared", source, got.Any(), err)
+			}
+		})
 	}
 }
 
@@ -244,6 +281,10 @@ func TestGoReturnsAResultWithOrWithoutAnError(t *testing.T) {
 		"Go beside Eval":     {machine.FunctionSpec{Name: "g.both_v1", Go: func(int64) int64 { return 0 }, Eval: machine.CoreRegistry().Overloads("add")[0].Eval}, "Go takes the place of"},
 		"Go beside a Result": {machine.FunctionSpec{Name: "g.typed_v1", Go: func(int64) int64 { return 0 }, Result: machine.IntType}, "Go takes the place of"},
 		"GoBatch alone":      {machine.FunctionSpec{Name: "g.batch_v1", GoBatch: func([]int64) []int64 { return nil }}, "GoBatch needs Go"},
+		"variadic":           {machine.FunctionSpec{Name: "g.sum_v1", Go: func(xs ...int64) int64 { return 0 }}, "variadic"},
+		"a variadic batch": {machine.FunctionSpec{
+			Name: "g.sums_v1", Go: func(xs []int64) int64 { return 0 }, GoBatch: func(xs ...[]int64) []int64 { return nil },
+		}, "variadic"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

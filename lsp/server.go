@@ -37,8 +37,8 @@ type Server struct {
 	// document shows it, since nothing compiles against a broken contract.
 	contractErr error
 	exited      bool
-	// callableItems is the completion list of the registry's functions and
-	// forms, built on first use.
+	// callableItems is the completion list of the registry's functions,
+	// forms and currencies, built on first use.
 	callableItems []completionItem
 }
 

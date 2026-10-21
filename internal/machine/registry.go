@@ -488,9 +488,7 @@ func validateTypePattern(t Type, vars map[string]bool) error {
 // Overloads returns every signature registered under a name, each a copy:
 // what a host changes in one changes nothing in the registry.
 func (r *Registry) Overloads(name string) []*RegisteredFunction {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	functions := r.byName[name]
+	functions := OverloadsOf(r, name)
 	out := make([]*RegisteredFunction, len(functions))
 	for i, function := range functions {
 		out[i] = function.snapshot()

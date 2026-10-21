@@ -39,6 +39,9 @@ func exceptItems(_ context.Context, args []Value) (Value, error) {
 // heldAgainst is array's items, in order, each once, that other has —
 // shared — or has not.
 func heldAgainst(array, other Value, shared bool) (Value, error) {
+	if holdsHandle(array) {
+		return Value{}, errHandleEquality
+	}
 	if err := meetPair(array, other); err != nil {
 		return Value{}, err
 	}

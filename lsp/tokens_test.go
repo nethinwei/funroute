@@ -74,3 +74,15 @@ func TestSemanticTokensNameRatios(t *testing.T) {
 		t.Errorf("tokens are %s, want %s", got, want)
 	}
 }
+
+// Past a syntax error the parser says nothing, and the lexer's reading
+// stands: what follows is still named, by the piece it is.
+func TestSemanticTokensNameWhatDoesNotParse(t *testing.T) {
+	t.Parallel()
+	s := newSession(t, withMoney(t), `{}`)
+	s.open("file:///a.fr", `fee + 1 round(amount * 2.9%, @half_up) + "x" // why`)
+	want := "variable operator number variable variable operator number enumMember operator string comment"
+	if got := strings.Join(tokenNames(s, "file:///a.fr"), " "); got != want {
+		t.Errorf("tokens are %s\nwant       %s", got, want)
+	}
+}

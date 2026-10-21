@@ -414,3 +414,23 @@ func BenchmarkRunBatchManyCalls(b *testing.B) {
 		program.RunBatch(ctx, len(requests), func(i int) *in { return &requests[i] }, func(i int) *float64 { return &outs[i] }, func(int, error) { b.Fatal("a request failed") })
 	}
 }
+
+// A batch's arrays of plain records are views of the host's slices, as
+// Run's are: what a batch allocates does not grow with the arrays.
+func TestRunBatchViewsArraysOfRecords(t *testing.T) {
+	program := bindProgram[viewedIn, int64](t, viewedRegistry(t), `reduce(c in channels if c.ok, t = 0, t + c.fee)`)
+	allocs := func(channels int) float64 {
+		in := &viewedIn{}
+		for i := range channels {
+			in.Channels = append(in.Channels, viewedChannel{Name: "c", Fee: int64(i), OK: i%2 == 0})
+		}
+		out := make([]int64, 8)
+		return testing.AllocsPerRun(100, func() {
+			program.RunBatch(t.Context(), len(out), func(int) *viewedIn { return in }, func(i int) *int64 { return &out[i] },
+				func(i int, err error) { t.Fatalf("request %d: %v", i, err) })
+		})
+	}
+	if short, long := allocs(10), allocs(1000); short != long {
+		t.Fatalf("RunBatch of 8 requests allocates %v times over 10 channels and %v over 1000; want the same", short, long)
+	}
+}

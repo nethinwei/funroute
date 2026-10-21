@@ -310,8 +310,16 @@ func (c *Currencies) rescaling(currency string, fx FxRate) (up, down uint64, err
 	if currency != "" && currency != fx.pair.Base {
 		return 0, 0, fmt.Errorf("%w: %s converted at %s→%s", ErrCurrency, currency, fx.pair.Base, fx.pair.Quote)
 	}
-	fromDigits, _ := c.Places(fx.pair.Base)
-	toDigits, _ := c.Places(fx.pair.Quote)
+	// Declared, both have places; a rate the table does not know is still
+	// an error here, not a conversion at zero places.
+	fromDigits, err := c.Places(fx.pair.Base)
+	if err != nil {
+		return 0, 0, err
+	}
+	toDigits, err := c.Places(fx.pair.Quote)
+	if err != nil {
+		return 0, 0, err
+	}
 	up, down = tens(toDigits - fromDigits)
 	return up, down, nil
 }

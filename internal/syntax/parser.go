@@ -1,6 +1,7 @@
 package syntax
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -34,8 +35,9 @@ type reading struct {
 }
 
 // read lexes and parses source. The lexer carries on past a bad character, so
-// the parser always has tokens to read; the error is the lexer's if it had
-// one, else the parser's.
+// the parser always has tokens to read; the error is the one that comes first
+// in the source, the lexer's where the two meet: it says what the bad piece
+// is.
 func read(source string, roles bool) reading {
 	lex := &lexer{source: source}
 	tokens, err := lex.tokens()
@@ -44,10 +46,17 @@ func read(source string, roles bool) reading {
 		p.roles = map[int]roleMark{}
 	}
 	expr, parseErr := p.program()
-	if err == nil {
+	if err == nil || before(parseErr, err) {
 		err = parseErr
 	}
 	return reading{lex: lex, parser: p, tokens: tokens, expr: expr, err: err}
+}
+
+// before reports a parser's error placed ahead of the lexer's.
+func before(parseErr, lexErr error) bool {
+	parsed, ok := errors.AsType[*PosError](parseErr)
+	lexed, lexOK := errors.AsType[*PosError](lexErr)
+	return ok && lexOK && parsed.Offset() < lexed.Offset()
 }
 
 // Parse reads an expression. A program is only an expression: the contract it

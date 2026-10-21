@@ -156,6 +156,32 @@ func TestBatchFlushesOnTheTimerAndCloses(t *testing.T) {
 	})
 }
 
+// A timer that fires as a full batch is taken is too late to stop, and
+// flushes nothing: the request that comes next still waits its MaxWait for
+// others to join it.
+func TestALateTimerLeavesTheNextRequestItsWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const wait = 5 * time.Millisecond
+		var single, batched atomic.Int64
+		runtime := modelRuntime(t, &single, &batched, `model.fraud_v1(model.embed_v1(features)) * 2.0`)
+		batch := machine.NewBatch(runtime, machine.BatchOptions{MaxSize: 2, MaxWait: wait})
+		runConcurrently(t, batch, 2)
+		value, _ := machine.ToValue([]float64{3})
+		started, answered := time.Now(), make(chan time.Duration)
+		go func() {
+			if _, err := batch.Run(t.Context(), []machine.Value{value}); err != nil {
+				t.Error(err)
+			}
+			answered <- time.Since(started)
+		}()
+		synctest.Wait()
+		machine.ExpireStale(batch)
+		if elapsed := <-answered; elapsed != wait {
+			t.Fatalf("the request after a full batch was answered after %s, want %s", elapsed, wait)
+		}
+	})
+}
+
 // An engine error is filed per request and surfaces where the program would
 // have made the call, with the function's name.
 func TestBatchErrorsSurfaceAtTheCall(t *testing.T) {

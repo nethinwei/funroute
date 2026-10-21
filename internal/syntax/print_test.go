@@ -190,3 +190,19 @@ func TestPrintSpellsExchangeTheWayItIsWritten(t *testing.T) {
 		})
 	}
 }
+
+// A text with nothing to escape is only put between quotes, as JSON would
+// write it: every byte alone, and texts of them, quote as escaped does.
+func TestQuoteWritesWhatJSONWrites(t *testing.T) {
+	t.Parallel()
+	texts := make([]string, 0, 2*256+10)
+	for b := range 256 {
+		texts = append(texts, string([]byte{byte(b)}), "x"+string([]byte{byte(b)})+"y")
+	}
+	texts = append(texts, "", "hello", "a<b>&c", "银😀", "\u2028", "\x7f", "\xff", `say "hi"`, `a\b`, "tab\t")
+	for _, text := range texts {
+		if got, want := quote(text), escaped(text); got != want {
+			t.Errorf("quote(%q) = %s, want %s", text, got, want)
+		}
+	}
+}

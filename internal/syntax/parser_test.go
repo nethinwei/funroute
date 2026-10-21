@@ -273,3 +273,27 @@ func TestNestingIsBounded(t *testing.T) {
 		})
 	}
 }
+
+// The error reported is the first in the source, the lexer's or the
+// parser's; where both are at one piece, the lexer's says what it is.
+func TestTheFirstErrorIsReported(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		`1 2 @`:   "2",
+		`1 + 2 @`: "@",
+		`1 + @`:   "@",
+		`@ 1 2`:   "@",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(source)
+			positioned, ok := errors.AsType[*PosError](err)
+			if !ok {
+				t.Fatalf("Parse(%q) error = %v, want a *PosError", source, err)
+			}
+			if got := source[positioned.start:positioned.end]; got != want {
+				t.Errorf("%q: the error covers %q, want %q (%v)", source, got, want, err)
+			}
+		})
+	}
+}

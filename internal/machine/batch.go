@@ -38,7 +38,10 @@ type Batch struct {
 	pending  []*batchRequest
 	requests sync.Pool
 	timer    *time.Timer
-	closed   bool
+	// epoch counts the takes, so that a timer flushes only the requests it
+	// was set for (expire).
+	epoch  uint64
+	closed bool
 }
 
 // BatchOptions bounds a batch: it is flushed when MaxSize requests are waiting
@@ -227,7 +230,8 @@ func (b *Batch) enqueue(request *batchRequest) error {
 		return nil
 	}
 	if len(b.pending) == 1 {
-		b.timer = time.AfterFunc(b.options.MaxWait, b.flush)
+		epoch := b.epoch
+		b.timer = time.AfterFunc(b.options.MaxWait, func() { b.expire(epoch) })
 	}
 	b.mu.Unlock()
 	return nil
@@ -237,11 +241,27 @@ func (b *Batch) enqueue(request *batchRequest) error {
 func (b *Batch) take() []*batchRequest {
 	requests := b.pending
 	b.pending = nil
+	b.epoch++
 	if b.timer != nil {
 		b.timer.Stop()
 		b.timer = nil
 	}
 	return requests
+}
+
+// expire is the timer's flush of the requests pending when it was set. A
+// timer that fired while a full batch took them was stopped too late: the
+// requests that came after are left to their own timer, not flushed before
+// their MaxWait.
+func (b *Batch) expire(epoch uint64) {
+	b.mu.Lock()
+	if b.epoch != epoch {
+		b.mu.Unlock()
+		return
+	}
+	requests := b.take()
+	b.mu.Unlock()
+	b.execute(requests)
 }
 
 func (b *Batch) flush() {
