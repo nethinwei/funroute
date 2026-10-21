@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"fmt"
+	"iter"
 	"slices"
 
 	"github.com/nethinwei/funroute/internal/compile"
@@ -122,7 +123,7 @@ func itemRecord(path []string) reach {
 // the span to stand the base in for (around), how the record is reached from
 // the base's type, and the fields already written.
 func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool)) ([]completionItem, bool) {
-	for _, candidate := range fieldTexts(doc.text, offset, filler) {
+	for candidate := range fieldTexts(doc, offset, filler) {
 		tree, err := doc.parse(candidate)
 		if err != nil {
 			continue
@@ -140,26 +141,53 @@ func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(sy
 	return nil, false
 }
 
-// fieldTexts are the texts fields are looked for in: text with filler in
-// place of the name being typed at offset, keeping all that follows it, where
-// a comprehension binds the names its yield reads, [order with {|} for order
-// in xs], so the tree scopes the base as written. Each closes the brackets
-// left open, on a line of its own past any comment. Past the first, what
-// follows is the next of a list written without its comma before it, or ends
-// in an operator still to be given its operand.
-func fieldTexts(text string, offset int, filler string) []string {
-	end := offset
+// keptTails are what fieldTexts writes around what follows the cursor: before
+// it, a comma or nothing; after it, an operand or nothing.
+var keptTails = [...]struct{ comma, operand string }{
+	{"", ""}, {"", "\n" + placeholder}, {", ", ""}, {", ", "\n" + placeholder},
+}
+
+// fieldTexts are the texts fields are looked for in, each made only when the
+// one before it was not the one: text with filler in place of the name being
+// typed at offset, keeping all that follows it, where a comprehension binds
+// the names its yield reads, [order with {|} for order in xs], so the tree
+// scopes the base as written. Each closes the brackets left open, on a line
+// of its own past any comment. Past the first, what follows is the next of a
+// list written without its comma before it, or ends in an operator still to
+// be given its operand. Last, where none of them parses — the cursor right
+// before a field written, order with {|fee: 0} — what follows is cut off and
+// the brackets closed, unless a for or a reduce follows: cut off, the names
+// it binds would be read as the arguments of the same names.
+func fieldTexts(doc *document, offset int, filler string) iter.Seq[string] {
+	text, end := doc.text, offset
 	for end < len(text) && kit.IsNameChar(text[end]) {
 		end++
 	}
-	texts := make([]string, 0, 4)
-	for _, rest := range []string{text[end:], ", " + text[end:]} {
-		for _, tail := range []string{"", "\n" + placeholder} {
-			kept := text[:offset] + filler + rest + tail
-			texts = append(texts, kept+"\n"+openBrackets(kept))
+	return func(yield func(string) bool) {
+		for _, around := range keptTails {
+			kept := text[:offset] + filler + around.comma + text[end:] + around.operand
+			if !yield(kept + "\n" + openBrackets(kept)) {
+				return
+			}
+		}
+		if !bindsPast(doc, offset) {
+			yield(text[:offset] + filler + openBrackets(text[:offset]))
 		}
 	}
-	return texts
+}
+
+// bindsPast reports a for or a reduce written past offset, not in a string
+// or a comment.
+func bindsPast(doc *document, offset int) bool {
+	for _, lexeme := range lexemesOf(doc) {
+		if lexeme.Start < offset || lexeme.Class != syntax.ClassIdentifier {
+			continue
+		}
+		if name := doc.text[lexeme.Start:lexeme.End]; name == "for" || name == "reduce" {
+			return true
+		}
+	}
+	return false
 }
 
 // reach is how a record is found from a type: the record, and false when the

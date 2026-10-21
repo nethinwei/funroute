@@ -218,7 +218,8 @@ func TestCompletionOffersTheFieldsWhereTheBaseIsOnlyReadAfter(t *testing.T) {
 // The texts fields are looked for in keep all that follows the cursor, |,
 // past the rest of the name typed there, and close the brackets the whole
 // text leaves open: those already closed after the cursor are not closed
-// again.
+// again. Last comes the text cut off at the cursor, unless a for or a reduce
+// is written past it, outside strings and comments.
 func TestFieldTextsKeepWhatFollowsTheCursor(t *testing.T) {
 	t.Parallel()
 	for text, want := range map[string][]string{
@@ -228,21 +229,67 @@ func TestFieldTextsKeepWhatFollowsTheCursor(t *testing.T) {
 			"[o with {_,  } for o in xs\n]",
 			"[o with {_,  } for o in xs\n_\n]",
 		},
+		"[o with {|a: 1}, reduce(o in xs, t = 0, t)]": {
+			"[o with {_: 1}, reduce(o in xs, t = 0, t)]\n",
+			"[o with {_: 1}, reduce(o in xs, t = 0, t)]\n_\n",
+			"[o with {_, : 1}, reduce(o in xs, t = 0, t)]\n",
+			"[o with {_, : 1}, reduce(o in xs, t = 0, t)]\n_\n",
+		},
 		"f(.a|b) + ": {
 			"f(.a_) + \n",
 			"f(.a_) + \n_\n",
 			"f(.a_, ) + \n",
 			"f(.a_, ) + \n_\n",
+			"f(.a_)",
+		},
+		"[o with {|a: 1} + \"for\"] // for": {
+			"[o with {_: 1} + \"for\"] // for\n",
+			"[o with {_: 1} + \"for\"] // for\n_\n",
+			"[o with {_, : 1} + \"for\"] // for\n",
+			"[o with {_, : 1} + \"for\"] // for\n_\n",
+			"[o with {_}]",
 		},
 	} {
 		cursor := strings.Index(text, "|")
-		got := fieldTexts(strings.Replace(text, "|", "", 1), cursor, placeholder)
+		doc := newDocument("x", 0, strings.Replace(text, "|", "", 1))
+		got := slices.Collect(fieldTexts(doc, cursor, placeholder))
 		for i := range got {
 			got[i] = strings.ReplaceAll(got[i], placeholder, "_")
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("fieldTexts(%q) = %q, want %q", text, got, want)
 		}
+	}
+}
+
+// Right before a field written, or in its name, the fields are offered from
+// the text cut off at the cursor — where a for or a reduce follows outside
+// strings and comments, none, rather than the argument's for a local.
+func TestCompletionOffersTheFieldsRightBeforeAFieldWritten(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]string{
+		"order with {|fee: 0, amount: 1}":                         "amount fee currency",
+		"order with {fe|e: 0, amount: 1}":                         "amount fee currency",
+		"order with {fee: 0,|currency: \"USD\"}":                  "amount currency",
+		"[order with {|currency: \"USD\"} + \"for order in xs\"]": "amount fee currency",
+		"order with {|fee: 0} // for order in xs":                 "amount fee currency",
+		"{\"k\": order with {|fee: 0} for order in xs}":           "",
+		"[order with {|fee: 0}, reduce(order in xs, t = 0, t)]":   "",
+	} {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+			s := newSession(t, standard(t), `{}`)
+			s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
+				{"name": "order", "type": "record{amount: int, fee: int, currency: string}"},
+				{"name": "xs", "type": "array<record{name: string, amount: int}>"},
+			}}})
+			cursor := strings.Index(text, "|")
+			s.open("file:///a.fr", strings.Replace(text, "|", "", 1))
+			got := labels(t, s.request("textDocument/completion", position("file:///a.fr", cursor)))
+			if want == "" && (slices.Contains(got, "fee") || slices.Contains(got, "currency")) || want != "" && strings.Join(got, " ") != want {
+				t.Errorf("%q: completion is %v, want the fields %q", text, got, want)
+			}
+		})
 	}
 }
 
