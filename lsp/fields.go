@@ -122,24 +122,13 @@ func itemRecord(path []string) reach {
 // the span to stand the base in for (around), how the record is reached from
 // the base's type, and the fields already written.
 func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool)) ([]completionItem, bool) {
-	kept, closed := repaired(doc.text, offset, filler)
-	for i, candidate := range []string{kept, closed} {
+	for _, candidate := range fieldTexts(doc.text, offset, filler) {
 		tree, err := doc.parse(candidate)
 		if err != nil {
 			continue
 		}
-		// Either text may be the one whose fields are found: the one kept
-		// as typed, or the one closed after the cursor.
 		base, around, record, written, ok := find(tree)
 		if !ok {
-			continue
-		}
-		// The closed text has lost what follows the cursor, where a
-		// comprehension binds the names its yield reads, [order with {|}
-		// for order in xs]: it would read the argument for the local. It
-		// is asked only when no comprehension around the base binds a name
-		// the base reads there.
-		if i > 0 && bindsAfter(doc, offset, base.Start, candidate[base.Start:base.End]) {
 			continue
 		}
 		typ, ok := s.baseType(doc, candidate, syntax.ScopeAt(tree, base.Start), base, around, record)
@@ -151,69 +140,26 @@ func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(sy
 	return nil, false
 }
 
-// bindsAfter reports a name expr, the base at baseStart, reads bound after
-// offset in the document by a comprehension around it — one of the names
-// written between a for and its in, for order, i in, where the innermost [
-// left open before the for opens before the base — and an expr that does not
-// parse. A for whose [ opens after the base binds nothing the base reads, nor
-// does a reduce: it binds its names in its own arguments, all after offset.
-// A name merely read or written as a field label binds nothing.
-func bindsAfter(doc *document, offset, baseStart int, expr string) bool {
-	tree, err := syntax.Parse(expr)
-	if err != nil {
-		return true
+// fieldTexts are the texts fields are looked for in: text with filler in
+// place of the name being typed at offset, keeping all that follows it, where
+// a comprehension binds the names its yield reads, [order with {|} for order
+// in xs], so the tree scopes the base as written. Each closes the brackets
+// left open, on a line of its own past any comment. Past the first, what
+// follows is the next of a list written without its comma before it, or ends
+// in an operator still to be given its operand.
+func fieldTexts(text string, offset int, filler string) []string {
+	end := offset
+	for end < len(text) && kit.IsNameChar(text[end]) {
+		end++
 	}
-	names, lexemes := syntax.FreeVariables(tree), lexemesOf(doc)
-	for i, lexeme := range lexemes {
-		if lexeme.Start < offset || lexeme.Class != syntax.ClassIdentifier || doc.text[lexeme.Start:lexeme.End] != "for" {
-			continue
-		}
-		if opensBefore(doc, lexemes[:i], baseStart) && bindsAny(doc, lexemes[i+1:], names) {
-			return true
+	texts := make([]string, 0, 4)
+	for _, rest := range []string{text[end:], ", " + text[end:]} {
+		for _, tail := range []string{"", "\n" + placeholder} {
+			kept := text[:offset] + filler + rest + tail
+			texts = append(texts, kept+"\n"+openBrackets(kept))
 		}
 	}
-	return false
-}
-
-// opensBefore reports that the innermost [ lexemes leave open starts before
-// at.
-func opensBefore(doc *document, lexemes []syntax.Lexeme, at int) bool {
-	depth := 0
-	for _, lexeme := range slices.Backward(lexemes) {
-		if lexeme.Class != syntax.ClassPunctuation {
-			continue
-		}
-		switch doc.text[lexeme.Start:lexeme.End] {
-		case "]":
-			depth++
-		case "[":
-			if depth == 0 {
-				return lexeme.Start < at
-			}
-			depth--
-		}
-	}
-	return false
-}
-
-// bindsAny reports one of names among the binders lexemes start with, the
-// names up to the in.
-func bindsAny(doc *document, lexemes []syntax.Lexeme, names []string) bool {
-	for _, lexeme := range lexemes {
-		if lexeme.Class == syntax.ClassComment {
-			continue
-		}
-		text := doc.text[lexeme.Start:lexeme.End]
-		switch {
-		case lexeme.Class == syntax.ClassIdentifier && text != "in":
-			if slices.Contains(names, text) {
-				return true
-			}
-		case text != ",":
-			return false // the in, or anything no binder is written in
-		}
-	}
-	return false
+	return texts
 }
 
 // reach is how a record is found from a type: the record, and false when the
