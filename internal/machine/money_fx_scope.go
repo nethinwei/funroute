@@ -39,10 +39,11 @@ func (f *frame) dropScopes(depth int) {
 }
 
 // fxHit is the innermost using's last answer to which of its quotes is
-// between two currencies: a loop converts one pair item after item, and a
-// using of a market's hundred quotes would be searched for it every time.
-// Its quotes do not change while it is open; opening or closing a using
-// forgets the answer.
+// between two currencies, as the rate from→to — a quote the other way
+// already inverted: a loop converts one pair item after item, and a using
+// of a market's hundred quotes would be searched for it every time, an
+// inverse made each time. Its quotes do not change while it is open;
+// opening or closing a using forgets the answer.
 type fxHit struct {
 	from, to string
 	rate     money.FxRate
@@ -106,24 +107,32 @@ func (f *frame) rateBetween(table *money.Currencies, from, to string) (money.FxR
 		pair, err := money.PairOf(table, from, to)
 		return money.FxRateFrom(pair, money.RatioFromParts(1, 1)), err
 	}
-	rate, found := f.fxHit.rate, f.fxHit.found && f.fxHit.from == from && f.fxHit.to == to
-	if !found {
-		quotes, _ := f.scopeQuotes()
-		if rate, found = quoteBetween(quotes, from, to); found {
-			f.fxHit = fxHit{from: from, to: to, rate: rate, found: true}
-		}
+	if f.fxHit.found && f.fxHit.from == from && f.fxHit.to == to {
+		return f.fxHit.rate, nil
 	}
+	quotes, _ := f.scopeQuotes()
+	quote, found := quoteBetween(quotes, from, to)
 	if !found {
 		return money.FxRate{}, fmt.Errorf("%w: the using has no quote between %s and %s, either way", ErrNoFxRate, from, to)
 	}
-	if rate.Base() == from {
-		return rate, nil
+	rate, err := directed(table, quote, from, to)
+	if err == nil {
+		f.fxHit = fxHit{from: from, to: to, rate: rate, found: true}
+	}
+	return rate, err
+}
+
+// directed is quote as the rate from→to: itself, or the other way round its
+// inverse.
+func directed(table *money.Currencies, quote money.FxRate, from, to string) (money.FxRate, error) {
+	if quote.Base() == from {
+		return quote, nil
 	}
 	pair, err := money.PairOf(table, from, to)
 	if err != nil {
 		return money.FxRate{}, err
 	}
-	return money.InverseFxRate(pair, rate)
+	return money.InverseFxRate(pair, quote)
 }
 
 // fxScopeKey is the context key a conversion finds the frame under.

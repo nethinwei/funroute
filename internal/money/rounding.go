@@ -44,6 +44,24 @@ func RoundingModes() []string { return slices.Clone(roundingNames[1:]) }
 
 func (r Rounding) String() string { return nameOf(roundingNames[:], r) }
 
+// MarshalText writes the mode's name, as a rule writes it after @.
+func (r Rounding) MarshalText() ([]byte, error) {
+	if err := checkMode(r); err != nil {
+		return nil, err
+	}
+	return []byte(r.String()), nil
+}
+
+// UnmarshalText reads a mode's name.
+func (r *Rounding) UnmarshalText(text []byte) error {
+	parsed, err := ParseRounding(string(text))
+	if err != nil {
+		return err
+	}
+	*r = parsed
+	return nil
+}
+
 // ParseRounding reads a mode's name.
 func ParseRounding(name string) (Rounding, error) {
 	if mode, ok := valueOf[Rounding](roundingNames[:], name); ok {

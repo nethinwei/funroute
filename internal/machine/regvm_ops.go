@@ -254,6 +254,10 @@ type rloop struct {
 	dst            int32
 	exit           int32
 	spread         bool
+	// filters says some items reach the loop's end uncollected — a filter
+	// the compiler wrote as a jump to its loop_next — so the array it makes
+	// is sized as it fills past filteredStart, not by its source.
+	filters bool
 	// itemsInPlace is set for a loop over an array of plain records whose
 	// item is only read field by field (lower_escape.go), and fields is the
 	// fields the body reads: each item loads those alone.

@@ -154,3 +154,29 @@ func TestExactMoneySign(t *testing.T) {
 		})
 	}
 }
+
+// Exact money reads back what it writes, and refuses what no exact amount
+// is: no currency on an amount that is not zero, a code that is none, minor
+// units that are no ratio, a part left out.
+func TestExactMoneyReadsBackItsJSON(t *testing.T) {
+	t.Parallel()
+	for _, e := range []ExactMoney{{}, usd(5).Exact(), ExactFrom("USD", ratio(17, 2)), ExactFrom("JPY", ratio(-1, 3))} {
+		encoded, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back ExactMoney
+		if err := json.Unmarshal(encoded, &back); err != nil || back != e {
+			t.Errorf("json.Unmarshal(%s) = %v, %v, want %v", encoded, back, err, e)
+		}
+	}
+	for _, text := range []string{
+		`{"currency": "", "minor": "1/2"}`, `{"currency": "usd", "minor": "1"}`, `{"currency": "USD", "minor": "x"}`,
+		`{"currency": "USD"}`, `{"minor": "1"}`, `"USD 1"`,
+	} {
+		var e ExactMoney
+		if err := json.Unmarshal([]byte(text), &e); err == nil {
+			t.Errorf("json.Unmarshal(%s) = %v, want an error", text, e)
+		}
+	}
+}

@@ -83,6 +83,10 @@ func TestRenderAndCatalog(t *testing.T) {
 	if !strings.Contains(fmt.Sprint(refused["message"]), "nope") {
 		t.Errorf("a refused contract is rendered as %v, want a message naming \"nope\"", refused)
 	}
+	// Nor are its arguments listed, as if the text's were the program's.
+	if listed := s.request("funroute/arguments", docParams("file:///a.fr")); !strings.Contains(fmt.Sprint(listed), "nope") {
+		t.Errorf("a refused contract's arguments are %v, want a message naming \"nope\"", listed)
+	}
 	catalog := as[map[string]any](t, s.request("funroute/catalog", map[string]any{}))
 	if len(as[[]any](t, catalog["functions"])) == 0 || len(as[[]any](t, catalog["special_forms"])) == 0 {
 		t.Errorf("the catalog is %v, want functions and special forms", catalog)

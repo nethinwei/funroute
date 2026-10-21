@@ -27,6 +27,12 @@ func TestFormattingAndHover(t *testing.T) {
 	if value := as[string](t, as[map[string]any](t, argument["contents"])["value"]); !strings.Contains(value, "fee 的说明") {
 		t.Errorf("hover on an argument is %q, want its contract doc \"fee 的说明\"", value)
 	}
+	// In parentheses an argument is the same argument.
+	s.open("file:///b.fr", "(fee) + x")
+	grouped := as[map[string]any](t, s.request("textDocument/hover", position("file:///b.fr", 2)))
+	if value := as[string](t, as[map[string]any](t, grouped["contents"])["value"]); !strings.Contains(value, "fee: int") || !strings.Contains(value, "fee 的说明") {
+		t.Errorf("hover on an argument in parentheses is %q, want \"fee: int\" and its contract doc", value)
+	}
 }
 
 // A program formatting would lose a comment of is refused with the reason,
@@ -100,6 +106,20 @@ func TestSignatureHelpFindsTheCallBeingTyped(t *testing.T) {
 	first := as[map[string]any](t, as[[]any](t, help["signatures"])[0])
 	if as[float64](t, help["activeParameter"]) != 2 || !strings.HasPrefix(as[string](t, first["label"]), "if(") {
 		t.Errorf("signature help is %v, want the third parameter of if", help)
+	}
+}
+
+// A comment between a function's name and its parenthesis leaves the call
+// what it is, as it does for the parser.
+func TestSignatureHelpLooksPastAComment(t *testing.T) {
+	t.Parallel()
+	s := newSession(t, standard(t), `{}`)
+	s.open("file:///a.fr", "len // the length\n(")
+	help := as[map[string]any](t, s.request("textDocument/signatureHelp", map[string]any{
+		"textDocument": map[string]string{"uri": "file:///a.fr"}, "position": map[string]int{"line": 1, "character": 1},
+	}))
+	if first := as[map[string]any](t, as[[]any](t, help["signatures"])[0]); !strings.HasPrefix(as[string](t, first["label"]), "len(") {
+		t.Errorf("signature help is %v, want len's", help)
 	}
 }
 
@@ -380,6 +400,32 @@ func TestHoverAndCompletionShowExamples(t *testing.T) {
 	for label, want := range map[string]string{"len": `len("日本円")  // 3`, "switch": `else => "many")  // "few"`} {
 		if !strings.Contains(documented[label], want) {
 			t.Errorf("completion of %s documents %q, want it to contain %q", label, documented[label], want)
+		}
+	}
+}
+
+// Inside a string or a comment no name is written, so none is offered; right
+// after a string, or on the line after a comment, names are again.
+func TestCompletionOffersNothingInsideTextOrAComment(t *testing.T) {
+	t.Parallel()
+	for text, offered := range map[string]bool{
+		`upper("ab|")`:               false,
+		`upper("ab|`:                 false,
+		`len("x") // a note|`:        false,
+		`len("x") // a| note`:        false,
+		`len("x")| // a note`:        true,
+		`upper("ab")|`:               true,
+		`len("x") // a note` + "\n|": true,
+	} {
+		s := newSession(t, standard(t), `{}`)
+		cursor := strings.Index(text, "|")
+		source := strings.Replace(text, "|", "", 1)
+		s.open("file:///a.fr", source)
+		line := strings.Count(source[:cursor], "\n")
+		character := cursor - (strings.LastIndex(source[:cursor], "\n") + 1)
+		got := labels(t, s.request("textDocument/completion", map[string]any{"textDocument": map[string]string{"uri": "file:///a.fr"}, "position": map[string]int{"line": line, "character": character}}))
+		if offered != slices.Contains(got, "len") {
+			t.Errorf("%q: completion offers %d names, want them offered %v", text, len(got), offered)
 		}
 	}
 }

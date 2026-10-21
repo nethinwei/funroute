@@ -211,3 +211,53 @@ func TestAnItemReadInPlaceLoadsTheFieldsItsBodyReads(t *testing.T) {
 		}
 	}
 }
+
+// A loop that collects its item as it is on one path and something it
+// computed on another makes one array of both: collecting the item where it
+// is is a fact of the whole loop, which this one is not. The compiler joins
+// the paths before one collect; a forged artifact need not.
+func TestALoopCollectingItsItemAndMoreKeepsBoth(t *testing.T) {
+	t.Parallel()
+	registry := viewedRegistry(t)
+	artifact, err := compileMoney(t, registry, `[if(c.fee > 10, c, c with {fee: 0}) for c in channels]`,
+		"channels: array<record{name: string, fee: int, risk: float, ok: bool}>", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := machine.PartsOf(artifact)
+	code := parts.Instructions
+	collect, next := code[12], code[13]
+	next.A = 2
+	parts.Instructions = []machine.Instruction{
+		code[0], {Op: machine.OpLoopInit, A: 15, B: 0, C: machine.NoAccumulator, D: machine.NoAccumulator, Type: code[1].Type},
+		code[2], code[3], code[4], code[5], {Op: machine.OpJumpIfFalse, A: 10},
+		code[7], collect, {Op: machine.OpJump, A: 14},
+		code[9], code[10], code[11], collect, next,
+	}
+	forged, err := machine.SealArtifact(parts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codec, err := machine.NewCodec[viewedIn, []viewedChannel](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := codec.Instantiate(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := viewedInput()
+	got, err := program.Run(t.Context(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := slices.Clone(in.Channels)
+	for i := range want {
+		if want[i].Fee <= 10 {
+			want[i].Fee = 0
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the loop collected %d channels %v, want %d %v", len(got), got, len(want), want)
+	}
+}

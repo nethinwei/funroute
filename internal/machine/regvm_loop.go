@@ -119,6 +119,10 @@ func (l *regLoop) walk(keyed bool) int {
 // or its own array, in its slot when it has one.
 func (f *frame) startOutput(loop *regLoop, in *rinstr) {
 	site := loop.site
+	size := loop.length
+	if site.filters {
+		size = min(size, filteredStart)
+	}
 	switch {
 	case site.acc >= 0:
 		f.copyReg(site.acc, in.b, site.typ.kind)
@@ -127,16 +131,16 @@ func (f *frame) startOutput(loop *regLoop, in *rinstr) {
 		loop.out = outer.out
 		loop.out.grow(expected(outer.length-outer.index, loop.length))
 	case site.typ.kind == DictKind:
-		loop.dict = newDictBuilder(*site.typ.elem, loop.length)
+		loop.dict = newDictBuilder(*site.typ.elem, size)
 	default:
 		switch slot := f.slotFor(site.built); {
 		case slot != nil:
-			loop.output = builderIn(slot, *site.typ.elem, loop.length)
+			loop.output = builderIn(slot, *site.typ.elem, size)
 		case site.collectsItem && loop.view != nil:
 			// The items stay where they are: what is built is which.
-			loop.output = arrayBuilder{elem: *site.typ.elem, of: loop.view, picked: make([]int, 0, loop.length)}
+			loop.output = arrayBuilder{elem: *site.typ.elem, of: loop.view, picked: make([]int, 0, size)}
 		default:
-			loop.output = newArrayBuilder(*site.typ.elem, loop.length)
+			loop.output = newArrayBuilder(*site.typ.elem, size)
 		}
 		loop.out = &loop.output
 	}
@@ -154,6 +158,11 @@ func expected(outer, inner int) int {
 // maxGrow is the most items one estimate makes room for; past it the array
 // grows as it fills.
 const maxGrow = 1 << 20
+
+// filteredStart is the most items a filtering loop makes room for at its
+// start: a rule's few hundred items are sized at once, and a million that
+// keep ten do not hold a million's memory.
+const filteredStart = 1 << 10
 
 // emptyResult is what a mapping loop over nothing gives: an empty array or
 // dictionary — nothing for a clause whose items go to the clause outside it.

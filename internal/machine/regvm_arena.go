@@ -19,6 +19,10 @@ type arenaSlot struct {
 	ints    []int64
 	floats  []float64
 	strings []string
+	// written is how many of strings' memory a run has written since the
+	// slot was last released: an array built after a longer one leaves the
+	// longer one's strings past its own end.
+	written int
 }
 
 // maxKept is the most items a slot keeps between runs: a run that built a
@@ -56,6 +60,7 @@ func finishIn(slot *arenaSlot, builder *arrayBuilder) Value {
 		return Value{kind: ArrayKind, i: int64(len(slot.floats)), box: &slot.floats}
 	case StringKind:
 		slot.strings = builder.strings
+		slot.written = max(slot.written, len(slot.strings))
 		return Value{kind: ArrayKind, i: int64(len(slot.strings)), box: &slot.strings}
 	}
 	// Only arrays of a native element are given a slot (builtFor).
@@ -64,7 +69,8 @@ func finishIn(slot *arenaSlot, builder *arrayBuilder) Value {
 
 // release drops the strings a slot holds, and a slot grown past maxKept.
 func (s *arenaSlot) release() {
-	clear(s.strings)
+	clear(s.strings[:min(s.written, cap(s.strings))])
+	s.written = 0
 	if cap(s.bools) > maxKept || cap(s.ints) > maxKept || cap(s.floats) > maxKept || cap(s.strings) > maxKept {
 		*s = arenaSlot{}
 	}

@@ -62,6 +62,7 @@ func TestCompletionOffersTheFieldsASelectorCanRead(t *testing.T) {
 		"sort_by(quotes, .meta.":      "rank",
 		"let(q = quotes, min_by(q, .": "fee channel meta",
 		"sort_by(quotes, .f|ee)":      "fee channel meta",
+		"sort_by(quotes, . ":          "fee channel meta",
 	} {
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
@@ -82,20 +83,47 @@ func TestCompletionOffersTheFieldsASelectorCanRead(t *testing.T) {
 	}
 }
 
+// The base of an update is the whole of what is written before with: a
+// record field's own fields are offered, and none of the record it is read
+// from — of a base that is no record, none at all.
+func TestCompletionOffersTheFieldsOfTheWholeBase(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]string{
+		"order.meta with {": "rank",
+		"order.fee with {":  "",
+	} {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+			s := newSession(t, standard(t), `{}`)
+			s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
+				{"name": "order", "type": "record{fee: int, meta: record{rank: int}}"},
+			}}})
+			s.open("file:///a.fr", text)
+			got := labels(t, s.request("textDocument/completion", position("file:///a.fr", len(text))))
+			if want == "" && slices.Contains(got, "fee") || want != "" && strings.Join(got, " ") != want {
+				t.Errorf("%q: completion is %q, want %q", text, strings.Join(got, " "), want)
+			}
+		})
+	}
+}
+
 // A selector's name is typed right after its dot: only there are the fields
 // of the list looked for.
 func TestTypingSelectorIsAfterTheDot(t *testing.T) {
 	t.Parallel()
 	for text, want := range map[string]bool{
-		"sort_by(xs, .":      true,
-		"sort_by(xs, .fe":    true,
-		"sort_by(xs, .a.b_2": true,
-		"sort_by(xs, ":       false,
-		"sort_by(xs, fe":     false,
-		"x.":                 true,
-		"":                   false,
+		"sort_by(xs, .":            true,
+		"sort_by(xs, .fe":          true,
+		"sort_by(xs, .a.b_2":       true,
+		"sort_by(xs, . ":           true,
+		"sort_by(xs, . fe":         true,
+		"sort_by(xs, .\n  // c\n ": true,
+		"sort_by(xs, ":             false,
+		"sort_by(xs, fe":           false,
+		"x.":                       true,
+		"":                         false,
 	} {
-		if got := typingSelector(text, len(text)); got != want {
+		if got := typingSelector(&document{text: text}, len(text)); got != want {
 			t.Errorf("typingSelector(%q) = %v, want %v", text, got, want)
 		}
 	}

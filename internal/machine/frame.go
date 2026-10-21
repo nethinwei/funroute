@@ -172,7 +172,20 @@ func (r *Runtime) finish(f *frame, value *Value, err *error, sink resultSink) {
 		*err = sink.deliver(*value)
 		*value = Value{}
 	}
+	if *err != nil {
+		f.arenaWrittenWhole()
+	}
 	r.releaseFrame(f)
+}
+
+// arenaWrittenWhole is the arena of a run that failed, or whose fallback
+// caught a failure in a loop: an array being built then never finished, so
+// how much of a slot's strings it wrote is unknown, and the release clears
+// all their memory.
+func (f *frame) arenaWrittenWhole() {
+	for i := range f.arena {
+		f.arena[i].written = cap(f.arena[i].strings)
+	}
 }
 
 // release drops what a run left, so a kept frame holds nothing alive: a

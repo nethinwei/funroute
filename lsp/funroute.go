@@ -138,8 +138,12 @@ func (s *Server) render(request renderRequest) (any, error) {
 // argumentList answers funroute/arguments: what the document's program takes,
 // in order — the contract's arguments, or the ones inferred from the text
 // when the contract declares none — for a client that asks for their values,
-// with a sample of each value's JSON.
+// with a sample of each value's JSON. A contract the server refused has no
+// arguments to list, nor are the text's taken for them.
 func (s *Server) argumentList(doc *document) (any, error) {
+	if s.contractErr != nil {
+		return nil, s.contractErr
+	}
 	args := s.arguments(doc)
 	samples := samplerFor(s.registry)
 	out := make([]map[string]string, 0, len(args))

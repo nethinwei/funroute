@@ -2,6 +2,7 @@ package money
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -41,6 +42,31 @@ func (e ExactMoney) MarshalJSON() ([]byte, error) {
 		Currency string `json:"currency"`
 		Minor    string `json:"minor"`
 	}{e.currency, e.minor.String()})
+}
+
+// UnmarshalJSON reads the shape MarshalJSON writes: the minor units as a
+// ratio's text, "17/2", and a currency, which only a zero may go without.
+func (e *ExactMoney) UnmarshalJSON(data []byte) error {
+	var shape struct {
+		Currency *string `json:"currency"`
+		Minor    *string `json:"minor"`
+	}
+	if err := json.Unmarshal(data, &shape); err != nil {
+		return err
+	}
+	if shape.Currency == nil || shape.Minor == nil {
+		return errors.New("exact money needs a \"currency\" and a \"minor\"")
+	}
+	minor, err := ParseRatio(*shape.Minor)
+	if err != nil {
+		return err
+	}
+	// Held to what an amount is held to: a code, or none for a zero.
+	if err := newMoney(*shape.Currency, int64(minor.Sign())).wellFormed(); err != nil {
+		return err
+	}
+	*e = ExactMoney{currency: *shape.Currency, minor: minor}
+	return nil
 }
 
 // Add is e + other, in their one currency.

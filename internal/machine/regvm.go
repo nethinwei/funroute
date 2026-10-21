@@ -88,7 +88,8 @@ func branchUnless(cond bool, pc int, target int32) int {
 }
 
 // caught hands a failure to the innermost fallback that takes it: the
-// loops and usings its candidate opened are closed.
+// loops and usings its candidate opened are closed, the arrays they were
+// building left unfinished in their slots (arenaWrittenWhole).
 func (f *frame) caught(err error) (int, error) {
 	if len(f.fallbacks) == 0 {
 		return 0, err
@@ -99,6 +100,9 @@ func (f *frame) caught(err error) (int, error) {
 	last := len(f.fallbacks) - 1
 	handler := f.fallbacks[last]
 	f.fallbacks = f.fallbacks[:last]
+	if len(f.loops) > handler.loops {
+		f.arenaWrittenWhole()
+	}
 	clear(f.loops[handler.loops:])
 	f.loops = f.loops[:handler.loops]
 	f.dropScopes(handler.scopes)

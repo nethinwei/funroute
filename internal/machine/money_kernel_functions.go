@@ -162,8 +162,11 @@ func registerRoundingScope(registry *Registry) {
 		Name: "round", Params: []Type{MoneyType, RoundingEnumType()}, Result: MoneyType, roundingScope: true,
 		Eval: func(_ context.Context, args []Value) (Value, error) {
 			mode, err := money.ParseRounding(args[1].s)
-			if err != nil || !IsExact(args[0]) {
-				return args[0], err
+			if err != nil {
+				return Value{}, err
+			}
+			if !IsExact(args[0]) {
+				return args[0], nil
 			}
 			return moneyResult(exactOf(args[0]).Round(mode))
 		},

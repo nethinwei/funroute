@@ -45,6 +45,10 @@ func (s *Server) hover(doc *document, offset int) (any, error) {
 		return null, nil
 	}
 	name := doc.text[fact.Span.Start:fact.Span.End]
+	if fact.Reference != "" {
+		// A name read in parentheses spans them: (fee) is fee.
+		name = strings.Trim(name, "() \t")
+	}
 	text := name
 	if fact.Type != nil {
 		text += ": " + fact.Type.String()
@@ -141,6 +145,9 @@ func (s *Server) namedExamples(name string) []machine.Example {
 // orders them by kind, nearest first — locals, arguments, functions, forms,
 // currencies — then by name.
 func (s *Server) completion(doc *document, offset int) (any, error) {
+	if inTextOrComment(doc, offset) {
+		return []completionItem{}, nil
+	}
 	if typingEnum(doc, offset) {
 		return s.enumMembers(), nil
 	}
@@ -331,6 +338,24 @@ func markdown(text string) *markupContent {
 	return &markupContent{Kind: "markdown", Value: text}
 }
 
+// inTextOrComment reports a cursor inside a string or a comment, where no
+// name is written: past a string's opening quote and before its closing
+// one — or anywhere after it, in one being typed that has none yet — or
+// after a comment's // up to its line's end.
+func inTextOrComment(doc *document, offset int) bool {
+	for _, lexeme := range lexemesOf(doc) {
+		open := lexeme.Class == syntax.ClassInvalid && doc.text[lexeme.Start] == '"'
+		switch {
+		case lexeme.Start >= offset:
+			return false
+		case lexeme.Class == syntax.ClassString && offset < lexeme.End,
+			(lexeme.Class == syntax.ClassComment || open) && offset <= lexeme.End:
+			return true
+		}
+	}
+	return false
+}
+
 // typingEnum reports a cursor at the end of an @ or of an @member being
 // typed — @, @half_e — and not of an @ inside a string or a comment.
 func typingEnum(doc *document, offset int) bool {
@@ -395,8 +420,8 @@ func enclosingCall(text string, lexemes []syntax.Lexeme, offset int) (string, in
 				commas++
 			}
 		case "(":
-			if depth == 0 && i > 0 && lexemes[i-1].Class == syntax.ClassIdentifier {
-				return callee(text, lexemes, i), commas, true
+			if name, called := callee(text, lexemes, i); depth == 0 && called {
+				return name, commas, true
 			}
 			// A paren that only groups holds one expression: the call the
 			// cursor is in, if any, is further out, at the same argument.
@@ -414,9 +439,15 @@ func enclosingCall(text string, lexemes []syntax.Lexeme, offset int) (string, in
 	return "", 0, false
 }
 
-func callee(text string, lexemes []syntax.Lexeme, paren int) string {
-	if paren == 0 {
-		return ""
+// callee is the name a "(" calls, the name before it past any comment, and
+// false for a paren that only groups.
+func callee(text string, lexemes []syntax.Lexeme, paren int) (string, bool) {
+	before := paren - 1
+	for before >= 0 && lexemes[before].Class == syntax.ClassComment {
+		before--
 	}
-	return text[lexemes[paren-1].Start:lexemes[paren-1].End]
+	if before < 0 || lexemes[before].Class != syntax.ClassIdentifier {
+		return "", false
+	}
+	return text[lexemes[before].Start:lexemes[before].End], true
 }

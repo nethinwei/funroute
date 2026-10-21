@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
 )
 
@@ -65,9 +66,15 @@ func RunPrefetched(ctx context.Context, r *Runtime, args []Value, byPC map[int]P
 	prefetched := make([]Prefetched, len(r.batch.sites))
 	for pc, answer := range byPC {
 		answer.ready = true
-		prefetched[r.batch.slots[r.callAt(pc)]] = answer
+		prefetched[r.batch.slots[callAt(r, pc)]] = answer
 	}
 	return r.runValues(ctx, args, prefetched)
+}
+
+// callAt is the call of the register form the stack instruction at pc
+// became, or -1.
+func callAt(r *Runtime, pc int) int {
+	return slices.IndexFunc(r.reg.calls, func(call rcall) bool { return int(call.pc) == pc })
 }
 
 // ArtifactWith is an unsealed artifact over parts, for the table tests of
@@ -254,3 +261,34 @@ var EvalMerge = evalMerge
 
 // PopScopeOfNone closes the innermost using of a frame that has none open.
 func PopScopeOfNone() { (&frame{}).popScope() }
+
+// StringsLeftInArena builds arrays of strings of the lengths runs gives, in
+// one arena slot — a run's arrays one after another in it, as a loop builds
+// an inner array again for each item — releasing it after each run, and
+// counts the strings its memory still holds.
+func StringsLeftInArena(runs ...[]int) int {
+	var slot arenaSlot
+	for _, lengths := range runs {
+		for _, n := range lengths {
+			builder := builderIn(&slot, StringType, n)
+			for range n {
+				builder.add(String("x"))
+			}
+			finishIn(&slot, &builder)
+		}
+		slot.release()
+	}
+	held := 0
+	for _, s := range slot.strings[:cap(slot.strings)] {
+		if s != "" {
+			held++
+		}
+	}
+	return held
+}
+
+// LoopsFilter is, for each loop of the runtime's register form, whether
+// lowering found it filters its items.
+func LoopsFilter(r *Runtime) []bool {
+	return kit.Map(r.reg.loops, func(loop rloop) bool { return loop.filters })
+}

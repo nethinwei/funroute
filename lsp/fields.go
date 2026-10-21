@@ -35,7 +35,7 @@ func (s *Server) updateFields(doc *document, offset int) ([]completionItem, bool
 // fields it names before reach, read off the program with the call replaced
 // by that list.
 func (s *Server) selectorFields(doc *document, offset int) ([]completionItem, bool) {
-	if !typingSelector(doc.text, offset) {
+	if !typingSelector(doc, offset) {
 		return nil, false
 	}
 	return s.fieldsAt(doc, offset, placeholder, func(tree syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool) {
@@ -44,14 +44,27 @@ func (s *Server) selectorFields(doc *document, offset int) ([]completionItem, bo
 	})
 }
 
-// typingSelector reports a cursor in a selector's name, right after its dot
-// or in what is typed of the name: .| or .fe|. A selector is nowhere else.
-func typingSelector(text string, offset int) bool {
+// typingSelector reports a cursor in a selector's name, after its dot or in
+// what is typed of the name — .|, .fe|, .a.|, or past spaces and comments
+// the parser reads between them, . fe| — and nowhere a selector cannot be.
+func typingSelector(doc *document, offset int) bool {
 	at := offset
-	for at > 0 && kit.IsNameChar(text[at-1]) {
+	for at > 0 && kit.IsNameChar(doc.text[at-1]) {
 		at--
 	}
-	return at > 0 && text[at-1] == '.'
+	if at > 0 && doc.text[at-1] == '.' {
+		return true
+	}
+	dot := false
+	for _, lexeme := range lexemesOf(doc) {
+		if lexeme.End > at {
+			break
+		}
+		if lexeme.Class != syntax.ClassComment {
+			dot = doc.text[lexeme.Start:lexeme.End] == "."
+		}
+	}
+	return dot
 }
 
 // itemRecord reaches, from a list's type, the record path leads to from its
@@ -119,14 +132,14 @@ func (s *Server) baseType(candidate string, base, around syntax.Span, record rea
 	if analysis == nil {
 		return machine.Type{}, false
 	}
-	// Nodes are in pre-order, so the first one inside the parentheses that
-	// leads to a record is the base itself rather than a part of it.
+	// The base is the node over the whole of it — its span may take in the
+	// parentheses — never a part of it: in order.fee with {…} the base is
+	// an int, whatever order is.
 	end := around.Start + len(stand)
 	for _, node := range analysis.Nodes {
-		if node.Span.Start >= around.Start && node.Span.End <= end && node.Type != nil {
-			if typ, ok := record(*node.Type); ok {
-				return typ, true
-			}
+		whole := node.Span.Start >= around.Start && node.Span.Start <= around.Start+1 && node.Span.End >= end-1 && node.Span.End <= end
+		if whole && node.Type != nil {
+			return record(*node.Type)
 		}
 	}
 	return machine.Type{}, false

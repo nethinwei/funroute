@@ -204,6 +204,9 @@ func keyedArgs(name string, args []Value) (items, keys Value, err error) {
 // so the work is n log k. When k is most of the keys, sorting them all is
 // quicker.
 func firstOf[T cmp.Ordered](keys []T, k int, ascending bool) []int {
+	if k == 0 {
+		return []int{} // none of them: no key need be read
+	}
 	if 4*k >= len(keys) {
 		return orderBy(keys, ascending)[:k]
 	}
@@ -220,7 +223,7 @@ func firstOf[T cmp.Ordered](keys []T, k int, ascending bool) []int {
 		case len(kept) < k:
 			kept = append(kept, i)
 			siftUp(kept, len(kept)-1, before)
-		case k > 0 && before(i, kept[0]):
+		case before(i, kept[0]):
 			kept[0] = i
 			siftDown(kept, before)
 		}

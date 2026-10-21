@@ -222,7 +222,8 @@ func (v *verifier) walk(pc int, s *vstate) error {
 
 // merge brings a path into an instruction. Paths that meet must agree on
 // the stack, the loops and the scopes; a local stays bound only where every
-// path bound it to one type.
+// path bound it to one type, and is kept from a rebind where any path's
+// fallback has it bound (guardBound).
 func (v *verifier) merge(next edge) error {
 	v.deepest = max(v.deepest, len(next.state.stack))
 	known := v.states[next.pc]
@@ -235,7 +236,7 @@ func (v *verifier) merge(next edge) error {
 		!slices.EqualFunc(known.fallbacks, next.state.fallbacks, vfallback.same) || known.scopes != next.state.scopes {
 		return errors.New("paths meet with different stacks")
 	}
-	changed := false
+	changed := guardBound(known, next.state)
 	for slot, typ := range known.locals {
 		if other := next.state.locals[slot]; typ != nil && (other == nil || !typ.Equal(*other)) {
 			known.locals[slot], changed = nil, true
@@ -245,6 +246,35 @@ func (v *verifier) merge(next edge) error {
 		v.work = append(v.work, next.pc)
 	}
 	return nil
+}
+
+// guardBound brings into known's fallbacks the locals next's have bound at
+// their begins: paths that meet may have begun their fallbacks apart, and a
+// candidate past the meeting rebinds no local either handler reads. It
+// reports whether known's changed, so the walk goes on from there with them.
+func guardBound(known, next *vstate) bool {
+	changed := false
+	for i := range known.fallbacks {
+		if merged := unionBound(known.fallbacks[i].bound, next.fallbacks[i].bound); merged != nil {
+			known.fallbacks[i].bound, changed = merged, true
+		}
+	}
+	return changed
+}
+
+// unionBound is the slots bound in either, a new slice — a fallback's bound
+// is shared by the states copied from it — or nil when other adds none.
+func unionBound(bound, other []bool) []bool {
+	var merged []bool
+	for slot, also := range other {
+		if also && !bound[slot] {
+			if merged == nil {
+				merged = slices.Clone(bound)
+			}
+			merged[slot] = true
+		}
+	}
+	return merged
 }
 
 // step is the paths out of the instruction at pc, entered in state s.

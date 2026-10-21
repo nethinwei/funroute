@@ -2,6 +2,7 @@ package machine
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/nethinwei/funroute/internal/kit"
 )
@@ -313,6 +314,18 @@ var branchOps = map[rop]rop{
 	rEqI: rBranchEqI, rEqF: rBranchEqF, rFieldB: rBranchField,
 }
 
+// skipsItems reports a loop whose body jumps straight to its loop_next, the
+// instruction before its exit: an item that goes there is not collected.
+func (l *lowerer) skipsItems(in Instruction) bool {
+	next := in.A - 1
+	if next <= l.pc || next >= len(l.code) || l.code[next].Op != OpLoopNext {
+		return false
+	}
+	return slices.ContainsFunc(l.code[l.pc+1:next], func(body Instruction) bool {
+		return (body.Op == OpJumpIfFalse || body.Op == OpJump) && body.A == next
+	})
+}
+
 // loopInit lowers the start of a loop: the source, and a fold's seed.
 func (l *lowerer) loopInit(in Instruction) {
 	seed := slot{reg: -1}
@@ -322,7 +335,7 @@ func (l *lowerer) loopInit(in Instruction) {
 	source := l.pop()
 	l.flush(0)
 	loop := rloop{typ: in.Type, item: l.localBase + int32(in.B), key: -1, acc: -1, dst: l.top(), exit: int32(in.A), built: l.builtFor(l.pc),
-		itemsInPlace: l.flow.at[l.pc].itemsInPlace, fields: l.flow.at[l.pc].itemFields}
+		itemsInPlace: l.flow.at[l.pc].itemsInPlace, fields: l.flow.at[l.pc].itemFields, filters: l.skipsItems(in)}
 	if regs, promoted := l.itemRegs[l.pc]; promoted {
 		loop.promoted = kit.Map(loop.fields, func(field int32) int32 { return regs[field] })
 		loop.collectsItem = l.flow.at[l.pc].collectsItem

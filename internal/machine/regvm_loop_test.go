@@ -1,6 +1,7 @@
 package machine_test
 
 import (
+	goruntime "runtime"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
@@ -46,5 +47,49 @@ func TestADictionaryIsBuiltInOneMap(t *testing.T) {
 		if allocs != want {
 			t.Errorf("%s allocated %v times, want %v", source, allocs, want)
 		}
+	}
+}
+
+// A loop that filters its items is told from one that keeps them all, and
+// makes room for what it keeps as it keeps it: a hundred thousand items of
+// which one is kept cost what ten would, not a hundred thousand's memory.
+func TestAFilteringLoopIsSizedAsItFills(t *testing.T) {
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	load := func(source string) *machine.Runtime {
+		artifact, err := compile.CompileExpr(source, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime, err := machine.Instantiate(artifact, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return runtime
+	}
+	for source, want := range map[string]bool{"[x + 1 for x in xs]": false, "[x for x in xs if x == 0]": true, "[x for x in xs if x > 1 && x < 5]": true} {
+		if got := machine.LoopsFilter(load(source)); len(got) != 1 || got[0] != want {
+			t.Errorf("%s: its loop filters %v, want %v", source, got, want)
+		}
+	}
+	runtime := load("[x for x in xs if x == 0]")
+	bytes := func(n int) uint64 {
+		items := make([]int64, n)
+		for i := range items {
+			items[i] = int64(i)
+		}
+		xs, _ := machine.ToValue(items)
+		var before, after goruntime.MemStats
+		goruntime.ReadMemStats(&before)
+		if _, err := runtime.RunValues(t.Context(), []machine.Value{xs}); err != nil {
+			t.Fatal(err)
+		}
+		goruntime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	if short, long := bytes(10), bytes(100_000); long > short+64<<10 {
+		t.Fatalf("keeping one of 10 items allocates %d bytes and one of 100000 %d; want them alike", short, long)
 	}
 }

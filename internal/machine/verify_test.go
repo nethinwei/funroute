@@ -141,6 +141,49 @@ func TestLoadingHoldsAFallbacksCandidateToWhatItBeganWith(t *testing.T) {
 	}
 }
 
+// Two fallbacks begun on two paths, a local bound on one and not on the
+// other, meet inside their candidates: a rebind after the meeting is refused
+// for the path whose handler reads the local, whichever path the walk takes
+// first — the meeting keeps what either has bound.
+func TestLoadingHoldsFallbacksThatMeetToBothBegins(t *testing.T) {
+	t.Parallel()
+	one := machine.Constant{Type: machine.IntType, Value: json.RawMessage(`1`)}
+	code := func(ops ...machine.Instruction) []machine.Instruction { return ops }
+	i := func(op machine.OpCode, a int) machine.Instruction { return machine.Instruction{Op: op, A: a} }
+	for _, test := range []struct {
+		name string
+		code []machine.Instruction
+		want string
+	}{
+		{"it rebinds a local bound on one of the paths it meets", code(
+			i(machine.OpLoadArg, 0), i(machine.OpLoadArg, 0), machine.Instruction{Op: machine.OpEqual}, i(machine.OpJumpIfFalse, 8),
+			i(machine.OpConstant, 0), i(machine.OpStoreLocal, 0), i(machine.OpBeginFallback, 14), i(machine.OpJump, 9),
+			i(machine.OpBeginFallback, 16),
+			i(machine.OpConstant, 0), i(machine.OpStoreLocal, 0), i(machine.OpLoadArg, 0), i(machine.OpEndFallback, 0), i(machine.OpJump, 17),
+			i(machine.OpLoadLocal, 0), i(machine.OpJump, 17),
+			i(machine.OpLoadArg, 0),
+		), "rebinds local 0"},
+		{"it rebinds a local bound on the other of the paths it meets", code(
+			i(machine.OpLoadArg, 0), i(machine.OpLoadArg, 0), machine.Instruction{Op: machine.OpEqual}, i(machine.OpJumpIfFalse, 6),
+			i(machine.OpBeginFallback, 16), i(machine.OpJump, 9),
+			i(machine.OpConstant, 0), i(machine.OpStoreLocal, 0), i(machine.OpBeginFallback, 14),
+			i(machine.OpConstant, 0), i(machine.OpStoreLocal, 0), i(machine.OpLoadArg, 0), i(machine.OpEndFallback, 0), i(machine.OpJump, 17),
+			i(machine.OpLoadLocal, 0), i(machine.OpJump, 17),
+			i(machine.OpLoadArg, 0),
+		), "rebinds local 0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := forgedLoad(t, "a", "a: int", func(p *machine.ArtifactParts) {
+				p.Instructions, p.Constants, p.Locals = test.code, []machine.Constant{one}, 1
+			})
+			if err == nil || !strings.Contains(err.Error(), "invalid bytecode") || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Instantiate of a candidate where %s = %v, want the bytecode refused saying %q", test.name, err, test.want)
+			}
+		})
+	}
+}
+
 // The walk that types the bytecode also finds how deep the stack gets, which
 // is what a frame reserves: an honest artifact loads and runs within it.
 func TestLoadingFindsTheStacksDepth(t *testing.T) {

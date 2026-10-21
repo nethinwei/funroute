@@ -122,6 +122,10 @@ type pcFacts struct {
 	itemFields   []int32
 	itemOf       int32
 	collectsItem bool
+	// collectsOther says a loop's collect takes something else than its
+	// item as it is too: collectsItem is a fact of the whole loop, and such
+	// a loop's item is made whole (itemEscaped).
+	collectsOther bool
 	// loopOf is, for a loop_next, the loop_init of the loop it ends.
 	loopOf        int32
 	firstUse      int32
@@ -432,6 +436,9 @@ func (w *flower) consume(pc int, in Instruction, s *fstate) {
 			w.use(pc, values[0], true)
 			return
 		}
+		if len(s.loops) > 0 {
+			w.facts[s.loops[len(s.loops)-1]].collectsOther = true
+		}
 		w.useAll(pc, values)
 	case OpLoopSpread, OpLoopFold:
 		w.useAll(pc, s.pop(1))
@@ -534,6 +541,11 @@ func (w *flower) result(parts *ArtifactParts) flow {
 	for pc, in := range w.code {
 		if loop := w.facts[pc].loopOf; in.Op == OpLoopNext && pc+1 < len(w.code) && w.code[pc+1].Op == OpLoopSpread && w.facts[loop].collectsItem {
 			w.facts[loop].itemEscaped = true
+		}
+		// A loop that collects its item as it is and something else besides
+		// makes one array of both: of values, its item among them made whole.
+		if w.facts[pc].collectsItem && w.facts[pc].collectsOther {
+			w.facts[pc].itemEscaped = true
 		}
 	}
 	for pc := range w.code {
