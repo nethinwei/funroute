@@ -2,9 +2,9 @@
 
 版本号按[语义化版本](https://semver.org/lang/zh-CN/)。v0.x 期间，公开 API、语法、ExprJSON、Artifact 与签名清单的形状在两个次版本之间都可能不兼容地改变；每次改变写在这里。
 
-## v0.1.2（未发布）
+## v0.1.2（2026-10-21）
 
-一次专门的修正与优化：外部评审报告逐条核实后的修复，以及有实测支撑的性能改进。新增[语义宪章](docs/semantics.md)，把"纯""强类型""必然终止""冻结""相等"的定义写在一处，下面不少修正就是让实现符合它。
+一次专门的修正与优化：外部评审报告逐条核实后的修复，以及有实测支撑的性能改进。发布前又做了一轮独立审查，补齐递归 Go 类型、LSP 补全与序列化边界。新增[语义宪章](docs/semantics.md)，把"纯""强类型""必然终止""冻结""相等"的定义写在一处，下面不少修正就是让实现符合它。
 
 ### 修正
 
@@ -164,6 +164,16 @@
 - `make perf` 新增金额与 record 的选择场景，以及路由规则常见形状（字段求和、按字段筛选、投影、`with`、封顶、按下标遍历）。
 - 随机循环体的向量与标量逐项对照，随机程序生成器补上 bool 数组；伪造 artifact 的操作数变异 fuzz。
 - ISO 4217 表的小数位写在代码表里（`JPY:0`），不再另列例外表；`internal/compile` 的循环编译拆到 `loop.go`。
+
+### 发布前审查（2026-10-21）
+
+- **递归 Go 类型不再栈溢出**：`ToValue`、`Bind`、`Register` 遇到自引用的 struct/slice/map（如 `type Node struct{ Children []Node }`）时返回 `unsupported Go type … it contains itself`，不再 `fatal error: stack overflow`。
+- **wasm 语言服务的回调不再竞争**：`connect` 与 `send` 跨 goroutine 的 callback 加锁；`connect` 之前到达的消息被丢弃，不再调用零 `js.Value`。
+- **LSP 字段补全**：补全按文档版本缓存 parse/Analyze；`with` 更新与选择器补全保留光标后的文本，按解析树作用域判定推导式绑定器，局部变量、字典推导、兄弟推导不再被当作契约参数；更新字段只在 `with {}` 里查找。3 KB 规则的 update 补全从 1.83 ms 降到 0.167 ms（同一版本）/0.36 ms（新版本）。
+- **`Registry.EncodeJSON`**：只展开含 money 或 record 的容器；10k float 从 1.14 ms、20008 次分配到 0.15 ms、4 次；exact money 与 `Value.MarshalJSON` 同形。
+- **`Money.MulInt`**：改用 64 位乘法，5.5 ns → 1.6 ns。
+- **换序 `mul` 重载的参数标签**：`mul(ratio, money)` 标“比例, 金额”，`mul(int, money)` 标“数量, 金额”，catalog 与悬停不再错位。
+- **格式化**：嵌套一元负号打印为 `- -x`，不再是 `--x`。
 
 
 ## v0.1.1（2026-09-28）
