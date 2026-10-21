@@ -137,8 +137,8 @@ func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(sy
 		// The closed text has lost what follows the cursor, where a
 		// comprehension binds the names its yield reads, [order with {|}
 		// for order in xs]: it would read the argument for the local. It
-		// is asked only when no name the base reads is written there.
-		if i > 0 && namedAfter(doc, offset, candidate[base.Start:base.End]) {
+		// is asked only when no name the base reads is bound there.
+		if i > 0 && bindsAfter(doc, offset, candidate[base.Start:base.End]) {
 			continue
 		}
 		typ, ok := s.baseType(doc, candidate, syntax.ScopeAt(tree, base.Start), base, around, record)
@@ -150,17 +150,32 @@ func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(sy
 	return nil, false
 }
 
-// namedAfter reports a name expr reads written after offset in the document
-// — in code, not in a string or a comment — and an expr that does not parse.
-func namedAfter(doc *document, offset int, expr string) bool {
+// bindsAfter reports a name expr reads bound after offset in the document by
+// a for or a reduce — one of the names written between it and its in, for
+// order, i in or reduce(order in — and an expr that does not parse. A name
+// merely read or written as a field label there binds nothing.
+func bindsAfter(doc *document, offset int, expr string) bool {
 	tree, err := syntax.Parse(expr)
 	if err != nil {
 		return true
 	}
-	names := syntax.FreeVariables(tree)
+	names, binding := syntax.FreeVariables(tree), false
 	for _, lexeme := range lexemesOf(doc) {
-		if lexeme.Start >= offset && lexeme.Class == syntax.ClassIdentifier && slices.Contains(names, doc.text[lexeme.Start:lexeme.End]) {
-			return true
+		if lexeme.Start < offset || lexeme.Class == syntax.ClassComment {
+			continue
+		}
+		text := doc.text[lexeme.Start:lexeme.End]
+		identifier := lexeme.Class == syntax.ClassIdentifier
+		switch {
+		case identifier && (text == "for" || text == "reduce"):
+			binding = true
+		case !binding:
+		case identifier && text != "in":
+			if slices.Contains(names, text) {
+				return true
+			}
+		case text != "," && text != "(":
+			binding = false // the in, or anything no binder is written in
 		}
 	}
 	return false

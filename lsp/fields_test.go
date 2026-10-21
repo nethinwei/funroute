@@ -152,6 +152,59 @@ func TestCompletionOffersNoArgumentsFieldsForALocal(t *testing.T) {
 	}
 }
 
+// A name the base reads written after the cursor but bound by no for or
+// reduce there — read again, or a field label — does not stop the fields
+// being offered where the text as typed lacks the comma before the next one.
+func TestCompletionOffersTheFieldsWhereTheBaseIsOnlyReadAfter(t *testing.T) {
+	t.Parallel()
+	for _, text := range []string{
+		"order with {\n  fee: 0,\n  |\n  currency: order.fee\n}",
+		"order with {\n  fee: 0,\n  |\n  meta: {order: 0}\n}",
+	} {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+			s := newSession(t, standard(t), `{}`)
+			s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
+				{"name": "order", "type": "record{amount: int, fee: int, currency: string}"},
+			}}})
+			cursor := strings.Index(text, "|")
+			s.open("file:///a.fr", strings.Replace(text, "|", "", 1))
+			got := labels(t, s.request("textDocument/completion", position("file:///a.fr", cursor)))
+			if !slices.Contains(got, "amount") || !slices.Contains(got, "currency") {
+				t.Errorf("%q: completion is %v, want the fields amount and currency", text, got)
+			}
+		})
+	}
+}
+
+// Only a for or a reduce after the cursor binds a name the base reads: the
+// names written between it and its in, not one in a string, a comment, a
+// read or a field label.
+func TestBindsAfterIsABinderAfterTheCursor(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]bool{
+		"| for order in xs]":                                    true,
+		"| for i, order in xs]":                                 true,
+		"| + reduce(order in xs, total = 0, total)":             true,
+		"| + [x for x in xs]":                                   false,
+		"| + reduce(price in prices, total = 0, total + price)": false,
+		"| + \"for order in xs\"":                               false,
+		"| // for order in xs\n":                                false,
+		"|, currency: order.fee}":                               false,
+		"|, meta: {order: 0}}":                                  false,
+		"for order in xs, |":                                    false,
+	} {
+		cursor := strings.Index(text, "|")
+		doc := &document{text: strings.Replace(text, "|", "", 1)}
+		if got := bindsAfter(doc, cursor, "order"); got != want {
+			t.Errorf("bindsAfter(%q, order) = %v, want %v", text, got, want)
+		}
+	}
+	if !bindsAfter(&document{}, 0, "order with {") {
+		t.Errorf("bindsAfter of a base that does not parse is false, want true")
+	}
+}
+
 // A selector's name is typed right after its dot: only there are the fields
 // of the list looked for.
 func TestTypingSelectorIsAfterTheDot(t *testing.T) {
