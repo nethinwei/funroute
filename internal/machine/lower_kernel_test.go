@@ -18,6 +18,19 @@ func TestKernelOpsAreTheKernels(t *testing.T) {
 	}
 }
 
+// Every kernel operation's function takes no more operands than fault hands
+// it when the operation refuses: a wider one needs fault taught where the
+// rest are before it gets an operation.
+func TestKernelOpsCarryWhatFaultKnows(t *testing.T) {
+	t.Parallel()
+	registry := CoreRegistry()
+	for key := range kernelOps {
+		if function, ok := registry.Resolve(key); ok && len(function.Params) > faultOperands {
+			t.Errorf("kernelOps has %s, of %d parameters: fault hands a function at most %d", key, len(function.Params), faultOperands)
+		}
+	}
+}
+
 // A kernel operation answers what its function answers, and refuses where
 // the function fails, on the edges of every type it takes.
 func TestKernelOpsAnswerAsTheirFunctions(t *testing.T) {

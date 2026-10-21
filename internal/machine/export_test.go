@@ -294,8 +294,8 @@ func LoopsFilter(r *Runtime) []bool {
 }
 
 // WidenParams gives every function the runtime calls two more parameters, for
-// regvm_test.go: what a kernel operation could not answer is asked of the
-// function with its parameters' count, however many the operation carries.
+// regvm_test.go: more operands than fault knows of, which it refuses rather
+// than ask the function with zeros for them.
 func WidenParams(r *Runtime) {
 	r.functions = kit.Map(r.functions, func(function *RegisteredFunction) *RegisteredFunction {
 		wide := *function

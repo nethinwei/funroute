@@ -128,30 +128,50 @@ func outcome(t *testing.T, runtime *machine.Runtime, args map[string]any) string
 	return string(encoded)
 }
 
-// A kernel operation that cannot answer asks its function why, with as many
-// arguments as the function has parameters: one with more than three,
-// the most an operation carries, still gives its own failure.
-func TestAFaultFollowsTheFunctionsParameters(t *testing.T) {
+// A kernel operation that cannot answer asks its function why, handing it
+// the operation's operands — rSliceS's end too, its third — and says the
+// function's own failure.
+func TestAFaultAsksTheFunctionWithTheOperands(t *testing.T) {
 	t.Parallel()
-	contract := compile.CompileOptions{Args: []compile.ArgSpec{
-		{Name: "a", Type: machine.IntType}, {Name: "b", Type: machine.IntType},
-		{Name: "s", Type: machine.StringType}, {Name: "xs", Type: machine.ArrayOf(machine.IntType)},
-	}}
-	args := map[string]any{"a": 1, "b": 0, "s": "abc", "xs": []int64{1}}
-	for _, source := range []string{"a / b", "xs[a]", "a % b"} {
+	for source, want := range map[string]string{
+		"a / b":          "error: div: ",
+		"xs[a]":          "error: at: ",
+		"a % b":          "error: mod: ",
+		"slice(s, b, 9)": "error: slice: ",
+	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
-			runtime, err := load(source, machine.CoreRegistry(), contract)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := outcome(t, runtime, args)
-			machine.WidenParams(runtime)
-			if got := outcome(t, runtime, args); got != want || !strings.HasPrefix(got, "error: ") {
-				t.Fatalf("%s with %v and two more parameters = %s, want %s", source, args, got, want)
+			if got := outcome(t, faultRuntime(t, source), faultArgs); !strings.HasPrefix(got, want) || strings.Contains(got, "internal error") {
+				t.Fatalf("%s with %v = %s, want the function's failure, %s…", source, faultArgs, got, want)
 			}
 		})
 	}
+}
+
+// A function of more operands than fault knows of is not asked with zeros
+// for the rest: the refusal is an internal error saying so.
+func TestAFaultRefusesMoreOperandsThanItKnows(t *testing.T) {
+	t.Parallel()
+	runtime := faultRuntime(t, "a / b")
+	machine.WidenParams(runtime)
+	if got := outcome(t, runtime, faultArgs); !strings.Contains(got, "internal error: div(int,int)->int carries 4 operands, fault knows at most 3") {
+		t.Fatalf("a / b with %v and two more parameters = %s, want the internal error", faultArgs, got)
+	}
+}
+
+var faultArgs = map[string]any{"a": 1, "b": 0, "s": "abc", "xs": []int64{1}}
+
+// faultRuntime loads source against a, b, s and xs.
+func faultRuntime(t *testing.T, source string) *machine.Runtime {
+	t.Helper()
+	runtime, err := load(source, machine.CoreRegistry(), compile.CompileOptions{Args: []compile.ArgSpec{
+		{Name: "a", Type: machine.IntType}, {Name: "b", Type: machine.IntType},
+		{Name: "s", Type: machine.StringType}, {Name: "xs", Type: machine.ArrayOf(machine.IntType)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime
 }
 
 // randomRegistry is the whole language and a host function that fails when

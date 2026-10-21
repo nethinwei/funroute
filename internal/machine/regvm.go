@@ -109,6 +109,12 @@ func (f *frame) caught(err error) (int, error) {
 	return handler.target, nil
 }
 
+// faultOperands is the most operands fault hands a kernel function: the two
+// every operation reads, and rSliceS's end. A kernel operation for a function
+// of more parameters needs fault to know where its other operands are first
+// (TestKernelOpsCarryWhatFaultKnows).
+const faultOperands = 3
+
 // fault is why the operation at pc could not answer: the kernel function's
 // own failure, which asking it gives.
 func (f *frame) fault(pc int) error {
@@ -122,9 +128,13 @@ func (f *frame) fault(pc int) error {
 		return err
 	}
 	function := f.runtime.functions[source.A]
-	// The arguments follow the function's parameters, not the operation's
-	// operands: nothing holds a kernel operation to three, and a fault is
-	// the cold path, which may allocate.
+	// The arguments follow the function's parameters, which are the
+	// operation's operands: a function with more than fault knows of would
+	// be asked with zeros for the rest, and answer for them. A fault is the
+	// cold path, which may allocate.
+	if len(function.Params) > faultOperands {
+		return fmt.Errorf("internal error: %s carries %d operands, fault knows at most %d", function.key, len(function.Params), faultOperands)
+	}
 	args := make([]Value, len(function.Params))
 	copy(args, []Value{left, right})
 	if in.op == rSliceS && len(args) > 2 {

@@ -90,8 +90,9 @@ func TestCompletionOffersTheFieldsASelectorCanRead(t *testing.T) {
 func TestCompletionOffersTheFieldsOfTheWholeBase(t *testing.T) {
 	t.Parallel()
 	for text, want := range map[string]string{
-		"order.meta with {": "rank",
-		"order.fee with {":  "",
+		"order.meta with {":          "rank",
+		"order.fee with {":           "",
+		"if(true, order.meta with {": "rank",
 	} {
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
@@ -103,6 +104,32 @@ func TestCompletionOffersTheFieldsOfTheWholeBase(t *testing.T) {
 			got := labels(t, s.request("textDocument/completion", position("file:///a.fr", len(text))))
 			if want == "" && slices.Contains(got, "fee") || want != "" && strings.Join(got, " ") != want {
 				t.Errorf("%q: completion is %q, want %q", text, strings.Join(got, " "), want)
+			}
+		})
+	}
+}
+
+// A local named as an argument hides it: where the rule has a type error
+// elsewhere, so the base's type cannot be read off it, the argument's fields
+// are not offered for the local's — no fields rather than the wrong ones —
+// whether the local is updated or a selector reads it.
+func TestCompletionOffersNoArgumentsFieldsForALocal(t *testing.T) {
+	t.Parallel()
+	for _, text := range []string{
+		`let(x = 1 + "s", let(order = {a: 1, b: 2}, order with {a: 3, `,
+		`let(x = 1 + "s", let(quotes = [{a: 1}], sort_by(quotes, .`,
+	} {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+			s := newSession(t, standard(t), `{}`)
+			s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
+				{"name": "order", "type": "record{amount: int, fee: int, currency: string}"},
+				{"name": "quotes", "type": "array<record{amount: int, currency: string}>"},
+			}}})
+			s.open("file:///a.fr", text)
+			got := labels(t, s.request("textDocument/completion", position("file:///a.fr", len(text))))
+			if slices.Contains(got, "amount") || slices.Contains(got, "currency") {
+				t.Errorf("%q: completion is %v, want none of the argument's fields", text, got)
 			}
 		})
 	}

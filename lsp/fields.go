@@ -103,7 +103,7 @@ func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(sy
 		if !ok {
 			continue
 		}
-		typ, ok := s.baseType(doc, candidate, base, around, record)
+		typ, ok := s.baseType(doc, candidate, syntax.ScopeAt(tree, base.Start), base, around, record)
 		if !ok {
 			continue
 		}
@@ -121,9 +121,17 @@ func recordOf(typ machine.Type) (machine.Type, bool) { return typ, typ.Kind() ==
 // baseType is the record reached from a base's type, read off the program
 // with "(base)" where around was, or, when that program does not compile —
 // the base stood in for the body a let or an if still lacks, let(x = (order))
-// — off "(base)" alone.
-func (s *Server) baseType(doc *document, candidate string, base, around syntax.Span, record reach) (machine.Type, bool) {
-	stand := "(" + candidate[base.Start:base.End] + ")"
+// — off "(base)" alone. locals are the names bound where the base is. An
+// argument named as the base is read off the contract at once; "(base)" alone
+// is asked only when every name the base reads is an argument none of locals
+// hides, since alone it knows no locals and would give an argument's fields
+// for a local of the same name.
+func (s *Server) baseType(doc *document, candidate string, locals []string, base, around syntax.Span, record reach) (machine.Type, bool) {
+	written := candidate[base.Start:base.End]
+	if arg, ok := s.argument(written, locals); ok {
+		return record(arg.Type)
+	}
+	stand := "(" + written + ")"
 	text := candidate[:around.Start] + stand + candidate[around.End:]
 	// The base's type follows from the arguments alone. A declared result is
 	// left out: a program half written rarely returns it yet, and holding it
@@ -134,9 +142,36 @@ func (s *Server) baseType(doc *document, candidate string, base, around syntax.S
 	if typ, ok := wholeType(analysis, around.Start, len(stand)); ok || err == nil {
 		return reached(typ, ok, record)
 	}
+	if !s.readsArguments(written, locals) {
+		return machine.Type{}, false
+	}
 	analysis, _ = doc.analyze(stand, s.registry, options)
 	typ, ok := wholeType(analysis, 0, len(stand))
 	return reached(typ, ok, record)
+}
+
+// argument is the contract's argument called name, unless locals hide it.
+func (s *Server) argument(name string, locals []string) (compile.ArgSpec, bool) {
+	at := slices.IndexFunc(s.contract.Args, func(arg compile.ArgSpec) bool { return arg.Name == name })
+	if at < 0 || slices.Contains(locals, name) {
+		return compile.ArgSpec{}, false
+	}
+	return s.contract.Args[at], true
+}
+
+// readsArguments reports that every name expr reads is an argument of the
+// contract, none hidden by locals.
+func (s *Server) readsArguments(expr string, locals []string) bool {
+	tree, err := syntax.Parse(expr)
+	if err != nil {
+		return false
+	}
+	for _, name := range syntax.FreeVariables(tree) {
+		if _, ok := s.argument(name, locals); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // reached is the record reached from typ, when there is a type to reach it

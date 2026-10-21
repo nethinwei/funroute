@@ -84,9 +84,15 @@ func (s *inferState) trial() (trail, vars int) {
 // them: its bindings are on the trail, and a trial spreads no watchers.
 func (s *inferState) endTrial(trail, vars int) {
 	s.undoTo(trail)
+	s.dropVars(vars)
+	s.probing--
+}
+
+// dropVars forgets the variables made since there were vars, once what made
+// them is taken back: only the trail named them.
+func (s *inferState) dropVars(vars int) {
 	clear(s.vars[vars:])
 	s.vars = s.vars[:vars]
-	s.probing--
 }
 
 func (s *inferState) commit(c *choice, function *machine.RegisteredFunction) error {
@@ -203,16 +209,26 @@ func (s *inferState) propagate() error {
 				continue
 			}
 			if err := s.narrowChoice(c); err != nil {
+				s.dropQueue()
 				return err
 			}
 		}
-		clear(s.queue)
-		s.queue = s.queue[:0]
+		s.dropQueue()
 		ran, err := s.runDeferred()
 		if err != nil || !ran && len(s.queue) == 0 {
 			return err
 		}
 	}
+}
+
+// dropQueue empties the queue, unmarking what it held: what a failure left
+// there was queued by changes about to be taken back.
+func (s *inferState) dropQueue() {
+	for _, c := range s.queue {
+		c.queued = false
+	}
+	clear(s.queue)
+	s.queue = s.queue[:0]
 }
 
 func (s *inferState) runDeferred() (bool, error) {
@@ -279,7 +295,7 @@ func (s *inferState) decide() (bool, error) {
 		if !unique {
 			continue
 		}
-		mark := s.mark()
+		mark, vars := s.mark(), len(s.vars)
 		err := s.commit(c, best)
 		if err == nil {
 			err = s.propagate()
@@ -288,6 +304,8 @@ func (s *inferState) decide() (bool, error) {
 			return true, nil
 		}
 		s.undoTo(mark)
+		s.dropQueue()
+		s.dropVars(vars)
 		rest := kept(c.open, func(f *machine.RegisteredFunction) bool { return f != best })
 		if len(rest) == 0 {
 			// The last candidate failed: why it did is the program's error,
