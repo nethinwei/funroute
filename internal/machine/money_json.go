@@ -19,10 +19,16 @@ func (r *Registry) EncodeJSON(value Value) ([]byte, error) {
 	return json.Marshal(readable(table, value))
 }
 
-// readable is value with its money written out as text, containers and
-// records walked; a record keeps its field order.
+// readable is value with its money written out as text, walked down to the
+// money; a record keeps its field order. What holds no money is written by
+// its own MarshalJSON, whole.
 func readable(t *money.Currencies, value Value) any {
-	return jsonTree(value, isComposite, func(value Value) any {
+	return jsonTree(value, opensForMoney, readableLeaf(t))
+}
+
+// readableLeaf writes an amount as text, and every other value as itself.
+func readableLeaf(t *money.Currencies) func(Value) any {
+	return func(value Value) any {
 		if value.kind != MoneyKind {
 			return value
 		}
@@ -35,11 +41,14 @@ func readable(t *money.Currencies, value Value) any {
 			return map[string]any{"currency": value.s, "minor": value.i}
 		}
 		return text
-	})
+	}
 }
 
-func isComposite(v Value) bool {
-	return v.kind == ArrayKind || v.kind == DictKind || v.kind == RecordKind
+// opensForMoney reports whether readable walks v rather than handing it to
+// MarshalJSON whole: a record, and a container with money or a record
+// inside — the cases opensForJSON opens for records, with money added.
+func opensForMoney(v Value) bool {
+	return opensWith(v, func(kind Kind) bool { return kind == MoneyKind || kind == RecordKind })
 }
 
 // orderedFields is a record written in its type's field order.

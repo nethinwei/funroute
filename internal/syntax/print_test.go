@@ -62,6 +62,8 @@ var printCorpus = []string{
 	`sort_by(xs, .fee)`, `top_k(xs, .meta.rank, 2)`, `(.a).b`, `(.a)[0]`, `f(xs, .a, .b.c)`,
 	// A bool under a field read is no name true.x.
 	`(true).x`, `(false)[0]`,
+	// Two minuses in a row are two negations.
+	`- -x`, `-(-(a+b))`, `sub(0, sub(0, x))`, `- -USD 1`,
 }
 
 // Every printed program parses back to the node it was printed from, on one
@@ -137,6 +139,26 @@ func TestPrintSpellsOperatorsTheWayTheyAreWritten(t *testing.T) {
 			t.Parallel()
 			if got := Inline(mustParse(t, source)); got != want {
 				t.Errorf("Inline(%q) = %q, want %q", source, got, want)
+			}
+		})
+	}
+}
+
+// A negation of a negation keeps its two minuses apart: --x reads as one
+// token to a person, if not to the lexer.
+func TestTwoMinusesPrintApart(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		`- -x`:              `- -x`,
+		`-(-(a+b))`:         `- -(a + b)`,
+		`sub(0, sub(0, x))`: `- -x`,
+		`- - -x`:            `- - -x`,
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			expr := mustParse(t, source)
+			if got, formatted := Inline(expr), Format(expr); got != want || formatted != want {
+				t.Errorf("Inline(%q) = %q and Format = %q, want %q", source, got, formatted, want)
 			}
 		})
 	}

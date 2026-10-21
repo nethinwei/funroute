@@ -292,3 +292,14 @@ func StringsLeftInArena(runs ...[]int) int {
 func LoopsFilter(r *Runtime) []bool {
 	return kit.Map(r.reg.loops, func(loop rloop) bool { return loop.filters })
 }
+
+// WidenParams gives every function the runtime calls two more parameters, for
+// regvm_test.go: what a kernel operation could not answer is asked of the
+// function with its parameters' count, however many the operation carries.
+func WidenParams(r *Runtime) {
+	r.functions = kit.Map(r.functions, func(function *RegisteredFunction) *RegisteredFunction {
+		wide := *function
+		wide.Params = append(slices.Clip(function.Params), function.Params[0], function.Params[0])
+		return &wide
+	})
+}

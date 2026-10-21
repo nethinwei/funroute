@@ -457,7 +457,13 @@ func opensForJSON(v Value) bool {
 	case *nestedArray, *nestedDict:
 		return true
 	}
-	return v.kind == RecordKind || (v.kind == ArrayKind || v.kind == DictKind) && TypeContains(v.elemType(), RecordKind)
+	return opensWith(v, func(kind Kind) bool { return kind == RecordKind })
+}
+
+// opensWith reports a record, or a container whose element type holds a kind
+// has accepts.
+func opensWith(v Value, has func(Kind) bool) bool {
+	return v.kind == RecordKind || (v.kind == ArrayKind || v.kind == DictKind) && typeHas(v.elemType(), has)
 }
 
 // jsonTree is v as the tree json.Marshal writes. The values walk accepts are

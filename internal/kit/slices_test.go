@@ -47,6 +47,15 @@ func TestRepeatedFindsTheFirstRepeat(t *testing.T) {
 	}
 }
 
+// Fewer than two items cannot repeat, and finding so allocates nothing.
+func TestRepeatedOfFewerThanTwoAllocatesNothing(t *testing.T) {
+	for _, items := range [][]string{nil, {"a"}} {
+		if allocs := testing.AllocsPerRun(10, func() { Repeated(items, Identity[string]) }); allocs != 0 {
+			t.Errorf("Repeated(%q) allocates %v times, want 0", items, allocs)
+		}
+	}
+}
+
 // Reach keeps what the items held, zeroes what they did not, and grows by
 // doubling: filling a table index by index allocates a logarithmic number
 // of times.

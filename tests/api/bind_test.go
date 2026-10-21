@@ -541,3 +541,29 @@ func answersEveryWay[Out any](t *testing.T, source string, want Out) {
 		func(_ int, err error) { t.Errorf("RunBatch of %q: %v", source, err) })
 	check("RunBatch", batched, nil)
 }
+
+// treeNode holds itself: the language has no recursive types, so every path
+// a struct takes into it refuses this one with an error, never a crash.
+type treeNode struct {
+	Children []treeNode `funroute:"children"`
+}
+
+func TestARecursiveGoTypeIsRefused(t *testing.T) {
+	t.Parallel()
+	const want = "it contains itself"
+	if _, err := funroute.ToValue(treeNode{}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("ToValue(treeNode{}) error = %v, want %q", err, want)
+	}
+	if err := funroute.CoreRegistry().Register(funroute.FunctionSpec{
+		Name: "f.tree_v1",
+		Go:   func(treeNode) (int64, error) { return 0, nil },
+	}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Register(func(treeNode)) error = %v, want %q", err, want)
+	}
+	type in struct {
+		Tree treeNode `funroute:"tree"`
+	}
+	if _, err := funroute.Bind[in, int64](funroute.CoreRegistry()); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Bind[in, int64] error = %v, want %q", err, want)
+	}
+}

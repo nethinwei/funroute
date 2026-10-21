@@ -150,5 +150,9 @@ func addInt64(a, b, sign int64) (int64, error) {
 
 // mulInt64 is a·b, refusing to wrap.
 func mulInt64(a, b int64) (int64, error) {
-	return mulDivRound(a, b, 1, RoundDown)
+	product, fits := mul64(a, b)
+	if !fits {
+		return 0, errFixedOverflow
+	}
+	return product, nil
 }

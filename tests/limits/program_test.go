@@ -36,6 +36,17 @@ func programTable(t *testing.T, registry *funroute.Registry) string {
 		{"嵌套 1000 层：`a + a + …` 999 个加法，加上最里面的 `a` / 再多一层", outcome(t, registry, sum(999), "a: int", one), outcome(t, registry, sum(1000), "a: int", one)},
 		{"指令数 10000：`len([a, …])` 9998 项 / 9999 项", instructions(t, registry, "len(["+repeated("a", 9998)+"])"), instructions(t, registry, "len(["+repeated("a", 9999)+"])")},
 	}
+	// Each bound holds where the table says: the program just inside runs,
+	// the one just past is refused when it compiles.
+	refused := "编译期 `ErrCompile`"
+	for _, check := range []struct{ name, got, want string }{
+		{"1000 levels", rows[0][1], "`1000`"}, {"1001 levels", rows[0][2], refused},
+		{"9998 items", rows[1][1], "10000 条指令"}, {"9999 items", rows[1][2], refused},
+	} {
+		if check.got != check.want {
+			t.Errorf("%s: %s, want %s", check.name, check.got, check.want)
+		}
+	}
 	var out strings.Builder
 	out.WriteString("| 边界 | 刚好在内 | 越过一点 |\n|---|---|---|\n")
 	for _, row := range rows {

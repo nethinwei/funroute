@@ -37,14 +37,26 @@ func largest(t *testing.T, registry *funroute.Registry, source string) int64 {
 	if err != nil {
 		t.Fatal(err)
 	}
+	takes := func(minor int64) error {
+		_, err := run(t, registry, artifact, `{"m": "`+usd(minor)+`"}`)
+		return err
+	}
 	low, high := int64(1), int64(math.MaxInt64)
 	for low < high {
 		middle := low + (high-low+1)/2
-		if _, err := run(t, registry, artifact, `{"m": "`+usd(middle)+`"}`); err == nil {
+		if takes(middle) == nil {
 			low = middle
 		} else {
 			high = middle - 1
 		}
+	}
+	// The search assumes the answer; a source that always fails would come
+	// out as 1.
+	if err := takes(low); err != nil {
+		t.Fatalf("%s with m = %s: %v, want it to take the largest amount the search found", source, usd(low), err)
+	}
+	if low < math.MaxInt64 && takes(low+1) == nil {
+		t.Fatalf("%s with m = %s succeeds, want the search's answer %s to be the largest", source, usd(low+1), usd(low))
 	}
 	return low
 }

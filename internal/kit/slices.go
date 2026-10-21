@@ -14,8 +14,12 @@ func Map[T, U any](xs []T, f func(T) U) []U {
 // Identity is x itself, for a projection or a key that is the item.
 func Identity[T any](x T) T { return x }
 
-// Repeated is the first key two of items share, in their order.
+// Repeated is the first key two of items share, in their order. Fewer than
+// two items share none, and cost no map.
 func Repeated[T any](items []T, key func(T) string) (string, bool) {
+	if len(items) < 2 {
+		return "", false
+	}
 	seen := make(map[string]bool, len(items))
 	for _, item := range items {
 		k := key(item)

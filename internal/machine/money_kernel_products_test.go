@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -116,6 +117,29 @@ func TestTheRoundingVariantsAreTheInexactSteps(t *testing.T) {
 			variant := strings.Replace(key, ")->", ",enum<rounding>{ceiling,down,floor,half_down,half_even,half_up,up})->", 1)
 			if _, has := registry.Resolve(variant); function.IsExactStep() != rounds || has != rounds {
 				t.Fatalf("%s: exact step %v, variant %v, want %v", key, function.IsExactStep(), has, rounds)
+			}
+		})
+	}
+}
+
+// A product written either way round labels each parameter by what it is,
+// in the order it is written.
+func TestEachOrderOfAProductLabelsItsOwnParams(t *testing.T) {
+	t.Parallel()
+	registry := moneyRegistry(t)
+	for key, want := range map[string][]string{
+		"mul(money,ratio)->money": {"金额", "比例"}, "mul(ratio,money)->money": {"比例", "金额"},
+		"mul(money,int)->money": {"金额", "数量"}, "mul(int,money)->money": {"数量", "金额"},
+		"mul(ratio,money,enum<rounding>{ceiling,down,floor,half_down,half_even,half_up,up})->money": {"比例", "金额", "舍入方式"},
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			function, ok := registry.Resolve(key)
+			if !ok {
+				t.Fatalf("Resolve(%q) found nothing", key)
+			}
+			if got := function.Doc.Params; !slices.Equal(got, want) {
+				t.Fatalf("%s: Doc.Params = %q, want %q", key, got, want)
 			}
 		})
 	}

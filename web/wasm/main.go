@@ -25,12 +25,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	var callback js.Value
-	server := lsp.New(registry, func(message []byte) { callback.Invoke(string(message)) })
+	page := new(peer)
+	server := lsp.New(registry, page.send)
 	inbox := newQueue()
 	js.Global().Set("funroute", js.ValueOf(map[string]any{
 		"connect": js.FuncOf(func(_ js.Value, args []js.Value) any {
-			callback = args[0]
+			page.connect(args[0])
 			return nil
 		}),
 		// send must not block: a JS callback that waits deadlocks the Go
@@ -42,6 +42,32 @@ func main() {
 	}))
 	for {
 		server.Handle(inbox.pop())
+	}
+}
+
+// peer is the page's end: the callback connect gave. connect runs on a JS
+// callback's goroutine and send on the loop's, so the two meet under a lock.
+type peer struct {
+	mu        sync.Mutex
+	callback  js.Value
+	connected bool
+}
+
+func (p *peer) connect(callback js.Value) {
+	p.mu.Lock()
+	p.callback, p.connected = callback, true
+	p.mu.Unlock()
+}
+
+// send hands one message to the page, outside the lock. A message sent
+// before connect has nowhere to go and is dropped: waiting for connect would
+// hold the loop, and the zero js.Value cannot be called.
+func (p *peer) send(message []byte) {
+	p.mu.Lock()
+	callback, connected := p.callback, p.connected
+	p.mu.Unlock()
+	if connected {
+		callback.Invoke(string(message))
 	}
 }
 

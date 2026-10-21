@@ -128,6 +128,32 @@ func outcome(t *testing.T, runtime *machine.Runtime, args map[string]any) string
 	return string(encoded)
 }
 
+// A kernel operation that cannot answer asks its function why, with as many
+// arguments as the function has parameters: one with more than three,
+// the most an operation carries, still gives its own failure.
+func TestAFaultFollowsTheFunctionsParameters(t *testing.T) {
+	t.Parallel()
+	contract := compile.CompileOptions{Args: []compile.ArgSpec{
+		{Name: "a", Type: machine.IntType}, {Name: "b", Type: machine.IntType},
+		{Name: "s", Type: machine.StringType}, {Name: "xs", Type: machine.ArrayOf(machine.IntType)},
+	}}
+	args := map[string]any{"a": 1, "b": 0, "s": "abc", "xs": []int64{1}}
+	for _, source := range []string{"a / b", "xs[a]", "a % b"} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			runtime, err := load(source, machine.CoreRegistry(), contract)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := outcome(t, runtime, args)
+			machine.WidenParams(runtime)
+			if got := outcome(t, runtime, args); got != want || !strings.HasPrefix(got, "error: ") {
+				t.Fatalf("%s with %v and two more parameters = %s, want %s", source, args, got, want)
+			}
+		})
+	}
+}
+
 // randomRegistry is the whole language and a host function that fails when
 // its argument is a multiple of three, which fallback takes.
 func randomRegistry(t *testing.T) *machine.Registry {

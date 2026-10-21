@@ -2,8 +2,11 @@ package machine
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -133,6 +136,87 @@ func recordsOfMoney(t *testing.T) Value {
 		t.Fatal(err)
 	}
 	return items
+}
+
+// openingAll is readable as it was: every container walked to its leaves.
+func openingAll(t *money.Currencies, value Value) ([]byte, error) {
+	return json.Marshal(jsonTree(value, func(v Value) bool {
+		return v.kind == ArrayKind || v.kind == DictKind || v.kind == RecordKind
+	}, readableLeaf(t)))
+}
+
+// unordered is an array and a dictionary of one record whose fields are not
+// in name order.
+func unordered(t *testing.T) (Value, Value) {
+	t.Helper()
+	typ := RecordOf(Field{name: "b", typ: IntType}, Field{name: "a", typ: StringType})
+	record, err := Record(typ, []Value{Int(1), String("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey, err := Dict(typ, map[string]Value{"k": record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nestedOf(typ, []Value{record}), byKey
+}
+
+// Only what holds money is walked; everything else is written whole, and
+// either way the bytes, and the failures, are the ones walking it all wrote.
+func TestEncodeJSONWritesWhatHoldsNoMoneyWhole(t *testing.T) {
+	t.Parallel()
+	registry := declared(t, money.CurrencySpec{Code: "USD", Digits: 2}, money.CurrencySpec{Code: "KWD", Digits: 3})
+	records, recordsByKey := unordered(t)
+	for name, value := range map[string]Value{
+		"an empty array":            mustValue(t, []int64{}),
+		"a nil array":               mustValue(t, []float64(nil)),
+		"an empty dictionary":       mustValue(t, map[string]float64{}),
+		"floats":                    mustValue(t, []float64{1, 2.5, math.Copysign(0, -1), 1e21}),
+		"a float that JSON refuses": mustValue(t, []float64{1, math.NaN()}),
+		"strings":                   mustValue(t, []string{"<a&b>", ""}),
+		"arrays of floats":          mustValue(t, [][]float64{{1}, {}}),
+		"durations":                 nestedOf(DurationType, []Value{Duration(time.Second), Duration(0)}),
+		"records without money":     records,
+		"a dictionary of records":   recordsByKey,
+		"amounts":                   mustValue(t, []money.Money{money.Make("USD", 1), {}}),
+		"arrays of money":           nestedMoney(t),
+		"records of money":          recordsOfMoney(t),
+		"a dictionary of money":     mustValue(t, map[string]money.Money{"b": money.Make("KWD", 1), "a": {}}),
+		"a bare zero":               MoneyValue(0, ""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			want, wantErr := openingAll(registry.currencies(), value)
+			got, err := registry.EncodeJSON(value)
+			if string(got) != string(want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
+				t.Fatalf("EncodeJSON(%s) = %s, %v, want %s, %v", value.Type(), got, err, want, wantErr)
+			}
+		})
+	}
+}
+
+// An array with no money in it is written whole: its allocations do not
+// grow with its length.
+func TestEncodeJSONDoesNotBoxEachFloat(t *testing.T) {
+	registry := declared(t, money.CurrencySpec{Code: "USD", Digits: 2})
+	allocs := func(n int) float64 {
+		value := arrayOf(make([]float64, n))
+		return testing.AllocsPerRun(10, func() { _, _ = registry.EncodeJSON(value) })
+	}
+	if short, long := allocs(10), allocs(10_000); long > short+4 {
+		t.Fatalf("EncodeJSON allocates %v times for 10 floats and %v for 10000, want about the same", short, long)
+	}
+}
+
+func BenchmarkEncodeJSONFloats(b *testing.B) {
+	registry := CoreRegistry()
+	if err := registry.DeclareMoney(money.MoneySpec{Currencies: []money.CurrencySpec{{Code: "USD", Digits: 2}}}); err != nil {
+		b.Fatal(err)
+	}
+	value := arrayOf(make([]float64, 10_000))
+	for b.Loop() {
+		_, _ = registry.EncodeJSON(value)
+	}
 }
 
 // A record that holds something JSON cannot write fails as a whole.

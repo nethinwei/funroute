@@ -223,6 +223,11 @@ func TestMoneyTimesACountIsExact(t *testing.T) {
 		"half of MinInt64 x2":  {usd(math.MinInt64 / 2), 2, usd(math.MinInt64), false},
 		"past MinInt64 by one": {usd(math.MinInt64/2 - 1), 2, Money{}, true},
 		"MaxInt64 times -1":    {usd(math.MaxInt64), -1, usd(-math.MaxInt64), false},
+		"-1 times MinInt64":    {usd(-1), math.MinInt64, Money{}, true},
+		"1 times MinInt64":     {usd(1), math.MinInt64, usd(math.MinInt64), false},
+		"MinInt64 squared":     {usd(math.MinInt64), math.MinInt64, Money{}, true},
+		"MaxInt64 squared":     {usd(math.MaxInt64), math.MaxInt64, Money{}, true},
+		"-1 times -1":          {usd(-1), -1, usd(1), false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -232,6 +237,32 @@ func TestMoneyTimesACountIsExact(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A count multiplies as the 128-bit product would, refusing what does not
+// fit: on every pair of edge values, the same answer as a·b/1.
+func TestMulInt64IsTheWideProduct(t *testing.T) {
+	t.Parallel()
+	edges := []int64{0, 1, -1, 2, -2, 3, math.MaxInt64, math.MinInt64, math.MaxInt64 / 2, math.MinInt64 / 2,
+		math.MinInt64/2 - 1, math.MaxInt64/2 + 1, 1 << 32, -1 << 32, 1<<31 + 1, 3037000499, 3037000500, -3037000500}
+	for _, a := range edges {
+		for _, b := range edges {
+			got, err := mulInt64(a, b)
+			want, wantErr := mulDivRound(a, b, 1, RoundDown)
+			if got != want || (err == nil) != (wantErr == nil) || (err != nil && err.Error() != wantErr.Error()) {
+				t.Fatalf("mulInt64(%d, %d) = %d, %v, want %d, %v", a, b, got, err, want, wantErr)
+			}
+		}
+	}
+}
+
+func BenchmarkMoneyMulInt(b *testing.B) {
+	m := usd(123456789)
+	var sink Money
+	for b.Loop() {
+		sink, _ = m.MulInt(37)
+	}
+	_ = sink
 }
 
 // Money times a ratio lands on the minor unit once, by the mode the caller

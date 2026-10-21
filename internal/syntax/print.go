@@ -128,7 +128,12 @@ func (p *printer) operatorSource(match operatorMatch, parent int) string {
 	case "index":
 		return p.postfixBase(match.operands[0]) + "[" + p.inline(match.operands[1], 0) + "]"
 	case "prefix":
-		text = spec.token + p.inline(match.operands[0], spec.precedence)
+		operand := p.inline(match.operands[0], spec.precedence)
+		if strings.HasPrefix(operand, "-") {
+			// - -x, not --x: two minuses apart read as the two they are.
+			operand = " " + operand
+		}
+		text = spec.token + operand
 	default:
 		// Left associative: a right operand of the same precedence keeps its
 		// parentheses, so a - (b - c) stays and (a - b) - c loses them; a

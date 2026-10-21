@@ -133,8 +133,9 @@ func (r *vecRun) resolveBlock(run *vecBlockRun, block *vecBlock) bool {
 		ok = ok && run.fold.kind == r.acc.kind && foldKind(block.fold.op) == r.acc.kind
 	}
 	if ok && block.collect != -1 {
+		// A loop that folds has no column to collect into.
 		run.collect, ok = r.operand(block.collect, block.collectCol, block.collectKind)
-		ok = ok && run.collect.kind == r.out.vecKind()
+		ok = ok && r.out != nil && run.collect.kind == r.out.vecKind()
 	}
 	if ok && block.cond != -1 {
 		run.cond, ok = r.operand(block.cond, block.condCol, BoolKind)

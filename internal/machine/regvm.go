@@ -122,8 +122,12 @@ func (f *frame) fault(pc int) error {
 		return err
 	}
 	function := f.runtime.functions[source.A]
-	args := []Value{left, right, {}}[:len(function.Params)]
-	if in.op == rSliceS {
+	// The arguments follow the function's parameters, not the operation's
+	// operands: nothing holds a kernel operation to three, and a fault is
+	// the cold path, which may allocate.
+	args := make([]Value, len(function.Params))
+	copy(args, []Value{left, right})
+	if in.op == rSliceS && len(args) > 2 {
 		// Its third operand is where lowering put it, untouched by a refusal.
 		args[2] = Value{kind: IntKind, i: f.ints[in.c]}
 	}
