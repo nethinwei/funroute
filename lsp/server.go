@@ -37,9 +37,10 @@ type Server struct {
 	// document shows it, since nothing compiles against a broken contract.
 	contractErr error
 	exited      bool
-	// callableItems is the completion list of the registry's functions and
-	// forms, built on first use.
-	callableItems []completionItem
+	// callableJSON is the completion list of the registry's functions,
+	// forms and currencies, encoded on first use: every completion sends the
+	// same bytes.
+	callableJSON json.RawMessage
 }
 
 // New starts a session for registry. send receives every message the server

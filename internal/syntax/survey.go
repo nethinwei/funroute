@@ -27,6 +27,8 @@ type Survey struct {
 	// forms is the forms that bind names around the node being walked,
 	// innermost last, and how deep each is.
 	forms []boundForm
+	// freeRead is the names in First, so a read asks once whatever their count.
+	freeRead map[string]bool
 }
 
 // letRead is a read of a name a let binds, and how deep that let is.
@@ -46,9 +48,9 @@ const notPinned = int(^uint(0) >> 1)
 // SurveyOf walks root once by the scope rule, visiting every node parents
 // first, as Nodes does.
 func SurveyOf(root Expr, visit func(Expr)) *Survey {
-	s := &Survey{}
+	s := &Survey{freeRead: map[string]bool{}}
 	s.walk(root, nil, 0, visit)
-	s.forms = nil
+	s.forms, s.freeRead = nil, nil
 	return s
 }
 
@@ -83,7 +85,8 @@ func (s *Survey) walk(expr Expr, bound scope, depth int, visit func(Expr)) (int,
 func (s *Survey) read(variable *VariableExpr, bound scope) (int, []letRead) {
 	binder, local := bound.binder(variable.Name)
 	if !local {
-		if !slices.ContainsFunc(s.First, func(read *VariableExpr) bool { return read.Name == variable.Name }) {
+		if !s.freeRead[variable.Name] {
+			s.freeRead[variable.Name] = true
 			s.First = append(s.First, variable)
 		}
 		return -1, nil

@@ -31,6 +31,9 @@ func registerMoneyKernel(registry *Registry, table *money.Currencies) error {
 	k.registerFunctions(registry)
 	k.registerConvert(registry)
 	k.registerRateReading(registry)
+	for _, spec := range moneyKeyedSpecs() {
+		mustRegister(registry, spec)
+	}
 	registerRoundingScope(registry)
 	return nil
 }

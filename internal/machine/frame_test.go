@@ -3,6 +3,7 @@ package machine_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -173,7 +174,8 @@ func TestAnIdleFrameKeepsNothingOfTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := &wideRequest{A: 7, B: 3, Name: "adyen", Xs: []int64{1, 2}, Rates: map[string]int64{"k": 1},
+	// Long enough for the vector, which keeps a run of its own in the frame.
+	in := &wideRequest{A: 7, B: 3, Name: "adyen", Xs: slices.Repeat([]int64{1, 2}, 32), Rates: map[string]int64{"k": 1},
 		Order: wideOrder{Fee: 5, Tags: []string{"vip"}}, Items: []wideItem{{Name: "a", Fee: 1}, {Name: "bc", Fee: 2}}}
 	args := binding.Options().Args
 	itemType, _ := args[6].Type.Elem()
@@ -183,7 +185,8 @@ func TestAnIdleFrameKeepsNothingOfTheRun(t *testing.T) {
 			must(machine.Record(itemType, []machine.Value{machine.String("a"), machine.Int(1)})),
 			must(machine.Record(itemType, []machine.Value{machine.String("bc"), machine.Int(2)})),
 		}))}
-	sources := []string{"a + b", "a + len(xs)", "len(name) + b", "order.fee + len(order.tags)", "reduce(i in items, total = 0, total + i.fee + len(i.name))"}
+	sources := []string{"a + b", "a + len(xs)", "len(name) + b", "order.fee + len(order.tags)", "reduce(i in items, total = 0, total + i.fee + len(i.name))",
+		"reduce(x in xs, total = 0, total + x * 2)"}
 	for _, source := range sources {
 		program, err := binding.Compile(source)
 		if err != nil {
@@ -238,5 +241,26 @@ func TestAPurePanicIsTheCandidatesFailure(t *testing.T) {
 	}
 	if _, err := compileAndRunInt(t, `p.boom_v1(x) + 1`, registry); !errors.Is(err, machine.ErrExtension) {
 		t.Errorf("p.boom_v1(x) + 1: %v; want ErrExtension", err)
+	}
+}
+
+// A frame given back keeps nothing of the texts the run read by s[i] or
+// len(s): the text cursor lets go of the host's text whichever way the run
+// ends.
+func TestAFrameLetsGoOfTheTextItRead(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	artifact, err := compile.CompileExpr(`s[1]`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "s", Type: machine.StringType}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, straight := range []bool{false, true} {
+		if kept := machine.TextKeptAfter(runtime, "the host's text", straight); kept != "" {
+			t.Errorf("straight %v: the frame keeps %q", straight, kept)
+		}
 	}
 }

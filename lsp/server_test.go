@@ -112,7 +112,7 @@ func newSession(t *testing.T, registry *machine.Registry, capabilities string) *
 	return s
 }
 
-func standard(t *testing.T) *machine.Registry {
+func standard(t testing.TB) *machine.Registry {
 	t.Helper()
 	registry := machine.CoreRegistry()
 	if err := registry.EnableForm(machine.SwitchForm, machine.ForForm, machine.ReduceForm); err != nil {

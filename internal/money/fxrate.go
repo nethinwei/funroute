@@ -121,8 +121,10 @@ func (f FxRate) Inverse() (FxRate, error) {
 	return newFxRate(&Pair{Base: f.pair.Quote, Quote: f.pair.Base}, inverse)
 }
 
-// Chain is f and then next: base to quote, then quote onward. The chain from
-// a currency back to itself is no exchange rate.
+// Chain is f and then next: base to quote, then quote onward, the exact
+// product of the two. A chain back to the currency it started from keeps the
+// rule every rate of a currency to itself keeps: it is 1, or it is no
+// exchange rate — the spreads on the way are an ErrArithmetic, not lost.
 func (f FxRate) Chain(next FxRate) (FxRate, error) {
 	if f.pair == nil || next.pair == nil {
 		return FxRate{}, cmp.Or(f.checked(), next.checked())
@@ -131,11 +133,6 @@ func (f FxRate) Chain(next FxRate) (FxRate, error) {
 		return FxRate{}, fmt.Errorf("%w: %s→%s cannot follow %s→%s", ErrCurrency, next.pair.Base, next.pair.Quote, f.pair.Base, f.pair.Quote)
 	}
 	pair := &Pair{Base: f.pair.Base, Quote: next.pair.Quote}
-	if pair.Base == pair.Quote {
-		// Back where it started: a currency to itself is 1, whatever the
-		// spreads on the way cost.
-		return FxRate{pair: pair, rate: ratioOne}, nil
-	}
 	product, err := f.rate.Mul(next.rate)
 	if err != nil {
 		return FxRate{}, err
@@ -251,13 +248,15 @@ func (c *Currencies) Implied(over, under Money) (FxRate, error) {
 		return FxRate{}, fmt.Errorf("%w: %s %d and %s %d minor units imply no exchange rate: the amounts must be non-zero and of one sign",
 			ErrArithmetic, over.currency, over.minor, under.currency, under.minor)
 	}
-	ratio, err := ratioOf(over.minor, under.minor)
-	if err != nil {
-		return FxRate{}, err
-	}
 	// Minor units to major ones: over / 10^over's places, under / 10^under's,
-	// which is the factor from over's minor units to under's.
-	r, err := c.factor(over.currency, under.currency, ratio)
+	// one fraction reduced as a whole, so that it fails only when the rate
+	// does not fit — not when over / under alone would not.
+	o, u := magnitude(over.minor), magnitude(under.minor)
+	g := gcd(o, u)
+	overDigits, _ := c.Places(over.currency)
+	underDigits, _ := c.Places(under.currency)
+	up, down := tens(underDigits - overDigits)
+	r, err := fraction(false, []uint64{o / g, up}, []uint64{u / g, down})
 	if err != nil {
 		return FxRate{}, err
 	}
@@ -289,29 +288,70 @@ func (c *Currencies) convertAt(m Money, fx FxRate, mode Rounding) (Money, error)
 	if err := m.wellFormed(); err != nil {
 		return Money{}, err
 	}
-	factor, err := c.rateFactor(m.currency, fx)
+	if err := checkMode(mode); err != nil {
+		return Money{}, err
+	}
+	up, down, err := c.rescaling(m.currency, fx)
 	if err != nil {
 		return Money{}, err
 	}
-	minor, err := factor.times(m.minor, mode)
+	num, den := fx.rate.parts()
+	nums, dens := [3]uint64{magnitude(m.minor), uint64(num), up}, [3]uint64{1, uint64(den), down}
+	minor, err := roundedFraction(m.minor < 0, nums[:], dens[:], mode)
 	return Money{currency: fx.pair.Quote, minor: minor}, err
 }
 
-// rateFactor is the factor fx converts money in currency by: currency is
-// fx's base, or none for the currency-less zero.
-func (c *Currencies) rateFactor(currency string, fx FxRate) (Ratio, error) {
+// rescaling is the powers of ten fx's rate is multiplied and divided by to
+// take minor units of money in currency to minor units of the quote:
+// currency is fx's base, or none for the currency-less zero. One of the two
+// is 1. They are kept apart from the rate, never multiplied into it: the
+// amount may cancel what the rate alone could not hold.
+func (c *Currencies) rescaling(currency string, fx FxRate) (up, down uint64, err error) {
 	if currency != "" && currency != fx.pair.Base {
-		return Ratio{}, fmt.Errorf("%w: %s converted at %s→%s", ErrCurrency, currency, fx.pair.Base, fx.pair.Quote)
+		return 0, 0, fmt.Errorf("%w: %s converted at %s→%s", ErrCurrency, currency, fx.pair.Base, fx.pair.Quote)
 	}
-	return c.factor(fx.pair.Base, fx.pair.Quote, fx.rate)
+	// Declared, both have places; a rate the table does not know is still
+	// an error here, not a conversion at zero places.
+	fromDigits, err := c.Places(fx.pair.Base)
+	if err != nil {
+		return 0, 0, err
+	}
+	toDigits, err := c.Places(fx.pair.Quote)
+	if err != nil {
+		return 0, 0, err
+	}
+	up, down = tens(toDigits - fromDigits)
+	return up, down, nil
 }
 
-// factor is what minor units of from are multiplied by to be minor units of
-// to at rate: the rate rescaled between the two currencies' places.
-func (c *Currencies) factor(from, to string, r Ratio) (Ratio, error) {
-	fromDigits, _ := c.Places(from)
-	toDigits, _ := c.Places(to)
-	return r.scaleTen(toDigits - fromDigits)
+// tens is 10^shift as a multiplier and a divisor, one of them 1.
+func tens(shift int) (up, down uint64) {
+	if shift < 0 {
+		return 1, uint64(pow10(-shift))
+	}
+	return uint64(pow10(shift)), 1
+}
+
+// errDenominatorOverflow is a conversion whose reduced denominator — the
+// rate's, times the places one currency has past the other — is past 64
+// bits: the rate is too fine for the currencies, whatever the amount.
+var errDenominatorOverflow = fmt.Errorf("%w: the exchange rate is finer than a conversion between these currencies can hold", ErrArithmetic)
+
+// roundedFraction is ±(nums[0]·nums[1]·nums[2])/(dens[0]·dens[1]·dens[2])
+// rounded once by mode, crossed as fraction crosses them: the numerator is
+// 192 bits wide in between, so it fails only when the reduced denominator,
+// or the rounded result, does not fit.
+func roundedFraction(negative bool, nums, dens []uint64, mode Rounding) (int64, error) {
+	crossReduce(nums, dens)
+	den, fits := product64(dens)
+	if !fits {
+		return 0, errDenominatorOverflow
+	}
+	q, r, err := mulDiv3Parts(nums[0], nums[1], nums[2], den)
+	if err != nil {
+		return 0, err
+	}
+	return rounded(negative, q, r, den, mode)
 }
 
 // pairOf is the table's one fxPair for two declared currencies, made the

@@ -21,8 +21,10 @@ type Runtime struct {
 	money moneyPlan
 	// depth is how deep the stack gets, which loading proved.
 	depth int
-	// reg is the program in register form, which is what runs.
-	reg regProgram
+	// reg is the program in register form, which is what runs; batch the
+	// calls of it a Batch hoists.
+	reg   regProgram
+	batch batchPlan
 	// scalars is, by argument, the kind of a bool, int, float or string
 	// parameter, which a value of that kind has without looking further;
 	// InvalidKind for the rest.
@@ -98,10 +100,12 @@ func newRuntime(artifact *Artifact, registry *Registry) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Runtime{
+	runtime := &Runtime{
 		artifact: artifact, registry: registry, constants: constants, functions: functions, depth: proof.depth, reg: reg,
 		money: newMoneyPlan(artifact, registry), scalars: scalarKinds(artifact.parts.Args),
-	}, nil
+	}
+	runtime.batch = planBatch(runtime)
+	return runtime, nil
 }
 
 // scalarKinds is what Runtime.scalars says of params.
@@ -264,7 +268,7 @@ func loadConstants(artifact *Artifact) ([]Value, error) {
 func bindFunctions(artifact *Artifact, registry *Registry) ([]*RegisteredFunction, error) {
 	functions := make([]*RegisteredFunction, len(artifact.parts.Calls))
 	for i, call := range artifact.parts.Calls {
-		function, ok := registry.Resolve(call.Signature)
+		function, ok := ResolveOf(registry, call.Signature)
 		if !ok {
 			return nil, fmt.Errorf("required function is not registered: %s", call.Signature)
 		}
@@ -332,6 +336,9 @@ func validateLoopInstruction(instruction Instruction, artifact *Artifact, fail f
 		return fail("malformed loop type")
 	}
 	if instruction.Op == OpLoopCollect {
+		if instruction.A != 0 && instruction.A != 1 || instruction.B != 0 || instruction.C != 0 || instruction.D != 0 {
+			return fail("malformed loop_collect operands")
+		}
 		return nil
 	}
 	if instruction.A < 0 || instruction.A > len(artifact.parts.Instructions) {
@@ -345,6 +352,11 @@ func validateLoopInstruction(instruction Instruction, artifact *Artifact, fail f
 	}
 	if instruction.D != NoKey && (instruction.D < 0 || instruction.D >= artifact.parts.Locals) {
 		return fail("malformed loop key slot %d", instruction.D)
+	}
+	// The item, the key and the accumulator are bound at once: in one slot
+	// one of them would be read as another.
+	if instruction.Op == OpLoopInit && (instruction.D == instruction.B || instruction.C != NoAccumulator && (instruction.C == instruction.B || instruction.C == instruction.D)) {
+		return fail("loop slots %d, %d and %d are not distinct", instruction.B, instruction.D, instruction.C)
 	}
 	if instruction.C == NoAccumulator {
 		// A comprehension builds an array, or a dictionary when it has a key.

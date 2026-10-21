@@ -82,9 +82,51 @@ func declaredValue(table *money.Currencies, value Value, ordered bool) error {
 		if value.kind != RecordKind && !containsUnits(value.elemType()) {
 			return nil
 		}
+		if amounts, ok := nativeItems[money.Money](value); ok {
+			return declaredAmounts(table, amounts)
+		}
+		if view, ok := value.box.(*recordsView); ok {
+			return declaredView(table, view)
+		}
 		return value.eachPart(ordered, func(part Value) error { return declaredValue(table, part, ordered) })
 	}
 	return nil
+}
+
+// declaredAmounts is declaredValue of an array of amounts, which is nearly
+// always in one currency: a currency the item before was found declared in
+// is not looked up again, so the walk is a comparison an item, not a lookup.
+// What it refuses, and the item it says, is eachPart's.
+func declaredAmounts(table *money.Currencies, amounts []money.Money) error {
+	declared := ""
+	for i, amount := range amounts {
+		if currency := amount.Currency(); currency == declared && currency != "" {
+			continue
+		}
+		if err := declaredValue(table, MoneyValue(amount.Minor(), amount.Currency()), false); err != nil {
+			return fmt.Errorf("item %d: %w", i, err)
+		}
+		declared = amount.Currency()
+	}
+	return nil
+}
+
+// declaredView is declaredValue of an array of records in the host's
+// memory: each amount and currency read where it is, with no record made of
+// an item, and, as declaredAmounts, a currency found declared just before
+// not looked up again. What it refuses, and where it says, is eachPart's.
+func declaredView(table *money.Currencies, view *recordsView) error {
+	declared := ""
+	return view.units(func(item, field int, unit Value) error {
+		if unit.s == declared && unit.s != "" {
+			return nil
+		}
+		if err := declaredValue(table, unit, false); err != nil {
+			return fmt.Errorf("item %d: field %q: %w", item, view.plan.elem.typ.fields[field].name, err)
+		}
+		declared = unit.s
+		return nil
+	})
 }
 
 func declaredCode(table *money.Currencies, currency string) error {

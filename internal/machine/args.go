@@ -10,7 +10,8 @@ import (
 
 // DecodeArgs reads a program's arguments from a JSON object. Numbers stay
 // json.Number, so an integer keeps every digit on its way to the contract's
-// type; anything after the object is refused rather than ignored.
+// type; anything after the object is refused rather than ignored. Nothing,
+// or null, is no arguments: an empty map, never a nil one.
 func DecodeArgs(data []byte) (map[string]any, error) {
 	args := map[string]any{}
 	if len(bytes.TrimSpace(data)) == 0 {
@@ -22,6 +23,9 @@ func DecodeArgs(data []byte) (map[string]any, error) {
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, fmt.Errorf("%w: args: trailing data after the object", ErrContract)
+	}
+	if args == nil {
+		return map[string]any{}, nil // the null Decode wrote over the map
 	}
 	return args, nil
 }

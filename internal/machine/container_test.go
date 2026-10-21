@@ -37,8 +37,8 @@ var nativeSamples = map[Kind]any{
 
 // natives is the one list of backings, and every switch that reads one
 // answers for each entry: the builders build it, the operations read it,
-// fromGo takes it as it is and the unsafe codecs hand it over without a
-// copy. A backing added to the list and missed by any of them fails here.
+// fromGo takes it as it is, its element type is told, and the unsafe codecs
+// hand it over without a copy, each at its constant's place in the list. A backing added to the list and missed by any of them fails here.
 func TestEveryBackingIsHandledEverywhere(t *testing.T) {
 	t.Parallel()
 	if nativeBoolMap != native(len(natives)) {
@@ -72,6 +72,9 @@ func checkBacking(t *testing.T, registry *Registry, container reflect.Value, typ
 	if err != nil || reflect.TypeOf(nativeAny(value)) != container.Type() || value.length() != 1 {
 		t.Fatalf("fromGo(%s) = %T, %v, want the %s itself", container.Type(), nativeAny(value), err, container.Type())
 	}
+	if elem := item.Type(); !value.elemType().Equal(elem) || !value.elemIs(&elem) {
+		t.Fatalf("the elements of %s are %s, want %s", container.Type(), value.elemType(), elem)
+	}
 	one, ok := value.at(0), true
 	if typ.kind == DictKind {
 		one, ok = value.lookup("k")
@@ -88,11 +91,50 @@ func checkBacking(t *testing.T, registry *Registry, container reflect.Value, typ
 		if built := builder.finish(); reflect.TypeOf(nativeAny(built)) != container.Type() || !ok || reflect.ValueOf(nativeAny(part)).UnsafePointer() != container.UnsafePointer() {
 			t.Fatalf("the builder of %s makes a %T, want a %s", item.Type(), nativeAny(built), container.Type())
 		}
+		if moved := rearranged(value, 1, func(int) int { return 0 }); reflect.TypeOf(nativeAny(moved)) != container.Type() || !moved.at(0).Equal(item) {
+			t.Fatalf("rearranged(%s) is a %T holding %v, want a %s holding %v", container.Type(), nativeAny(moved), moved.at(0), container.Type(), item)
+		}
+		checkArena(t, item)
 	}
 	if !ok || !one.Equal(item) {
 		t.Fatalf("the item of %s reads %v, want %v", container.Type(), one, item)
 	}
+	if copied := owned(value); reflect.ValueOf(nativeAny(copied)).UnsafePointer() == container.UnsafePointer() || !copied.Equal(value) {
+		t.Fatalf("owned(%s) shares its memory or differs from it", container.Type())
+	}
 	checkCodec(t, registry, container, typ, want)
+}
+
+// checkArena holds an array of item's kind, when a frame's slot may hold
+// one, to the slot's builder: the item reads back as it went in.
+func checkArena(t *testing.T, item Value) {
+	t.Helper()
+	if !arenaElem(item.kind) {
+		return
+	}
+	var slot arenaSlot
+	builder := builderIn(&slot, item.Type(), 1)
+	builder.add(item)
+	built := finishIn(&slot, &builder)
+	if held := slotArray(built); built.length() != 1 || held.length() != 1 || !held.at(0).Equal(item) {
+		t.Fatalf("an arena array of %s is a %T, want the slot's slice holding %v", item.Type(), built.box, item)
+	}
+}
+
+// slotArray is an arena array as the native array its slot's slice is; the
+// zero Value for a box no slot holds.
+func slotArray(v Value) Value {
+	switch box := v.box.(type) {
+	case *[]bool:
+		return arrayOf(*box)
+	case *[]int64:
+		return arrayOf(*box)
+	case *[]float64:
+		return arrayOf(*box)
+	case *[]string:
+		return arrayOf(*box)
+	}
+	return Value{}
 }
 
 // checkCodec plans a codec for the container's Go type and has it load the

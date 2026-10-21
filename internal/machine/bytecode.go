@@ -114,10 +114,10 @@ type Constant struct {
 // constant of typ, the type the program gives it — for an enum member more
 // than the string it holds. A literal list or record that does not read an
 // argument is built once, while the rule compiles, rather than on every run.
-// It reports false for a value that has no constant form: a handle, exact
-// money, or a value that is not of typ.
+// It reports false for a value that has no constant form: one whose type
+// holds a handle anywhere, exact money, or a value that is not of typ.
 func ConstantOf(value Value, typ Type) (Constant, bool) {
-	if value.kind == HandleKind || IsExact(value) || !typ.IsConcrete() || !value.hasType(typ) {
+	if TypeContains(typ, HandleKind) || IsExact(value) || !typ.IsConcrete() || !value.hasType(typ) {
 		return Constant{}, false
 	}
 	if data, ok := scalarJSON(value); ok {
@@ -262,6 +262,11 @@ type Instruction struct {
 	Type *Type    `json:"type,omitempty"`
 }
 
+// collectsKey reports a loop_collect of a dictionary comprehension, which
+// takes the key under the value. Its A is 1 then and 0 otherwise
+// (validateLoopInstruction); nothing reads A as a count.
+func (in Instruction) collectsKey() bool { return in.A == 1 }
+
 type CallReference struct {
 	Name      string `json:"name"`
 	Signature string `json:"signature"`
@@ -292,7 +297,8 @@ type ArtifactParts struct {
 // Artifact is a compiled program, frozen: its bytecode, its contract and the
 // digest over both. A host gets one from a compile, stores and loads it as
 // JSON, and reads its contract through the methods; nothing else can change
-// it, and Instantiate checks every part again anyway.
+// it, and Instantiate checks every part again anyway: what makes it safe to
+// run, not every proof of the compiler's (docs/semantics.md S7).
 type Artifact struct{ parts ArtifactParts }
 
 // SealArtifact freezes parts into an artifact: the version, the money stamp

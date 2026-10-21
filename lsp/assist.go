@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -14,12 +15,20 @@ import (
 )
 
 func (s *Server) formatting(doc *document) (any, error) {
-	if formatted, err := syntax.FormatSource(doc.text); err == nil && formatted != doc.text {
+	formatted, err := syntax.FormatSource(doc.text)
+	switch {
+	case err == nil && formatted != doc.text:
 		return []textEdit{{Range: doc.whole(s.encoding), NewText: formatted}}, nil
+	case err != nil:
+		// A text that does not parse is left as it is, like one already
+		// formatted: the diagnostics already say why, and a failed request
+		// would only add a popup. One that parses has nothing in the
+		// diagnostics to say why — a comment inside the expression — so the
+		// request says it.
+		if _, parsed := syntax.Parse(doc.text); parsed == nil {
+			return nil, err
+		}
 	}
-	// A text that cannot be formatted is left as it is, like one already
-	// formatted: the diagnostics already say why, and a failed request would
-	// only add a popup.
 	return []textEdit{}, nil
 }
 
@@ -36,6 +45,10 @@ func (s *Server) hover(doc *document, offset int) (any, error) {
 		return null, nil
 	}
 	name := doc.text[fact.Span.Start:fact.Span.End]
+	if fact.Reference != "" {
+		// A name read in parentheses spans them: (fee) is fee.
+		name = strings.Trim(name, "() \t")
+	}
 	text := name
 	if fact.Type != nil {
 		text += ": " + fact.Type.String()
@@ -50,7 +63,7 @@ func (s *Server) hover(doc *document, offset int) (any, error) {
 
 func (s *Server) explain(doc *document, fact compile.NodeFact, name string) []string {
 	var out []string
-	if function, ok := s.registry.Resolve(fact.Signature); ok {
+	if function, ok := machine.ResolveOf(s.registry, fact.Signature); ok {
 		out = append(out, "`"+fact.Signature+"`", describe(function.Doc)+examples(function.Doc.Examples))
 	}
 	if fact.Reference == "argument" {
@@ -76,6 +89,10 @@ func (s *Server) explain(doc *document, fact compile.NodeFact, name string) []st
 // is the literal as written, so any space may part the code from the figure
 // and the figure may carry a sign and _ separators (JPY -1_000).
 func (s *Server) minorUnits(text string) string {
+	// A literal written in parens covers them: (USD 1.70) is USD 1.70.
+	for text = strings.TrimSpace(text); len(text) >= 2 && text[0] == '(' && text[len(text)-1] == ')'; {
+		text = strings.TrimSpace(text[1 : len(text)-1])
+	}
 	words := strings.Fields(text)
 	if len(words) != 2 {
 		return ""
@@ -112,7 +129,7 @@ func examples(list []machine.Example) string {
 // a name the kernel and a pack share has examples from both.
 func (s *Server) namedExamples(name string) []machine.Example {
 	var out []machine.Example
-	for _, function := range s.registry.Overloads(name) {
+	for _, function := range machine.OverloadsOf(s.registry, name) {
 		for _, example := range function.Doc.Examples {
 			if !slices.Contains(out, example) {
 				out = append(out, example)
@@ -128,11 +145,17 @@ func (s *Server) namedExamples(name string) []machine.Example {
 // orders them by kind, nearest first — locals, arguments, functions, forms,
 // currencies — then by name.
 func (s *Server) completion(doc *document, offset int) (any, error) {
-	if offset > 0 && doc.text[offset-1] == '@' {
+	if inTextOrComment(doc, offset) {
+		return []completionItem{}, nil
+	}
+	if typingEnum(doc, offset) {
 		return s.enumMembers(), nil
 	}
 	// Where only a field can be named — of the record being updated, or of
 	// the items a selector reads — only fields are offered.
+	// Only fields are offered where only a field can be named: of the record
+	// being updated, after a with, or of the items a selector reads, after
+	// its dot. Elsewhere neither is looked for: each parses the text twice.
 	if fields, ok := s.updateFields(doc, offset); ok {
 		return fields, nil
 	}
@@ -143,10 +166,23 @@ func (s *Server) completion(doc *document, offset int) (any, error) {
 	for _, arg := range s.arguments(doc) {
 		items = append(items, completionItem{Label: arg.Name(), Kind: kindVariable, SortText: "1" + arg.Name(), Detail: arg.Type().String(), Documentation: markdown(arg.Doc())})
 	}
-	for _, name := range localsAt(doc.text, offset) {
+	for _, name := range localsAt(doc, offset) {
 		items = append(items, completionItem{Label: name, Kind: kindVariable, SortText: "0" + name, Detail: "局部名"})
 	}
-	return append(append(items, s.callables()...), s.currencies()...), nil
+	return withCallables(items, s.callables())
+}
+
+// withCallables is items followed by the callables, as the one JSON array
+// they make: the callables, the same on every completion, were encoded once.
+func withCallables(items []completionItem, callables json.RawMessage) (json.RawMessage, error) {
+	if len(items) == 0 {
+		return callables, nil
+	}
+	head, err := json.Marshal(items)
+	if err != nil || string(callables) == "[]" {
+		return head, err
+	}
+	return slices.Concat(head[:len(head)-1], []byte(","), callables[1:]), nil
 }
 
 // currencies are the registry's declared currencies, written as their codes.
@@ -181,9 +217,9 @@ const placeholder = "funroute_completion"
 // parses, so when it does not, the text is tried again with a name at the
 // cursor and the brackets still open there closed, the way the parser would
 // need to see it: let(rate = fee, | becomes let(rate = fee, funroute_completion).
-func localsAt(text string, offset int) []string {
-	for _, candidate := range completionCandidates(text, offset) {
-		if tree, err := syntax.Parse(candidate); err == nil {
+func localsAt(doc *document, offset int) []string {
+	for _, candidate := range completionCandidates(doc.text, offset) {
+		if tree, err := doc.parse(candidate); err == nil {
 			return syntax.ScopeAt(tree, offset)
 		}
 	}
@@ -227,13 +263,15 @@ func openBrackets(prefix string) string {
 	return string(closers)
 }
 
-// callables is every function and form the registry offers. The registry is
-// fixed for the session, so the list is built once.
-func (s *Server) callables() []completionItem {
-	if s.callableItems == nil {
-		s.callableItems = s.buildCallables()
+// callables is every function, form and currency the registry offers. The
+// registry is fixed for the session, so the list is built once.
+func (s *Server) callables() json.RawMessage {
+	if s.callableJSON == nil {
+		// Never null: no callable is an empty list.
+		items := append([]completionItem{}, s.buildCallables()...)
+		s.callableJSON, _ = json.Marshal(items) // strings and ints: it cannot fail
 	}
-	return s.callableItems
+	return s.callableJSON
 }
 
 func (s *Server) buildCallables() []completionItem {
@@ -244,7 +282,7 @@ func (s *Server) buildCallables() []completionItem {
 			continue
 		}
 		seen[function.Name()] = true
-		overloads := len(s.registry.Overloads(function.Name()))
+		overloads := len(machine.OverloadsOf(s.registry, function.Name()))
 		detail := function.Signature()
 		if overloads > 1 {
 			detail = fmt.Sprintf("%s（共 %d 个签名）", detail, overloads)
@@ -259,7 +297,7 @@ func (s *Server) buildCallables() []completionItem {
 			items = append(items, completionItem{Label: name, Kind: kindKeyword, SortText: "3" + name, Documentation: markdown(describe(doc) + examples(doc.Examples))})
 		}
 	}
-	return items
+	return append(items, s.currencies()...)
 }
 
 // enumMembers lists every member of every enum the contract declares, and
@@ -300,19 +338,51 @@ func markdown(text string) *markupContent {
 	return &markupContent{Kind: "markdown", Value: text}
 }
 
+// inTextOrComment reports a cursor inside a string or a comment, where no
+// name is written: past a string's opening quote and before its closing
+// one — or anywhere after it, in one being typed that has none yet — or
+// after a comment's // up to its line's end.
+func inTextOrComment(doc *document, offset int) bool {
+	for _, lexeme := range lexemesOf(doc) {
+		open := lexeme.Class == syntax.ClassInvalid && doc.text[lexeme.Start] == '"'
+		switch {
+		case lexeme.Start >= offset:
+			return false
+		case lexeme.Class == syntax.ClassString && offset < lexeme.End,
+			(lexeme.Class == syntax.ClassComment || open) && offset <= lexeme.End:
+			return true
+		}
+	}
+	return false
+}
+
+// typingEnum reports a cursor at the end of an @ or of an @member being
+// typed — @, @half_e — and not of an @ inside a string or a comment.
+func typingEnum(doc *document, offset int) bool {
+	for _, lexeme := range lexemesOf(doc) {
+		if lexeme.Start < offset && offset <= lexeme.End {
+			return lexeme.Class == syntax.ClassEnum || lexeme.Class == syntax.ClassInvalid && doc.text[lexeme.Start] == '@'
+		}
+	}
+	return false
+}
+
 // signatureHelp names the call the cursor is in and which argument it is on.
 // A call being typed does not parse yet, so it is found from the lexemes,
 // which the lexer produces for any text.
 func (s *Server) signatureHelp(doc *document, offset int) (any, error) {
 	lexemes := lexemesOf(doc)
 	name, active, ok := enclosingCall(doc.text, lexemes, offset)
-	overloads := s.registry.Overloads(name)
+	overloads := machine.OverloadsOf(s.registry, name)
 	if !ok || len(overloads) == 0 {
 		return null, nil
 	}
-	// The active signature is the first that has the argument being typed.
-	first := slices.IndexFunc(overloads, func(function *machine.RegisteredFunction) bool { return len(function.Params) > active })
-	help := signatureHelp{ActiveSignature: max(first, 0), ActiveParameter: active}
+	// The active signature is the first that has the argument being typed,
+	// or the first of all when none has.
+	first := max(slices.IndexFunc(overloads, func(function *machine.RegisteredFunction) bool { return len(function.Params) > active }), 0)
+	// Past the last parameter of the signature shown, its last parameter is
+	// the one being typed into: the index stays inside that signature.
+	help := signatureHelp{ActiveSignature: first, ActiveParameter: max(min(active, len(overloads[first].Params)-1), 0)}
 	for _, function := range overloads {
 		help.Signatures = append(help.Signatures, signatureOf(function))
 	}
@@ -331,7 +401,8 @@ func signatureOf(function *machine.RegisteredFunction) signatureInformation {
 }
 
 // enclosingCall walks back from offset to the "(" that opens the call it is
-// in, counting the commas at that level: the argument the cursor is on. A
+// in, past any that only group, counting the commas at that level: the
+// argument the cursor is on. A
 // bracket or brace on the way means the cursor is inside a container, whose
 // commas are not the call's. Other punctuation (":" of a record, "." of a
 // field) says nothing about where the call is.
@@ -349,10 +420,14 @@ func enclosingCall(text string, lexemes []syntax.Lexeme, offset int) (string, in
 				commas++
 			}
 		case "(":
-			if depth == 0 {
-				return callee(text, lexemes, i), commas, i > 0 && lexemes[i-1].Class == syntax.ClassIdentifier
+			if name, called := callee(text, lexemes, i); depth == 0 && called {
+				return name, commas, true
 			}
-			depth--
+			// A paren that only groups holds one expression: the call the
+			// cursor is in, if any, is further out, at the same argument.
+			if depth > 0 {
+				depth--
+			}
 		case "[", "{":
 			if depth == 0 {
 				commas = 0
@@ -364,9 +439,15 @@ func enclosingCall(text string, lexemes []syntax.Lexeme, offset int) (string, in
 	return "", 0, false
 }
 
-func callee(text string, lexemes []syntax.Lexeme, paren int) string {
-	if paren == 0 {
-		return ""
+// callee is the name a "(" calls, the name before it past any comment, and
+// false for a paren that only groups.
+func callee(text string, lexemes []syntax.Lexeme, paren int) (string, bool) {
+	before := paren - 1
+	for before >= 0 && lexemes[before].Class == syntax.ClassComment {
+		before--
 	}
-	return text[lexemes[paren-1].Start:lexemes[paren-1].End]
+	if before < 0 || lexemes[before].Class != syntax.ClassIdentifier {
+		return "", false
+	}
+	return text[lexemes[before].Start:lexemes[before].End], true
 }

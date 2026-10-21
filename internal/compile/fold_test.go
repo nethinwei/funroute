@@ -259,6 +259,21 @@ func TestClosedFailuresAreCompileErrors(t *testing.T) {
 		`fallback(1 / 0, 7)`,
 		`[1, 2][5]`,
 		`9223372036854775807 + 1`,
+		// The whole is closed too, and folds to the branch it takes: the
+		// branch it does not take is held to the same rule.
+		`if(true, 1, 1 / 0)`,
+		`false && 1 / 0 > 0`,
+		`switch(case true => 2, else => 1 / 0)`,
+		`fallback(1, 1 / 0)`,
+		`let(v = if(true, 1, 1 / 0), v)`,
+		// A closed part of a branch that is not itself closed, in a whole
+		// that folds: as it is when the whole reads an argument.
+		`sum([if(true, x, 1 / 0 + x) for x in [1, 2]])`,
+		`if(true, 1, if(use_bad, 2, 1 / 0))`,
+		// A let's name that folds is a constant to the branches under it.
+		`let(x = 0, if(true, 2, 1 / x))`,
+		`let(x = 0, switch(case true => 2, else => 1 / x))`,
+		`let(x = 0, y = x + 1, fallback(2, 1 / (y - 1)))`,
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
@@ -278,13 +293,23 @@ func TestClosedFailuresAreCompileErrors(t *testing.T) {
 }
 
 // A closed expression that fails is a compile error that says where: the
-// node that failed, not the start of the program.
+// node that failed, not the start of the program, nor the closed part a fold
+// ran whole — a branch taken as well as one stepped over, and inside a let.
 func TestAFailingFoldIsPlaced(t *testing.T) {
 	t.Parallel()
+	deep := "1 / 0" + strings.Repeat(" + 1", 900)
 	for source, want := range map[string]string{
 		"x + 1 / 0":                     "1 / 0",
 		"if(x > 0, [1, 2][5], 0)":       "[1, 2][5]",
 		"x * (9223372036854775807 + 1)": "(9223372036854775807 + 1)",
+		"if(true, 1, 1 / 0)":            "1 / 0",
+		"if(false, 1, 1 / 0)":           "1 / 0",
+		"x + if(false, 1, 1 / 0)":       "1 / 0",
+		"2 + 3 * (1 / 0)":               "(1 / 0)",
+		"let(a = 0, b = 2, b / a)":      "b / a",
+		"let(a = 5, [1, 2][a] + 1)":     "[1, 2][a]",
+		"let(a = 1 / 0, a)":             "1 / 0",
+		deep:                            "1 / 0",
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()

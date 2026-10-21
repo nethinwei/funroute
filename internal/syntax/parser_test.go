@@ -7,7 +7,9 @@ import (
 )
 
 // Every node's span lies inside its parent's, and the root covers the
-// program from its first token to its last.
+// program from its first token to its last. A literal an operator's
+// expansion writes in — the false of &&, the zero of a minus — covers no
+// source: its span is empty, at the operator.
 func TestSpansNest(t *testing.T) {
 	t.Parallel()
 	for _, source := range lexemeCorpus {
@@ -29,7 +31,8 @@ func TestSpansNest(t *testing.T) {
 func checkNested(t *testing.T, source string, parent Expr) {
 	t.Helper()
 	outer := parent.Extent()
-	if outer.Start < 0 || outer.End > len(source) || outer.End <= outer.Start {
+	_, literal := parent.(*LiteralExpr)
+	if outer.Start < 0 || outer.End > len(source) || outer.End < outer.Start || outer.End == outer.Start && !literal {
 		t.Fatalf("%q: %T has span %+v", source, parent, outer)
 	}
 	for _, child := range Children(parent) {
@@ -224,6 +227,18 @@ func TestElseLeadsToItsResultWithAnArrow(t *testing.T) {
 	}
 }
 
+// A call is named as ExprJSON names one: what the importer refuses, the
+// parser refuses too, so every program that parses exports and reads back.
+func TestACallTakesNoReservedName(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{`for(x)`, `in(x)`, `case(1)`, `else(1)`, `with(1)`} {
+		expr, err := Parse(source)
+		if err == nil || !strings.Contains(err.Error(), "invalid function name") {
+			t.Errorf("Parse(%s) = %v, %v; want the name refused", source, expr, err)
+		}
+	}
+}
+
 // An expression's tree is at most maxNesting nodes deep — calls, operators,
 // containers and subscripts alike, whether the parser read them by recursion
 // or by a loop — and one deeper is a syntax error at the node that went too
@@ -254,6 +269,30 @@ func TestNestingIsBounded(t *testing.T) {
 			var positioned *PosError
 			if !errors.As(err, &positioned) || !strings.Contains(err.Error(), "nests deeper than 1000 levels") {
 				t.Fatalf("Parse(%s) error = %v, want a positioned nesting error", name, err)
+			}
+		})
+	}
+}
+
+// The error reported is the first in the source, the lexer's or the
+// parser's; where both are at one piece, the lexer's says what it is.
+func TestTheFirstErrorIsReported(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		`1 2 @`:   "2",
+		`1 + 2 @`: "@",
+		`1 + @`:   "@",
+		`@ 1 2`:   "@",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(source)
+			positioned, ok := errors.AsType[*PosError](err)
+			if !ok {
+				t.Fatalf("Parse(%q) error = %v, want a *PosError", source, err)
+			}
+			if got := source[positioned.start:positioned.end]; got != want {
+				t.Errorf("%q: the error covers %q, want %q (%v)", source, got, want, err)
 			}
 		})
 	}

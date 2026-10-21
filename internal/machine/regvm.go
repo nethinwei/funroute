@@ -88,7 +88,8 @@ func branchUnless(cond bool, pc int, target int32) int {
 }
 
 // caught hands a failure to the innermost fallback that takes it: the
-// loops and usings its candidate opened are closed.
+// loops and usings its candidate opened are closed, the arrays they were
+// building left unfinished in their slots (arenaWrittenWhole).
 func (f *frame) caught(err error) (int, error) {
 	if len(f.fallbacks) == 0 {
 		return 0, err
@@ -99,11 +100,20 @@ func (f *frame) caught(err error) (int, error) {
 	last := len(f.fallbacks) - 1
 	handler := f.fallbacks[last]
 	f.fallbacks = f.fallbacks[:last]
+	if len(f.loops) > handler.loops {
+		f.arenaWrittenWhole()
+	}
 	clear(f.loops[handler.loops:])
 	f.loops = f.loops[:handler.loops]
 	f.dropScopes(handler.scopes)
 	return handler.target, nil
 }
+
+// faultOperands is the most operands fault hands a kernel function: the two
+// every operation reads, and rSliceS's end. A kernel operation for a function
+// of more parameters needs fault to know where its other operands are first
+// (TestKernelOpsCarryWhatFaultKnows).
+const faultOperands = 3
 
 // fault is why the operation at pc could not answer: the kernel function's
 // own failure, which asking it gives.
@@ -112,13 +122,25 @@ func (f *frame) fault(pc int) error {
 	origin := int(f.runtime.reg.origins[pc])
 	source := f.runtime.artifact.parts.Instructions[origin]
 	// The operands as the function takes them: values, out of their files.
-	left, right := unarena(f.valueAt(in.a, kinds.a)), f.valueAt(in.b, kinds.b)
+	left, right := unarena(f.valueAt(in.a, kinds.a)), unarena(f.valueAt(in.b, kinds.b))
 	if source.Op == OpEqual {
 		_, err := compareEqual(left, right)
 		return err
 	}
 	function := f.runtime.functions[source.A]
-	args := []Value{left, right}[:len(function.Params)]
+	// The arguments follow the function's parameters, which are the
+	// operation's operands: a function with more than fault knows of — a
+	// third anywhere but rSliceS's — would be asked with zeros for the rest,
+	// and answer for them. A fault is the cold path, which may allocate.
+	if len(function.Params) > faultOperands || len(function.Params) == faultOperands && in.op != rSliceS {
+		return fmt.Errorf("internal error: %s carries %d operands, fault knows at most %d", function.key, len(function.Params), faultOperands)
+	}
+	args := make([]Value, len(function.Params))
+	copy(args, []Value{left, right})
+	if in.op == rSliceS && len(args) > 2 {
+		// Its third operand is where lowering put it, untouched by a refusal.
+		args[2] = Value{kind: IntKind, i: f.ints[in.c]}
+	}
 	// A run with no call never had a context to keep.
 	ctx := f.ctx
 	if ctx == nil {

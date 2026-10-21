@@ -1,8 +1,10 @@
 package machine
 
 import (
+	"cmp"
 	"fmt"
 	"math"
+	"math/bits"
 	"slices"
 )
 
@@ -145,7 +147,7 @@ func statisticSpecs() []FunctionSpec {
 			Label: "标准差", Category: "聚合",
 			Description: "总体标准差（除以个数，不是个数减一）：数据就是全部时用它，衡量成功率或费率的抖动。空数组报错。",
 			Params:      []string{"数组"}, Result: "标准差",
-		}, deviationOf[int64], deviationOf[float64]),
+		}, intDeviationOf, deviationOf),
 		libEach("percentile", Doc{
 			Label: "分位数", Category: "聚合",
 			Description: "升序排列后的分位值，比例写 0 到 1（p95 就是 0.95），落在两个样本之间时线性插值。空数组报错。",
@@ -171,28 +173,83 @@ func medianOf[T int64 | float64](items []T) (float64, error) {
 		return 0, fmt.Errorf("%w: median of an empty array", ErrDomain)
 	}
 	sorted := append([]T(nil), items...)
-	slices.Sort(sorted)
 	middle := len(sorted) / 2
+	nth(sorted, middle)
 	if len(sorted)%2 == 1 {
 		return float64(sorted[middle]), nil
 	}
-	return (float64(sorted[middle-1]) + float64(sorted[middle])) / 2, nil
+	return (float64(slices.MaxFunc(sorted[:middle], ordered[T])) + float64(sorted[middle])) / 2, nil
 }
 
-func deviationOf[T int64 | float64](items []T) (float64, error) {
+func deviationOf(items []float64) (float64, error) {
 	mean, err := averageOf(items)
 	if err != nil {
 		return 0, fmt.Errorf("%w: stddev of an empty array", ErrDomain)
 	}
 	total := 0.0
 	for _, item := range items {
-		diff := float64(item) - mean
+		diff := item - mean
 		// The conversion rounds the square before it is added, as Go's spec
 		// has it, so no CPU fuses the two into one FMA: the answer is the
 		// same on every machine.
 		total += float64(diff * diff)
 	}
 	return math.Sqrt(total / float64(len(items))), nil
+}
+
+// intDeviationOf is stddev of ints, which past 2^53 a float64 does not tell
+// apart: each item's distance from the mean's floor is taken in integers, and
+// only then the mean's fraction off it, so items close to each other have a
+// deviation as exact as a float holds, however large they are.
+func intDeviationOf(items []int64) (float64, error) {
+	if len(items) == 0 {
+		return 0, fmt.Errorf("%w: stddev of an empty array", ErrDomain)
+	}
+	floor, rest := floorMean(items)
+	fraction := float64(rest) / float64(len(items))
+	total := 0.0
+	for _, item := range items {
+		diff := distance(item, floor) - fraction
+		// Rounded before it is added, as deviationOf's.
+		total += float64(diff * diff)
+	}
+	return math.Sqrt(total / float64(len(items))), nil
+}
+
+// floorMean is the mean of items as floor + rest/n, 0 <= rest < n, their sum
+// held in 128 bits. The sum is less than n·2^63 either way, so the high word
+// of its magnitude is below n and Div64 does not panic, and the floor, between
+// the least item and the greatest, is an int64.
+func floorMean(items []int64) (int64, uint64) {
+	var high, low uint64
+	for _, item := range items {
+		var carry uint64
+		low, carry = bits.Add64(low, uint64(item), 0)
+		// A negative item's high word is all ones.
+		high += carry + uint64(item>>63)
+	}
+	n := uint64(len(items))
+	if int64(high) >= 0 {
+		quotient, rest := bits.Div64(high, low, n)
+		return int64(quotient), rest
+	}
+	low, borrow := bits.Sub64(0, low, 0)
+	high, _ = bits.Sub64(0, high, borrow)
+	quotient, rest := bits.Div64(high, low, n)
+	if rest == 0 {
+		return -int64(quotient), 0
+	}
+	return -int64(quotient) - 1, n - rest
+}
+
+// distance is item - floor as a float, which subtracting int64s could
+// overflow: the difference of their bits is right modulo 2^64, and the
+// distance's magnitude is less than that.
+func distance(item, floor int64) float64 {
+	if item >= floor {
+		return float64(uint64(item) - uint64(floor))
+	}
+	return -float64(uint64(floor) - uint64(item))
 }
 
 func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) {
@@ -204,17 +261,100 @@ func percentileOf[T int64 | float64](items []T, ratio float64) (float64, error) 
 		return 0, fmt.Errorf("%w: a percentile is a ratio between 0 and 1, got %v", ErrArithmetic, ratio)
 	}
 	sorted := append([]T(nil), items...)
-	slices.Sort(sorted)
 	// Each product is rounded by a conversion before a sum takes it, so no
 	// CPU fuses them (stddev says why).
 	position := float64(ratio * float64(len(sorted)-1))
 	lower := int(math.Floor(position))
 	upper := int(math.Ceil(position))
+	nth(sorted, lower)
 	if lower == upper {
 		return float64(sorted[lower]), nil
 	}
+	// upper is lower + 1: the least of what nth left after lower.
 	weight := position - float64(lower)
-	return float64(float64(sorted[lower])*(1-weight)) + float64(float64(sorted[upper])*weight), nil
+	next := slices.MinFunc(sorted[upper:], ordered[T])
+	return float64(float64(sorted[lower])*(1-weight)) + float64(float64(next)*weight), nil
+}
+
+// nth puts at k the item sorting items would put there, the ones before it
+// before it in that order and the rest after: median and percentile need no
+// more of a sort than that. It is quickselect around three-way partitions,
+// so many equal items are no slower than distinct ones, its pivot the median
+// of three, and past a depth of twice the bits of the length what is left is
+// sorted, so no order of the items makes it quadratic.
+func nth[T int64 | float64](items []T, k int) {
+	lo, hi := 0, len(items)
+	for depth := 2 * bits.Len(uint(len(items))); hi-lo > 16; depth-- {
+		if depth == 0 {
+			break
+		}
+		below, above := partition(items[lo:hi])
+		switch {
+		case k < lo+below:
+			hi = lo + below
+		case k >= lo+above:
+			lo += above
+		default:
+			return
+		}
+	}
+	slices.SortFunc(items[lo:hi], ordered[T])
+}
+
+// partition orders items around a pivot, Tukey's ninther — the median of
+// the medians of three spread thirds — which sorted, reversed and organ-pipe
+// items do not fool: items[:below] before it, items[below:above] equal to
+// it, the rest after.
+func partition[T int64 | float64](items []T) (below, above int) {
+	n := len(items)
+	step := n / 8
+	at := func(i int) T { return items[i*step] }
+	pivot := medianOfThree(medianOfThree(at(0), at(1), at(2)), medianOfThree(at(3), at(4), at(5)), medianOfThree(at(6), at(7), items[n-1]))
+	below, above = 0, n
+	for i := 0; i < above; {
+		switch c := ordered(items[i], pivot); {
+		case c < 0:
+			items[below], items[i] = items[i], items[below]
+			below++
+			i++
+		case c > 0:
+			above--
+			items[i], items[above] = items[above], items[i]
+		default:
+			i++
+		}
+	}
+	return below, above
+}
+
+func medianOfThree[T int64 | float64](a, b, c T) T {
+	if ordered(a, b) > 0 {
+		a, b = b, a
+	}
+	if ordered(b, c) > 0 {
+		b = c
+	}
+	if ordered(a, b) > 0 {
+		b = a
+	}
+	return b
+}
+
+// ordered is the order median and percentile read items in: slices.Sort's,
+// a NaN first, and -0 before 0, which compare equal, so which zero is
+// where is never the sort's choice.
+func ordered[T int64 | float64](a, b T) int {
+	if c := cmp.Compare(a, b); c != 0 || a != 0 {
+		return c
+	}
+	return -cmp.Compare(boolInt(math.Signbit(float64(a))), boolInt(math.Signbit(float64(b))))
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // pairwiseSpecs are min and max on two values rather than on a list: a fee

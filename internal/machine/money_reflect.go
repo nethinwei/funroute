@@ -47,7 +47,8 @@ func intoOwnGo(value Value, typ reflect.Type) (reflect.Value, bool, error) {
 	if value.kind != want.kind {
 		return reflect.Value{}, true, fmt.Errorf("argument is %s, want %s", value.Type(), want)
 	}
-	return newOwnGo(typ, value), true, nil
+	converted, err := newOwnGo(typ, value)
+	return converted, true, err
 }
 
 // outOfOwnGo converts one of those Go values into a Value.

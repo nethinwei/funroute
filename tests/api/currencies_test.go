@@ -246,3 +246,122 @@ func TestAHostComputesBesideTheRule(t *testing.T) {
 		t.Fatalf("USD 1.00 at 150 JPY / USD = %v, %v, want JPY 150", yen, err)
 	}
 }
+
+// A rule hopping through a currency inside one round, and a host converting
+// once at the rate Chain multiplies, land on the same amount; a chain back
+// where it started with spreads on the way is no rate, and says so.
+func TestAChainedRateConvertsAsTheRuleHops(t *testing.T) {
+	t.Parallel()
+	registry := moneyConsole(t)
+	table, _ := registry.Currencies()
+	eurUSD, err := table.FxRate("EUR", "USD", "1.0837")
+	if err != nil {
+		t.Fatal(err)
+	}
+	usdJPY, err := table.FxRate("USD", "JPY", "151.37")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := funroute.CompileOptions{Args: []funroute.ArgSpec{{Name: "amount", Type: funroute.MoneyType}, {Name: "market", Type: funroute.ArrayOf(funroute.FxRateType)}}}
+	artifact, err := funroute.CompileExpr("using(market, round(amount -> USD -> JPY, @half_even))", registry, contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := funroute.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	euros, err := table.Parse("EUR 123.45")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := runtime.RunValues(t.Context(), []funroute.Value{valueOf(euros), valueOf([]funroute.FxRate{eurUSD, usdJPY})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chained, err := eurUSD.Chain(usdJPY)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := table.Convert(euros, chained, funroute.RoundHalfEven)
+	if rule, _ := value.Money(); err != nil || rule != host {
+		t.Fatalf("EUR 123.45 through USD to JPY: the rule gives %v, Chain and Convert %v, %v", rule, host, err)
+	}
+	usdEUR, err := table.FxRate("USD", "EUR", "0.92")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if home, err := eurUSD.Chain(usdEUR); !errors.Is(err, funroute.ErrArithmetic) {
+		t.Errorf("EUR→USD then USD→EUR with a spread = %v, %v, want ErrArithmetic", home, err)
+	}
+	assertTheRuleHopsHomeWhereChainRefuses(t, registry, contract)
+}
+
+// Through three currencies back to the first, a rule converts at the product
+// of the rates, 1.2 here, spreads and all; Chain has no rate of a currency to
+// itself but 1, and says so.
+func assertTheRuleHopsHomeWhereChainRefuses(t *testing.T, registry *funroute.Registry, contract funroute.CompileOptions) {
+	t.Helper()
+	table, _ := registry.Currencies()
+	rates := make([]funroute.FxRate, 0, 3)
+	for _, quote := range [][3]string{{"EUR", "USD", "1.25"}, {"USD", "JPY", "160"}, {"JPY", "EUR", "0.006"}} {
+		fx, err := table.FxRate(quote[0], quote[1], quote[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		rates = append(rates, fx)
+	}
+	artifact, err := funroute.CompileExpr("using(market, round(amount -> USD -> JPY -> EUR, @half_even))", registry, contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := funroute.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	euros, err := table.Parse("EUR 100.00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := runtime.RunValues(t.Context(), []funroute.Value{valueOf(euros), valueOf(rates)})
+	if got, _ := value.Money(); err != nil || got.Minor() != 12000 || got.Currency() != "EUR" {
+		t.Errorf("EUR 100.00 through USD and JPY home = %v, %v, want EUR 120.00", got, err)
+	}
+	toYen, err := rates[0].Chain(rates[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if home, err := toYen.Chain(rates[2]); !errors.Is(err, funroute.ErrArithmetic) {
+		t.Errorf("EUR→USD→JPY→EUR chained = %v, %v, want ErrArithmetic", home, err)
+	}
+}
+
+// RateHolder is a host struct holding an exchange rate.
+type RateHolder struct {
+	Rate funroute.FxRate `funroute:"rate"`
+}
+
+// The zero FxRate is no rate wherever a host hands it over — alone, in a
+// slice, in a struct — and says so as a currency error, by ToValue and by
+// Run alike.
+func TestAZeroRateAnywhereIsACurrencyError(t *testing.T) {
+	t.Parallel()
+	for name, input := range map[string]any{"alone": funroute.FxRate{}, "in a slice": []funroute.FxRate{{}}, "in a struct": RateHolder{}} {
+		if _, err := funroute.ToValue(input); !errors.Is(err, funroute.ErrCurrency) {
+			t.Errorf("ToValue(the zero rate %s) error = %v, want ErrCurrency", name, err)
+		}
+	}
+	registry := moneyConsole(t)
+	held := funroute.RecordOf(funroute.FieldOf("rate", funroute.FxRateType))
+	artifact, err := funroute.CompileExpr("r.rate", registry, funroute.CompileOptions{Args: []funroute.ArgSpec{{Name: "r", Type: held}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := funroute.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Run(t.Context(), map[string]any{"r": RateHolder{}}); !errors.Is(err, funroute.ErrCurrency) {
+		t.Errorf("Run with the zero rate in a struct: error = %v, want ErrCurrency", err)
+	}
+}

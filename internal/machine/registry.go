@@ -296,7 +296,8 @@ func (r *Registry) EnabledForms() []Form {
 // function could have). Two copies would drift.
 //
 // A function name may be dotted, to carry a namespace and a version:
-// route.score_v1. A variable name may not: "." is kept for field access. The
+// route.score_v1, each part named, so f..g and f. are not. A variable name
+// may not: "." is kept for field access. The
 // shapes are checked byte by byte rather than by a regular expression: the
 // run's boundary asks of every currency unit whether it is a variable, and a
 // regexp's matcher comes from a pool.
@@ -305,7 +306,7 @@ func nameShape(name string, dotted bool) bool {
 		return false
 	}
 	for i := 1; i < len(name); i++ {
-		if c := name[i]; !kit.IsNameChar(c) && (!dotted || c != '.') {
+		if c := name[i]; !kit.IsNameChar(c) && (!dotted || c != '.' || i+1 == len(name) || name[i+1] == '.') {
 			return false
 		}
 	}
@@ -356,8 +357,10 @@ func (r *Registry) Register(spec FunctionSpec) error {
 	if err := r.reflectSpec(&spec); err != nil {
 		return err
 	}
+	// Nothing the host holds stays shared: a ConstArgs changed after the
+	// registration would make the compiler index past a call's arguments.
 	spec.Params = cloneTypes(spec.Params)
-	spec.Doc.Params = append([]string(nil), spec.Doc.Params...)
+	spec.Doc = cloneDoc(spec.Doc)
 	if spec.Eval == nil && spec.special == specialNone {
 		return fmt.Errorf("function %s has no evaluator", spec.Name)
 	}
@@ -482,15 +485,26 @@ func validateTypePattern(t Type, vars map[string]bool) error {
 	}
 }
 
-// Overloads returns every signature registered under a name. Inference walks
-// them to find the ones an argument list can satisfy.
+// Overloads returns every signature registered under a name, each a copy:
+// what a host changes in one changes nothing in the registry.
 func (r *Registry) Overloads(name string) []*RegisteredFunction {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	functions := r.byName[name]
+	functions := OverloadsOf(r, name)
 	out := make([]*RegisteredFunction, len(functions))
-	copy(out, functions)
+	for i, function := range functions {
+		out[i] = function.snapshot()
+	}
 	return out
+}
+
+// snapshot is a copy of the function a caller may change as it likes.
+func (f *RegisteredFunction) snapshot() *RegisteredFunction {
+	copied := *f
+	copied.Params, copied.Doc = cloneTypes(f.Params), cloneDoc(f.Doc)
+	if f.Fold != nil {
+		fold := *f.Fold
+		copied.Fold = &fold
+	}
+	return &copied
 }
 
 // OverloadsOf is Overloads without the copy, for inference to walk: the
@@ -503,8 +517,19 @@ func OverloadsOf(r *Registry, name string) []*RegisteredFunction {
 	return slices.Clip(r.byName[name])
 }
 
-// Resolve looks up the exact signature a call is bound to.
+// Resolve looks up the exact signature a call is bound to: a copy, as
+// Overloads gives.
 func (r *Registry) Resolve(key string) (*RegisteredFunction, bool) {
+	function, ok := ResolveOf(r, key)
+	if !ok {
+		return nil, false
+	}
+	return function.snapshot(), true
+}
+
+// ResolveOf is Resolve without the copy, for the compiler, the machine and
+// the language service, which only read it.
+func ResolveOf(r *Registry, key string) (*RegisteredFunction, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	function, ok := r.byKey[key]

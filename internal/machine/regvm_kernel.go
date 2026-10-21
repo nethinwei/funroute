@@ -3,6 +3,7 @@ package machine
 import (
 	"math"
 	"math/bits"
+	"unicode/utf8"
 )
 
 // The kernel's arithmetic on its fast path. Each answers what builtins.go's
@@ -45,6 +46,16 @@ func modInt(a, b int64) (int64, bool) {
 		return 0, true
 	}
 	return a % b, true
+}
+
+// absI is the kernel's abs of an int: the smallest int has none, and the
+// function says so (fault).
+func absI(ints []int64, in *rinstr) bool {
+	value, err := absInt(ints[in.a])
+	if err == nil {
+		ints[in.c] = value
+	}
+	return err == nil
 }
 
 func addI(ints []int64, in *rinstr) bool {
@@ -203,6 +214,8 @@ func atI(b *banks, in *rinstr) bool {
 		b.ints[in.c] = itemsAt(items, array.i)[index]
 	case *[]int64:
 		b.ints[in.c] = (*items)[index]
+	default:
+		return false // a backing it does not read: the function answers
 	}
 	return true
 }
@@ -218,6 +231,8 @@ func atB(b *banks, in *rinstr) bool {
 		b.ints[in.c] = word(itemsAt(items, array.i)[index])
 	case *[]bool:
 		b.ints[in.c] = word((*items)[index])
+	default:
+		return false // a backing it does not read: the function answers
 	}
 	return true
 }
@@ -278,6 +293,114 @@ func atF(b *banks, in *rinstr) bool {
 		b.floats[in.c] = itemsAt(items, array.i)[index]
 	case *[]float64:
 		b.floats[in.c] = (*items)[index]
+	default:
+		return false // a backing it does not read: the function answers
 	}
+	return true
+}
+
+// textCursor is where in a text the last s[i] or len(s) of the run was: the
+// text, a character of it and the offset of the byte it starts at, and how
+// many characters the text has once one of them has counted them. The next
+// on the same text goes on from there, forward or back, so a loop down a
+// text, or up it, steps a character a turn, where counting from its start
+// each time would make the loop's work the square of the text's length.
+// Only the run's register operations keep it; the frame lets go of the text
+// when it is released.
+type textCursor struct {
+	text         string
+	char, offset int
+	// count is the text's characters, or -1 while none has counted them.
+	count int
+}
+
+// on is the cursor on text: as it was when it was on text already, and at
+// its start otherwise. Comparing the two is a comparison of their pointers
+// when they are one text, the case that matters; the zero cursor is on "",
+// whose count is 0.
+func (c *textCursor) on(text string) {
+	if c.text != text {
+		*c = textCursor{text: text, count: -1}
+	}
+}
+
+// to moves the cursor to character n, or as near as the text goes, and
+// reports whether it got there: to a character of the text, or to its end.
+func (c *textCursor) to(n int64) bool {
+	text := c.text
+	// Back is as far as forward from the start when n is less than half the
+	// way: past that, go back from here.
+	if n < int64(c.char) && n < int64(c.char)-n {
+		c.char, c.offset = 0, 0
+	}
+	for int64(c.char) > n {
+		_, size := utf8.DecodeLastRuneInString(text[:c.offset])
+		c.char, c.offset = c.char-1, c.offset-size
+	}
+	for int64(c.char) < n && c.offset < len(text) {
+		_, size := utf8.DecodeRuneInString(text[c.offset:])
+		c.char, c.offset = c.char+1, c.offset+size
+	}
+	if c.offset == len(text) {
+		c.count = c.char
+	}
+	return int64(c.char) == n
+}
+
+// charAt is at(string, int): the character at b of the text in a, the
+// bytes the text has there as evalStringAt reads them. Past the end, or
+// before the start, the function says why.
+func charAt(b *banks, in *rinstr) bool {
+	index := b.ints[in.b]
+	if index < 0 {
+		return false
+	}
+	c := &b.text
+	c.on(b.regs[in.a].s)
+	if !c.to(index) || c.offset == len(c.text) {
+		return false
+	}
+	_, size := utf8.DecodeRuneInString(c.text[c.offset:])
+	b.regs[in.c] = String(c.text[c.offset : c.offset+size])
+	return true
+}
+
+// textLength is len(string) of the text in a, counted once a text: from the
+// cursor on, what it has passed being counted already.
+func textLength(b *banks, in *rinstr) {
+	c := &b.text
+	c.on(b.regs[in.a].s)
+	if c.count < 0 {
+		c.count = c.char + utf8.RuneCountInString(c.text[c.offset:])
+	}
+	b.ints[in.c] = int64(c.count)
+}
+
+// textSlice is slice(string, int, int): of the text in a, the characters
+// from b up to the end in c's int, cut at their bytes as sliceString cuts
+// them. A range outside the text, or backwards, is the function's to say.
+func textSlice(b *banks, in *rinstr) bool {
+	start, end := b.ints[in.b], b.ints[in.c]
+	if start < 0 || end < start {
+		return false
+	}
+	c := &b.text
+	c.on(b.regs[in.a].s)
+	// The end goes on from where the cursor was when that is nearer than
+	// the start: slice(s, 0, i) down a text steps a character, as s[i] does.
+	before := *c
+	if !c.to(start) {
+		return false
+	}
+	from := c.offset
+	if before.char > c.char && int64(before.char) <= end {
+		count := c.count
+		*c = before
+		c.count = max(c.count, count)
+	}
+	if !c.to(end) {
+		return false
+	}
+	b.regs[in.c] = String(c.text[from:c.offset])
 	return true
 }

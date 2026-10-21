@@ -1,9 +1,9 @@
 package lsp
 
 import (
-	"encoding/json"
 	"strings"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -98,7 +98,4 @@ func (s sampler) record(fields []machine.Field) string {
 }
 
 // quoted is text as a JSON string.
-func quoted(text string) string {
-	encoded, _ := json.Marshal(text)
-	return string(encoded)
-}
+func quoted(text string) string { return string(kit.AppendJSONString(nil, text)) }

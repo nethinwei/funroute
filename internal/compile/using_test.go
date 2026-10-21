@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/machine"
+	"github.com/nethinwei/funroute/internal/syntax"
 )
 
 // fxContract is the arguments the using tests read: dollars, yen, amounts
@@ -59,6 +60,14 @@ func TestAUsingQuotesOnlyExchangeRates(t *testing.T) {
 				t.Fatalf("CompileExpr(%q) error = %v, want ErrCompile containing %q", source, err, want)
 			}
 		})
+	}
+	// A literal that cannot become a rate is refused as any quote is, at the
+	// quote.
+	for _, source := range []string{"using(0, a)", "using(0.5, a)", "using([0], a)"} {
+		_, err := compileMoney(t, source, fxContract, "")
+		if at, ok := errors.AsType[*syntax.PosError](err); !ok || at.Offset() != len("using(") || !strings.Contains(err.Error(), "using quotes exchange rates") {
+			t.Errorf("CompileExpr(%q) error = %v, want one at the quote saying using quotes exchange rates", source, err)
+		}
 	}
 }
 
@@ -166,10 +175,12 @@ func TestCompileUsingOpensAndClosesTheScope(t *testing.T) {
 }
 
 // A conversion outside every using has no rates to convert at, so it does
-// not compile: which rates a rule converts at is written in the rule.
+// not compile: which rates a rule converts at is written in the rule. That is
+// said first, before that a bare one lands between minor units, which a
+// round would not mend.
 func TestAConversionOutsideAUsingDoesNotCompile(t *testing.T) {
 	t.Parallel()
-	for _, source := range []string{"round(a -> JPY, @half_even)", "round(convert(a, JPY), @half_even)", "fx(USD, JPY)", "round(a -> JPY, @up)", "fallback(round(a -> JPY, @half_even), JPY 7)", "round(using(150 JPY / USD, a) -> JPY, @half_even)"} {
+	for _, source := range []string{"a -> JPY", "(a -> JPY) + JPY 1", "round(a -> JPY, @half_even)", "round(convert(a, JPY), @half_even)", "fx(USD, JPY)", "round(a -> JPY, @up)", "fallback(round(a -> JPY, @half_even), JPY 7)", "round(using(150 JPY / USD, a) -> JPY, @half_even)"} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			if _, err := compileMoney(t, source, "a: money", ""); err == nil || !strings.Contains(err.Error(), "inside using(") {

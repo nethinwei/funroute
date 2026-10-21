@@ -68,6 +68,12 @@ type flowAt struct {
 	arena, uses, builds, itemsInPlace bool
 	dest                              int
 	itemFields                        []int32
+	// itemOf is, for a field read, the pc of the loop_init whose item it
+	// reads, plus one; 0 for a field of anything else. collectsItem says the
+	// loop collects its item as it is, into its own array: the item is
+	// otherwise read field by field (itemsInPlace).
+	itemOf       int32
+	collectsItem bool
 }
 
 // fstate is what the walk knows on entering an instruction.
@@ -111,8 +117,17 @@ type flower struct {
 // reads where it is, when it does.
 type pcFacts struct {
 	escaped, itemEscaped bool
-	// itemFields is the fields of a loop's item its body reads.
-	itemFields    []int32
+	// itemFields is the fields of a loop's item its body reads, and itemOf
+	// the loop whose item a field read reads (flowAt.itemOf).
+	itemFields   []int32
+	itemOf       int32
+	collectsItem bool
+	// collectsOther says a loop's collect takes something else than its
+	// item as it is too: collectsItem is a fact of the whole loop, and such
+	// a loop's item is made whole (itemEscaped).
+	collectsOther bool
+	// loopOf is, for a loop_next, the loop_init of the loop it ends.
+	loopOf        int32
 	firstUse      int32
 	usedElsewhere bool
 	consumes      bool
@@ -267,6 +282,7 @@ func (w *flower) step(pc int, s *fstate) []fedge {
 	case OpLoopInit:
 		return w.loopInit(pc, in, s)
 	case OpLoopNext:
+		w.facts[pc].loopOf = int32(s.loops[len(s.loops)-1])
 		past := w.pastLoop(s)
 		return w.to(fedge{in.A, s}, fedge{pc + 1, past})
 	case OpLoopBreak:
@@ -302,6 +318,9 @@ func (w *flower) straight(pc int, in Instruction, s *fstate) {
 		if item && !slices.Contains(w.facts[loop].itemFields, int32(in.A)) {
 			w.facts[loop].itemFields = append(w.facts[loop].itemFields, int32(in.A))
 		}
+		if item {
+			w.facts[pc].itemOf = int32(loop) + 1
+		}
 		w.use(pc, record, item || argument && w.args[i].typ.kind == RecordKind)
 		s.push(fromElsewhere)
 	case OpCall:
@@ -329,10 +348,14 @@ func (w *flower) build(pc int, in Instruction, s *fstate) {
 // nativeElem reports an array type whose items are bools, ints, floats or
 // strings: one native slice backs it.
 func nativeElem(typ Type) bool {
-	if typ.kind != ArrayKind || typ.elem == nil {
-		return false
-	}
-	switch typ.elem.kind {
+	return typ.kind == ArrayKind && typ.elem != nil && arenaElem(typ.elem.kind)
+}
+
+// arenaElem is the kinds an array of which a frame's slot holds, a view
+// lends and an answer is built in: builderIn, finishIn and viewIn have a case
+// for each (TestEveryBackingIsHandledEverywhere).
+func arenaElem(kind Kind) bool {
+	switch kind {
 	case BoolKind, IntKind, FloatKind, StringKind:
 		return true
 	}
@@ -340,15 +363,15 @@ func nativeElem(typ Type) bool {
 }
 
 // plainRecords reports an array of records whose fields are all bools, ints,
-// floats or strings: an item loads in place with nothing to check but a
-// float's being finite.
+// floats, strings, amounts or currencies: an item loads in place with
+// nothing to check, the currencies having been at the boundary (viewable).
 func plainRecords(typ Type) bool {
 	if typ.kind != ArrayKind || typ.elem == nil || typ.elem.kind != RecordKind {
 		return false
 	}
 	for _, field := range typ.elem.fields {
 		switch field.typ.kind {
-		case BoolKind, IntKind, FloatKind, StringKind:
+		case BoolKind, IntKind, FloatKind, StringKind, MoneyKind, CurrencyKind:
 		default:
 			return false
 		}
@@ -382,11 +405,41 @@ func (w *flower) recordsArg(o origin) bool {
 	return argument && plainRecords(w.args[i].typ)
 }
 
+// flowRules is every opcode the walk has a rule for — step's, straight's or
+// consume's; end_fallback and fx_pop move no value, and their rule is to
+// leave the state be. TestEveryOpcodeHasAFlowRule holds the opcode table to
+// it: one added without a rule would leave the walk's stack out of step.
+var flowRules = map[OpCode]bool{
+	OpJump: true, OpJumpIfFalse: true, OpBeginFallback: true, OpEndFallback: true,
+	OpLoopInit: true, OpLoopNext: true, OpLoopBreak: true, OpLoopCollect: true, OpLoopSpread: true, OpLoopFold: true,
+	OpConstant: true, OpLoadArg: true, OpLoadLocal: true, OpStoreLocal: true,
+	OpMakeArray: true, OpMakeDict: true, OpMakeRecord: true, OpRecordWith: true,
+	OpField: true, OpCall: true, OpEqual: true, OpFxPush: true, OpFxPop: true,
+}
+
 // consume follows the instructions that take values and make none.
 func (w *flower) consume(pc int, in Instruction, s *fstate) {
 	switch in.Op {
 	case OpLoopCollect:
-		w.useAll(pc, s.pop(1+in.A))
+		n := 1
+		if in.collectsKey() {
+			n = 2
+		}
+		values := s.pop(n)
+		// A loop's own item, loaded and collected as it is into the loop's
+		// own array, is kept where it is: the array is made of where the
+		// items are. Loaded just before, in the same block, it is in the
+		// item's own register when lowered, never moved through another.
+		if loop, item := values[0].item(); item && !in.collectsKey() && s.loops[len(s.loops)-1] == loop && w.code[loop].C == NoAccumulator &&
+			!w.joins[pc] && w.code[pc-1].Op == OpLoadLocal && w.code[pc-1].A == w.code[loop].B {
+			w.facts[loop].collectsItem = true
+			w.use(pc, values[0], true)
+			return
+		}
+		if len(s.loops) > 0 {
+			w.facts[s.loops[len(s.loops)-1]].collectsOther = true
+		}
+		w.useAll(pc, values)
 	case OpLoopSpread, OpLoopFold:
 		w.useAll(pc, s.pop(1))
 	case OpFxPush:
@@ -395,13 +448,29 @@ func (w *flower) consume(pc int, in Instruction, s *fstate) {
 		w.useAll(pc, s.pop(2))
 		s.push(fromElsewhere)
 	case OpRecordWith:
-		// The base is read, its fields copied: a record argument stays.
+		// The base is read, its fields copied: a record argument stays, and
+		// so does a loop's item, every field of which is read.
 		values := s.pop(len(in.Keys) + 1)
 		i, argument := values[0].arg()
-		w.use(pc, values[0], argument && w.args[i].typ.kind == RecordKind)
+		loop, item := values[0].item()
+		if item {
+			w.readsAll(pc, loop, in.Type)
+		}
+		w.use(pc, values[0], item || argument && w.args[i].typ.kind == RecordKind)
 		w.useAll(pc, values[1:])
 		s.push(origin(pc))
 	}
+}
+
+// readsAll records an update at pc of the item of the loop at loop, which
+// reads every field of the item's type typ.
+func (w *flower) readsAll(pc, loop int, typ *Type) {
+	for field := range typ.fields {
+		if !slices.Contains(w.facts[loop].itemFields, int32(field)) {
+			w.facts[loop].itemFields = append(w.facts[loop].itemFields, int32(field))
+		}
+	}
+	w.facts[pc].itemOf = int32(loop) + 1
 }
 
 // loopInit follows the start of a loop: an array walked stays where it is.
@@ -461,10 +530,23 @@ func (w *flower) result(parts *ArtifactParts) flow {
 	}
 	for pc := range w.code {
 		f.at[pc].arena = w.arrayProducer(pc) && !w.facts[pc].escaped
+		f.at[pc].itemOf = w.facts[pc].itemOf
 	}
 	for i, param := range parts.Args {
 		f.fieldOnly[i] = param.typ.kind == RecordKind && !w.argEscaped[i]
 		f.viewOnly[i] = (nativeElem(param.typ) || plainRecords(param.typ)) && !w.argEscaped[i]
+	}
+	// The inner clause of a nested comprehension collects into the outer
+	// clause's array: an item it collects leaves its loop.
+	for pc, in := range w.code {
+		if loop := w.facts[pc].loopOf; in.Op == OpLoopNext && pc+1 < len(w.code) && w.code[pc+1].Op == OpLoopSpread && w.facts[loop].collectsItem {
+			w.facts[loop].itemEscaped = true
+		}
+		// A loop that collects its item as it is and something else besides
+		// makes one array of both: of values, its item among them made whole.
+		if w.facts[pc].collectsItem && w.facts[pc].collectsOther {
+			w.facts[pc].itemEscaped = true
+		}
 	}
 	for pc := range w.code {
 		if !w.facts[pc].consumes {
@@ -475,6 +557,7 @@ func (w *flower) result(parts *ArtifactParts) flow {
 		f.at[pc].uses = o >= 0 && f.at[o].arena || argument && f.viewOnly[i]
 		f.at[pc].itemsInPlace = w.code[pc].Op == OpLoopInit && w.recordsArg(o) && !w.facts[pc].itemEscaped
 		f.at[pc].itemFields = w.facts[pc].itemFields
+		f.at[pc].collectsItem = f.at[pc].itemsInPlace && w.facts[pc].collectsItem
 	}
 	if answer := int(w.answer); w.answer >= 0 && w.usedOnce(answer) {
 		w.answerDest(&f, answer)

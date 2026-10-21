@@ -101,7 +101,7 @@ func allocateEvenly(_ context.Context, args []Value) (Value, error) {
 		return Value{}, err
 	}
 	amount, _ := args[0].Money()
-	shares, err := amount.SplitBy(strategy, int(args[1].i))
+	shares, err := money.SplitCount(amount, strategy, args[1].i)
 	return arrayOf(shares), err
 }
 
@@ -112,11 +112,7 @@ func (k moneyKernel) registerProportions(registry *Registry) {
 	byInts := moneyDoc("prorate", "按比例取金额：prorate(m, part, whole) 是 m × part / whole，中间精确、只舍入一次。", "金额", "分子", "分母")
 	registerRounded(registry, FunctionSpec{Name: "prorate", Params: []Type{MoneyType, IntType, IntType}, Result: MoneyType, Doc: byInts},
 		func(_ context.Context, args []Value) (money.ExactMoney, error) {
-			part, err := proportion(args[1].i, args[2].i)
-			if err != nil {
-				return money.ExactMoney{}, err
-			}
-			return exactOf(args[0]).MulRatio(part)
+			return exactOf(args[0]).MulPart(args[1].i, args[2].i)
 		},
 		func(_ context.Context, args []Value, mode money.Rounding) (Value, error) {
 			return moneyResult(moneyOf(args[0]).Prorate(args[1].i, args[2].i, mode))
@@ -124,11 +120,7 @@ func (k moneyKernel) registerProportions(registry *Registry) {
 	byAmounts := moneyDoc("prorate", "按两笔同币种金额之比取金额：prorate(fee, refund, paid) 按退款占比退手续费，中间精确、只舍入一次。", "金额", "部分", "整体")
 	registerRounded(registry, FunctionSpec{Name: "prorate", Params: []Type{MoneyType, MoneyType, MoneyType}, Result: MoneyType, Doc: byAmounts},
 		func(_ context.Context, args []Value) (money.ExactMoney, error) {
-			part, err := moneyOf(args[1]).Ratio(moneyOf(args[2]))
-			if err != nil {
-				return money.ExactMoney{}, err
-			}
-			return exactOf(args[0]).MulRatio(part)
+			return exactOf(args[0]).ProrateBy(moneyOf(args[1]), moneyOf(args[2]))
 		},
 		func(_ context.Context, args []Value, mode money.Rounding) (Value, error) {
 			return moneyResult(moneyOf(args[0]).ProrateBy(moneyOf(args[1]), moneyOf(args[2]), mode))
@@ -141,14 +133,6 @@ func (k moneyKernel) registerProportions(registry *Registry) {
 		}
 		return moneyResult(moneyOf(args[0]).RoundTo(moneyOf(args[1]), mode))
 	})
-}
-
-// proportion is part / whole as a ratio; a whole of zero is no proportion.
-func proportion(part, whole int64) (money.Ratio, error) {
-	if whole == 0 {
-		return money.Ratio{}, errDivisionByZero
-	}
-	return money.RatioOf(part, whole)
 }
 
 func registerRatioConversions(registry *Registry) {
@@ -178,8 +162,11 @@ func registerRoundingScope(registry *Registry) {
 		Name: "round", Params: []Type{MoneyType, RoundingEnumType()}, Result: MoneyType, roundingScope: true,
 		Eval: func(_ context.Context, args []Value) (Value, error) {
 			mode, err := money.ParseRounding(args[1].s)
-			if err != nil || !IsExact(args[0]) {
-				return args[0], err
+			if err != nil {
+				return Value{}, err
+			}
+			if !IsExact(args[0]) {
+				return args[0], nil
 			}
 			return moneyResult(exactOf(args[0]).Round(mode))
 		},

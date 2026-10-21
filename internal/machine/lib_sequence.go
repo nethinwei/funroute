@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -117,7 +118,13 @@ func rearranged(array Value, n int, at func(int) int) Value {
 	case *recordsView:
 		return viewed(box.arranged(n, at))
 	}
-	return array
+	// A backing not listed: item by item, as any array is read, never the
+	// array as it was.
+	builder := newArrayBuilder(array.elemType(), n)
+	for i := range n {
+		builder.add(array.at(at(i)))
+	}
+	return builder.finish()
 }
 
 func picked[T any](items []T, n int, at func(int) int) []T {
@@ -164,9 +171,14 @@ func joined[T any](left []T, right Value) Value {
 
 // uniqueItems is an array's items, in order, each once: a native array's by
 // a set — a float's zero and negative zero are one key, as they are one
-// value, and a NaN, equal to nothing, is kept every time — any other's by
-// Equal.
+// value, and a NaN, equal to nothing, is kept every time — an amount's and
+// a record of scalars' by a set of keys that are equal when they are, and
+// any other's by Equal. Money meets first (money_meet.go): an array of two
+// currencies has no answer.
 func uniqueItems(_ context.Context, args []Value) (Value, error) {
+	if err := meetValue(args[0]); err != nil {
+		return Value{}, err
+	}
 	switch box := args[0].box.(type) {
 	case *bool:
 		return arrayOf(distinctOf(itemsAt(box, args[0].i))), nil
@@ -176,8 +188,16 @@ func uniqueItems(_ context.Context, args []Value) (Value, error) {
 		return arrayOf(distinctOf(itemsAt(box, args[0].i))), nil
 	case *string:
 		return arrayOf(distinctOf(itemsAt(box, args[0].i))), nil
+	case *money.Money:
+		return arrayOf(distinctAmounts(itemsAt(box, args[0].i))), nil
+	}
+	if holdsHandle(args[0]) {
+		return Value{}, errHandleEquality
 	}
 	items, _ := args[0].Array()
+	if out, keyed := distinctKeyed(items); keyed {
+		return packArray(args[0].elemType(), out), nil
+	}
 	out := make([]Value, 0, len(items))
 	for _, item := range items {
 		if !slices.ContainsFunc(out, item.Equal) {
@@ -185,6 +205,152 @@ func uniqueItems(_ context.Context, args []Value) (Value, error) {
 		}
 	}
 	return packArray(args[0].elemType(), out), nil
+}
+
+// distinctAmounts is distinctOf for amounts that meet: in one currency, or
+// the currency-less zero, which equals that currency's zero — so two are
+// one amount when their minor units are.
+func distinctAmounts(amounts []money.Money) []money.Money {
+	out, seen := []money.Money{}, make(map[int64]bool, len(amounts))
+	for _, amount := range amounts {
+		if !seen[amount.Minor()] {
+			seen[amount.Minor()] = true
+			out = append(out, amount)
+		}
+	}
+	return out
+}
+
+// distinctKeyed is the items each once, by itemKey, and true; false for
+// items it cannot key, which are left to Equal. An item equal to nothing is
+// kept each time it comes, as Equal would keep it.
+func distinctKeyed(items []Value) ([]Value, bool) {
+	out, seen := []Value{}, make(map[string]bool, len(items))
+	var key []byte
+	for _, item := range items {
+		var state keyState
+		switch key, state = itemKey(item, key[:0]); state {
+		case keyNone:
+			return nil, false
+		case keyAlone:
+			out = append(out, item)
+		case keyFound:
+			if !seen[string(key)] {
+				seen[string(key)] = true
+				out = append(out, item)
+			}
+		}
+	}
+	return out, true
+}
+
+// keyState is what itemKey makes of an item.
+type keyState uint8
+
+const (
+	// keyFound is a key two items of one type share exactly when they are
+	// Equal.
+	keyFound keyState = iota
+	// keyAlone is an item Equal to nothing, itself neither: a NaN, or a
+	// record, array or dictionary holding one — a handle never gets here,
+	// refused before (holdsHandle). It has no key to share, and needs none:
+	// a set keeps it each time, and finds it nowhere.
+	keyAlone
+	// keyNone is an item with no key, exact money: Equal decides it.
+	keyNone
+)
+
+// itemKey appends item to key as bytes two items of one type share exactly
+// when they are Equal: a float's zeros as one, an amount by its minor units —
+// its currency is the place's one, or none for a zero — a string by its
+// length then itself, a ratio by its parts in lowest terms, a rate by its
+// pair and its ratio, a time, a duration and a currency by what Equal reads
+// of them, a record field by field, an array by its length then item by item
+// and a dictionary by its size then its entries in key order, each written
+// whole before the next.
+func itemKey(item Value, key []byte) ([]byte, keyState) {
+	key = append(key, byte(item.kind))
+	switch {
+	case item.kind == FloatKind && math.IsNaN(item.f):
+		return key, keyAlone
+	case item.kind == BoolKind && item.b:
+		key = append(key, 1)
+	case item.kind == BoolKind:
+		key = append(key, 0)
+	case item.kind == IntKind, item.kind == TimeKind, item.kind == DurationKind:
+		key = strconv.AppendInt(key, item.i, 10)
+	case item.kind == FloatKind:
+		key = strconv.AppendUint(key, math.Float64bits(item.f+0), 16) // -0 + 0 is 0
+	case item.kind == StringKind, item.kind == CurrencyKind:
+		key = append(strconv.AppendInt(key, int64(len(item.s)), 10), ':')
+		key = append(key, item.s...)
+	case item.kind == MoneyKind && !IsExact(item):
+		key = strconv.AppendInt(key, item.i, 10)
+	case item.kind == RatioKind:
+		// Every ratio is made in lowest terms (money's ratioOf), so its parts
+		// are it — but for zero's denominator, which says nothing.
+		num, den := money.RatioParts(ratioFrom(item))
+		if num == 0 {
+			den = 0
+		}
+		key = strconv.AppendInt(append(strconv.AppendInt(key, num, 10), '/'), den, 10)
+	case item.kind == FxRateKind:
+		// A rate is its pair and its ratio, as == has two equal.
+		rate, _ := item.FxRate()
+		num, den := money.RatioParts(ratioFrom(item))
+		key = append(append(append(key, rate.Base()...), '/'), rate.Quote()...)
+		key = strconv.AppendInt(append(strconv.AppendInt(append(key, ':'), num, 10), '/'), den, 10)
+	case item.kind == RecordKind || item.kind == ArrayKind:
+		return partsKey(item, key)
+	case item.kind == DictKind:
+		return entriesKey(item, key)
+	default:
+		return key, keyNone
+	}
+	return append(key, '|'), keyFound
+}
+
+// entriesKey is itemKey of a dictionary: its size, then each key and its
+// value in key order — two are equal when they hold the same entries,
+// whatever order their maps keep them in.
+func entriesKey(item Value, key []byte) ([]byte, keyState) {
+	keys := item.keys()
+	key = append(strconv.AppendInt(key, int64(len(keys)), 10), ':')
+	for _, name := range keys {
+		key = append(append(strconv.AppendInt(key, int64(len(name)), 10), ':'), name...)
+		entry, _ := item.lookup(name)
+		var state keyState
+		if key, state = itemKey(entry, key); state != keyFound {
+			return key, state
+		}
+	}
+	return append(key, '|'), keyFound
+}
+
+// partsKey is itemKey of a record or an array: its fields, or its length and
+// its items. A part equal to nothing makes the whole so, as Equal finds it
+// unequal there whatever the other parts are.
+func partsKey(item Value, key []byte) ([]byte, keyState) {
+	record, isRecord := item.box.(*recordValue)
+	n := item.length()
+	if isRecord {
+		n = len(record.fields)
+	} else {
+		key = append(strconv.AppendInt(key, int64(n), 10), ':')
+	}
+	for i := range n {
+		var part Value
+		if isRecord {
+			part = record.fields[i]
+		} else {
+			part = item.at(i)
+		}
+		var state keyState
+		if key, state = itemKey(part, key); state != keyFound {
+			return key, state
+		}
+	}
+	return append(key, '|'), keyFound
 }
 
 func distinctOf[T comparable](items []T) []T {
@@ -222,7 +388,7 @@ func sortSpecs() []FunctionSpec {
 		Params:      []string{"数组"}, Result: "升序数组",
 	}, sorter[int64](false, nil), sorter(false, hasNegativeZero), sorter[string](false, nil)), libEach("sort_desc", Doc{
 		Label: "降序排序", Category: "数组",
-		Description: "按自然顺序降序排列，省得写 reverse(sort(xs))。",
+		Description: "按自然顺序降序排列。相等的元素（如 0 与 -0）保持原来的先后，所以不一定与 reverse(sort(xs)) 逐个相同。",
 		Params:      []string{"数组"}, Result: "降序数组",
 	}, sorter[int64](true, nil), sorter(true, hasNegativeZero), sorter[string](true, nil)))
 }

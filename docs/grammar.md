@@ -17,7 +17,7 @@ exponent   = ( "e" | "E" ) [ "+" | "-" ] digits
 number     = decimal [ exponent ]                   // 没有 "." 也没有指数是 int，否则是 float；float 必须恰好是写下的值（0.30000000000000001 报错）
 duration   = digits unit { digits unit }            // 90s、2h30m、1_500ms；unit 取最长的一个（1ms 是毫秒），最后一个单位后不能紧接字母、数字或点
 unit       = "h" | "m" | "s" | "ms" | "us" | "ns"
-ratio      = decimal ( "%" | "bps" )                // 紧贴数字的 % 一律是比例的单位，带指数的数也一样（1e3% 报错）；bps 后不能紧接字母或数字
+ratio      = decimal ( "%" | "bps" )                // 紧贴数字的 % 一律是比例的单位，带指数的数也一样（1e3% 报错）；bps 后不能紧接字母、数字或点（与 duration 的单位同一条规则）
 word       = ( letter | "_" ) { letter | digit | "_" }
 code       = upper 2*7( upper | digit )             // 大写字母开头、共 3–8 位：币种，不是变量
 name       = word { "." word }                      // 名字连同其中的点是一个 token，含义见下文
@@ -48,7 +48,7 @@ unary          = ( "!" | "-" ) unary | postfix      // -USD 1.70 是对金额取
 postfix        = primary { "[" expression "]" | "." word | "with" "{" word ":" expression { "," word ":" expression } [ "," ] "}" }  // 字段更新：order with {fee: 0}
 primary        = number | ratio | money | fxrate | code | string | "true" | "false" | enum
                | name                               // 变量；第一个点之后是字段读取：order.amount
-               | name "(" [ args ] ")"              // 函数调用，名字可带点：route.score_v1(x)
+               | name "(" [ args ] ")"              // 函数调用，名字可带点：route.score_v1(x)；不能是保留字，for(x) 是语法错误
                | "switch" "(" [ expression "," ] case { "," case } ( [ "," ] ")" | "," "else" "=>" expression ")" )
                | "reduce" "(" locals "in" expression [ "if" expression ] "," word "=" expression "," expression ")"
                | "let" "(" binding { binding } expression ")"
@@ -76,7 +76,7 @@ quote          = expression                         // 一个 fxrate 或 array<f
 - **保留字引出的形式**：`switch`、`reduce`、`let`、`using` 外形像函数调用，但内部用 `case … =>`、`else =>`、`x in xs`、`acc = init` 标出各个位置；`if`、`fallback` 则是普通的函数名。
 - **`if` 不能作变量名与局部名**（字段可以），因为它也是推导式与 `reduce` 里筛选子句的开头。
 - **`switch` 的两种形态**：有主语时，`case` 的值与主语比较相等，几个值任一相等就选这一支；没有主语时每个 `case` 是 `bool` 条件，取第一个成立的。只有主语是契约里的枚举、且各 `case` 覆盖了全部成员时才能省略 `else`，所以运行时不会有"没有分支匹配"。
-- **嵌套至多 1000 层**（括号、调用、容器、前缀运算符各算一层），更深的是语法错误；ExprJSON 同一上限。
+- **嵌套至多 1000 层**（按语法树的节点层数算：调用、运算符、容器、下标各算一层，括号不算），更深的是语法错误；ExprJSON 同一上限。多余的括号另受解析器递归的上限约束，见 [limits.md](limits.md#程序的边界)。
 
 ## 取值范围
 

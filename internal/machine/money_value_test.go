@@ -73,10 +73,11 @@ func TestEqualUnits(t *testing.T) {
 		"other dollars":                {MoneyValue(5, "USD"), MoneyValue(6, "USD"), false},
 		"a dollar zero and a bare one": {MoneyValue(0, "USD"), MoneyValue(0, ""), true},
 		"a bare zero and a euro zero":  {MoneyValue(0, ""), MoneyValue(0, "EUR"), true},
-		"two currencies' zeros":        {MoneyValue(0, "USD"), MoneyValue(0, "EUR"), true},
-		"the same amount elsewhere":    {MoneyValue(5, "USD"), MoneyValue(5, "EUR"), false},
-		"one currency":                 {CurrencyValue("USD"), CurrencyValue("USD"), true},
-		"two currencies":               {CurrencyValue("USD"), CurrencyValue("EUR"), false},
+		// Only the currency-less zero is every currency's (docs/semantics.md).
+		"two currencies' zeros":     {MoneyValue(0, "USD"), MoneyValue(0, "EUR"), false},
+		"the same amount elsewhere": {MoneyValue(5, "USD"), MoneyValue(5, "EUR"), false},
+		"one currency":              {CurrencyValue("USD"), CurrencyValue("USD"), true},
+		"two currencies":            {CurrencyValue("USD"), CurrencyValue("EUR"), false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -127,24 +128,32 @@ func TestMoneyConstructorsAndAccessors(t *testing.T) {
 	}
 }
 
-// Equality with money in it has no answer across currencies, at any depth:
-// two exchange rates of different pairs, amounts in a record's fields, in a
-// dictionary's entries. Same currencies compare as values; a currency-less
-// zero meets any.
+// Equality with money in it has no answer across currencies, at any depth
+// and whatever else differs first: two exchange rates of different pairs,
+// amounts in a record's fields, in a dictionary's entries, in an array in
+// either order, USD 0 and EUR 0. Same currencies compare as values; only
+// the currency-less zero meets any (docs/semantics.md).
 func TestEqualityAcrossUnitsHasNoAnswer(t *testing.T) {
 	t.Parallel()
 	usdJPY := FxRateValue(money.FxRateFrom(&money.Pair{Base: "USD", Quote: "JPY"}, ratio(150, 1)))
 	eurJPY := FxRateValue(money.FxRateFrom(&money.Pair{Base: "EUR", Quote: "JPY"}, ratio(160, 1)))
-	fee := RecordOf(FieldOf("fee", MoneyType))
-	record := func(currency string) Value {
-		value, err := Record(fee, []Value{MoneyValue(100, currency)})
+	dict := func(currency string) Value {
+		return Value{kind: DictKind, box: map[string]money.Money{"k": money.Make(currency, 1)}}
+	}
+	named := RecordOf(FieldOf("name", StringType), FieldOf("fee", MoneyType))
+	channel := func(name, currency string) Value {
+		value, err := Record(named, []Value{String(name), MoneyValue(100, currency)})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return value
 	}
-	dict := func(currency string) Value {
-		return Value{kind: DictKind, box: map[string]money.Money{"k": money.Make(currency, 1)}}
+	amounts := func(currencies ...string) Value {
+		items := make([]money.Money, len(currencies))
+		for i, currency := range currencies {
+			items[i] = money.Make(currency, 1)
+		}
+		return arrayOf(items)
 	}
 	for name, test := range map[string]struct {
 		left, right Value
@@ -153,14 +162,18 @@ func TestEqualityAcrossUnitsHasNoAnswer(t *testing.T) {
 	}{
 		"rates of one pair":       {usdJPY, usdJPY, true, false},
 		"rates of two pairs":      {usdJPY, eurJPY, false, true},
-		"records in one currency": {record("USD"), record("USD"), true, false},
-		"records in two":          {record("USD"), record("EUR"), false, true},
+		"records in one currency": {channel("a", "USD"), channel("a", "USD"), true, false},
+		"records in two":          {channel("a", "USD"), channel("a", "EUR"), false, true},
 		"dictionaries in two":     {dict("USD"), dict("EUR"), false, true},
 		"a zero meets any":        {MoneyValue(0, ""), MoneyValue(0, "USD"), true, false},
+		"two currencies' zeros":   {MoneyValue(0, "EUR"), MoneyValue(0, "USD"), false, true},
+		"a name differs first":    {channel("a", "USD"), channel("b", "EUR"), false, true},
+		"arrays, one way":         {amounts("USD", "EUR"), amounts("USD", "USD"), false, true},
+		"arrays, the other way":   {amounts("EUR", "USD"), amounts("USD", "USD"), false, true},
 	} {
-		equal, err := equalInUnits(test.left, test.right)
-		if equal != test.equal || (err != nil) != test.fails || (err != nil && !errors.Is(err, ErrCurrency)) {
-			t.Errorf("%s: equalInUnits = %v, %v, want %v and failing %v", name, equal, err, test.equal, test.fails)
+		got, err := compareEqual(test.left, test.right)
+		if equal, _ := got.Bool(); equal != test.equal || (err != nil) != test.fails || (err != nil && !errors.Is(err, ErrCurrency)) {
+			t.Errorf("%s: compareEqual = %v, %v, want %v and failing %v", name, got.Any(), err, test.equal, test.fails)
 		}
 	}
 }

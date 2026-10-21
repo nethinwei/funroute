@@ -65,6 +65,6 @@ func updateFields(node *syntax.RecordUpdateExpr, base typeTerm, values []typeTer
 func (c *bytecodeCompiler) compileRecordUpdate(node *syntax.RecordUpdateExpr) error {
 	values := append([]syntax.Expr{node.Base}, fieldValues(node.Fields)...)
 	names := kit.Map(node.Fields, func(field syntax.RecordFieldExpr) string { return field.Name })
-	return c.compileMake(node.ID, machine.RecordKind, values,
+	return c.compileMake(node, node.ID, machine.RecordKind, values,
 		machine.Instruction{Op: machine.OpRecordWith, Keys: names}, "internal error: record update with unresolved type")
 }

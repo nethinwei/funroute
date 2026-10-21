@@ -1,74 +1,11 @@
 package std
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"slices"
-	"sort"
 
 	"github.com/nethinwei/funroute"
 )
-
-// keyedSpecs are the keyed sorts, both ways, and the keyed cuts: sort_by
-// with a direction and a count, because "the three cheapest" and "the three
-// best" are what a rule actually asks for — writing take(sort_by(...), 3) or
-// take(reverse(sort_by(...)), 3) every time is a puzzle the rule writer
-// should not have to solve twice. The key type is what the registrations are
-// for: a key can be a fee, a rate or a name, and money where the registry
-// declares it — the cheapest channels by fee.
-func keyedSpecs(money bool) []funroute.FunctionSpec {
-	keys := []funroute.Type{funroute.IntType, funroute.FloatType, funroute.StringType}
-	if money {
-		keys = []funroute.Type{funroute.MoneyType}
-	}
-	sortByMoney := moneyDoc("按金额排序", "按金额键排序候选，相等的保持原顺序。")
-	rankByMoney := moneyDoc("按金额取前 k 个", "按金额键取最小或最大的 k 个候选。")
-	specs := make([]funroute.FunctionSpec, 0, 4*len(keys))
-	for _, keyed := range []keyedFunction{
-		{"sort_by", "按键排序", "按第二个数组的键把第一个数组升序排好，两者长度必须相同；相等的保持原顺序。取最便宜的三个写 take(sort_by(channels, fees), 3)。", sortByMoney, true, false},
-		{"sort_by_desc", "按键降序", "sort_by 的反向：按键从大到小排。相等的保持原顺序。", sortByMoney, false, false},
-		{"bottom_k", "取最小的 k 个", "按键升序取前 k 个候选：最便宜的几个渠道。k 大于长度就取完。", rankByMoney, true, true},
-		{"top_k", "取最大的 k 个", "按键降序取前 k 个候选：成功率最高的几个渠道。k 大于长度就取完。", rankByMoney, false, true},
-	} {
-		for _, key := range keys {
-			specs = append(specs, keyed.spec(key, money))
-		}
-	}
-	return specs
-}
-
-type keyedFunction struct {
-	name, label, description string
-	byMoney                  funroute.Doc
-	ascending, ranked        bool
-}
-
-func (k keyedFunction) spec(key funroute.Type, money bool) funroute.FunctionSpec {
-	list := funroute.ArrayOf(funroute.TypeVar("T"))
-	ascending := k.ascending
-	spec := funroute.FunctionSpec{
-		Name: k.name, Params: []funroute.Type{list, funroute.ArrayOf(key)}, Result: list,
-		Eval: func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-			return sortedBy(args, ascending)
-		},
-		Doc: funroute.Doc{
-			Label: k.label, Category: "选择", Description: k.description,
-			Params: []string{"候选", "键"}, Result: "排序后的候选",
-		},
-	}
-	if k.ranked {
-		spec.Params = append(spec.Params, funroute.IntType)
-		spec.Eval = func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-			return pickRanked(args, ascending)
-		}
-		spec.Doc.Params, spec.Doc.Result = []string{"候选", "键", "个数"}, "选出的候选"
-	}
-	if money {
-		spec.Doc, spec.Eval = k.byMoney, uniformKeys(1, spec.Eval)
-	}
-	return spec
-}
 
 // whileSpecs cut a list where a run of trues ends. The test is the second
 // array, same as every other pair here — "every item until the running total
@@ -100,128 +37,23 @@ func whileSpecs() []funroute.FunctionSpec {
 }
 
 func cutWhile(name string, args []funroute.Value, prefix bool) (funroute.Value, error) {
-	items, flags := itemsOf(args[0]), itemsOf(args[1])
-	if len(items) != len(flags) {
-		return funroute.Value{}, fmt.Errorf("%w: %s has %d candidates and %d tests", funroute.ErrDomain, name, len(items), len(flags))
+	count, _ := args[0].Length()
+	tests, _ := args[1].Length()
+	if count != tests {
+		return funroute.Value{}, fmt.Errorf("%w: %s has %d candidates and %d tests", funroute.ErrDomain, name, count, tests)
 	}
-	cut := len(items)
-	for i, flag := range flags {
-		if keep, _ := flag.Bool(); !keep {
+	cut := count
+	for i := range tests {
+		test, _ := args[1].At(i)
+		if keep, _ := test.Bool(); !keep {
 			cut = i
 			break
 		}
 	}
 	if prefix {
-		return funroute.Array(elementType(args[0]), items[:cut])
+		return part(args[0], 0, cut)
 	}
-	return funroute.Array(elementType(args[0]), items[cut:])
-}
-
-func pickRanked(args []funroute.Value, ascending bool) (funroute.Value, error) {
-	sorted, err := sortedBy(args, ascending)
-	if err != nil {
-		return funroute.Value{}, err
-	}
-	count, _ := args[2].Int()
-	return takeFirst(sorted, count, "a count of candidates cannot be negative, got %d")
-}
-
-func sortedBy(args []funroute.Value, ascending bool) (funroute.Value, error) {
-	itemCount, _ := args[0].Length()
-	keyCount, _ := args[1].Length()
-	if itemCount != keyCount {
-		return funroute.Value{}, fmt.Errorf("%w: sort_by has %d candidates and %d keys", funroute.ErrDomain, itemCount, keyCount)
-	}
-	if order, ok := nativeOrder(args[1], ascending); ok {
-		return arranged(args[0], order)
-	}
-	items, keys := itemsOf(args[0]), itemsOf(args[1])
-	order := make([]int, len(items))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool {
-		left, right := keys[order[a]], keys[order[b]]
-		if ascending {
-			return valueLess(left, right)
-		}
-		return valueLess(right, left)
-	})
-	out := make([]funroute.Value, len(items))
-	for position, index := range order {
-		out[position] = items[index]
-	}
-	return funroute.Array(elementType(args[0]), out)
-}
-
-// valueLess orders the key types the same way the comparison operators do.
-// nativeOrder is the candidates' order by native keys, ties in place.
-func nativeOrder(keys funroute.Value, ascending bool) ([]int, bool) {
-	switch keys := backing(keys).(type) {
-	case []int64:
-		return orderBy(keys, ascending), true
-	case []float64:
-		return orderBy(keys, ascending), true
-	case []string:
-		return orderBy(keys, ascending), true
-	}
-	return nil, false
-}
-
-func orderBy[T cmp.Ordered](keys []T, ascending bool) []int {
-	order := make([]int, len(keys))
-	for i := range order {
-		order[i] = i
-	}
-	slices.SortStableFunc(order, func(a, b int) int {
-		if ascending {
-			return cmp.Compare(keys[a], keys[b])
-		}
-		return cmp.Compare(keys[b], keys[a])
-	})
-	return order
-}
-
-// arranged is the candidates in order: a native array's as its own slice.
-func arranged(items funroute.Value, order []int) (funroute.Value, error) {
-	switch items := backing(items).(type) {
-	case []int64:
-		return funroute.ToValue(picked(items, order))
-	case []float64:
-		return funroute.ToValue(picked(items, order))
-	case []string:
-		return funroute.ToValue(picked(items, order))
-	case []bool:
-		return funroute.ToValue(picked(items, order))
-	}
-	values := itemsOf(items)
-	return funroute.Array(elementType(items), picked(values, order))
-}
-
-func picked[T any](items []T, order []int) []T {
-	out := make([]T, len(order))
-	for i, at := range order {
-		out[i] = items[at]
-	}
-	return out
-}
-
-func valueLess(left, right funroute.Value) bool {
-	if a, ok := left.Int(); ok {
-		b, _ := right.Int()
-		return a < b
-	}
-	if a, ok := left.Money(); ok {
-		b, _ := right.Money()
-		return a.Minor() < b.Minor()
-	}
-	if a, ok := left.Float(); ok {
-		b, _ := right.Float()
-		return a < b
-	}
-	a, _ := left.String()
-	b, _ := right.String()
-	return a < b
+	return part(args[0], cut, count)
 }
 
 // errNoExtreme is an arg_min or arg_max, or a money min or max, of nothing.

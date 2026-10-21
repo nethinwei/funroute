@@ -31,7 +31,8 @@ type Fold struct {
 	// First makes the first item the answer, and ends the fold there: first.
 	// With no item the function itself is called on an empty array, and
 	// fails as it does. The function answers its array's element type; the
-	// fold fuses where that is a bool, an int, a float or a string.
+	// fold fuses where that is a bool, an int, a float, a string, an amount
+	// or a record of them.
 	First bool
 }
 
@@ -92,6 +93,6 @@ func (r *Registry) validateFolding(spec *FunctionSpec, fold Fold, fail failFunc)
 // with, if the registry has one: for the compiler, which lays the fold out.
 func FoldStep(r *Registry, name string, answer, item Type) (*RegisteredFunction, bool) {
 	key := FunctionSpec{Name: name, Params: []Type{answer, item}, Result: answer}.Signature()
-	function, ok := r.Resolve(key)
+	function, ok := ResolveOf(r, key)
 	return function, ok && function.builtin
 }

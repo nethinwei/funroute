@@ -45,6 +45,14 @@ var literalTypes = map[syntax.Class]int{
 	syntax.ClassNumber: tokenNumber, syntax.ClassString: tokenString, syntax.ClassIdentifier: tokenKeyword,
 }
 
+// unparsedTypes names a lexeme the parser gave no role — an operator, or
+// anything past a syntax error, where the parser never got — by what the
+// lexer read.
+var unparsedTypes = map[syntax.Class]int{
+	syntax.ClassIdentifier: tokenVariable, syntax.ClassNumber: tokenNumber, syntax.ClassString: tokenString,
+	syntax.ClassEnum: tokenEnumMember, syntax.ClassOperator: tokenOperator,
+}
+
 // tokenOf is a lexeme's type index and modifiers, or false for one the
 // protocol has no type for: punctuation, and text the lexer could not read.
 func tokenOf(lexeme syntax.Lexeme) (int, int, bool) {
@@ -54,8 +62,8 @@ func tokenOf(lexeme syntax.Lexeme) (int, int, bool) {
 		typ, ok = literalTypes[lexeme.Class]
 	case lexeme.Class == syntax.ClassComment:
 		typ, ok = tokenComment, true
-	case lexeme.Role == syntax.RoleNone && lexeme.Class == syntax.ClassOperator:
-		typ, ok = tokenOperator, true
+	case lexeme.Role == syntax.RoleNone:
+		typ, ok = unparsedTypes[lexeme.Class]
 	}
 	if !ok {
 		return 0, 0, false

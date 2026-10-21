@@ -78,7 +78,8 @@ func dictValues(node *syntax.DictExpr) []syntax.Expr {
 }
 
 // inferHomogeneous infers an array or dictionary node, whose elements all share
-// one element type.
+// one element type. An empty one nothing around decides is said where it is
+// written, as a type error: [] in len([]) holds nothing a program can name.
 func inferHomogeneous(node syntax.Expr, items []syntax.Expr, kind machine.Kind, message string, state *inferState, context inferContext) (typeTerm, error) {
 	elem := state.fresh()
 	for _, item := range items {
@@ -86,7 +87,18 @@ func inferHomogeneous(node syntax.Expr, items []syntax.Expr, kind machine.Kind, 
 			return typeTerm{}, typeErrorAt(node, err, message)
 		}
 	}
-	return record(node, state, containerTerm(kind, elem)), nil
+	term := containerTerm(kind, elem)
+	state.checks = append(state.checks, func() error {
+		if _, ok := state.publicType(term); ok {
+			return nil
+		}
+		name := "array"
+		if kind == machine.DictKind {
+			name = "dictionary"
+		}
+		return syntax.Around(node, "type error: cannot infer what this %s holds; give it an item, or provide a compile-time type hint", name)
+	})
+	return record(node, state, term), nil
 }
 
 // mismatch is a sub-expression that typed but not as what its place asks.
@@ -123,8 +135,8 @@ func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContex
 	}
 	result := state.fresh()
 	for _, item := range node.Cases {
-		if err := inferSwitchCase(item, subject, result, state, context); err != nil {
-			return typeTerm{}, typeErrorAt(item.Result, err, "switch branches must match the subject and return one type"+memberWrittenAsString(item, context.enums))
+		if at, err := inferSwitchCase(item, subject, result, state, context); err != nil {
+			return typeTerm{}, typeErrorAt(at, err, "switch branches must match the subject and return one type"+memberWrittenAsString(item, context.enums))
 		}
 	}
 	if node.Default != nil {
@@ -137,14 +149,14 @@ func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContex
 }
 
 // inferSwitchCase holds every value of a branch to the subject and its
-// result to the switch's.
-func inferSwitchCase(item syntax.SwitchCaseExpr, subject, result typeTerm, state *inferState, context inferContext) error {
+// result to the switch's, and on a failure is the one that failed.
+func inferSwitchCase(item syntax.SwitchCaseExpr, subject, result typeTerm, state *inferState, context inferContext) (syntax.Expr, error) {
 	for _, match := range item.Match {
 		if err := inferAs(match, subject, state, context); err != nil {
-			return err
+			return match, err
 		}
 	}
-	return inferAs(item.Result, result, state, context)
+	return item.Result, inferAs(item.Result, result, state, context)
 }
 
 // validateEnumSwitch proves a switch over a declared enum exhaustive, and
@@ -349,7 +361,7 @@ func (c inferContext) lookup(name string) (typeTerm, bool) {
 			return local.term, true
 		}
 	}
-	return c.args.find(name)
+	return c.arg(name)
 }
 
 // loopSourceHint explains which source shape the variable count asks for.

@@ -46,20 +46,113 @@ func (c *bytecodeCompiler) tryFold(expr syntax.Expr) (bool, error) {
 	return ok, nil
 }
 
+// untaken folds what the fold of expr may have stepped over — the branches
+// of an if, a fallback's backups, a switch's cases — so that a closed
+// failure is a compile error whichever branch it is written in, as when the
+// branch is compiled on its own: if(true, 1, 1 / 0) as much as if(f, 1, 1 / 0),
+// and the 1 / 0 of a branch that reads a loop's item as much as of one that
+// reads nothing. It walks expr in the scopes compileLet makes: a let's
+// binding that folds is a constant to the branches under it, so
+// let(x = 0, if(true, 2, 1 / x)) is held to the rule as if(b, 2, 1 / 0) is.
+// The deepest branches go first, and each closed part that evaluates is known
+// after (bytecodeCompiler.known): the branch around it compiles it as its
+// value, so a chain of n ifs is evaluated in n steps, not n² of them. The
+// constants the walk folds the bindings to are its own, dropped after.
+func (c *bytecodeCompiler) untaken(expr syntax.Expr) error {
+	pool := len(c.constants)
+	defer func() { c.constants = c.constants[:pool] }()
+	return c.untakenIn(expr)
+}
+
+func (c *bytecodeCompiler) untakenIn(expr syntax.Expr) error {
+	if let, ok := expr.(*syntax.LetExpr); ok {
+		return c.untakenLet(let)
+	}
+	var err error
+	syntax.EachChild(expr, func(child syntax.Expr) {
+		if err == nil {
+			err = c.untakenIn(child)
+		}
+	})
+	for _, branch := range c.branches(expr) {
+		if err == nil {
+			err = c.closedParts(branch)
+		}
+	}
+	return err
+}
+
+// untakenLet is untakenIn of a let: each binding, then the body with the
+// bindings in scope — as constants when they fold, as names that are not
+// otherwise, which hide an outer one of the same name either way.
+func (c *bytecodeCompiler) untakenLet(node *syntax.LetExpr) error {
+	for _, binding := range node.Bindings {
+		if err := c.untakenIn(binding.Value); err != nil {
+			return err
+		}
+		index, folded, err := c.foldBinding(binding.Value)
+		if err != nil {
+			return err
+		}
+		c.names.push(binding.Name, nameSlot{index: index, constant: folded})
+		defer c.names.pop(binding.Name)
+	}
+	return c.untakenIn(node.Body)
+}
+
+// closedParts evaluates expr when it is closed, and otherwise each of its
+// parts that is: the largest ones, each once.
+func (c *bytecodeCompiler) closedParts(expr syntax.Expr) error {
+	if _, done := c.known[expr.NodeID()]; done {
+		return nil
+	}
+	if !c.foldable(expr) {
+		var err error
+		syntax.EachChild(expr, func(child syntax.Expr) {
+			if err == nil {
+				err = c.closedParts(child)
+			}
+		})
+		return err
+	}
+	value, ok, err := c.evaluate(expr)
+	if err != nil || !ok {
+		return err
+	}
+	if constant, has := machine.ConstantOf(value, c.inferred.typeOf(expr.NodeID())); has {
+		c.known[expr.NodeID()] = constant
+	}
+	return nil
+}
+
+// branches is what node may not evaluate.
+func (c *bytecodeCompiler) branches(node syntax.Expr) []syntax.Expr {
+	switch node := node.(type) {
+	case *syntax.CallExpr:
+		if function, found := machine.ResolveOf(c.registry, c.inferred.Selections[node.ID]); found && (function.IsLazyIf() || function.IsLazyFallback()) {
+			return node.Args[1:]
+		}
+	case *syntax.SwitchExpr:
+		var parts []syntax.Expr
+		for _, branch := range node.Cases {
+			parts = append(append(parts, branch.Match...), branch.Result)
+		}
+		if node.Default != nil {
+			parts = append(parts, node.Default)
+		}
+		return parts
+	}
+	return nil
+}
+
 // constexprOnly reports whether every call in expr may run while compiling.
 // The kernel's functions always may; a host function only if it says so. This
 // is what keeps folding from reaching an engine or a clock, and it is also
 // what makes a failure found here a certainty rather than a circumstance.
 func constexprOnly(expr syntax.Expr, inferred *inference, registry *machine.Registry) bool {
 	for node := range syntax.Nodes(expr) {
-		switch node := node.(type) {
-		case *syntax.UsingExpr:
-			// A using is only there for the conversions in it, which read the run.
+		if !ownConstexpr(node, inferred, registry) {
 			return false
-		case *syntax.CallExpr:
-			if function, found := registry.Resolve(inferred.Selections[node.ID]); !found || !function.IsConstexpr() {
-				return false
-			}
 		}
 	}
 	return true
@@ -103,7 +196,11 @@ func (c *bytecodeCompiler) foldValue(expr syntax.Expr) (machine.Value, bool, err
 	if !c.foldable(expr) {
 		return machine.Value{}, false, nil
 	}
-	return c.evaluate(expr)
+	value, ok, err := c.evaluate(expr)
+	if err == nil && ok {
+		err = c.untaken(expr)
+	}
+	return value, ok, err
 }
 
 // foldable reports whether expr is worth trying to fold. It must read nothing
@@ -112,24 +209,25 @@ func (c *bytecodeCompiler) foldValue(expr syntax.Expr) (machine.Value, bool, err
 // resolves to a binding that folded to a constant itself. That is what makes
 // folding transitive — with `@let a = 250`, `a * 4` folds to 1000.
 //
-// Literals and plain variables are skipped because they already compile to a
-// single instruction; folding them would only cost a compile-time run.
+// Literals — money, ratios, rates, currencies and enum members among them —
+// and plain variables are skipped because they already compile to a single
+// instruction; folding them would only cost a compile-time run, a nested
+// compiler and a VM for each amount a long switch names.
 func (c *bytecodeCompiler) foldable(expr syntax.Expr) bool {
 	if c.folding {
 		return false
 	}
 	switch expr.(type) {
-	case *syntax.LiteralExpr, *syntax.VariableExpr:
+	case *syntax.LiteralExpr, *syntax.VariableExpr, *syntax.EnumExpr,
+		*syntax.MoneyExpr, *syntax.RatioExpr, *syntax.FxRateExpr, *syntax.CurrencyExpr:
 		return false
 	}
 	return c.constantExpr(expr) && c.callsConstexpr(expr)
 }
 
-// callsConstexpr is constexprOnly, each node's answer found once.
+// callsConstexpr is constexprOnly, each node's answer found once: every
+// compiler has the memo, a nested one its parent's.
 func (c *bytecodeCompiler) callsConstexpr(expr syntax.Expr) bool {
-	if c.constexpr == nil {
-		return constexprOnly(expr, c.inferred, c.registry)
-	}
 	return c.constexpr.of(expr, c.inferred, c.registry)
 }
 
@@ -156,6 +254,76 @@ func (c *bytecodeCompiler) constantExpr(expr syntax.Expr) bool {
 // evaluate returns the value expr has at compile time and true, false when it
 // cannot be folded for a reason that is not a failure, or the failure itself.
 func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (machine.Value, bool, error) {
+	value, ok, err := c.run(expr)
+	if err != nil {
+		return machine.Value{}, false, c.placed(expr, err)
+	}
+	return value, ok, nil
+}
+
+// placed is err, expr's failure, said at the smallest closed part of expr
+// that fails as expr does: expr runs whole, and its failure happens at the
+// 1/0 in 2 + 3 * (1/0), not at the +. Only a failure pays for the search.
+func (c *bytecodeCompiler) placed(expr syntax.Expr, err error) error {
+	if placed := c.failingIn(expr, err); placed != nil {
+		return placed
+	}
+	return syntax.AroundError(expr, err)
+}
+
+// failingIn is err placed at a part of expr that fails as expr does, nil
+// when no part does. The deepest parts go first, and each that evaluates is
+// known after, as closedParts has it: the part around it compiles it as its
+// value, so the search is as long as expr, not its depth times its size.
+func (c *bytecodeCompiler) failingIn(expr syntax.Expr, err error) error {
+	if let, ok := expr.(*syntax.LetExpr); ok {
+		return c.failingInLet(let, err)
+	}
+	for _, child := range syntax.Children(expr) {
+		if placed := c.failingAt(child, err); placed != nil {
+			return placed
+		}
+	}
+	return nil
+}
+
+// failingAt is failingIn of part, or err placed at part itself when part is
+// closed and fails as expr does; a closed part that evaluates is known after.
+func (c *bytecodeCompiler) failingAt(part syntax.Expr, err error) error {
+	if placed := c.failingIn(part, err); placed != nil || !c.foldable(part) {
+		return placed
+	}
+	value, ok, failed := c.run(part)
+	if failed != nil && failed.Error() == err.Error() {
+		return syntax.AroundError(part, err)
+	}
+	if constant, has := machine.ConstantOf(value, c.inferred.typeOf(part.NodeID())); failed == nil && ok && has {
+		c.known[part.NodeID()] = constant
+	}
+	return nil
+}
+
+// failingInLet is failingIn of a let, in the scopes untakenLet walks it in:
+// a binding that folds is a constant to the parts after it.
+func (c *bytecodeCompiler) failingInLet(node *syntax.LetExpr, err error) error {
+	pool := len(c.constants)
+	defer func() { c.constants = c.constants[:pool] }()
+	for _, binding := range node.Bindings {
+		if placed := c.failingIn(binding.Value, err); placed != nil {
+			return placed
+		}
+		index, folded, failed := c.foldBinding(binding.Value)
+		if failed != nil {
+			return failed
+		}
+		c.names.push(binding.Name, nameSlot{index: index, constant: folded})
+		defer c.names.pop(binding.Name)
+	}
+	return c.failingAt(node.Body, err)
+}
+
+// run is evaluate, its failure not yet placed.
+func (c *bytecodeCompiler) run(expr syntax.Expr) (machine.Value, bool, error) {
 	// The runtime checks the value it produced against the declared result
 	// type, so a node whose type inference left open is not folded.
 	result, ok := c.inferred.nodeType(expr.NodeID())
@@ -173,14 +341,13 @@ func (c *bytecodeCompiler) evaluate(expr syntax.Expr) (machine.Value, bool, erro
 		if errors.Is(err, machine.ErrFoldBudget) {
 			return machine.Value{}, false, nil
 		}
-		return machine.Value{}, false, syntax.AroundError(expr, err)
+		return machine.Value{}, false, err
 	}
 	// Exact money has no constant form, and the round around it still has
 	// its rounding to do: the steps are left to run.
 	if machine.IsExact(value) {
 		return machine.Value{}, false, nil
 	}
-	c.roundSteps += sub.roundSteps
 	return value, true, nil
 }
 
@@ -191,14 +358,14 @@ func (c *bytecodeCompiler) compileNested(expr syntax.Expr) (*bytecodeCompiler, b
 	sub := newBytecodeCompiler(c.registry, c.inferred)
 	sub.folding = true
 	// The nested compiler inherits the constant pool and the names in scope,
-	// so a name that already folded resolves to its value here too — and the
-	// round(…) it sits in. Only a closed expression gets here, so every free
-	// name it reads is a constant; the local slots it binds are its own.
+	// so a name that already folded resolves to its value here too. Only a
+	// closed expression gets here, so every free name it reads is a constant;
+	// the local slots it binds are its own.
 	sub.constants = c.constants
 	sub.names = c.names
 	sub.reads = c.reads
 	sub.constexpr = c.constexpr
-	sub.inRound = c.inRound
+	sub.known = c.known
 	sub.plain = c.plain
 	return sub, sub.compile(expr) == nil
 }

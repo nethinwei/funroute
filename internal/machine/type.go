@@ -88,6 +88,10 @@ type Type struct {
 	// to, so two records with the same fields in a different order are two
 	// types.
 	fields []Field
+	// shape is what a record holds, worked out where the type is made
+	// (recordType), nil when it holds neither money nor a handle. It is no
+	// part of the type: Equal and JSON never read it.
+	shape *recordShape
 }
 
 // Field is one field of a record, made by FieldOf.
@@ -158,6 +162,9 @@ func (t *Type) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*t = Type{kind: shape.Kind, elem: shape.Elem, name: shape.Name, values: shape.Values, fields: shape.Fields}
+	if t.kind == RecordKind {
+		*t = recordType(shape.Fields)
+	}
 	return nil
 }
 
@@ -219,7 +226,15 @@ func DictOf(elem Type) Type  { return Type{kind: DictKind, elem: new(elem)} }
 
 // RecordOf builds a record type from fields in the order they are given.
 func RecordOf(fields ...Field) Type {
-	return Type{kind: RecordKind, fields: append([]Field(nil), fields...)}
+	return recordType(append([]Field(nil), fields...))
+}
+
+// recordType is the record of fields, with its shape: every record type is
+// made here, by RecordOf or read from JSON, and none is changed after.
+func recordType(fields []Field) Type {
+	t := Type{kind: RecordKind, fields: fields}
+	t.shape = shapeOf(t)
+	return t
 }
 
 func TypeVar(name string) Type {

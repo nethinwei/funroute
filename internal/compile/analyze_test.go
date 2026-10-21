@@ -57,3 +57,20 @@ func TestAnalyzeKeepsWhatWasLearnt(t *testing.T) {
 		t.Error("a syntax error was not reported")
 	}
 }
+
+// On an operator, the node is the operator's own: not an operand its
+// expansion writes in, which covers no source.
+func TestTheNodeAtAnOperatorIsTheOperators(t *testing.T) {
+	t.Parallel()
+	options := CompileOptions{Args: []ArgSpec{{Name: "a", Type: machine.BoolType}, {Name: "b", Type: machine.BoolType}, {Name: "n", Type: machine.IntType}}}
+	for source, operator := range map[string]string{"a && b": "&&", "a || b": "||", "!a": "!", "-n": "-"} {
+		analysis, err := Analyze(source, machine.CoreRegistry(), options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fact, ok := analysis.At(strings.Index(source, operator))
+		if !ok || source[fact.Span.Start:fact.Span.End] != source {
+			t.Errorf("%s: the node at %s covers %q, want the whole %q", source, operator, source[fact.Span.Start:fact.Span.End], source)
+		}
+	}
+}

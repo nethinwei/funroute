@@ -23,11 +23,11 @@ FunRoute 的值、类型、运算符与各个形式。金额见 [money.md](money
 
 几条规则：
 
-- 字符串与数值之间不做隐式转换，用 `int(...)`、`float(...)`、`string(...)`、`bool(...)` 显式转换。
+- 字符串与数值之间不做隐式转换，用 `int(...)`、`float(...)`、`string(...)`、`bool(...)` 显式转换。int 与 float 可以混算（`amount * 0.5`），由注册表里的混合重载表达，±2^53 以内精确，超出在运行时拒绝。
 - 空的 `[]` / `{}` 需要从上下文（函数签名或契约）得到元素类型。
 - 取整函数（`ceil`/`floor`/`round`）对 float 返回 `int`（金额的 `round(m, @mode)` 见[金额](money.md)）。要 float 就写 `float(floor(x))`。
 - **没有 null**。数组越界、字典缺键、除零都是错误。要兜底就写出来：`get(d, "k", 0)`。
-- 金额不要用 `float`：注册表声明币种后用 `money`，见[金额](money.md)。
+- 金额不要用 `float`：注册表声明币种后用 `money`，见[金额](money.md)。币种也能作字典的键：`rates[currency(m)]`。
 - 每种类型的范围、精度和越界时的行为见[附录 B](grammar.md#取值范围)；完整文法见[附录 A](grammar.md#语法参考)。
 
 ## 时间
@@ -42,9 +42,9 @@ weekday(paid_at, "UTC") >= 6            // 周末：1 是周一，7 是周日
 add_days(start_of_day(now, "Asia/Shanghai"), 1, "Asia/Shanghai")   // 上海明天零点
 ```
 
-- **没有 `now`**。当前时间由宿主作为参数传入，同一输入永远同一答案。
+- **没有 `now`**。当前时间由宿主作为参数传入，同一输入、同一环境永远同一答案（见[语义宪章 S2](semantics.md#s2-确定性)）。
 - **时区写在调用处**：`hour`、`weekday`、`day`、`month`、`start_of_day`、`add_days` 都要一个 IANA 时区名（`"Asia/Shanghai"`、`"UTC"`）；不认识的名字、空串与 `"Local"` 是 `ErrDomain`。时区规则来自宿主机器的 tzdata，所以这些调用不在编译期折叠。
-- `add_days` 按那个时区的日历加天，钟点不变；遇到夏令时切换，一天不是 24 小时。
+- `add_days` 按那个时区的日历加天，钟点不变；遇到夏令时切换，一天不是 24 小时。切换跳过的钟点读成跳过之后同样远的时刻（跳过 02:00–03:00 时 02:30 读作 03:30），重复的钟点取较早的一次（与 java.time、RFC 5545 一致）；所以零点被跳过的日子，`start_of_day` 是切换的那一刻，不会落到前一天。
 - 负的时长写 `-30m`；对变量取负写 `0s - d`（`-d` 是 `0 - d`，整数减时长没有定义）。
 
 ## 运算符
@@ -66,6 +66,8 @@ add_days(start_of_day(now, "Asia/Shanghai"), 1, "Asia/Shanghai")   // 上海明�
 二元运算符左结合，括号可改变优先级。`&&` 和 `||` 展开成惰性的 `if`，所以天然短路 —— `x != 0 && 10 / x > 2` 不会除零。`->` 比 `+`/`-` 松、比比较紧：`fee + amount -> JPY` 换的是和，`amount -> JPY > cap` 比的是换后的金额，`(amount -> JPY) * 2` 要括号（`->` 要写在 `using` 与 `round` 里，见[金额](money.md)）。
 
 `in` 有三种用法：`x in xs` 查数组元素，`"k" in d` 查字典键，`"b" in text` 查子串。字符串按 UTF-8 码点处理，`s[i]` 返回单字符字符串。
+
+**相等**：`==`、`!=`、`in`、`switch` 的值匹配、`index_of`、`unique`、`intersect`、`except` 用同一个相等关系。float 按 IEEE 754（NaN 不等于任何值）；金额先检查币种再比较，两种币种的金额没有相等的答案（`ErrCurrency`），检查与元素的顺序无关，见[语义宪章 S1](semantics.md#s1-金额的代数)。句柄不能比较，装着句柄的数组、字典与 record 也不能（按类型判断，空数组也一样），这些运算一律报错。
 
 注释用 `//`，数字可以写 `1_000_000`，列表可以带尾随逗号。
 
@@ -155,13 +157,13 @@ reduce(name, weight in weights, total = 0.0, total + weight)            // 遍�
 |---|---|---|
 | 聚合 | `sum` `min` `max` `any` `all` `avg` `median` `stddev` `percentile` | 它们的金额重载 |
 | 序列 | `range` `indices` `first` `last` `take` `slice` `reverse` `concat` `unique` `flatten` `sort` `sort_desc` `top_k` `bottom_k` | `take_while` `drop_while` `windows` `chunk` `deltas` `cumsum` |
-| 选择与分组 | `index_of` `arg_min` `arg_max` `min_by` `max_by` `sort_by` `sort_by_desc` | `group_by` `rank` `intersect` `except` |
+| 选择与分组 | `index_of` `arg_min` `arg_max` `min_by` `max_by` `sort_by` `sort_by_desc` `intersect` `except` | `group_by` `rank` |
 | 字典 | `get` `merge` | |
 | 时间 | `time` `hour` `weekday` `day` `month` `start_of_day` `add_days` | |
 | 字符串 | `upper` `lower` `trim` `trim_prefix` `trim_suffix` `contains` `starts_with` `ends_with` `index_of` `last_index_of` `matches` `split` `join` `replace` | `pad_left` `pad_right` `repeat`（结果至多 10000 个字符） |
 | 数值 | `abs` `ceil` `floor` `round` `pow` `mod`（float） | |
 
-`sum`、`any`、`all` 与内核的 `len` 套推导式时边算边折叠，不建中间数组；`any`/`all` 在决定答案的元素处停下，后面的元素不再计算——`any([10 / x > 2 for x in xs])` 在第一个为真的元素之后不会再除零，和 `||` 一样。
+`sum`、`any`、`all`、`first` 与内核的 `len` 套推导式时边算边折叠，不建中间数组。`any`/`all`/`first` 直接套推导式是**短路形式**：在决定答案的元素处停下，后面的元素既不计算也不失败——`any([10 / x > 2 for x in xs])` 在第一个为真的元素之后不会再除零，和 `||` 一样。这是语义，不是优化；`let` 是严格的，所以先绑定再聚合的 `let(big = [10 / x > 2 for x in xs], any(big))` 会先建出整个数组（见[语义宪章 S4](semantics.md#s4-求值策略)）。
 
 `range(n)` 是唯一能凭空造出数组的函数，所以它的参数必须由输入规模界定：字面量、`len(容器)`，或它们的算术组合。`range(len(fees))` 可以，`range(n)`（`n` 是任意入参）不行 —— 否则一个整数就能让规则跑任意久。
 
@@ -176,7 +178,7 @@ reduce(name, weight in weights, total = 0.0, total + weight)            // 遍�
 - **字段顺序是类型的一部分**。`record{a: int, b: int}` 和 `record{b: int, a: int}` 是两个类型。字段访问在编译期解析成下标，运行时不查名字。
 - **没有缺失字段**。传入的数据少一个字段就直接拒绝；读一个不存在的字段是编译错误。多出来的字段会被忽略。
 - **靠写法区分字典和记录**：`{"k": v}` 是字典，`{k: v}` 是记录。
-- **相等逐字段比较**，`==`、`in`、`switch` 都适用。
+- **相等逐字段比较**，`==`、`in`、`switch` 都适用；字段里的金额按[相等](#运算符)的规则先检查币种。
 - 可以随意组合：`[o.amount for o in orders]`、`order.tags[0]`、`dict<record{…}>` 都成立。
 
 **按字段选择**：调用第一个实参之后写 `.字段`，给第一个实参的每一项按字段取键，第一个实参只写一遍。

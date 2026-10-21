@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nethinwei/funroute/internal/kit"
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // The container half of the kernel's functions — the rest of CoreRegistry is in
@@ -144,16 +145,29 @@ func evalArrayMember(_ context.Context, args []Value) (Value, error) {
 	if found, native := nativeMember(item, container); native {
 		return Bool(found), nil
 	}
-	for i := range container.length() {
-		equal, err := compareEqual(container.at(i), item)
-		if err != nil {
-			return Value{}, err
-		}
-		if found, _ := equal.Bool(); found {
-			return Bool(true), nil
-		}
+	at, err := indexOfValue(container, item)
+	return Bool(at >= 0), err
+}
+
+// indexOfValue is where item first is in array, or -1, by the equality ==
+// asks: the two meet first, wherever item is (money_meet.go), and a handle
+// is never compared, nor anything holding one. Met, two amounts at one place are equal when their
+// minor units are, and two rates as == has them.
+func indexOfValue(array, item Value) (int, error) {
+	if holdsHandle(item) {
+		return -1, errHandleEquality
 	}
-	return Bool(false), nil
+	if err := meetIn(item, array); err != nil {
+		return -1, err
+	}
+	switch first := array.box.(type) {
+	case *money.Money:
+		return slices.IndexFunc(itemsAt(first, array.i), func(amount money.Money) bool { return amount.Minor() == item.i }), nil
+	case *money.FxRate:
+		// As == has two rates equal: pair and rate, whatever meeting checked.
+		return slices.IndexFunc(itemsAt(first, array.i), func(fx money.FxRate) bool { return FxRateValue(fx).equalUnits(item) }), nil
+	}
+	return slices.IndexFunc(valuesOf(array), item.Equal), nil
 }
 
 // nativeMember is whether a native array of scalars holds item, as the

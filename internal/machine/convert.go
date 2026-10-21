@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"time"
 
@@ -13,12 +14,14 @@ import (
 	"github.com/nethinwei/funroute/internal/money"
 )
 
-// The host boundary, in both directions, with one list of Go types.
+// The host boundary, in both directions.
 //
-// fromGo is that list. ToValue, the Go functions a FunctionSpec names in Go
-// and Run's argument binding all go through it, and goType derives a function's
-// signature from it, so a Go type is supported everywhere or nowhere. A
-// container is wrapped, not converted: the Value holds the caller's slice.
+// fromGo is the Go values that are a Value as they are: ToValue and Run's
+// argument binding go through it. A container is wrapped, not converted: the
+// Value holds the caller's slice. A Go function a FunctionSpec names in Go,
+// and a type Bind takes, are read by reflection instead (reflectType), which
+// also takes Go's narrower integers, uint up to uint32 and float32, and
+// containers of them, each element converted to an int64 or a float64.
 
 // errUnsupportedGoType is a sentinel so the by-name path, which tries fromGo
 // first on every argument, pays nothing when it has to fall through.
@@ -177,12 +180,15 @@ func FromValue[T any](value Value) (T, error) {
 	case *time.Duration:
 		return out, assign(target, Value.Duration, value)
 	case *money.Currency:
-		code, ok := value.Currency()
-		*target = code
-		if !ok {
-			return out, fmt.Errorf("argument is %s, want %T", value.Type(), out)
+		return out, assign(target, Value.Currency, value)
+	}
+	// An interface takes the value's Go form, never what holds it inside a
+	// Value; a handle's Go form is its payload.
+	if value.kind != HandleKind && reflect.TypeFor[T]().Kind() == reflect.Interface {
+		if converted, ok := value.Any().(T); ok {
+			return converted, nil
 		}
-		return out, nil
+		return out, fmt.Errorf("argument is %s, want %s", value.Type(), reflect.TypeFor[T]())
 	}
 	if boxed, ok := value.box.(T); ok {
 		return boxed, nil
@@ -197,7 +203,8 @@ func FromValue[T any](value Value) (T, error) {
 func fromRecord[T any](value Value) (T, error) {
 	var out T
 	target := reflect.ValueOf(&out).Elem()
-	if target.Kind() == reflect.Map || target.Kind() == reflect.Interface {
+	if target.Kind() != reflect.Struct {
+		// A map takes the record's Go form; nothing else but a struct does.
 		converted, ok := value.Any().(T)
 		if !ok {
 			return out, fmt.Errorf("argument is %s, want %T", value.Type().Summary(), out)
@@ -275,9 +282,20 @@ func coerce(input any, expected Type) (Value, error) {
 // coerceWith is coerce with the registry's currency table, which reading
 // money written as "USD 1.70" needs: the places belong to the currency.
 func coerceWith(input any, expected Type, table *money.Currencies) (Value, error) {
-	if value, err := fromGo(input); err == nil {
+	value, err := fromGo(input)
+	if err != nil && !errors.Is(err, errUnsupportedGoType) {
+		// A Go value of the language's own that is not one — the zero
+		// FxRate, a time past the years a time spans — says so itself.
+		return Value{}, err
+	}
+	if err == nil {
 		if value.hasType(expected) {
 			return value, nil
+		}
+		// A host's struct is matched by name, as Load matches one: the
+		// fields the contract does not declare are left out.
+		if _, isValue := input.(Value); !isValue && value.kind == RecordKind && expected.kind == RecordKind {
+			return projected(value, expected)
 		}
 		// A typed Value of the wrong type is a host bug. A float64 where an
 		// int is expected is a JSON decoder at work, and the lenient path below
@@ -308,6 +326,33 @@ func coerceWith(input any, expected Type, table *money.Currencies) (Value, error
 	default:
 		return Value{}, fmt.Errorf("unsupported expected type %s", expected)
 	}
+}
+
+// projected is the record a host's struct gave, cut to the fields expected
+// declares, in its order, a nested record cut the same way. A field it does
+// not declare is left out; one it declares and the struct lacks is missing.
+func projected(value Value, expected Type) (Value, error) {
+	if value.hasType(expected) {
+		return value, nil
+	}
+	record, ok := value.box.(*recordValue)
+	if !ok || expected.kind != RecordKind {
+		return Value{}, fmt.Errorf("got %s, want %s", value.Type().Summary(), expected.Summary())
+	}
+	given := value.Type().fields
+	fields := make([]Value, len(expected.fields))
+	for i, want := range expected.fields {
+		at := slices.IndexFunc(given, func(field Field) bool { return field.name == want.name })
+		if at < 0 {
+			return Value{}, fmt.Errorf("field %q is missing", want.name)
+		}
+		field, err := projected(record.fields[at], want.typ)
+		if err != nil {
+			return Value{}, fmt.Errorf("field %q: %w", want.name, err)
+		}
+		fields[i] = field
+	}
+	return Record(expected, fields)
 }
 
 // coerceRecord builds a record from the object a host or a JSON decoder hands

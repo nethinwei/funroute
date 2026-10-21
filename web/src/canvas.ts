@@ -91,7 +91,12 @@ export class StructureView extends LitElement {
     // Not a block but holding one — say (a + b) where b is a switch: say
     // what joins the parts, and show each part.
     if (!isCard(tree, this.lazy)) {
-      return html`<div class="plain"><code class="joins">${tree.operator ?? name}</code>${children(tree).map((node) => this.node(node))}</div>`;
+      // A record's fields and a dictionary's entries keep their names: each
+      // item is shown with its own, as a card's are.
+      const parts = tree.fields?.some((field) => field.items)
+        ? this.fields(tree.node, tree.fields ?? [])
+        : children(tree).map((node) => this.node(node));
+      return html`<div class="plain"><code class="joins">${tree.operator ?? name}</code>${parts}</div>`;
     }
     const fields = (tree.fields ?? []).filter((field) => !(tree.node === "call" && field.name === "name"));
     return html`<div class="card" style="--accent: ${accentOf(name)}">

@@ -18,16 +18,40 @@ func TestKernelOpsAreTheKernels(t *testing.T) {
 	}
 }
 
+// Every kernel operation's function takes no more operands than fault hands
+// it when the operation refuses — a third only for slice, whose end fault
+// knows is in c: a wider one needs fault taught where the rest are before it
+// gets an operation.
+func TestKernelOpsCarryWhatFaultKnows(t *testing.T) {
+	t.Parallel()
+	registry := CoreRegistry()
+	for key, kernel := range kernelOps {
+		function, ok := registry.Resolve(key)
+		switch {
+		case !ok:
+			continue
+		case len(function.Params) > faultOperands:
+			t.Errorf("kernelOps has %s, of %d parameters: fault hands a function at most %d", key, len(function.Params), faultOperands)
+		case len(function.Params) == faultOperands && (kernel.op != rSliceS || key != "slice(string,int,int)->string"):
+			t.Errorf("kernelOps has %s, of %d parameters: fault knows where the third operand is only for slice(string,int,int)->string", key, faultOperands)
+		}
+	}
+}
+
 // A kernel operation answers what its function answers, and refuses where
 // the function fails, on the edges of every type it takes.
 func TestKernelOpsAnswerAsTheirFunctions(t *testing.T) {
 	t.Parallel()
 	registry := CoreRegistry()
 	ints := []int64{0, 1, -1, 2, -2, 3, 7, -7, math.MaxInt64, math.MinInt64, math.MaxInt64 - 1, math.MinInt64 + 1, 1 << 32, -(1 << 31)}
-	floats := []float64{0, math.Copysign(0, -1), 1.5, -1.5, 3, math.MaxFloat64, -math.MaxFloat64, math.SmallestNonzeroFloat64, 1e308, 1e-308}
+	floats := []float64{0, math.Copysign(0, -1), 1.5, -1.5, 3, math.MaxFloat64, -math.MaxFloat64, math.SmallestNonzeroFloat64, 1e308, 1e-308, math.NaN(), math.Inf(1), math.Inf(-1)}
 	strings := []string{"", "a", "b", "ab", "é"}
 	for key, kernel := range kernelOps {
 		function, _ := registry.Resolve(key)
+		if kernel.ternary {
+			assertTernaryKernelOp(t, function, kernel, append(strings, "aé名\xff𝄞"), ints)
+			continue
+		}
 		pairs := operandsOf(function.Params, ints, floats, strings)
 		if kernel.op == rEq {
 			// eq(T, T) of ints and floats is eq_i and eq_f.
@@ -103,6 +127,43 @@ func assertKernelOp(t *testing.T, function *RegisteredFunction, kernel kernelOp,
 	if !runKernelOp(inPlace, &rinstr{op: in.op, a: 0, b: 1, c: 0}) && !identical(inPlace.valueAt(0, pair[0].kind), pair[0]) {
 		t.Errorf("%s%v refused in place, and changed its operand to %v", function.key, args, inPlace.valueAt(0, pair[0].kind).Any())
 	}
+}
+
+// assertTernaryKernelOp holds an operation of a text and two ints — the
+// last in the int of the answer's register, as lowering puts it — to its
+// function on every text with every two ints, and in place.
+func assertTernaryKernelOp(t *testing.T, function *RegisteredFunction, kernel kernelOp, texts []string, ints []int64) {
+	t.Helper()
+	cases := make([]textRange, 0, len(texts)*len(ints)*len(ints))
+	for _, text := range texts {
+		for _, first := range ints {
+			for _, last := range ints {
+				cases = append(cases, textRange{text, first, last})
+			}
+		}
+	}
+	for _, c := range cases {
+		want, wantErr := function.Eval(t.Context(), []Value{String(c.text), Int(c.first), Int(c.last)})
+		b := newBanks(3, nil)
+		b.setValue(0, String(c.text))
+		b.ints[1], b.ints[2] = c.first, c.last
+		ok := runKernelOp(&b, &rinstr{op: kernel.op, a: 0, b: 1, c: 2})
+		if ok != (wantErr == nil) || ok && b.regs[2].s != want.s {
+			t.Errorf("%s%v = %q, %v; the function says %q, %v", function.key, c, b.regs[2].s, ok, want.s, wantErr)
+		}
+		inPlace := newBanks(3, nil)
+		inPlace.setValue(0, String(c.text))
+		inPlace.ints[1], inPlace.ints[0] = c.first, c.last
+		if !runKernelOp(&inPlace, &rinstr{op: kernel.op, a: 0, b: 1, c: 0}) && (inPlace.regs[0].s != c.text || inPlace.ints[0] != c.last) {
+			t.Errorf("%s%v refused in place, and changed its operands", function.key, c)
+		}
+	}
+}
+
+// textRange is a text and two positions in it.
+type textRange struct {
+	text        string
+	first, last int64
 }
 
 // loweredOp is the operation lowering makes of op on the pair: an equality

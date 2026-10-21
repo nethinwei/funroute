@@ -56,7 +56,7 @@ type vecCols struct{ a, b, c int32 }
 // columns of, and the loop's item and answer.
 type vecPlan struct {
 	blocks []vecBlock
-	// columns is how many registers the body writes, each a column.
+	// columns is how many writes the body makes, each a column.
 	columns   int
 	item, acc int32
 	accKind   Kind
@@ -84,6 +84,7 @@ var elementwise = map[rop]bool{
 	rMoveI: true, rMoveF: true, rAddI: true, rSubI: true, rMulI: true, rDivI: true, rModI: true,
 	rAddF: true, rSubF: true, rMulF: true, rDivF: true,
 	rLtI: true, rLeI: true, rLtF: true, rLeF: true, rEqI: true, rEqF: true, rIntToF: true,
+	rMinI: true, rMaxI: true, rMinF: true, rMaxF: true, rAbsI: true, rAbsF: true,
 }
 
 // vectorOp is an operation as a column computes it: a move and an equality
@@ -262,7 +263,6 @@ func (p *vecPlanner) folding(in rinstr) bool {
 // check holds the plan to what a column can compute: an operation writes
 // neither the item nor the answer, reads the answer only as the fold, and
 // reads a register the body writes only after the body wrote it this item.
-// Each register the body writes is a column.
 func (p *vecPlanner) check() bool {
 	plan := p.plan
 	written := map[int32]bool{}
@@ -276,40 +276,42 @@ func (p *vecPlanner) check() bool {
 	if !plan.shape() {
 		return false
 	}
-	columns := map[int32]int32{}
 	for _, block := range plan.blocks {
 		for _, in := range block.ops {
 			if !readable(in.a) || in.op != rMove && in.op != rIntToF && !readable(in.b) || in.c == plan.item || in.c == plan.acc {
 				return false
 			}
 			written[in.c] = true
-			if _, ok := columns[in.c]; !ok {
-				columns[in.c] = int32(len(columns))
-			}
 		}
 		if block.folds && !readable(block.fold.b) || block.collect != -1 && !readable(block.collect) || block.cond >= 0 && !readable(block.cond) {
 			return false
 		}
 	}
-	plan.columns = len(columns)
-	plan.placeColumns(columns)
+	plan.placeColumns()
 	return true
 }
 
 // placeColumns writes down where each block's operands are among the
-// columns, so a run reads them by index.
-func (plan *vecPlan) placeColumns(columns map[int32]int32) {
+// columns, so a run reads them by index. Each operation writes a column of
+// its own: a register of the int file may hold an int and then a bool, and a
+// column holds one kind. An operand is the column of its register's last
+// write before it, or -1 for a register the body does not write.
+func (plan *vecPlan) placeColumns() {
+	last := map[int32]int32{}
 	col := func(reg int32) int32 {
-		if c, ok := columns[reg]; ok {
+		if c, ok := last[reg]; ok {
 			return c
 		}
 		return -1
 	}
+	plan.columns = 0
 	for k := range plan.blocks {
 		block := &plan.blocks[k]
 		block.cols = make([]vecCols, len(block.ops))
 		for i, in := range block.ops {
-			block.cols[i] = vecCols{a: col(in.a), b: col(in.b), c: col(in.c)}
+			block.cols[i] = vecCols{a: col(in.a), b: col(in.b), c: int32(plan.columns)}
+			last[in.c] = int32(plan.columns)
+			plan.columns++
 		}
 		block.foldCol, block.collectCol, block.condCol = col(block.fold.b), col(block.collect), col(block.cond)
 	}

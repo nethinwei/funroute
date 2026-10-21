@@ -159,6 +159,39 @@ func TestDetachedPanicsAreContainedAndTyped(t *testing.T) {
 	}
 }
 
+// A detached call is handed its own copy of every container: abandoned at
+// its deadline, it may read on after the run has returned and the host has
+// reused the memory the run was given.
+func TestADetachedCallReadsItsOwnCopy(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	var seen *int64
+	if err := registry.Register(machine.FunctionSpec{
+		Name: "engine.first_v1",
+		Doc:  machine.Doc{Detached: true},
+		Go:   func(xs []int64) int64 { seen = &xs[0]; return xs[0] },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := compile.CompileExpr(`engine.first_v1(xs)`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := []int64{7, 8}
+	xs, err := machine.ToValue(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := runtime.RunValues(t.Context(), []machine.Value{xs})
+	if got, _ := value.Int(); err != nil || got != 7 || seen == &host[0] {
+		t.Fatalf("a detached call = %v, %v, and it read the host's own slice: %v; want 7 from a copy", value.Any(), err, seen == &host[0])
+	}
+}
+
 func TestPanickingExtensionIsContained(t *testing.T) {
 	t.Parallel()
 	registry := machine.CoreRegistry()

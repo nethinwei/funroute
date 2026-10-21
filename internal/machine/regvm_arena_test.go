@@ -46,3 +46,19 @@ func TestArraysThatStayInTheRunDoNotAllocate(t *testing.T) {
 		}
 	}
 }
+
+// A slot keeps its memory from run to run, never the strings in it: an
+// array built shorter than one before it, in the run or in an earlier one,
+// leaves none of the longer one behind for the pooled frame to hold.
+func TestAnArenaHoldsNoStringOfAnEarlierRun(t *testing.T) {
+	t.Parallel()
+	for name, runs := range map[string][][]int{
+		"a shorter run":          {{100}, {10}},
+		"shorter in one run":     {{100, 10}},
+		"shorter in a later run": {{10}, {100, 10}, {5}},
+	} {
+		if held := machine.StringsLeftInArena(runs...); held != 0 {
+			t.Errorf("%s %v: the slot holds %d strings, want 0", name, runs, held)
+		}
+	}
+}

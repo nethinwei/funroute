@@ -17,7 +17,7 @@ type pureCall func(b *banks, args, dst int32) error
 
 // pureOf is the pureCall of fn, or nil for a shape it has none for.
 func pureOf(fn any) pureCall {
-	for _, shapes := range []func(any) pureCall{pureUnary, pureBinary, plainUnary, plainBinary} {
+	for _, shapes := range []func(any) pureCall{pureUnary, pureBinary, pureMixed, plainUnary, plainBinary} {
 		if call := shapes(fn); call != nil {
 			return call
 		}
@@ -138,6 +138,57 @@ func pureBinary(fn any) pureCall {
 			return nil
 		}
 	}
+	return nil
+}
+
+// pureMixed are the shapes of an error and arguments of more than one
+// kind, the standard pack's pad_left among them.
+func pureMixed(fn any) pureCall {
+	switch fn := fn.(type) {
+	case func(string, float64) (float64, error):
+		return func(b *banks, a, dst int32) error {
+			r, err := fn(b.regs[a].s, b.floats[a+1])
+			return floatInto(b, dst, r, err)
+		}
+	case func(float64, int64) (float64, error):
+		return func(b *banks, a, dst int32) error {
+			r, err := fn(b.floats[a], b.ints[a+1])
+			return floatInto(b, dst, r, err)
+		}
+	case func(int64, float64) (float64, error):
+		return func(b *banks, a, dst int32) error {
+			r, err := fn(b.ints[a], b.floats[a+1])
+			return floatInto(b, dst, r, err)
+		}
+	case func(string, string) (bool, error):
+		return func(b *banks, a, dst int32) error {
+			r, err := fn(b.regs[a].s, b.regs[a+1].s)
+			if err != nil {
+				return err
+			}
+			b.ints[dst] = word(r)
+			return nil
+		}
+	case func(string, string, string) (string, error):
+		return func(b *banks, a, dst int32) error {
+			r, err := fn(b.regs[a].s, b.regs[a+1].s, b.regs[a+2].s)
+			return stringInto(b, dst, r, err)
+		}
+	case func(string, int64, string) (string, error):
+		return func(b *banks, a, dst int32) error {
+			r, err := fn(b.regs[a].s, b.ints[a+1], b.regs[a+2].s)
+			return stringInto(b, dst, r, err)
+		}
+	}
+	return nil
+}
+
+// stringInto writes a string answer.
+func stringInto(b *banks, dst int32, r string, err error) error {
+	if err != nil {
+		return err
+	}
+	b.regs[dst] = String(r)
 	return nil
 }
 

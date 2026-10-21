@@ -177,9 +177,10 @@ func benchRun(run func() error) (float64, error) {
 
 // ruleSizes times what a console does with one rule on each keystroke —
 // compile it under its contract and format it — for the rules most are,
-// and for two deep ones, which must stay linear in their size.
+// and for three deep ones, which must stay linear in their size: the last
+// folds whole, and the branches each fold steps over are checked once.
 func ruleSizes(out *strings.Builder, registry *funroute.Registry) error {
-	out.WriteString("\n一条规则，有契约（深的两行守着编译与格式化随规模线性增长）：\n\n| 规则 | 编译 | 格式化 |\n|---|---|---|\n")
+	out.WriteString("\n一条规则，有契约（深的三行守着编译与格式化随规模线性增长）：\n\n| 规则 | 编译 | 格式化 |\n|---|---|---|\n")
 	args := []funroute.ArgSpec{{Name: "a", Type: funroute.IntType}, {Name: "b", Type: funroute.IntType},
 		{Name: "xs", Type: funroute.ArrayOf(funroute.IntType)}}
 	for _, rule := range []struct{ label, source string }{
@@ -189,6 +190,7 @@ func ruleSizes(out *strings.Builder, registry *funroute.Registry) error {
 		{"`let(k = 3, t = k * 4, [x * t + a for x in xs if x > k])`", `let(k = 3, t = k * 4, [x * t + a for x in xs if x > k])`},
 		{"循环体里 800 项的加法链", "[x" + strings.Repeat(" + 1", 800) + " for x in xs]"},
 		{"400 层嵌套的调用", strings.Repeat("max(a, ", 400) + "b" + strings.Repeat(")", 400)},
+		{"800 层闭合的 `if` 链", "a + " + strings.Repeat("if(true, ", 800) + "1" + strings.Repeat(", 0)", 800)},
 	} {
 		compiled, err := benchRun(func() error {
 			_, err := funroute.CompileExpr(rule.source, registry, funroute.CompileOptions{Args: args})

@@ -2,6 +2,7 @@ package syntax
 
 import (
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +25,8 @@ func (p *parser) negate(operator token) (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	zero := &LiteralExpr{Node: Node{ID: p.id(), Pos: operator.pos, Span: tokenSpan(operator)}, Value: machine.Int(0)}
+	// The zero is the expansion's, written nowhere (boolean).
+	zero := &LiteralExpr{Node: Node{ID: p.id(), Pos: operator.pos, Span: Span{Start: operator.pos, End: operator.pos}}, Value: machine.Int(0)}
 	return p.call(operator, "sub", zero, operand), nil
 }
 
@@ -245,8 +247,17 @@ func (p *parser) fxRateLiteral(figure token) (Expr, error) {
 // would have been. 0.30000000000000001 would be 0.3, and a rule would say
 // one thing and compute another.
 func (e *LiteralExpr) Float() (machine.Value, error) {
-	number, _ := e.Value.Float()
-	if nearest := strconv.FormatFloat(number, 'g', -1, 64); nearest != e.Decimal.String() {
+	number, ok := e.Value.Float()
+	if !ok {
+		return machine.Value{}, Around(e, "type error: %s is not a float literal", e.Value.Type())
+	}
+	// As written is as a number, not as text: 0.1 is the float64 whose
+	// shortest text is 0.1, and 2^60 written out in full is a float64
+	// exactly, though strconv writes it shorter.
+	nearest := strconv.FormatFloat(number, 'g', -1, 64)
+	written, _ := new(big.Rat).SetString(e.Decimal.String())
+	shortest, _ := new(big.Rat).SetString(nearest)
+	if written == nil || written.Cmp(shortest) != 0 && written.Cmp(new(big.Rat).SetFloat64(number)) != 0 {
 		return machine.Value{}, Around(e, "type error: float %s is not a float64 as written: the nearest one is %s", e.Decimal, nearest)
 	}
 	return e.Value, nil

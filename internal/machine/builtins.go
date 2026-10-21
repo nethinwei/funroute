@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 
@@ -47,11 +48,11 @@ func registerComparisons(registry *Registry) {
 
 func registerComparison(registry *Registry, name, label string, accept func(int) bool) {
 	eval := func(_ context.Context, args []Value) (Value, error) {
-		order, err := compareValues(args[0], args[1])
+		order, ordered, err := compareValues(args[0], args[1])
 		if err != nil {
 			return Value{}, err
 		}
-		return Bool(accept(order)), nil
+		return Bool(ordered && accept(order)), nil
 	}
 	for _, params := range [][2]Type{
 		{IntType, IntType}, {FloatType, FloatType}, {StringType, StringType},
@@ -72,22 +73,28 @@ func registerComparison(registry *Registry, name, label string, accept func(int)
 
 // compareValues orders two values of the same domain. Integers are compared as
 // integers, so values beyond float64's exact range still order correctly.
-func compareValues(left, right Value) (int, error) {
+// ordered is false when a float is NaN.
+func compareValues(left, right Value) (order int, ordered bool, err error) {
 	switch {
 	case left.kind == StringKind && right.kind == StringKind:
-		return strings.Compare(left.s, right.s), nil
+		return strings.Compare(left.s, right.s), true, nil
 	case left.kind == IntKind && right.kind == IntKind:
-		return cmp.Compare(left.i, right.i), nil
+		return cmp.Compare(left.i, right.i), true, nil
 	}
 	first, err := numericFloat(left)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	second, err := numericFloat(right)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return cmp.Compare(first, second), nil
+	// As IEEE 754 compares: NaN is in no order, so every comparison with it
+	// is false, as < on two floats is. cmp.Compare's total order is a sort's.
+	if math.IsNaN(first) || math.IsNaN(second) {
+		return 0, false, nil
+	}
+	return cmp.Compare(first, second), true, nil
 }
 
 func registerControl(registry *Registry) {

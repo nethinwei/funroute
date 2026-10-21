@@ -83,6 +83,51 @@ func TestConvertExactLeavesTheRounding(t *testing.T) {
 	if _, err := table.ConvertExact(Money{currency: "EUR", minor: 100}.Exact(), fx); !errors.Is(err, ErrCurrency) {
 		t.Fatalf("ConvertExact of euros at a dollar rate: error = %v, want ErrCurrency", err)
 	}
+	// The rate in minor units, 10^-20, fits no ratio; the amount cancels it.
+	tiny, err := table.ConvertExact(Money{currency: "USD", minor: 100}.Exact(), fxRate(t, "USD", "JPY", "0.000000000000000001"))
+	if err != nil || tiny.Minor() != ratio(1, 1_000_000_000_000_000_000) {
+		t.Fatalf("ConvertExact(USD 1.00) at 10^-18 = %s, %v, want 10^-18 yen", tiny, err)
+	}
+}
+
+// MulPart is prorate's exact step: the proportion is never a ratio of its
+// own, so a whole of MinInt64 — 1/MinInt64 fits no ratio — takes a share.
+func TestExactMoneyTakesAPart(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		e           ExactMoney
+		part, whole int64
+		want        Ratio
+	}{
+		"a third":            {usd(100).Exact(), 1, 3, ratio(100, 3)},
+		"a negative whole":   {usd(100).Exact(), 1, -4, ratio(-25, 1)},
+		"zero of MinInt64":   {usd(0).Exact(), 1, math.MinInt64, Ratio{}},
+		"MinInt64 of itself": {usd(5).Exact(), math.MinInt64, math.MinInt64, ratio(5, 1)},
+		"half of MinInt64":   {usd(math.MinInt64).Exact(), 1, 2, ratio(math.MinInt64/2, 1)},
+	} {
+		if got, err := test.e.MulPart(test.part, test.whole); err != nil || got.Minor() != test.want {
+			t.Errorf("%s: (%s).MulPart(%d, %d) = %s, %v, want %s", name, test.e, test.part, test.whole, got, err, test.want)
+		}
+	}
+	if _, err := usd(1).Exact().MulPart(1, 0); !errors.Is(err, ErrArithmetic) {
+		t.Fatalf("MulPart(1, 0) error = %v, want ErrArithmetic", err)
+	}
+}
+
+// ProrateBy takes the part by two amounts of one currency, as Money.ProrateBy
+// does: USD 0.01 of the smallest amount is no ratio, and needs none.
+func TestExactMoneyProratesByAmounts(t *testing.T) {
+	t.Parallel()
+	got, err := usd(2).Exact().ProrateBy(usd(1), usd(math.MinInt64))
+	if want := ratio(-1, 1<<62); err != nil || got.Minor() != want {
+		t.Errorf("(USD 0.02).ProrateBy(USD 0.01, the smallest) = %s, %v, want %s minor units", got, err, want)
+	}
+	if _, err := usd(2).Exact().ProrateBy(usd(1), Money{currency: "EUR", minor: 3}); !errors.Is(err, ErrCurrency) {
+		t.Errorf("ProrateBy(USD, EUR) error = %v, want ErrCurrency", err)
+	}
+	if _, err := usd(2).Exact().ProrateBy(usd(1), usd(0)); !errors.Is(err, ErrArithmetic) {
+		t.Errorf("ProrateBy(USD 0.01, USD 0) error = %v, want ErrArithmetic", err)
+	}
 }
 
 // The sign of exact money is the sign of its minor units, however small a
@@ -107,5 +152,31 @@ func TestExactMoneySign(t *testing.T) {
 				t.Fatalf("(%s).Sign() = %d, want %d", test.e, got, test.want)
 			}
 		})
+	}
+}
+
+// Exact money reads back what it writes, and refuses what no exact amount
+// is: no currency on an amount that is not zero, a code that is none, minor
+// units that are no ratio, a part left out.
+func TestExactMoneyReadsBackItsJSON(t *testing.T) {
+	t.Parallel()
+	for _, e := range []ExactMoney{{}, usd(5).Exact(), ExactFrom("USD", ratio(17, 2)), ExactFrom("JPY", ratio(-1, 3))} {
+		encoded, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back ExactMoney
+		if err := json.Unmarshal(encoded, &back); err != nil || back != e {
+			t.Errorf("json.Unmarshal(%s) = %v, %v, want %v", encoded, back, err, e)
+		}
+	}
+	for _, text := range []string{
+		`{"currency": "", "minor": "1/2"}`, `{"currency": "usd", "minor": "1"}`, `{"currency": "USD", "minor": "x"}`,
+		`{"currency": "USD"}`, `{"minor": "1"}`, `"USD 1"`,
+	} {
+		var e ExactMoney
+		if err := json.Unmarshal([]byte(text), &e); err == nil {
+			t.Errorf("json.Unmarshal(%s) = %v, want an error", text, e)
+		}
 	}
 }

@@ -55,9 +55,11 @@ var (
 // ToValue wraps a Go value — a []float64 becomes an array<float> holding that
 // very slice — and FromValue hands the backing back out: the host boundary is
 // free of conversion. The same two functions convert an extension's arguments
-// and result, so the list of supported Go types (bool, int64, float64, string,
-// their slices and string-keyed maps, and [][]float64) is stated once, in
-// machine.
+// and result, so the list of supported Go types is stated once, in machine:
+// bool, int64, float64, string, their slices and string-keyed maps, and
+// [][]float64; Money, Ratio, FxRate and Currency, []Money, []FxRate and
+// map[string]Money; time.Time and time.Duration; a struct, or a pointer to
+// one, as a record of its tagged fields; and a Value as it is.
 //
 // What makes this safe is a convention rather than a copy: a slice or map that
 // has been given to a Value, or taken from one, is read-only from then on.
@@ -171,7 +173,7 @@ const ExprJSONVersion = syntax.ExprJSONVersion
 // Compilation produces an artifact: immutable bytecode with a digest over
 // everything that is contract. A host stores and ships it as JSON and reads
 // its contract through Args, Result and Digest; its bytecode is the
-// machine's, and Instantiate checks every part of it again.
+// machine's, and Instantiate checks again that every part is safe to run.
 type (
 	Artifact       = machine.Artifact
 	Parameter      = machine.Parameter

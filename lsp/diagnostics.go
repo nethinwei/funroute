@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
 
@@ -35,6 +36,34 @@ func (s *Server) analysisOf(doc *document) (*compile.Analysis, error) {
 		doc.analyzed = true
 	}
 	return doc.analysis, doc.analysisErr
+}
+
+// parse is what parsing text gave, text being this version's or one made of
+// it. Parsing needs no contract, so the answer holds for the whole version.
+func (d *document) parse(text string) (syntax.Expr, error) {
+	if got, ok := d.parses[text]; ok {
+		return got.tree, got.err
+	}
+	tree, err := syntax.Parse(text)
+	if d.parses == nil {
+		d.parses = map[string]parseResult{}
+	}
+	d.parses[text] = parseResult{tree, err}
+	return tree, err
+}
+
+// analyze is what analyzing text against options gave. options follow from
+// the contract, so a new contract clears the answers (Server.setContract).
+func (d *document) analyze(text string, registry *machine.Registry, options compile.CompileOptions) (*compile.Analysis, error) {
+	if got, ok := d.analyses[text]; ok {
+		return got.analysis, got.err
+	}
+	analysis, err := compile.Analyze(text, registry, options)
+	if d.analyses == nil {
+		d.analyses = map[string]analysisResult{}
+	}
+	d.analyses[text] = analysisResult{analysis, err}
+	return analysis, err
 }
 
 // lexemesOf is every piece of the document, as the lexer and parser read it.
@@ -81,7 +110,7 @@ type setContractParams struct {
 func (s *Server) setContract(in setContractParams) error {
 	s.applyContract(in.Contract)
 	for _, doc := range s.documents {
-		doc.analyzed = false
+		doc.analyzed, doc.analyses = false, nil
 		s.publish(doc)
 	}
 	return nil

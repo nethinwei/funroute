@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"unsafe"
 
 	"github.com/nethinwei/funroute/internal/kit"
@@ -179,24 +180,27 @@ func (v Value) lookup(key string) (Value, bool) {
 // every entry, without sorting or copying the keys as keys does.
 func (v Value) eachEntry(visit func(key string, entry Value) error) error {
 	switch box := v.box.(type) {
+	case map[string]bool:
+		return eachOf(box, Bool, visit)
+	case map[string]int64:
+		return eachOf(box, Int, visit)
+	case map[string]float64:
+		return eachOf(box, Float, visit)
+	case map[string]string:
+		return eachOf(box, String, visit)
 	case map[string]money.Money:
-		for key, amount := range box {
-			if err := visit(key, MoneyValue(amount.Minor(), amount.Currency())); err != nil {
-				return err
-			}
-		}
+		return eachOf(box, moneyValueOf, visit)
 	case *nestedDict:
-		for key, entry := range box.entries {
-			if err := visit(key, entry); err != nil {
-				return err
-			}
-		}
-	default:
-		for _, key := range v.keys() {
-			entry, _ := v.lookup(key)
-			if err := visit(key, entry); err != nil {
-				return err
-			}
+		return eachOf(box.entries, func(entry Value) Value { return entry }, visit)
+	}
+	return nil
+}
+
+// eachOf visits the entries of one backing, each made a value by value.
+func eachOf[T any](entries map[string]T, value func(T) Value, visit func(key string, entry Value) error) error {
+	for key, entry := range entries {
+		if err := visit(key, value(entry)); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -302,6 +306,36 @@ type arrayBuilder struct {
 	monies  []money.Money
 	fxRates []money.FxRate
 	values  []Value
+	// of is the view a loop picks its items out of (rCollectItem), and
+	// picked where each is in the host's slice: the array is a view of
+	// them.
+	of     *recordsView
+	picked []int
+	// slab and slabFields are the records a loop builds as it collects them
+	// and their fields, a block at a time, rather than one allocation each
+	// (record).
+	slab       []recordValue
+	slabFields []Value
+}
+
+// firstSlab is how many records the first block of a slab holds; each
+// after it holds twice as many, but never more than the items left.
+const firstSlab = 16
+
+// record is a record of typ with n fields, out of the slab: a block twice
+// the size of the last once the last is full, and no bigger than what is
+// still to come — so a loop that keeps few items keeps little memory.
+func (b *arrayBuilder) record(typ *Type, n int) *recordValue {
+	if len(b.slab) == cap(b.slab) || len(b.slabFields)+n > cap(b.slabFields) {
+		room := min(max(firstSlab, 2*cap(b.slab)), max(cap(b.values)-len(b.values), 1))
+		b.slab, b.slabFields = make([]recordValue, 0, room), make([]Value, 0, room*n)
+	}
+	b.slab = b.slab[:len(b.slab)+1]
+	start := len(b.slabFields)
+	b.slabFields = b.slabFields[:start+n]
+	record := &b.slab[len(b.slab)-1]
+	*record = recordValue{typ: typ, fields: b.slabFields[start : start+n : start+n]}
+	return record
 }
 
 func newArrayBuilder(elem Type, capacity int) arrayBuilder {
@@ -356,6 +390,9 @@ func (b *arrayBuilder) addAll(value Value) {
 }
 
 func (b *arrayBuilder) finish() Value {
+	if b.of != nil {
+		return viewed(&recordsView{data: b.of.data, length: len(b.picked), plan: b.of.plan, perm: b.picked})
+	}
 	switch b.elem.kind {
 	case BoolKind:
 		return arrayOf(b.bools)
@@ -401,4 +438,57 @@ func mapEntries[T any](entries map[string]Value, get func(Value) T) map[string]T
 		out[key] = get(value)
 	}
 	return out
+}
+
+// owned is v with every container in it copied, so that nothing it holds is
+// memory another may change: the host's, which it may reuse once a run
+// returns. A string cannot change, and a handle's payload is the host's own;
+// neither is copied.
+func owned(v Value) Value {
+	switch box := v.box.(type) {
+	case *nestedArray:
+		return nestedOf(box.elem, ownedValues(box.items))
+	case *recordsView:
+		items, _ := v.Array()
+		return nestedOf(v.elemType(), ownedValues(items))
+	case *nestedDict:
+		entries := make(map[string]Value, len(box.entries))
+		for key, entry := range box.entries {
+			entries[key] = owned(entry)
+		}
+		return Value{kind: DictKind, box: &nestedDict{elem: box.elem, entries: entries}}
+	case *recordValue:
+		return Value{kind: RecordKind, box: &recordValue{typ: box.typ, fields: ownedValues(box.fields)}}
+	}
+	return ownedNative(v)
+}
+
+// ownedNative is owned of a native array or dictionary, and v itself for
+// anything else.
+func ownedNative(v Value) Value {
+	switch box := v.box.(type) {
+	case *bool:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case *int64:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case *float64:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case *string:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case *money.Money:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case *money.FxRate:
+		return arrayOf(slices.Clone(itemsAt(box, v.i)))
+	case map[string]bool:
+		v.box = maps.Clone(box)
+	case map[string]int64:
+		v.box = maps.Clone(box)
+	case map[string]float64:
+		v.box = maps.Clone(box)
+	case map[string]string:
+		v.box = maps.Clone(box)
+	case map[string]money.Money:
+		v.box = maps.Clone(box)
+	}
+	return v
 }

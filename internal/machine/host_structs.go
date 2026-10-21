@@ -31,7 +31,12 @@ import (
 // structFields describes one Go struct as record fields, in declaration order.
 // A record has at least one field, so a struct that tags none is refused.
 func structFields(registry *Registry, typ reflect.Type) ([]Field, []int, error) {
-	fields, indexes, err := taggedFields(registry, typ)
+	return structFieldsOn(registry, typ, nil)
+}
+
+// structFieldsOn is structFields for a struct met on path (reflectTypeOn).
+func structFieldsOn(registry *Registry, typ reflect.Type, path *typePath) ([]Field, []int, error) {
+	fields, indexes, err := taggedFieldsOn(registry, typ, path)
 	if err == nil && len(fields) == 0 {
 		return nil, nil, fmt.Errorf(`struct %s declares no record fields: tag the ones the language may read with `+"`funroute:\"name\"`", typ)
 	}
@@ -41,6 +46,11 @@ func structFields(registry *Registry, typ reflect.Type) ([]Field, []int, error) 
 // taggedFields is structFields without the lower bound, for a struct that is
 // a program's arguments: a rule may take none.
 func taggedFields(registry *Registry, typ reflect.Type) ([]Field, []int, error) {
+	return taggedFieldsOn(registry, typ, nil)
+}
+
+// taggedFieldsOn is taggedFields for a struct met on path (reflectTypeOn).
+func taggedFieldsOn(registry *Registry, typ reflect.Type, path *typePath) ([]Field, []int, error) {
 	var fields []Field
 	var indexes []int
 	for i := range typ.NumField() {
@@ -60,7 +70,7 @@ func taggedFields(registry *Registry, typ reflect.Type) ([]Field, []int, error) 
 			return nil, nil, fmt.Errorf("fields %s and %s of %s are both tagged %q",
 				typ.Field(indexes[at]).Name, structField.Name, typ, name)
 		}
-		fieldType, err := reflectType(registry, structField.Type)
+		fieldType, err := reflectTypeOn(registry, structField.Type, path)
 		if err != nil {
 			return nil, nil, fmt.Errorf("field %s: %w", structField.Name, err)
 		}

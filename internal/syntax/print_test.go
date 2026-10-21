@@ -12,6 +12,9 @@ var printCorpus = []string{
 	// A negated exchange rate and a negated item: a minus before a number
 	// is a literal only when the number stands alone.
 	`-150 JPY / USD`, `-2[0]`, `-(1.5)`,
+	// A negative number after ->, and a bool as a comprehension's key: the
+	// one is no postfix expression, the other no field name.
+	`a -> (-1)`, `convert(a, -1.5)`, `{(true): 1 for x in xs}`, `{(-1): 1 for x in xs}`,
 	// A call without arguments, fields read off a field, and a field read off
 	// an enum member — each once printed as something that did not read back.
 	`f()`, `route.now_v1()`, `f(x).a.b`, `xs[0].a.b`, `{a: {b: 1}}.a.b`, `(@A).A`, `(@A).a.b`,
@@ -57,6 +60,10 @@ var printCorpus = []string{
 	// Selectors: a field read off one is not a longer one.
 	`t + 90s`, `2h30m - 1s500ms`, `-2h`, `0 - 2h`, `(30m).x`, `d * 2 > 1h`, `[1ms, 1us, 1ns][0]`,
 	`sort_by(xs, .fee)`, `top_k(xs, .meta.rank, 2)`, `(.a).b`, `(.a)[0]`, `f(xs, .a, .b.c)`,
+	// A bool under a field read is no name true.x.
+	`(true).x`, `(false)[0]`,
+	// Two minuses in a row are two negations.
+	`- -x`, `-(-(a+b))`, `sub(0, sub(0, x))`, `- -USD 1`,
 }
 
 // Every printed program parses back to the node it was printed from, on one
@@ -137,6 +144,26 @@ func TestPrintSpellsOperatorsTheWayTheyAreWritten(t *testing.T) {
 	}
 }
 
+// A negation of a negation keeps its two minuses apart: --x reads as one
+// token to a person, if not to the lexer.
+func TestTwoMinusesPrintApart(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		`- -x`:              `- -x`,
+		`-(-(a+b))`:         `- -(a + b)`,
+		`sub(0, sub(0, x))`: `- -x`,
+		`- - -x`:            `- - -x`,
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			expr := mustParse(t, source)
+			if got, formatted := Inline(expr), Format(expr); got != want || formatted != want {
+				t.Errorf("Inline(%q) = %q and Format = %q, want %q", source, got, formatted, want)
+			}
+		})
+	}
+}
+
 // A ratio before != prints as 2.9% != r, which has to read back.
 func TestARatioBeforeNotEqualPrintsBack(t *testing.T) {
 	t.Parallel()
@@ -183,5 +210,21 @@ func TestPrintSpellsExchangeTheWayItIsWritten(t *testing.T) {
 				t.Errorf("Inline(%q) = %q, want %q", source, got, want)
 			}
 		})
+	}
+}
+
+// A text with nothing to escape is only put between quotes, as JSON would
+// write it: every byte alone, and texts of them, quote as escaped does.
+func TestQuoteWritesWhatJSONWrites(t *testing.T) {
+	t.Parallel()
+	texts := make([]string, 0, 2*256+10)
+	for b := range 256 {
+		texts = append(texts, string([]byte{byte(b)}), "x"+string([]byte{byte(b)})+"y")
+	}
+	texts = append(texts, "", "hello", "a<b>&c", "银😀", "\u2028", "\x7f", "\xff", `say "hi"`, `a\b`, "tab\t")
+	for _, text := range texts {
+		if got, want := quote(text), escaped(text); got != want {
+			t.Errorf("quote(%q) = %s, want %s", text, got, want)
+		}
 	}
 }

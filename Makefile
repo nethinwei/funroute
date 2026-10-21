@@ -121,8 +121,9 @@ golden:
 	$(GO) test ./tests/golden -update
 
 perf: wasm
-	$(GO) run ./tests/perf > docs/perf.md
-	cd tests/perf/expr && $(GO) run . >> ../../../docs/perf.md
+	$(GO) run ./tests/perf > docs/perf.md.new || { rm -f docs/perf.md.new; exit 1; }
+	cd tests/perf/expr && $(GO) run . >> ../../../docs/perf.md.new || { rm -f ../../../docs/perf.md.new; exit 1; }
+	mv docs/perf.md.new docs/perf.md
 
 check-js:
 	@for file in web/*.js; do $(NODE) --check $$file || exit 1; done

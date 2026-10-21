@@ -73,6 +73,9 @@ func (m Money) AllocateBy(strategy AllocationStrategy, weights ...int64) ([]Mone
 	if strategy.String() == "invalid" {
 		return nil, fmt.Errorf("%w: allocation strategy %d is not one", ErrArithmetic, strategy)
 	}
+	if len(weights) > maxAllocation {
+		return nil, fmt.Errorf("%w: allocate needs 1 to %d shares, got %d", ErrArithmetic, maxAllocation, len(weights))
+	}
 	total, err := allocationTotal(weights)
 	if err != nil {
 		return nil, err
@@ -88,8 +91,11 @@ func (m Money) AllocateBy(strategy AllocationStrategy, weights ...int64) ([]Mone
 		magnitudes[i], remainders[i] = part, rest
 		left -= part
 	}
-	for _, i := range receivers(strategy, weights, remainders, int(left)) {
-		magnitudes[i]++
+	// Divided evenly, there is no unit left to give, and no one to choose.
+	if left > 0 {
+		for _, i := range receivers(strategy, weights, remainders, int(left)) {
+			magnitudes[i]++
+		}
 	}
 	return signedShares(m, magnitudes)
 }
@@ -179,8 +185,36 @@ func (m Money) Split(n int) ([]Money, error) {
 // strategy says: with equal weights the largest remainder and in order both
 // start at the first share, reverse order and all last at the last.
 func (m Money) SplitBy(strategy AllocationStrategy, n int) ([]Money, error) {
+	return m.splitBy(strategy, int64(n))
+}
+
+// splitBy is SplitBy of a count a rule computed, held to the bound before it
+// is an int: on a 32-bit platform an int64 past it would wrap into it.
+func (m Money) splitBy(strategy AllocationStrategy, n int64) ([]Money, error) {
 	if n <= 0 || n > maxAllocation {
 		return nil, fmt.Errorf("%w: allocate needs 1 to %d shares, got %d", ErrArithmetic, maxAllocation, n)
 	}
-	return m.AllocateBy(strategy, slices.Repeat([]int64{1}, n)...)
+	if strategy.String() == "invalid" {
+		return nil, fmt.Errorf("%w: allocation strategy %d is not one", ErrArithmetic, strategy)
+	}
+	// AllocateBy of n weights of one, with nothing to weigh: every share is
+	// the quotient, and the remainder's units go one each to the first
+	// shares or the last ones, or all to the first or the last.
+	quotient, left := magnitude(m.minor)/uint64(n), int(magnitude(m.minor)%uint64(n))
+	magnitudes := slices.Repeat([]uint64{quotient}, int(n))
+	switch strategy {
+	case AllocateReverseOrder:
+		for i := int(n) - left; i < int(n); i++ {
+			magnitudes[i]++
+		}
+	case AllocateAllFirst:
+		magnitudes[0] += uint64(left)
+	case AllocateAllLast:
+		magnitudes[n-1] += uint64(left)
+	default:
+		for i := range left {
+			magnitudes[i]++
+		}
+	}
+	return signedShares(m, magnitudes)
 }

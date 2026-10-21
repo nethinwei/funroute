@@ -6,6 +6,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/nethinwei/funroute/extensions/std"
+	"github.com/nethinwei/funroute/internal/compile"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -143,6 +145,9 @@ func TestUsingNestsAndEnds(t *testing.T) {
 		"before the body":                {source: "round((a -> JPY), @half_even) + using(160 JPY / USD, round(a -> JPY, @half_even))", outer: dollarAt150, want: "{JPY 310}"},
 		"after an inner body":            {source: "using(160 JPY / USD, using(170 JPY / USD, round(a -> JPY, @half_even)) + round((a -> JPY), @half_even))", want: "{JPY 330}"},
 		"one after another":              {source: "using(160 JPY / USD, round(a -> JPY, @half_even)) + using(170 JPY / USD, round(a -> JPY, @half_even))", want: "{JPY 330}"},
+		// The pair found in the outer using is not the inner's, nor the
+		// inner's the outer's once it ends.
+		"the outer, an inner, the outer": {source: "using(160 JPY / USD, round(a -> JPY, @half_even) + using(170 JPY / USD, round(a -> JPY, @half_even)) + round(a -> JPY, @half_even))", want: "{JPY 490}"},
 	})
 }
 
@@ -157,6 +162,9 @@ func TestAFallbackEndsTheUsingsItCatches(t *testing.T) {
 		"a candidate with its own": {source: "fallback(using(0.9 EUR / USD, round(a -> JPY, @half_even)), using(160 JPY / USD, round(a -> JPY, @half_even)))", outer: dollarAt150, want: "{JPY 160}"},
 		"a quote of two amounts":   {source: "fallback(using(implied(y, a), round(a -> JPY, @half_even)), JPY 0)", outer: dollarAt150, want: "{JPY 1600}"},
 		"no table after the catch": {source: "fallback(using(0.9 EUR / USD, round(a -> JPY, @half_even)), JPY 0) + round((a -> JPY), @half_even)", err: machine.ErrNoFxRate},
+		// The candidate found yen at 170 before it failed; the using
+		// around the fallback still has them at 160.
+		"a rate found before the failure": {source: "using(160 JPY / USD, fallback(using(170 JPY / USD, round(a -> JPY, @half_even) + round(a -> EUR -> JPY, @half_even)), JPY 0) + round(a -> JPY, @half_even))", want: "{JPY 160}"},
 	})
 }
 
@@ -395,4 +403,62 @@ func moneyValues[T any](t *testing.T, input T) machine.Value {
 		t.Fatal(err)
 	}
 	return value
+}
+
+// BenchmarkConvertManyQuotes converts 500 amounts in a using of a market of
+// 1 to 150 quotes, the pair the loop converts quoted first: the quote is
+// searched for once, not once an item.
+func BenchmarkConvertManyQuotes(b *testing.B) {
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		b.Fatal(err)
+	}
+	if err := registry.DeclareMoney(money.MoneySpec{Currencies: std.ISO4217()}); err != nil {
+		b.Fatal(err)
+	}
+	table, _ := registry.Currencies()
+	amounts := make([]money.Money, 500)
+	for i := range amounts {
+		amounts[i], _ = table.Minor("USD", int64(100+i))
+	}
+	xs, _ := machine.ToValue(amounts)
+	artifact, err := compile.CompileExpr("using(market, [round(a -> JPY, @half_even) for a in xs])", registry, compile.CompileOptions{
+		Args: []compile.ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.MoneyType)}, {Name: "market", Type: machine.ArrayOf(machine.FxRateType)}},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, size := range []int{1, 8, 50, 150} {
+		market, _ := machine.ToValue(marketOf(table, size))
+		args := []machine.Value{xs, market}
+		b.Run(fmt.Sprint("quotes=", size), func(b *testing.B) {
+			for b.Loop() {
+				_, _ = runtime.RunValues(b.Context(), args)
+			}
+		})
+	}
+}
+
+// marketOf is size quotes of the dollar, yen first, where a search from the
+// latest quote meets it last.
+func marketOf(table *money.Currencies, size int) []money.FxRate {
+	yen, _ := table.FxRate("USD", "JPY", "150.25")
+	rates := []money.FxRate{yen}
+	for _, currency := range std.ISO4217() {
+		if fx, err := table.FxRate("USD", currency.Code, "1.5"); err == nil && len(rates) < size && currency.Code != "JPY" && currency.Code != "USD" {
+			rates = append(rates, fx)
+		}
+	}
+	return rates
+}
+
+// Closing a using where none is open closes nothing: the verifier refuses
+// such bytecode, and the frame does not lean on it.
+func TestClosingNoUsingClosesNothing(t *testing.T) {
+	t.Parallel()
+	machine.PopScopeOfNone()
 }

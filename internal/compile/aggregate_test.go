@@ -74,6 +74,38 @@ func TestAFoldOfAComprehensionAnswersAsTheCall(t *testing.T) {
 	}
 }
 
+// A fold whose step is no kernel instruction — add(float, int) — calls it
+// with its arguments in registers of its own: a field read out of a record
+// argument before the loop, on either side of the fold, keeps its value.
+func TestAFoldLeavesThePromotedFieldsAlone(t *testing.T) {
+	t.Parallel()
+	registry := aggregateRegistry(t)
+	total := func(items []int64) float64 {
+		sum := 0.0
+		for _, item := range items {
+			sum += float64(item)
+		}
+		return sum
+	}
+	err := registry.Register(machine.FunctionSpec{Name: "t.total_v1", Go: total, Fold: &machine.Fold{Step: "add", Init: machine.Float(0)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := machine.RecordOf(machine.FieldOf("rate", machine.FloatType))
+	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}, {Name: "order", Type: order}}}
+	args := map[string]any{"xs": []any{1, 2, 3}, "order": map[string]any{"rate": 100.0}}
+	for _, source := range []string{
+		`t.total_v1([x for x in xs]) + order.rate`,
+		`order.rate + t.total_v1([x for x in xs])`,
+	} {
+		fused, plain := compileBoth(t, source, registry, options)
+		assertFusedAnswersAsPlain(t, source, fused, plain, args)
+		if got, err := fused.Run(t.Context(), args); err != nil || got.Any() != 106.0 {
+			t.Errorf("%s = %v, %v; want 106", source, got.Any(), err)
+		}
+	}
+}
+
 // compileBoth is the program fused and as written; the fused one calls no
 // fold on an array.
 func compileBoth(t *testing.T, source string, registry *machine.Registry, options CompileOptions) (fused, plain *machine.Runtime) {
@@ -167,6 +199,31 @@ func TestAFirstOfAComprehensionStopsAtItsItem(t *testing.T) {
 	}
 }
 
+// any, all and first on a comprehension are short-circuit forms, and let is
+// strict: binding the comprehension first builds every item, so the items
+// after the one that decides the answer are computed — and fail — there.
+// That is the language's meaning (docs/semantics.md S4), not an accident of
+// the fusion.
+func TestAShortCircuitFormIsNotItsLetBinding(t *testing.T) {
+	t.Parallel()
+	registry := aggregateRegistry(t)
+	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}}
+	args := map[string]any{"xs": []any{1, 0}}
+	for _, pair := range [][2]string{
+		{`t.any_v1([10 / x > 2 for x in xs])`, `let(big = [10 / x > 2 for x in xs], t.any_v1(big))`},
+		{`t.all_v1([10 / x > 20 for x in xs])`, `let(big = [10 / x > 20 for x in xs], t.all_v1(big))`},
+	} {
+		short, _ := compileHoisted(t, pair[0], registry, options)
+		if _, err := short.Run(t.Context(), args); err != nil {
+			t.Errorf("%s with %v fails: %v; it stops at the first item", pair[0], args, err)
+		}
+		bound, _ := compileHoisted(t, pair[1], registry, options)
+		if got, err := bound.Run(t.Context(), args); !errors.Is(err, machine.ErrArithmetic) {
+			t.Errorf("%s with %v: %v, %v; want the division by zero let computes", pair[1], args, got.Any(), err)
+		}
+	}
+}
+
 // A fold must fold for the function it is declared on: one array in, a step
 // the kernel has, a stop only of bools, a count of an int.
 func TestAFoldIsHeldToItsFunction(t *testing.T) {
@@ -228,6 +285,35 @@ func TestAnInvariantInnerSourceIsComputedOnce(t *testing.T) {
 			if hoistedCalls != wantCalls {
 				t.Errorf("%s with %v: the inner source computed %d times, as written %d; want %d", test.source, xs, hoistedCalls, plainCalls, wantCalls)
 			}
+		}
+	}
+}
+
+// A first of a comprehension of records fuses too, its seed a record of
+// zeros: the record found is the only one built, and the answer and the
+// failure are those of the call on the array built.
+func TestAFirstOfRecordsBuildsOnlyItsAnswer(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}}
+	source := `first([{n: x, name: string(x), big: x > 2, half: float(x) / 2.0} for x in xs if x > 1])`
+	artifact, err := CompileExpr(source, registry, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded, _ := json.Marshal(artifact); !strings.Contains(string(encoded), "loop_break") {
+		t.Fatalf("%s does not stop at its record: %s", source, encoded)
+	}
+	fused, plain := compileHoisted(t, source, registry, options)
+	for _, xs := range [][]any{{}, {1, 2, 3}, {0}, {5}} {
+		args := map[string]any{"xs": xs}
+		got, gotErr := fused.Run(t.Context(), args)
+		want, wantErr := plain.Run(t.Context(), args)
+		if (gotErr == nil) != (wantErr == nil) || gotErr == nil && !got.Equal(want) || gotErr != nil && gotErr.Error() != wantErr.Error() {
+			t.Errorf("%s with %v: fused %v, %v; as written %v, %v", source, xs, got.Any(), gotErr, want.Any(), wantErr)
 		}
 	}
 }

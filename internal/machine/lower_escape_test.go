@@ -78,10 +78,11 @@ func destOps(dest map[string]int) string {
 // An array of plain records is handed over in the frame's own slot when the
 // program only walks or measures it — through let, in nested loops, under a
 // filter; an index into it, or the array itself answered or handed on, lets
-// it out. Apart from that, a loop loads its items into the frame's own
-// record when it only reads their fields; an item that goes anywhere else —
-// collected, compared, put in a record — is made a record of its own, and
-// the loop's items do not stay put.
+// it out. Apart from that, a loop loads the fields it reads of its items
+// into registers when it only reads their fields, or collects an item as it
+// is into its own array; an item that goes anywhere else — collected into
+// an outer clause's array or as part of something, compared, put in a record
+// — is made a record of its own, and the loop's items do not stay put.
 func TestAnArrayOfRecordsIsViewedWhileItsItemsStayPut(t *testing.T) {
 	t.Parallel()
 	registry := randomRegistry(t)
@@ -98,7 +99,10 @@ func TestAnArrayOfRecordsIsViewedWhileItsItemsStayPut(t *testing.T) {
 		{`len([c.fee for c in cs for d in cs if d.fee > c.fee])`, true, 2},
 		{`len([let(n = c, n.fee) for c in cs])`, true, 1},
 		{`len([c for c in cs])`, true, 1}, // a count: the items are never collected
-		{`[c for c in cs]`, true, 0},
+		{`[c for c in cs]`, true, 1},
+		{`[c for c in cs if c.ok && c.fee < 50]`, true, 1},
+		{`[d for c in cs for d in cs]`, true, 1},
+		{`[if(c.ok, c, c) for c in cs]`, true, 0},
 		{`len([[c] for c in cs])`, true, 0},
 		{`cs[0].fee`, false, 0},
 		{`len([c == c for c in cs])`, true, 0},
@@ -205,5 +209,55 @@ func TestAnItemReadInPlaceLoadsTheFieldsItsBodyReads(t *testing.T) {
 		if err != nil || wantErr != nil || want.Any() != got {
 			t.Errorf("%s = %v, %v; over the records %v, %v", source, got, err, want.Any(), wantErr)
 		}
+	}
+}
+
+// A loop that collects its item as it is on one path and something it
+// computed on another makes one array of both: collecting the item where it
+// is is a fact of the whole loop, which this one is not. The compiler joins
+// the paths before one collect; a forged artifact need not.
+func TestALoopCollectingItsItemAndMoreKeepsBoth(t *testing.T) {
+	t.Parallel()
+	registry := viewedRegistry(t)
+	artifact, err := compileMoney(t, registry, `[if(c.fee > 10, c, c with {fee: 0}) for c in channels]`,
+		"channels: array<record{name: string, fee: int, risk: float, ok: bool}>", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := machine.PartsOf(artifact)
+	code := parts.Instructions
+	collect, next := code[12], code[13]
+	next.A = 2
+	parts.Instructions = []machine.Instruction{
+		code[0], {Op: machine.OpLoopInit, A: 15, B: 0, C: machine.NoAccumulator, D: machine.NoAccumulator, Type: code[1].Type},
+		code[2], code[3], code[4], code[5], {Op: machine.OpJumpIfFalse, A: 10},
+		code[7], collect, {Op: machine.OpJump, A: 14},
+		code[9], code[10], code[11], collect, next,
+	}
+	forged, err := machine.SealArtifact(parts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codec, err := machine.NewCodec[viewedIn, []viewedChannel](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := codec.Instantiate(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := viewedInput()
+	got, err := program.Run(t.Context(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := slices.Clone(in.Channels)
+	for i := range want {
+		if want[i].Fee <= 10 {
+			want[i].Fee = 0
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the loop collected %d channels %v, want %d %v", len(got), got, len(want), want)
 	}
 }

@@ -3,6 +3,8 @@ package machine_test
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -379,4 +381,100 @@ func TestLoadingRefusesATypeWithAPartMissing(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not concrete") {
 		t.Fatalf("Instantiate of an array with no element type = %v, want it refused", err)
 	}
+}
+
+// A loop_collect's A says whether it takes a key, and is read as nothing
+// else: one that says more is refused, as are operands it does not have.
+func TestALoopCollectWithOtherOperandsIsRefused(t *testing.T) {
+	t.Parallel()
+	registry := forgeRegistry(t)
+	for _, forge := range []struct {
+		name string
+		set  func(*machine.Instruction)
+	}{
+		{"a=2", func(in *machine.Instruction) { in.A = 2 }},
+		{"a=-1", func(in *machine.Instruction) { in.A = -1 }},
+		{"a=1<<30", func(in *machine.Instruction) { in.A = 1 << 30 }},
+		{"b=1", func(in *machine.Instruction) { in.B = 1 }},
+		{"d=-1", func(in *machine.Instruction) { in.D = -1 }},
+	} {
+		t.Run(forge.name, func(t *testing.T) {
+			t.Parallel()
+			parts := forgeSeed(t, registry, `reduce(x in xs, t = 0, t + x)`)
+			at := slices.IndexFunc(parts.Instructions, func(in machine.Instruction) bool { return in.Op == machine.OpLoopCollect })
+			if at < 0 {
+				t.Fatal("the program has no loop_collect")
+			}
+			forge.set(&parts.Instructions[at])
+			sealed, err := machine.SealArtifact(parts, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := machine.Instantiate(sealed, registry); err == nil {
+				t.Errorf("Instantiate(loop_collect with %s) = nil error, want a refusal", forge.name)
+			}
+		})
+	}
+}
+
+// An artifact rewritten in storage or on the wire — any operand of any
+// instruction set to anything, and the digest computed again — is refused or
+// loaded, and a loaded one runs; neither panics.
+func FuzzInstantiateNeverPanics(f *testing.F) {
+	registry := forgeRegistry(f)
+	sources := []string{
+		`reduce(x in xs, t = 0, t + x)`,
+		`len({string(x): x * 2 for x in xs})`,
+		`sum([x * 2 for x in xs if x > a])`,
+		`[x * 2 > 5 for x in xs]`,
+		`switch(a, case 1 => b, else => len([y for x in xs for y in xs]))`,
+		`let(r = {a: a, b: b}, r.a + fallback(xs[a], b))`,
+	}
+	seeds := make([]machine.ArtifactParts, len(sources))
+	for i, source := range sources {
+		seeds[i] = forgeSeed(f, registry, source)
+	}
+	for _, value := range []int64{-1, 0, 1, 2, 1 << 30, math.MinInt64} {
+		f.Add(uint8(0), uint16(3), uint8(0), value)
+	}
+	f.Fuzz(func(t *testing.T, seed uint8, pc uint16, operand uint8, value int64) {
+		parts := seeds[int(seed)%len(seeds)]
+		parts.Instructions = slices.Clone(parts.Instructions)
+		in := &parts.Instructions[int(pc)%len(parts.Instructions)]
+		*[]*int{&in.A, &in.B, &in.C, &in.D}[operand%4] = int(value)
+		sealed, err := machine.SealArtifact(parts, nil)
+		if err != nil {
+			return
+		}
+		runtime, err := machine.Instantiate(sealed, registry)
+		if err != nil {
+			return
+		}
+		args := map[string]any{"a": int64(1), "b": int64(2), "xs": []any{int64(1), int64(2), int64(3)}}
+		if _, err := runtime.Run(t.Context(), args); err != nil && strings.Contains(err.Error(), "panicked") {
+			t.Fatalf("%v: %v", parts.Instructions, err)
+		}
+	})
+}
+
+// forgeRegistry is the kernel with its loops and switch.
+func forgeRegistry(tb testing.TB) *machine.Registry {
+	tb.Helper()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.SwitchForm, machine.ForForm, machine.ReduceForm); err != nil {
+		tb.Fatal(err)
+	}
+	return registry
+}
+
+// forgeSeed is the parts of source compiled against a, b and xs.
+func forgeSeed(tb testing.TB, registry *machine.Registry, source string) machine.ArtifactParts {
+	tb.Helper()
+	artifact, err := compile.CompileExpr(source, registry, compile.CompileOptions{Args: []compile.ArgSpec{
+		{Name: "a", Type: machine.IntType}, {Name: "b", Type: machine.IntType}, {Name: "xs", Type: machine.ArrayOf(machine.IntType)},
+	}})
+	if err != nil {
+		tb.Fatalf("%s: %v", source, err)
+	}
+	return machine.PartsOf(artifact)
 }

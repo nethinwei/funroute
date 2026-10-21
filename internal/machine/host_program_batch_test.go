@@ -3,7 +3,9 @@ package machine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -355,4 +357,80 @@ func runSlice[In, Out any](ctx context.Context, program *machine.Program[In, Out
 // runInto runs a batch whose results go into objects the host already has.
 func runInto[In, Out any](ctx context.Context, program *machine.Program[In, Out], in []In, out []*Out, failed func(int, error)) {
 	program.RunBatch(ctx, len(in), func(i int) *In { return &in[i] }, func(i int) *Out { return out[i] }, failed)
+}
+
+// A batch of no requests — n zero or less — reads, writes and reports
+// nothing.
+func TestRunBatchOfNoRequestsDoesNothing(t *testing.T) {
+	t.Parallel()
+	type in struct {
+		X int64 `funroute:"x"`
+	}
+	program := bindProgram[in, int64](t, machine.CoreRegistry(), `x + 1`)
+	touched := func(int) bool { t.Error("a request of a batch of none was touched"); return false }
+	for _, n := range []int{0, -1} {
+		program.RunBatch(t.Context(), n, func(i int) *in { touched(i); return nil }, func(i int) *int64 { touched(i); return nil },
+			func(i int, _ error) { touched(i) })
+	}
+}
+
+// BenchmarkRunBatchManyCalls is a batch of 64 requests of a program that
+// calls one batchable model and nineteen host functions that are not: what
+// the batch keeps for the model's answers grows with the requests and the
+// model's calls, not with every call the program makes.
+func BenchmarkRunBatchManyCalls(b *testing.B) {
+	registry := machine.CoreRegistry()
+	err := registry.Register(machine.FunctionSpec{
+		Name:    "model.score_v1",
+		Go:      func(x float64) (float64, error) { return x, nil },
+		GoBatch: func(xs []float64) ([]float64, error) { return xs, nil },
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := registry.Register(machine.FunctionSpec{Name: "host.plus_v1", Go: func(x float64) float64 { return x + 1 }}); err != nil {
+		b.Fatal(err)
+	}
+	var source strings.Builder
+	source.WriteString("model.score_v1(x)")
+	for i := range 19 {
+		fmt.Fprintf(&source, " + host.plus_v1(x + %d.0)", i)
+	}
+	type in struct {
+		X float64 `funroute:"x"`
+	}
+	binding, err := compile.Bind[in, float64](registry)
+	if err != nil {
+		b.Fatal(err)
+	}
+	program, err := binding.Compile(source.String())
+	if err != nil {
+		b.Fatal(err)
+	}
+	requests, outs := make([]in, 64), make([]float64, 64)
+	ctx := b.Context()
+	b.ReportAllocs()
+	for b.Loop() {
+		program.RunBatch(ctx, len(requests), func(i int) *in { return &requests[i] }, func(i int) *float64 { return &outs[i] }, func(int, error) { b.Fatal("a request failed") })
+	}
+}
+
+// A batch's arrays of plain records are views of the host's slices, as
+// Run's are: what a batch allocates does not grow with the arrays.
+func TestRunBatchViewsArraysOfRecords(t *testing.T) {
+	program := bindProgram[viewedIn, int64](t, viewedRegistry(t), `reduce(c in channels if c.ok, t = 0, t + c.fee)`)
+	allocs := func(channels int) float64 {
+		in := &viewedIn{}
+		for i := range channels {
+			in.Channels = append(in.Channels, viewedChannel{Name: "c", Fee: int64(i), OK: i%2 == 0})
+		}
+		out := make([]int64, 8)
+		return testing.AllocsPerRun(100, func() {
+			program.RunBatch(t.Context(), len(out), func(int) *viewedIn { return in }, func(i int) *int64 { return &out[i] },
+				func(i int, err error) { t.Fatalf("request %d: %v", i, err) })
+		})
+	}
+	if short, long := allocs(10), allocs(1000); short != long {
+		t.Fatalf("RunBatch of 8 requests allocates %v times over 10 channels and %v over 1000; want the same", short, long)
+	}
 }

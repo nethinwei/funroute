@@ -1,5 +1,7 @@
 package machine
 
+import "slices"
+
 // A record argument the program reads only field by field, each read
 // straight off the argument, is never built: each field it reads has a
 // register of its own, the field read becomes a read of that register, and a
@@ -67,8 +69,36 @@ func promoted(promotions []promotion, arg, field int32) int32 {
 	return -1
 }
 
+// itemRegsOf gives each field the body of a loop over an array of plain
+// records reads, where the loop's item is only read field by field
+// (flowAt.itemsInPlace), a register of its own from base up: each turn
+// loads the item's fields there, and a read of one reads its register. No
+// record is made of the item. It is the registers by loop_init, by field,
+// and the register past them.
+func itemRegsOf(f flow, base int32) (map[int][]int32, int32) {
+	regs := map[int][]int32{}
+	for pc, at := range f.at {
+		if !at.itemsInPlace {
+			continue
+		}
+		byField := make([]int32, slices.Max(append([]int32{-1}, at.itemFields...))+1)
+		for _, field := range at.itemFields {
+			byField[field], base = base, base+1
+		}
+		regs[pc] = byField
+	}
+	return regs, base
+}
+
 // field lowers a field read: of a promoted field, the read of its register.
 func (l *lowerer) field(index int) {
+	if loop := l.flow.at[l.pc].itemOf; loop > 0 {
+		if regs, promoted := l.itemRegs[int(loop-1)]; promoted {
+			l.pop()
+			l.push(regs[index])
+			return
+		}
+	}
 	// An argument's register is between the constants and the stack.
 	if held := l.stack[len(l.stack)-1].reg; held >= l.out.args && held < l.stackBase {
 		if reg := promoted(l.out.promotions, held-l.out.args, int32(index)); reg >= 0 {

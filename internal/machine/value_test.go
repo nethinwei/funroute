@@ -86,3 +86,28 @@ func TestAnEmptyContainerWritesItsEmptyJSON(t *testing.T) {
 		}
 	}
 }
+
+// Whether two arrays are equal does not hang on whether they share a backing:
+// a NaN is equal to nothing, itself included, in an array as alone, so an
+// array of one is not equal to itself either; an array of anything else is.
+func TestArrayEqualityDoesNotDependOnBacking(t *testing.T) {
+	t.Parallel()
+	nan := arrayOf([]float64{math.NaN()})
+	copied := arrayOf([]float64{math.NaN()})
+	ints := arrayOf([]int64{1, 2})
+	for name, test := range map[string]struct {
+		left, right Value
+		want        bool
+	}{
+		"a NaN's array and itself":     {nan, nan, false},
+		"a NaN's array and a copy":     {nan, copied, false},
+		"an int array and itself":      {ints, ints, true},
+		"an int array and a copy":      {ints, arrayOf([]int64{1, 2}), true},
+		"nested, a NaN's and itself":   {nestedOf(ArrayOf(FloatType), []Value{nan}), nestedOf(ArrayOf(FloatType), []Value{nan}), false},
+		"a float array of no NaN, one": {arrayOf([]float64{1.5}), arrayOf([]float64{1.5}), true},
+	} {
+		if got, err := compareEqual(test.left, test.right); err != nil || got.b != test.want || test.left.Equal(test.right) != test.want {
+			t.Errorf("%s: == is %v, %v and Equal %v, want %v", name, got.b, err, test.left.Equal(test.right), test.want)
+		}
+	}
+}

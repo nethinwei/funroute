@@ -157,6 +157,9 @@ func verify(artifact *Artifact, functions []*RegisteredFunction) (proof, error) 
 	for pc := range v.depths {
 		v.depths[pc] = -1
 	}
+	if err := circles(instructions); err != nil {
+		return proof{}, err
+	}
 	v.states[0] = &vstate{stack: make([]Type, 0, 8), locals: make([]*Type, artifact.parts.Locals)}
 	v.work = []int{0}
 	for len(v.work) > 0 {
@@ -219,7 +222,8 @@ func (v *verifier) walk(pc int, s *vstate) error {
 
 // merge brings a path into an instruction. Paths that meet must agree on
 // the stack, the loops and the scopes; a local stays bound only where every
-// path bound it to one type.
+// path bound it to one type, and is kept from a rebind where any path's
+// fallback has it bound (guardBound).
 func (v *verifier) merge(next edge) error {
 	v.deepest = max(v.deepest, len(next.state.stack))
 	known := v.states[next.pc]
@@ -232,7 +236,7 @@ func (v *verifier) merge(next edge) error {
 		!slices.EqualFunc(known.fallbacks, next.state.fallbacks, vfallback.same) || known.scopes != next.state.scopes {
 		return errors.New("paths meet with different stacks")
 	}
-	changed := false
+	changed := guardBound(known, next.state)
 	for slot, typ := range known.locals {
 		if other := next.state.locals[slot]; typ != nil && (other == nil || !typ.Equal(*other)) {
 			known.locals[slot], changed = nil, true
@@ -242,6 +246,35 @@ func (v *verifier) merge(next edge) error {
 		v.work = append(v.work, next.pc)
 	}
 	return nil
+}
+
+// guardBound brings into known's fallbacks the locals next's have bound at
+// their begins: paths that meet may have begun their fallbacks apart, and a
+// candidate past the meeting rebinds no local either handler reads. It
+// reports whether known's changed, so the walk goes on from there with them.
+func guardBound(known, next *vstate) bool {
+	changed := false
+	for i := range known.fallbacks {
+		if merged := unionBound(known.fallbacks[i].bound, next.fallbacks[i].bound); merged != nil {
+			known.fallbacks[i].bound, changed = merged, true
+		}
+	}
+	return changed
+}
+
+// unionBound is the slots bound in either, a new slice — a fallback's bound
+// is shared by the states copied from it — or nil when other adds none.
+func unionBound(bound, other []bool) []bool {
+	var merged []bool
+	for slot, also := range other {
+		if also && !bound[slot] {
+			if merged == nil {
+				merged = slices.Clone(bound)
+			}
+			merged[slot] = true
+		}
+	}
+	return merged
 }
 
 // step is the paths out of the instruction at pc, entered in state s.
@@ -275,6 +308,56 @@ func (v *verifier) step(pc int, s *vstate) ([]edge, error) {
 		return v.loopBreak(in, s)
 	}
 	return v.to(edge{pc + 1, s}), v.straight(in, s)
+}
+
+// circles finds a path that comes back to where it was without a loop_next
+// on it. A loop_next's turns are counted and end with its source; any other
+// circle would run until the process does, the deadline unheard. Without one,
+// every run reaches the end or fails.
+func circles(instructions []Instruction) error {
+	const (
+		unseen = iota
+		open
+		done
+	)
+	state := make([]uint8, len(instructions)+1)
+	type visit struct{ pc, next int }
+	stack := []visit{{0, 0}}
+	state[0] = open
+	for len(stack) > 0 {
+		top := &stack[len(stack)-1]
+		next, ok := successor(instructions, top.pc, top.next)
+		if !ok {
+			state[top.pc] = done
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		top.next++
+		switch state[next] {
+		case open:
+			return fmt.Errorf("invalid bytecode at %d: a path goes back to %d without a loop_next", top.pc, next)
+		case unseen:
+			state[next] = open
+			stack = append(stack, visit{next, 0})
+		}
+	}
+	return nil
+}
+
+// successor is the i-th place the instruction at pc goes on to, a
+// loop_next's turn back to its body aside.
+func successor(instructions []Instruction, pc, i int) (int, bool) {
+	if pc == len(instructions) {
+		return 0, false
+	}
+	in := instructions[pc]
+	switch in.Op {
+	case OpJump, OpLoopBreak:
+		return in.A, i == 0
+	case OpJumpIfFalse, OpBeginFallback, OpLoopInit:
+		return [2]int{pc + 1, in.A}[min(i, 1)], i < 2
+	}
+	return pc + 1, i == 0
 }
 
 // finish holds the end of the program: its result, and nothing open.
@@ -501,7 +584,7 @@ func (v *verifier) loopCollect(in Instruction, s *vstate) error {
 	if err != nil {
 		return err
 	}
-	keyed := in.A == 1
+	keyed := in.collectsKey()
 	fits := in.Type.Equal(loop.result) && !keyed
 	if !loop.folds {
 		fits = keyed == (loop.result.kind == DictKind) && in.Type.Equal(*loop.result.elem)

@@ -3,18 +3,23 @@ package machine
 import (
 	"errors"
 	"fmt"
+	"math"
 )
 
 // cold runs the operations the hot loop does not hold, and returns where the
 // run goes on, and whether the fast path answered. It is small enough to be
 // inlined, so a kernel operation costs one call: its row of coldKernels.
 func (f *frame) cold(pc int, in *rinstr) (int, bool, error) {
-	if in.op < rCall {
+	if kernelRop(in.op) {
 		pc, ok := coldKernels[in.op](&f.banks, pc, in)
 		return pc, ok, nil
 	}
 	return f.structure(pc, in)
 }
+
+// kernelRop reports a kernel operation: one before rCall, or one of those
+// placed after the rest (rMinI on).
+func kernelRop(op rop) bool { return op < rCall || op >= rMinI }
 
 // kernelStep runs a kernel operation, and is where the run goes on — past
 // it, or where the branch it makes goes — and whether the fast path
@@ -24,8 +29,8 @@ type kernelStep func(b *banks, pc int, in *rinstr) (int, bool)
 // coldKernels is, by operation, the kernel operations the hot loop does not
 // hold: a table, not a switch in a switch, so each is one call away. A row
 // the hot loop holds runs as it would there. TestEveryKernelOpHasAColdStep
-// holds every operation before rCall to one.
-var coldKernels = [rCall]kernelStep{
+// holds every kernel operation (kernelRop) to one.
+var coldKernels = [ropCount]kernelStep{
 	rInvalid: func(_ *banks, pc int, _ *rinstr) (int, bool) { return pc, true },
 	rMove:    func(b *banks, pc int, in *rinstr) (int, bool) { b.regs[in.c] = b.regs[in.a]; return pc, true },
 	rMoveI:   func(b *banks, pc int, in *rinstr) (int, bool) { b.ints[in.c] = b.ints[in.a]; return pc, true },
@@ -117,6 +122,30 @@ var coldKernels = [rCall]kernelStep{
 	rAtA:      func(b *banks, pc int, in *rinstr) (int, bool) { return pc, arenaAt(b, in) },
 	rTake:     func(b *banks, pc int, in *rinstr) (int, bool) { return pc, takeOp(b, in) },
 	rHasKey:   func(b *banks, pc int, in *rinstr) (int, bool) { hasKey(b, in); return pc, true },
+	rMinI: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.ints[in.c] = min(b.ints[in.a], b.ints[in.b])
+		return pc, true
+	},
+	rMaxI: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.ints[in.c] = max(b.ints[in.a], b.ints[in.b])
+		return pc, true
+	},
+	rMinF: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.floats[in.c] = min(b.floats[in.a], b.floats[in.b])
+		return pc, true
+	},
+	rMaxF: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.floats[in.c] = max(b.floats[in.a], b.floats[in.b])
+		return pc, true
+	},
+	rAbsI: func(b *banks, pc int, in *rinstr) (int, bool) { return pc, absI(b.ints, in) },
+	rAbsF: func(b *banks, pc int, in *rinstr) (int, bool) {
+		b.floats[in.c] = math.Abs(b.floats[in.a])
+		return pc, true
+	},
+	rAtS:    func(b *banks, pc int, in *rinstr) (int, bool) { return pc, charAt(b, in) },
+	rLenS:   func(b *banks, pc int, in *rinstr) (int, bool) { textLength(b, in); return pc, true },
+	rSliceS: func(b *banks, pc int, in *rinstr) (int, bool) { return pc, textSlice(b, in) },
 }
 
 // structure runs what builds values and what opens and closes a loop, a
@@ -129,6 +158,8 @@ func (f *frame) structure(pc int, in *rinstr) (int, bool, error) {
 		f.collectInt(in.a)
 	case rCollectF:
 		f.collectFloat(in.a)
+	case rCollectItem:
+		f.collectItem()
 	case rCollectNextF:
 		f.collectFloat(in.a)
 		pc, err := f.regLoopNext(int(in.c), in.b)
@@ -183,6 +214,7 @@ func (f *frame) scoped(pc int, in *rinstr) (int, bool, error) {
 	case rFxPush:
 		f.fxMarks = append(f.fxMarks, len(f.fxQuotes))
 		f.fxQuotes = append(f.fxQuotes, f.regs[in.a:in.a+in.b]...)
+		f.fxHit = fxHit{}
 	case rFxPop:
 		f.popScope()
 	default:
@@ -219,15 +251,27 @@ func (f *frame) build(in *rinstr) (Value, error) {
 		}
 		return finishIn(slot, &builder), nil
 	case rMakeDict:
-		return packDict(*made.typ.elem, zipEntries(made.keys, items)), nil
+		dict := newDictBuilder(*made.typ.elem, len(items))
+		for i, item := range items {
+			dict.add(made.keys[i], item)
+		}
+		return dict.finish()
 	case rMakeRecord:
 		if made.answer && f.lending {
 			f.answer.typ, f.answer.fields = made.typ, append(f.answer.fields[:0], items...)
 			return Value{kind: RecordKind, box: &f.answer}, nil
 		}
-		record := newRecord(made.typ, len(items))
+		record := f.newRecord(made, made.typ, len(items))
 		copy(record.fields, items)
 		return Value{kind: RecordKind, box: record}, nil
+	}
+	return f.update(made, items)
+}
+
+// update is a record update: the base in items[0], the new values after it.
+func (f *frame) update(made *rmake, items []Value) (Value, error) {
+	if made.base != nil {
+		return f.updateItem(made, items), nil
 	}
 	base, ok := items[0].box.(*recordValue)
 	if !ok {
@@ -239,7 +283,7 @@ func (f *frame) build(in *rinstr) (Value, error) {
 	if made.answer && f.lending {
 		f.answer.typ, f.answer.fields = base.typ, append(f.answer.fields[:0], base.fields...)
 	} else {
-		record = newRecord(base.typ, len(base.fields))
+		record = f.newRecord(made, base.typ, len(base.fields))
 		copy(record.fields, base.fields)
 	}
 	for i, index := range made.fields {
@@ -248,11 +292,24 @@ func (f *frame) build(in *rinstr) (Value, error) {
 	return Value{kind: RecordKind, box: record}, nil
 }
 
-// zipEntries pairs keys with values, one for one.
-func zipEntries(keys []string, values []Value) map[string]Value {
-	entries := make(map[string]Value, len(values))
-	for i, value := range values {
-		entries[keys[i]] = value
+// updateItem is the update of a loop's item whose fields are in registers:
+// the record is made of them, the updated ones replaced.
+func (f *frame) updateItem(made *rmake, items []Value) Value {
+	record := f.newRecord(made, made.typ, len(made.base))
+	for i, reg := range made.base {
+		record.fields[i] = f.valueAt(reg, made.typ.fields[i].typ.kind)
 	}
-	return entries
+	for i, index := range made.fields {
+		record.fields[index] = items[1+i]
+	}
+	return Value{kind: RecordKind, box: record}
+}
+
+// newRecord is a record of typ with n fields for made to fill: in the slab
+// of the array the loop collects it into, for a sink.
+func (f *frame) newRecord(made *rmake, typ *Type, n int) *recordValue {
+	if made.sink {
+		return f.loops[len(f.loops)-1].out.record(typ, n)
+	}
+	return newRecord(typ, n)
 }

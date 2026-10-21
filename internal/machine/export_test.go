@@ -3,15 +3,45 @@ package machine
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
+	"unsafe"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
 )
 
 // ValidateInstruction is validateInstruction, for vm_test.go's table test of
 // how a single instruction is checked on load.
 var ValidateInstruction = validateInstruction
+
+// OwnRoundTrip writes v into a new Go value of typ, one of the language's
+// own Go types, and reads it back, for host_own_test.go.
+func OwnRoundTrip(typ reflect.Type, v Value) (Value, error) {
+	out := reflect.New(typ)
+	if err := storeOwn(typ, out.UnsafePointer(), v); err != nil {
+		return Value{}, err
+	}
+	return loadOwn(typ, out.UnsafePointer())
+}
+
+// TextKeptAfter is the text a frame of r still holds once a run on it ends,
+// straight or not, its text cursor having been on text.
+func TextKeptAfter(r *Runtime, text string, straight bool) string {
+	f := r.acquireFrame()
+	f.text = textCursor{text: text, count: -1}
+	if straight {
+		r.finishStraight(f)
+	} else {
+		r.releaseFrame(f)
+	}
+	return f.text.text
+}
+
+// LoadOwn is loadOwn, for host_own_test.go to hand it a type it has no
+// reading of.
+var LoadOwn = loadOwn
 
 // NewMoney is money without a currency table, for the external tests that
 // build values: they test the machine, not the boundary.
@@ -29,16 +59,22 @@ func NewRatio(num, den int64) money.Ratio {
 // NewCurrency is a currency value's Go form without a table.
 func NewCurrency(code string) money.Currency { return money.CurrencyOf(code) }
 
-// RunPrefetched is RunValues with a Batch's answers for the runtime's calls,
+// RunPrefetched is RunValues with a Batch's answers for the runtime's sites,
 // by the call instructions' program counters, for a test that plays the
 // Batch.
 func RunPrefetched(ctx context.Context, r *Runtime, args []Value, byPC map[int]Prefetched) (Value, error) {
-	prefetched := make([]Prefetched, len(r.reg.calls))
+	prefetched := make([]Prefetched, len(r.batch.sites))
 	for pc, answer := range byPC {
 		answer.ready = true
-		prefetched[r.callAt(pc)] = answer
+		prefetched[r.batch.slots[callAt(r, pc)]] = answer
 	}
 	return r.runValues(ctx, args, prefetched)
+}
+
+// callAt is the call of the register form the stack instruction at pc
+// became, or -1.
+func callAt(r *Runtime, pc int) int {
+	return slices.IndexFunc(r.reg.calls, func(call rcall) bool { return int(call.pc) == pc })
 }
 
 // ArtifactWith is an unsealed artifact over parts, for the table tests of
@@ -145,15 +181,13 @@ func IdleFrameHoldsPointers(r *Runtime) bool {
 			return true
 		}
 	}
-	for i := range f.items {
-		if slices.ContainsFunc(f.items[i].fields, func(v Value) bool { return v.s != "" || v.box != nil }) {
-			return true
-		}
-	}
 	for i := range f.records {
 		if slices.ContainsFunc(f.records[i].fields, func(v Value) bool { return v.s != "" || v.box != nil }) {
 			return true
 		}
+	}
+	if f.vector != nil && (f.vector.run.item.ints != nil || f.vector.run.item.floats != nil || f.vector.run.loop != nil || f.vector.run.out != nil) {
+		return true
 	}
 	if slices.ContainsFunc(f.views, func(slot arenaSlot) bool {
 		return slot.bools != nil || slot.ints != nil || slot.floats != nil || slot.strings != nil
@@ -167,8 +201,22 @@ func IdleFrameHoldsPointers(r *Runtime) bool {
 // registers of their own (lower_promote.go).
 func Promotions(r *Runtime) int { return len(r.reg.promotions) }
 
+// ItemPromotions is how many fields of loop items r's program reads out of
+// registers of their own (lower_promote.go's itemRegsOf).
+func ItemPromotions(r *Runtime) int {
+	n := 0
+	for _, loop := range r.reg.loops {
+		n += len(loop.promoted)
+	}
+	return n
+}
+
 // Straight reports whether p runs the shorter way (host_straight.go).
 func Straight[In, Out any](p *Program[In, Out]) bool { return p.straight }
+
+// PlainLoads reports whether p loads its arguments field by field into the
+// register files (host_straight.go's plainLoads).
+func PlainLoads[In, Out any](p *Program[In, Out]) bool { return p.plain != nil }
 
 // Identical reports two values that are one value, NaN included
 // (identical).
@@ -191,4 +239,67 @@ func ConstantBothWays(c Constant) (quick Value, ok bool, decoded Value, err erro
 	quick, ok = c.scalar()
 	decoded, err = c.decoded()
 	return quick, ok, decoded, err
+}
+
+// OverlapsBools reports whether v's memory meets out's: a []bool the host
+// lends for an answer.
+func OverlapsBools(out *[]bool, v Value) bool {
+	return overlaps((*sliceHeader)(unsafe.Pointer(out)), nativeBools, v)
+}
+
+// ExpireStale fires the timer of a batch already taken, as one that fired
+// while the take held the lock.
+func ExpireStale(b *Batch) {
+	b.mu.Lock()
+	epoch := b.epoch
+	b.mu.Unlock()
+	b.expire(epoch - 1)
+}
+
+// EvalMerge is merge's Eval, for handing it two dictionaries no type would.
+var EvalMerge = evalMerge
+
+// PopScopeOfNone closes the innermost using of a frame that has none open.
+func PopScopeOfNone() { (&frame{}).popScope() }
+
+// StringsLeftInArena builds arrays of strings of the lengths runs gives, in
+// one arena slot — a run's arrays one after another in it, as a loop builds
+// an inner array again for each item — releasing it after each run, and
+// counts the strings its memory still holds.
+func StringsLeftInArena(runs ...[]int) int {
+	var slot arenaSlot
+	for _, lengths := range runs {
+		for _, n := range lengths {
+			builder := builderIn(&slot, StringType, n)
+			for range n {
+				builder.add(String("x"))
+			}
+			finishIn(&slot, &builder)
+		}
+		slot.release()
+	}
+	held := 0
+	for _, s := range slot.strings[:cap(slot.strings)] {
+		if s != "" {
+			held++
+		}
+	}
+	return held
+}
+
+// LoopsFilter is, for each loop of the runtime's register form, whether
+// lowering found it filters its items.
+func LoopsFilter(r *Runtime) []bool {
+	return kit.Map(r.reg.loops, func(loop rloop) bool { return loop.filters })
+}
+
+// WidenParams gives every function the runtime calls two more parameters, for
+// regvm_test.go: more operands than fault knows of, which it refuses rather
+// than ask the function with zeros for them.
+func WidenParams(r *Runtime) {
+	r.functions = kit.Map(r.functions, func(function *RegisteredFunction) *RegisteredFunction {
+		wide := *function
+		wide.Params = append(slices.Clip(function.Params), function.Params[0], function.Params[0])
+		return &wide
+	})
 }

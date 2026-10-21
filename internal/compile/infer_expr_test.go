@@ -230,11 +230,25 @@ func TestMoneyFlowsThroughForms(t *testing.T) {
 	}
 }
 
-// Splitting into a count the input does not bound is refused, as range is.
+// Splitting into a count the input does not bound is refused, as range is;
+// a let's name is the count its value is.
 func TestAllocateNeedsABoundedCount(t *testing.T) {
 	t.Parallel()
-	if _, err := compileMoney(t, "allocate(amount, k)", formContract, ""); err == nil {
-		t.Fatal("allocate(amount, k) compiled, want the count to need a bound")
+	for source, bounded := range map[string]bool{
+		"allocate(amount, k)":                                   false,
+		"let(n = k, allocate(amount, n))":                       false,
+		"let(n = len(ms), allocate(amount, n))":                 true,
+		"let(n = len(ms) * 2, let(m = n, allocate(amount, m)))": true,
+		"let(n = 3, let(m = n, allocate(amount, m)))":           true,
+		// The name read is the one the let bound: the k it hides is not.
+		"let(k = len(ms), allocate(amount, k))": true,
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			if _, err := compileMoney(t, source, formContract, ""); (err == nil) != bounded {
+				t.Errorf("CompileExpr(%s) error = %v, want bounded %v", source, err, bounded)
+			}
+		})
 	}
 }
 

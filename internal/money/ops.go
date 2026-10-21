@@ -109,11 +109,8 @@ func (m Money) MulRatio(r Ratio, mode Rounding) (Money, error) {
 // DivRatio is m divided by a ratio — the gross an amount is the net of —
 // rounded once to the minor unit by mode.
 func (m Money) DivRatio(r Ratio, mode Rounding) (Money, error) {
-	inverse, err := r.inverse()
-	if err != nil {
-		return Money{}, err
-	}
-	minor, err := inverse.times(m.minor, mode)
+	num, den := r.parts()
+	minor, err := mulDivRound(m.minor, den, num, mode)
 	return Money{currency: m.currency, minor: minor}, err
 }
 
@@ -153,5 +150,9 @@ func addInt64(a, b, sign int64) (int64, error) {
 
 // mulInt64 is a·b, refusing to wrap.
 func mulInt64(a, b int64) (int64, error) {
-	return mulDivRound(a, b, 1, RoundDown)
+	product, fits := mul64(a, b)
+	if !fits {
+		return 0, errFixedOverflow
+	}
+	return product, nil
 }

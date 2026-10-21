@@ -1,6 +1,9 @@
 package machine
 
-import "github.com/nethinwei/funroute/internal/kit"
+import (
+	"github.com/nethinwei/funroute/internal/kit"
+	"github.com/nethinwei/funroute/internal/money"
+)
 
 // regLoop is one active loop of the register machine.
 type regLoop struct {
@@ -18,10 +21,8 @@ type regLoop struct {
 	// body ran the ones before it (scalarFirst); 0 when it does not.
 	vecAt int
 	site  *rloop
-	// view is an array of plain records in the host's memory, and item the
-	// frame's record each of its items is loaded into.
+	// view is an array of plain records in the host's memory.
 	view *recordsView
-	item *recordValue
 	// out is where the comprehension's items go: its own output, or, for
 	// the inner clause of a nested one, the outer clause's. A frame's loops
 	// never move — the slice is made as deep as the program nests — so the
@@ -49,13 +50,6 @@ func (f *frame) regLoopInit(pc int, in *rinstr) (int, error) {
 			f.regs[site.dst] = f.emptyResult(site)
 		}
 		return int(site.exit), nil
-	}
-	// A view is walked into the frame's own record when the value flow
-	// proved the loop's items are only read.
-	if loop.view != nil && site.itemsInPlace {
-		loop.item, f.walked = &f.items[in.c], true
-		loop.view.shape(loop.item)
-		f.regs[site.item] = Value{kind: RecordKind, box: loop.item}
 	}
 	f.startOutput(loop, in)
 	switch {
@@ -125,6 +119,10 @@ func (l *regLoop) walk(keyed bool) int {
 // or its own array, in its slot when it has one.
 func (f *frame) startOutput(loop *regLoop, in *rinstr) {
 	site := loop.site
+	size := loop.length
+	if site.filters {
+		size = min(size, filteredStart)
+	}
 	switch {
 	case site.acc >= 0:
 		f.copyReg(site.acc, in.b, site.typ.kind)
@@ -133,12 +131,16 @@ func (f *frame) startOutput(loop *regLoop, in *rinstr) {
 		loop.out = outer.out
 		loop.out.grow(expected(outer.length-outer.index, loop.length))
 	case site.typ.kind == DictKind:
-		loop.dict = newDictBuilder(*site.typ.elem, loop.length)
+		loop.dict = newDictBuilder(*site.typ.elem, size)
 	default:
-		if slot := f.slotFor(site.built); slot != nil {
-			loop.output = builderIn(slot, *site.typ.elem, loop.length)
-		} else {
-			loop.output = newArrayBuilder(*site.typ.elem, loop.length)
+		switch slot := f.slotFor(site.built); {
+		case slot != nil:
+			loop.output = builderIn(slot, *site.typ.elem, size)
+		case site.collectsItem && loop.view != nil:
+			// The items stay where they are: what is built is which.
+			loop.output = arrayBuilder{elem: *site.typ.elem, of: loop.view, picked: make([]int, 0, size)}
+		default:
+			loop.output = newArrayBuilder(*site.typ.elem, size)
 		}
 		loop.out = &loop.output
 	}
@@ -156,6 +158,11 @@ func expected(outer, inner int) int {
 // maxGrow is the most items one estimate makes room for; past it the array
 // grows as it fills.
 const maxGrow = 1 << 20
+
+// filteredStart is the most items a filtering loop makes room for at its
+// start: a rule's few hundred items are sized at once, and a million that
+// keep ten do not hold a million's memory.
+const filteredStart = 1 << 10
 
 // emptyResult is what a mapping loop over nothing gives: an empty array or
 // dictionary — nothing for a clause whose items go to the clause outside it.
@@ -180,8 +187,8 @@ func (f *frame) emptyResult(site *rloop) Value {
 // of its kind.
 func (f *frame) bindRegs(loop *regLoop, index int) {
 	switch item := loop.site.item; {
-	case loop.item != nil:
-		loop.view.load(index, loop.item, loop.site.fields)
+	case loop.site.itemsInPlace:
+		f.loadItem(loop, index)
 	case loop.ints != nil:
 		f.ints[item] = loop.ints[index]
 	case loop.floats != nil:
@@ -201,6 +208,22 @@ func (f *frame) bindRegs(loop *regLoop, index int) {
 	}
 }
 
+// loadItem loads the fields the body reads of the item at index into their
+// registers: out of the host's memory for a view, and out of the record
+// otherwise. The value flow proved the item is read for those alone, so no
+// record is made of it.
+func (f *frame) loadItem(loop *regLoop, index int) {
+	site := loop.site
+	if loop.view != nil {
+		loop.view.loadInto(index, site.fields, site.promoted, &f.banks)
+		return
+	}
+	record, _ := loop.source.at(index).box.(*recordValue)
+	for i, field := range site.fields {
+		f.setValue(site.promoted[i], record.fields[field])
+	}
+}
+
 // collect adds register value to what the comprehension builds, under the
 // key in register key unless it is -1: a dictionary's entry, of kind, out
 // of its file.
@@ -213,6 +236,21 @@ func (f *frame) collect(value, key int32, kind Kind) {
 	// An int, a bool or a float is collected out of its file (collectInt,
 	// collectFloat): what reaches here is in the values.
 	loop.out.add(f.regs[value])
+}
+
+// collectItem adds the innermost loop's item as it is: where it is in the
+// host's slice, for a loop over a view, and otherwise the record itself.
+func (f *frame) collectItem() {
+	loop := &f.loops[len(f.loops)-1]
+	if loop.view == nil {
+		loop.out.add(loop.source.at(loop.index))
+		return
+	}
+	at := loop.index
+	if loop.view.perm != nil {
+		at = loop.view.perm[at]
+	}
+	loop.out.picked = append(loop.out.picked, at)
 }
 
 // collectInt adds the int or the bool in register value to the array the
@@ -303,15 +341,19 @@ func (f *frame) loopValue(loop *regLoop) (Value, error) {
 	return loop.output.finish(), nil
 }
 
-// dictBuilder builds a comprehension's dictionary as it goes: an int's or a
-// float's straight into its native map, anything else through a map of
-// values packed at the end. A key made twice is refused when the loop ends,
-// as a literal's is refused: one key, one value, whichever door the
-// dictionary came in by — and after every item, as the loop would have run.
+// dictBuilder builds a dictionary as it goes, a comprehension's or a
+// literal's: a native kind's values straight into the native map the
+// dictionary is, anything else into a map of values it owns. A key made twice
+// is refused when the loop ends, as a literal's is refused: one key, one
+// value, whichever door the dictionary came in by — and after every item, as
+// the loop would have run.
 type dictBuilder struct {
 	elem   Type
 	ints   map[string]int64
 	floats map[string]float64
+	bools  map[string]bool
+	texts  map[string]string
+	monies map[string]money.Money
 	values map[string]Value
 	twice  string
 	twiced bool
@@ -324,6 +366,12 @@ func newDictBuilder(elem Type, capacity int) dictBuilder {
 		builder.ints = make(map[string]int64, capacity)
 	case FloatKind:
 		builder.floats = make(map[string]float64, capacity)
+	case BoolKind:
+		builder.bools = make(map[string]bool, capacity)
+	case StringKind:
+		builder.texts = make(map[string]string, capacity)
+	case MoneyKind:
+		builder.monies = make(map[string]money.Money, capacity)
 	default:
 		builder.values = make(map[string]Value, capacity)
 	}
@@ -331,34 +379,51 @@ func newDictBuilder(elem Type, capacity int) dictBuilder {
 }
 
 func (d *dictBuilder) add(key string, value Value) {
-	var before, after int
+	var fresh bool
 	switch {
 	case d.ints != nil:
-		before = len(d.ints)
-		d.ints[key] = value.i
-		after = len(d.ints)
+		fresh = added(d.ints, key, value.i)
 	case d.floats != nil:
-		before = len(d.floats)
-		d.floats[key] = value.f
-		after = len(d.floats)
+		fresh = added(d.floats, key, value.f)
+	case d.bools != nil:
+		fresh = added(d.bools, key, value.b)
+	case d.texts != nil:
+		fresh = added(d.texts, key, value.s)
+	case d.monies != nil:
+		fresh = added(d.monies, key, money.Make(value.s, value.i))
 	default:
-		before = len(d.values)
-		d.values[key] = value
-		after = len(d.values)
+		fresh = added(d.values, key, value)
 	}
-	if after == before && !d.twiced {
+	if !fresh && !d.twiced {
 		d.twice, d.twiced = key, true
 	}
 }
 
+// added sets key in entries, and reports whether it was not there before.
+func added[T any](entries map[string]T, key string, value T) bool {
+	n := len(entries)
+	entries[key] = value
+	return len(entries) > n
+}
+
 func (d *dictBuilder) finish() (Value, error) {
+	var box any
 	switch {
 	case d.twiced:
 		return Value{}, kit.Errorf(ErrDomain, "the comprehension produced the key %q twice", d.twice)
 	case d.ints != nil:
-		return Value{kind: DictKind, box: d.ints}, nil
+		box = d.ints
 	case d.floats != nil:
-		return Value{kind: DictKind, box: d.floats}, nil
+		box = d.floats
+	case d.bools != nil:
+		box = d.bools
+	case d.texts != nil:
+		box = d.texts
+	case d.monies != nil:
+		box = d.monies
+	default:
+		// The builder's own map: nothing else holds it, so it is not copied.
+		box = &nestedDict{elem: d.elem, entries: d.values}
 	}
-	return packDict(d.elem, d.values), nil
+	return Value{kind: DictKind, box: box}, nil
 }

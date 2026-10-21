@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 
@@ -226,6 +227,8 @@ func TestCurrencylessZeroGoesWithAnyCurrency(t *testing.T) {
 		{"arg_max 指向零", "arg_max(fees)", with("EUR -0.05", zero), "1"},
 		{"二元 min", "min(fees[0], fees[1])", with("EUR -0.05", zero), "{EUR -5}"},
 		{"二元 max", "max(fees[0], fees[1])", with("EUR -0.05", zero), "{EUR 0}"},
+		{"二元 max 零在前", "max(fees[0], fees[1])", with(zero, "EUR -0.05"), "{EUR 0}"},
+		{"二元 min 全是零", "min(fees[0], fees[1])", with(zero, zero), "{ 0}"},
 		{"abs 零", "abs(fees[0])", with(zero), "{ 0}"},
 		{"avg 零参与平均", "avg(fees, @half_even)", with(zero, "EUR 0.05"), "{EUR 2}"},
 		{"median 单个零", "median(fees, @half_even)", with(zero), "{ 0}"},
@@ -531,10 +534,14 @@ func TestDeclaringMoneyAfterThePackAddsNoPackOverloads(t *testing.T) {
 	if err := late.DeclareMoney(funroute.MoneySpec{Currencies: std.ISO4217()}); err != nil {
 		t.Fatalf("DeclareMoney after std.Register: %v, want it accepted", err)
 	}
-	if _, err := funroute.CompileExpr("USD 1 + USD 2", late, funroute.CompileOptions{}); err != nil {
-		t.Fatalf("kernel money after a late declaration: %v", err)
+	// The kernel's money, keyed sorts by amounts among it, comes with the
+	// declaration whenever it is made.
+	for _, source := range []string{"USD 1 + USD 2", `sort_by(["a"], fees)`} {
+		if _, err := funroute.CompileExpr(source, late, funroute.CompileOptions{Args: []funroute.ArgSpec{unknownFees}}); err != nil {
+			t.Fatalf("kernel money %s after a late declaration: %v", source, err)
+		}
 	}
-	for _, source := range []string{"sum(fees)", "avg(fees, @half_even)", "sort(fees)", "abs(fees[0])", `sort_by(["a"], fees)`} {
+	for _, source := range []string{"sum(fees)", "avg(fees, @half_even)", "sort(fees)", "abs(fees[0])"} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			_, err := funroute.CompileExpr(source, late, funroute.CompileOptions{Args: []funroute.ArgSpec{unknownFees}})
@@ -609,5 +616,41 @@ func roundsAwayFromZero(mode funroute.Rounding, twice int, odd bool, sign int) b
 		return twice > 0 || (twice == 0 && odd)
 	default:
 		return false
+	}
+}
+
+// top_k and bottom_k keep only the k best in a heap; what they answer is
+// the first k of the whole sort, ties in their own order, for every k.
+func TestRankedMoneyIsTheFirstOfTheSort(t *testing.T) {
+	t.Parallel()
+	registry := moneyPack(t)
+	random := rand.New(rand.NewPCG(3, 4))
+	ids := make([]any, 40)
+	fees := make([]any, len(ids))
+	for i := range ids {
+		ids[i] = int64(i)
+		fees[i] = fmt.Sprintf("USD %d.00", random.IntN(6)-2) // ties, negatives and zeros
+	}
+	args := map[string]any{"ids": ids, "fees": fees}
+	specs := []funroute.ArgSpec{{Name: "ids", Type: funroute.ArrayOf(funroute.IntType)}, unknownFees}
+	for _, k := range []int{0, 1, 2, 7, 39, 40, 41} {
+		for ranked, sorted := range map[string]string{"bottom_k": "sort_by", "top_k": "sort_by_desc"} {
+			got, err := runMoneyOn(t, registry, fmt.Sprintf("%s(ids, fees, %d)", ranked, k), args, specs...)
+			want, _ := runMoneyOn(t, registry, fmt.Sprintf("take(%s(ids, fees), %d)", sorted, k), args, specs...)
+			if err != nil || got != want {
+				t.Errorf("%s(ids, fees, %d) = %s, %v; want %s", ranked, k, got, err, want)
+			}
+		}
+	}
+}
+
+// Every function of the pack names its parameters, the money overloads as
+// the others: a signature never reads "参数 1".
+func TestEveryOverloadNamesItsParameters(t *testing.T) {
+	t.Parallel()
+	for _, function := range moneyPack(t).Catalog().Functions() {
+		if params := function.Doc().Params; slices.ContainsFunc(params, func(name string) bool { return strings.HasPrefix(name, "参数 ") }) {
+			t.Errorf("%s names its parameters %q, want names of their own", function.Signature(), params)
+		}
 	}
 }

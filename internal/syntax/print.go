@@ -128,7 +128,12 @@ func (p *printer) operatorSource(match operatorMatch, parent int) string {
 	case "index":
 		return p.postfixBase(match.operands[0]) + "[" + p.inline(match.operands[1], 0) + "]"
 	case "prefix":
-		text = spec.token + p.inline(match.operands[0], spec.precedence)
+		operand := p.inline(match.operands[0], spec.precedence)
+		if strings.HasPrefix(operand, "-") {
+			// - -x, not --x: two minuses apart read as the two they are.
+			operand = " " + operand
+		}
+		text = spec.token + operand
 	default:
 		// Left associative: a right operand of the same precedence keeps its
 		// parentheses, so a - (b - c) stays and (a - b) - c loses them; a
@@ -136,6 +141,11 @@ func (p *printer) operatorSource(match operatorMatch, parent int) string {
 		// that is not postfix (leftLevel, rightLevel).
 		left := p.inline(match.operands[0], spec.leftLevel())
 		right := p.inline(match.operands[1], spec.rightLevel())
+		if spec.postfixRight && strings.HasPrefix(right, "-") {
+			// A negative number is a literal, not a postfix expression:
+			// a -> -1 does not parse.
+			right = "(" + right + ")"
+		}
 		text = left + " " + spec.token + " " + right
 	}
 	if spec.precedence < parent {
@@ -148,13 +158,13 @@ func (p *printer) operatorSource(match operatorMatch, parent int) string {
 // that ends in a number or a code is parenthesised, or the lexer would read
 // the . or [ into it: (1).x is not 1.x, (@a).b is not the qualified member
 // @a.b, and so for (USD 1).x, (2.9%)[0] and (150 JPY / USD).x; (.a).b is
-// not the selector .a.b.
+// not the selector .a.b, and (true).x is no name true.x.
 func (p *printer) postfixBase(expr Expr) string {
 	switch expr.(type) {
 	case *EnumExpr, *RatioExpr, *MoneyExpr, *FxRateExpr, *CurrencyExpr, *SelectorExpr:
 		return "(" + p.inline(expr, 0) + ")"
 	}
-	if isNumber(expr) {
+	if literal, ok := expr.(*LiteralExpr); ok && literal.Value.Kind() == machine.BoolKind || isNumber(expr) {
 		return "(" + p.inline(expr, 0) + ")"
 	}
 	return p.inline(expr, postfixPrecedence)
@@ -188,8 +198,20 @@ func floatLiteral(text string) string {
 	return text + ".0"
 }
 
-// quote writes a string with JSON escapes, which the lexer reads back.
+// quote writes a string with JSON escapes, which the lexer reads back. Most
+// text needs none, and is only put between quotes.
 func quote(text string) string {
+	for i := range len(text) {
+		if b := text[i]; b < 0x20 || b >= 0x80 || b == '"' || b == '\\' {
+			return escaped(text)
+		}
+	}
+	return `"` + text + `"`
+}
+
+// escaped is quote of a text that needs escapes: as JSON writes it, without
+// escaping HTML.
+func escaped(text string) string {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)

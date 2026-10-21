@@ -11,7 +11,10 @@ import (
 // accepts and their decimal places. Until it is called a registry admits no
 // money type at all, and everything it compiles is what it was before the
 // feature existed — digests included. It can be called once, before any
-// function that takes or returns money is registered.
+// function that takes or returns money is registered. It is part of building
+// the registry: the money kernel is registered after the feature is on, so
+// nothing should register into, compile against or read the registry from
+// another goroutine until it returns.
 func (r *Registry) DeclareMoney(spec money.MoneySpec) error {
 	table, err := money.NewCurrencies(spec)
 	if err != nil {

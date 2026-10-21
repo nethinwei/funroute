@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -439,5 +440,130 @@ func TestProgramRunsIntoTheHostsResult(t *testing.T) {
 		if len(out.Doubled) != len(fees) || out.Doubled[0] != fees[0]*2 || cap(out.Doubled) != 8 {
 			t.Fatalf("RunInto(%v) = %v with room for %d, want the doubles in the same 8", fees, out.Doubled, cap(out.Doubled))
 		}
+	}
+}
+
+// FeedIn holds an order whose fees a program may or may not read.
+type FeedIn struct {
+	Order struct {
+		Amount int64   `funroute:"amount"`
+		Fees   []int64 `funroute:"fees"`
+	} `funroute:"order"`
+}
+
+// Where RunInto's out points is the caller's. It never builds the answer in
+// the memory of an argument the program reads — the answer would be written
+// over what it is computed from — and builds it, as anywhere, in the memory
+// of one the program does not read.
+func TestRunIntoWritesWhereOutPoints(t *testing.T) {
+	t.Parallel()
+	registry := funroute.CoreRegistry()
+	if err := registry.EnableForm(funroute.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := funroute.Bind[FeedIn, []int64](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for source, want := range map[string][2][]int64{
+		"[fee * 2 for fee in order.fees]": {{14, 16, 18}, {7, 8, 9}},
+		"[order.amount, order.amount]":    {{42, 42}, {42, 42, 9}},
+	} {
+		program, err := binding.Compile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var in FeedIn
+		in.Order.Amount, in.Order.Fees = 42, []int64{7, 8, 9}
+		out := in.Order.Fees[:1]
+		if err := program.RunInto(t.Context(), &in, &out); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(out, want[0]) || !slices.Equal(in.Order.Fees, want[1]) {
+			t.Errorf("%s into the fees' memory = %v, fees %v; want %v, fees %v", source, out, in.Order.Fees, want[0], want[1])
+		}
+	}
+}
+
+// Percent is a named number: a Go type the language reads by its shape.
+type Percent float64
+
+// PairIn holds the two items every array answer below is built from.
+type PairIn struct {
+	A int64 `funroute:"a"`
+	B int64 `funroute:"b"`
+}
+
+// WideOut answers an array whose Go items are not the language's own.
+type WideOut struct {
+	Items []int `funroute:"items"`
+}
+
+// An array the program builds reaches the host whatever Go type holds its
+// items — the language's own, a narrower or wider one, a named one — as the
+// whole answer or a field of it, and on every way of running.
+func TestEveryArrayAnswerReachesTheHost(t *testing.T) {
+	t.Parallel()
+	t.Run("[]int64", func(t *testing.T) { t.Parallel(); answersEveryWay(t, "[a, b]", []int64{3, 4}) })
+	t.Run("[]int32", func(t *testing.T) { t.Parallel(); answersEveryWay(t, "[a, b]", []int32{3, 4}) })
+	t.Run("[]int", func(t *testing.T) { t.Parallel(); answersEveryWay(t, "[a, b]", []int{3, 4}) })
+	t.Run("[]float32", func(t *testing.T) { t.Parallel(); answersEveryWay(t, "[float(a), float(b)]", []float32{3, 4}) })
+	t.Run("[]Percent", func(t *testing.T) { t.Parallel(); answersEveryWay(t, "[float(a), float(b)]", []Percent{3, 4}) })
+	t.Run("record field []int", func(t *testing.T) { t.Parallel(); answersEveryWay(t, "{items: [a, b]}", WideOut{Items: []int{3, 4}}) })
+}
+
+// answersEveryWay compiles source to answer Out and checks that Run, RunInto,
+// a Session and RunBatch all answer want.
+func answersEveryWay[Out any](t *testing.T, source string, want Out) {
+	t.Helper()
+	binding, err := funroute.Bind[PairIn, Out](funroute.CoreRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := &PairIn{A: 3, B: 4}
+	check := func(way string, got Out, err error) {
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s of %q = %v, %v; want %v", way, source, got, err, want)
+		}
+	}
+	got, err := program.Run(t.Context(), in)
+	check("Run", got, err)
+	var into Out
+	check("RunInto", into, program.RunInto(t.Context(), in, &into))
+	got, err = program.Session().Run(t.Context(), in)
+	check("Session.Run", got, err)
+	var batched Out
+	program.RunBatch(t.Context(), 1, func(int) *PairIn { return in }, func(int) *Out { return &batched },
+		func(_ int, err error) { t.Errorf("RunBatch of %q: %v", source, err) })
+	check("RunBatch", batched, nil)
+}
+
+// treeNode holds itself: the language has no recursive types, so every path
+// a struct takes into it refuses this one with an error, never a crash.
+type treeNode struct {
+	Children []treeNode `funroute:"children"`
+}
+
+func TestARecursiveGoTypeIsRefused(t *testing.T) {
+	t.Parallel()
+	const want = "it contains itself"
+	if _, err := funroute.ToValue(treeNode{}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("ToValue(treeNode{}) error = %v, want %q", err, want)
+	}
+	if err := funroute.CoreRegistry().Register(funroute.FunctionSpec{
+		Name: "f.tree_v1",
+		Go:   func(treeNode) (int64, error) { return 0, nil },
+	}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Register(func(treeNode)) error = %v, want %q", err, want)
+	}
+	type in struct {
+		Tree treeNode `funroute:"tree"`
+	}
+	if _, err := funroute.Bind[in, int64](funroute.CoreRegistry()); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Bind[in, int64] error = %v, want %q", err, want)
 	}
 }

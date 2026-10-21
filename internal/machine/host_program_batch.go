@@ -32,10 +32,15 @@ import (
 // result. All the requests' arguments share one allocation, and a batch that
 // succeeds allocates nothing for errors. failed is the host's code, so a panic
 // in it is not recovered; it happens after every program has run and every
-// frame is back in the pool, and leaves the Program as usable as before.
+// frame is back in the pool, and leaves the Program as usable as before. An
+// n of zero or less is no requests.
 func (p *Program[In, Out]) RunBatch(ctx context.Context, n int, in func(i int) *In, out func(i int) *Out, failed func(i int, err error)) {
 	if failed == nil {
 		panic("RunBatch: failed must not be nil")
+	}
+	// No requests, as for n == 0: nothing is read, written or reported.
+	if n <= 0 {
+		return
 	}
 	if ctx == nil {
 		ctx = context.Background()

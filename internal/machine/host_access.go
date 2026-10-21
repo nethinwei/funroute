@@ -6,7 +6,6 @@ import (
 	"math"
 	"reflect"
 	"slices"
-	"time"
 	"unsafe"
 
 	"github.com/nethinwei/funroute/internal/kit"
@@ -101,19 +100,20 @@ func encodeArgs[In any](plan *argsCodec, reads []argRead, args []Value, in *In, 
 }
 
 // load reads the argument at p: into the frame's record when the program
-// only reads its fields.
+// only reads its fields. Without a frame — a batch's arguments, encoded
+// before any runs — an array of records is still a view of its own: like a
+// native slice, it holds the host's backing, not the host's struct.
 // Nothing in the frame points into the host's struct — it may be on the
 // host's stack — only at what its fields point at.
 func (read *argRead) load(p unsafe.Pointer, f *frame) (Value, error) {
 	switch {
-	case f == nil:
-	case read.fieldOnly:
+	case f != nil && read.fieldOnly:
 		f.borrows = append(f.borrows, read.index)
 		return read.codec.loadRecordInto(p, &f.records[read.index])
-	case read.view:
+	case f != nil && read.view:
 		f.borrows = append(f.borrows, read.index)
 		return viewIn(&f.views[read.index], read.codec.native, p), nil
-	case read.inPlace:
+	case f != nil && read.inPlace:
 		f.borrows = append(f.borrows, read.index)
 		return viewRecords(&f.recordViews[read.index], read.codec, p, true), nil
 	case read.records:
@@ -182,55 +182,6 @@ func (c *codec) load(p unsafe.Pointer) (Value, error) {
 	default:
 		return c.loadBoxed(p)
 	}
-}
-
-// loadOwn reads one of the language's own Go types. An exchange rate boxes
-// its quote; a time.Time outside the years a time spans is refused.
-func loadOwn(typ reflect.Type, p unsafe.Pointer) (Value, error) {
-	switch typ {
-	case moneyGoType:
-		amount := (*money.Money)(p)
-		return MoneyValue(amount.Minor(), amount.Currency()), nil
-	case ratioGoType:
-		return RatioValue(*(*money.Ratio)(p)), nil
-	case fxRateGoType:
-		return FxRateValue(*(*money.FxRate)(p)), nil
-	case timeGoType:
-		return timeValue(*(*time.Time)(p))
-	case durationGoType:
-		return Duration(*(*time.Duration)(p)), nil
-	default:
-		return CurrencyValue((*money.Currency)(p).Code()), nil
-	}
-}
-
-// storeOwn writes one of the language's own Go types.
-func storeOwn(typ reflect.Type, p unsafe.Pointer, v Value) error {
-	if want, _ := ownGoKind(typ); v.kind != want.kind {
-		return fmt.Errorf("value is %s, want %s", v.Type().Summary(), want)
-	}
-	switch typ {
-	case moneyGoType:
-		*(*money.Money)(p) = money.Make(v.s, v.i)
-	case ratioGoType:
-		*(*money.Ratio)(p) = ratioFrom(v)
-	case fxRateGoType:
-		*(*money.FxRate)(p), _ = v.FxRate()
-	case timeGoType:
-		*(*time.Time)(p), _ = v.Time()
-	case durationGoType:
-		*(*time.Duration)(p) = time.Duration(v.i)
-	default:
-		*(*money.Currency)(p) = money.CurrencyOf(v.s)
-	}
-	return nil
-}
-
-// newOwnGo is a new Go value of one of those types, typ, holding v, whose kind is typ's.
-func newOwnGo(typ reflect.Type, v Value) reflect.Value {
-	out := reflect.New(typ)
-	_ = storeOwn(typ, out.UnsafePointer(), v)
-	return out.Elem()
 }
 
 // loadScalar also holds a string to the enum it carries: a member name is the
@@ -547,6 +498,9 @@ func (c *codec) storeRecord(p unsafe.Pointer, v Value) error {
 }
 
 func (c *codec) storeSlice(p unsafe.Pointer, v Value) error {
+	// An answer built in a frame's slot is read item by item here: as the
+	// ordinary array it is.
+	v = unarena(v)
 	if v.kind != ArrayKind {
 		return fmt.Errorf("value is %s, want an array", v.Type().Summary())
 	}
@@ -566,7 +520,7 @@ func (c *codec) storeSlice(p unsafe.Pointer, v Value) error {
 }
 
 func (c *codec) storeBoxed(p unsafe.Pointer, v Value) error {
-	converted, err := c.intoGo(v)
+	converted, err := c.intoGo(unarena(v))
 	if err != nil {
 		return err
 	}
@@ -635,6 +589,9 @@ func (s resultSink) deliver(value Value) error {
 // said they may be built into and none shares memory with an argument: an
 // answer built over its own input would read what it had written.
 func (s resultSink) lend(f *frame, args []Value) {
+	if f.runtime.reg.hidesArrays {
+		return
+	}
 	for dest := range f.dest {
 		p, plan := s.out, s.plan
 		if dest > 0 {
@@ -654,7 +611,7 @@ func (s resultSink) lend(f *frame, args []Value) {
 // memory overlaps it.
 func lendSlot(slot *arenaSlot, kind native, p unsafe.Pointer, args []Value) {
 	header := (*sliceHeader)(p)
-	if header.cap == 0 || overlapsAny(header, args) {
+	if header.cap == 0 || overlapsAny(header, kind, args) {
 		return
 	}
 	switch kind {
@@ -670,9 +627,9 @@ func lendSlot(slot *arenaSlot, kind native, p unsafe.Pointer, args []Value) {
 }
 
 // overlapsAny reports an argument, or a field of a record argument, whose
-// native slice shares memory with the one header describes.
-func overlapsAny(header *sliceHeader, args []Value) bool {
-	meets := func(v Value) bool { return overlaps(header, v) }
+// native slice shares memory with the one header describes, a slice of kind.
+func overlapsAny(header *sliceHeader, kind native, args []Value) bool {
+	meets := func(v Value) bool { return overlaps(header, kind, v) }
 	for _, arg := range args {
 		if record, ok := arg.box.(*recordValue); ok && slices.ContainsFunc(record.fields, meets) || meets(arg) {
 			return true
@@ -681,30 +638,31 @@ func overlapsAny(header *sliceHeader, args []Value) bool {
 	return false
 }
 
-// overlaps reports a native array v whose items meet header's memory.
-func overlaps(header *sliceHeader, v Value) bool {
+// overlaps reports a native array v whose items meet the memory of header,
+// a slice of kind. A slice of another kind never shares memory with it, and
+// is not measured: in v's items, header's span would be the wrong length,
+// and could take in an array merely next to it.
+func overlaps(header *sliceHeader, kind native, v Value) bool {
 	var other sliceHeader
 	var size uintptr
+	var of native
 	// An argument handed over in place points at the host's slice.
 	v = unarena(v)
 	switch first := v.box.(type) {
 	case *bool:
-		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(false)
+		other, size, of = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(false), nativeBools
 	case *int64:
-		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(int64(0))
+		other, size, of = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(int64(0)), nativeInts
 	case *float64:
-		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(float64(0))
+		other, size, of = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(float64(0)), nativeFloats
 	case *string:
-		other, size = headerOf(itemsAt(first, v.i)), unsafe.Sizeof("")
+		other, size, of = headerOf(itemsAt(first, v.i)), unsafe.Sizeof(""), nativeStrings
 	default:
 		return false
 	}
-	if other.cap == 0 {
+	if of != kind || other.cap == 0 {
 		return false
 	}
-	// Both are measured in the other's items: a slice of a different kind
-	// never shares memory with an array of this one, so sizes only matter
-	// for slices of one kind.
 	lo, hi := uintptr(header.data), uintptr(header.data)+uintptr(header.cap)*size
 	otherLo, otherHi := uintptr(other.data), uintptr(other.data)+uintptr(other.cap)*size
 	return lo < otherHi && otherLo < hi

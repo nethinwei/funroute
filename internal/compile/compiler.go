@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
@@ -96,11 +95,14 @@ func build(expr syntax.Expr, registry *machine.Registry, options CompileOptions)
 	// A node compiles to an instruction or so; a switch or a loop to a few.
 	compiler.instructions = make([]machine.Instruction, 0, surveyed.nodes+surveyed.nodes/2)
 	compiler.plain, compiler.unsealed = options.plain, options.unsealed
+	if err := compiler.checkLiterals(expr); err != nil {
+		return inferred, nil, compileError(err)
+	}
 	if err := compiler.compile(expr); err != nil {
 		return inferred, nil, compileError(err)
 	}
 	if limit := cmp.Or(options.MaxInstructions, 10_000); len(compiler.instructions) > limit {
-		return inferred, nil, compileError(fmt.Errorf("compiled program has %d instructions, limit is %d", len(compiler.instructions), limit))
+		return inferred, nil, compileError(syntax.Around(expr, "compiled program has %d instructions, limit is %d", len(compiler.instructions), limit))
 	}
 	return inferred, compiler, nil
 }
@@ -113,6 +115,7 @@ func newBytecodeCompiler(registry *machine.Registry, inferred *inference) *bytec
 		names:     scoped[nameSlot]{},
 		callIndex: map[string]int{},
 		hoisted:   map[int]int{},
+		known:     map[int]machine.Constant{},
 	}
 	for i, param := range inferred.Params {
 		compiler.argIndex[param.Name()] = i
@@ -156,10 +159,6 @@ type bytecodeCompiler struct {
 	// recurses into another fold. folded counts what was folded away.
 	folding bool
 	folded  int
-	// inRound is set inside a round(…), where the steps that land between
-	// minor units are exact; roundSteps counts the ones in the innermost.
-	inRound    bool
-	roundSteps int
 	// usingDepth is how many using bodies the compiler is inside: a
 	// conversion outside every one has no rates to convert at.
 	usingDepth int
@@ -170,11 +169,15 @@ type bytecodeCompiler struct {
 	plain   bool
 	// unsealed is CompileOptions.unsealed.
 	unsealed bool
+	// known is, by node, the constant of a closed node a fold's check of
+	// its untaken branches has evaluated (untaken): a branch around it,
+	// evaluated after, compiles it as that constant rather than again.
+	// Nested compilers share it.
+	known map[int]machine.Constant
 }
 
 func (c *bytecodeCompiler) compile(expr syntax.Expr) error {
-	if slot, ok := c.hoisted[expr.NodeID()]; ok {
-		c.emit(machine.Instruction{Op: machine.OpLoadLocal, A: slot})
+	if c.loadComputed(expr) {
 		return nil
 	}
 	folded, err := c.tryFold(expr)
@@ -242,6 +245,22 @@ func (c *bytecodeCompiler) constantValue(expr syntax.Expr) (machine.Value, error
 
 // emitConstant pushes value, of the static type typ, which a literal always
 // has a constant form for.
+// loadComputed loads expr when it is already computed — a closed node a
+// fold's check evaluated, or one hoisted before its loop — and reports
+// whether it did.
+func (c *bytecodeCompiler) loadComputed(expr syntax.Expr) bool {
+	if constant, ok := c.known[expr.NodeID()]; ok {
+		c.constants = append(c.constants, constant)
+		c.emit(machine.Instruction{Op: machine.OpConstant, A: len(c.constants) - 1})
+		return true
+	}
+	if slot, ok := c.hoisted[expr.NodeID()]; ok {
+		c.emit(machine.Instruction{Op: machine.OpLoadLocal, A: slot})
+		return true
+	}
+	return false
+}
+
 func (c *bytecodeCompiler) emitConstant(value machine.Value, typ machine.Type) error {
 	index, ok := c.addConstant(value, typ)
 	if !ok {
@@ -269,7 +288,7 @@ func (c *bytecodeCompiler) compileVariable(node *syntax.VariableExpr) error {
 }
 
 func (c *bytecodeCompiler) compileArray(node *syntax.ArrayExpr) error {
-	return c.compileMake(node.ID, machine.ArrayKind, node.Items,
+	return c.compileMake(node, node.ID, machine.ArrayKind, node.Items,
 		machine.Instruction{Op: machine.OpMakeArray, A: len(node.Items)}, "cannot compile array with unresolved type")
 }
 
@@ -277,7 +296,7 @@ func (c *bytecodeCompiler) compileArray(node *syntax.ArrayExpr) error {
 // and the ExprJSON import keep a dictionary's entries in.
 func (c *bytecodeCompiler) compileDict(node *syntax.DictExpr) error {
 	keys := kit.Map(node.Entries, func(entry syntax.DictEntryExpr) string { return entry.Key })
-	return c.compileMake(node.ID, machine.DictKind, dictValues(node),
+	return c.compileMake(node, node.ID, machine.DictKind, dictValues(node),
 		machine.Instruction{Op: machine.OpMakeDict, A: len(keys), Keys: keys}, "cannot compile dictionary with unresolved type")
 }
 
@@ -285,20 +304,21 @@ func (c *bytecodeCompiler) compileDict(node *syntax.DictExpr) error {
 // them; compileField turns the name into the index it resolved to, so reading
 // a field is one instruction and no name survives into the bytecode.
 func (c *bytecodeCompiler) compileRecord(node *syntax.RecordExpr) error {
-	return c.compileMake(node.ID, machine.RecordKind, fieldValues(node.Fields),
+	return c.compileMake(node, node.ID, machine.RecordKind, fieldValues(node.Fields),
 		machine.Instruction{Op: machine.OpMakeRecord, A: len(node.Fields)}, "cannot compile record with unresolved type")
 }
 
 // compileMake pushes values in order and packs them into one value of the
 // node's type with instruction. A record's type is always known, so only a
-// container's can be unresolved.
-func (c *bytecodeCompiler) compileMake(id int, kind machine.Kind, values []syntax.Expr, instruction machine.Instruction, unresolved string) error {
+// container's can be unresolved: [] that nothing gives a type is refused
+// where it is written.
+func (c *bytecodeCompiler) compileMake(node syntax.Expr, id int, kind machine.Kind, values []syntax.Expr, instruction machine.Instruction, unresolved string) error {
 	if err := c.compileAll(values); err != nil {
 		return err
 	}
 	typ, ok := c.inferred.nodeType(id)
 	if !ok || typ.Kind() != kind || (kind != machine.RecordKind && !hasElem(typ)) {
-		return errors.New(unresolved)
+		return syntax.Around(node, "%s", unresolved)
 	}
 	instruction.Type = &typ
 	c.emit(instruction)
@@ -326,7 +346,7 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 	if !ok {
 		return fmt.Errorf("internal error: no selected overload for %s", node.Name)
 	}
-	function, ok := c.registry.Resolve(key)
+	function, ok := machine.ResolveOf(c.registry, key)
 	if !ok {
 		return fmt.Errorf("function disappeared during compilation: %s", key)
 	}
@@ -337,7 +357,7 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 		return c.compileFallback(node)
 	}
 	if function.ReadsRates() && c.usingDepth == 0 {
-		return syntax.Around(node, "type error: %s reads exchange rates, which only a using has: write it inside using(150 JPY / USD, …), or using(rates, …) with the rates as an argument", operatorName(node))
+		return outsideUsing(node)
 	}
 	if function.NeedsBoundedArgs() {
 		if err := c.requireBoundedArgs(node); err != nil {
@@ -345,9 +365,6 @@ func (c *bytecodeCompiler) compileCall(node *syntax.CallExpr) error {
 		}
 	}
 	if err := c.requireConstantArgs(node, function); err != nil {
-		return err
-	}
-	if err := c.exactStep(node, function); err != nil {
 		return err
 	}
 	if fused, err := c.compileAggregate(node, function); fused || err != nil {
@@ -422,88 +439,6 @@ func (c *bytecodeCompiler) compileSwitch(node *syntax.SwitchExpr) error {
 	return nil
 }
 
-// requireBoundedArgs holds a BoundedArgs function to its promise: what it
-// produces is sized by its arguments, so those arguments must have a size the
-// inputs already bound. Three things do: a literal, the length of a container
-// (that length *is* part of the input size), and the two combined by
-// arithmetic. An argument that could be any scalar at run time does not, and
-// that is the one docs/termination.md rules out.
-func (c *bytecodeCompiler) requireBoundedArgs(node *syntax.CallExpr) error {
-	for i, arg := range node.Args {
-		// Only an integer can stand for a length; the amount allocate splits
-		// or anything else of another type says nothing about the size.
-		if typ, ok := c.inferred.nodeType(arg.NodeID()); ok && typ.Kind() != machine.IntKind {
-			continue
-		}
-		if c.boundedExpr(arg) {
-			continue
-		}
-		return syntax.Around(arg,
-			"%s needs arguments whose size the inputs already bound: a literal, len(...) of a container, or those combined by arithmetic — argument %d is neither",
-			node.Name, i+1)
-	}
-	return nil
-}
-
-// requireConstantArgs holds a call to the arguments its function wants
-// fixed at compile time (Doc.ConstArgs): each must be a constant expression,
-// and the function must take its value. A nested compiler, folding, leaves
-// the check to the compile it folds for.
-func (c *bytecodeCompiler) requireConstantArgs(node *syntax.CallExpr, function *machine.RegisteredFunction) error {
-	for _, at := range function.Doc.ConstArgs {
-		if c.folding {
-			return nil
-		}
-		arg := node.Args[at]
-		if !c.constantExpr(arg) {
-			return syntax.Around(arg, "%s needs argument %d fixed when the rule is compiled: a literal, or what folds to one", node.Name, at+1)
-		}
-		value, ok, err := c.evaluate(arg)
-		if err != nil {
-			return err
-		}
-		if err := machine.CheckConstantArg(function, value); ok && err != nil {
-			return syntax.AroundError(arg, err)
-		}
-	}
-	return nil
-}
-
-func (c *bytecodeCompiler) boundedExpr(expr syntax.Expr) bool {
-	switch node := expr.(type) {
-	case *syntax.LiteralExpr:
-		return true
-	case *syntax.VariableExpr:
-		// A binding that folded to a constant is as good as a literal.
-		return c.foldedName(node.Name)
-	case *syntax.CallExpr:
-		return c.boundedCall(node)
-	}
-	return false
-}
-
-// boundedCall knows two things about the kernel: len hands back a size the
-// input already bound, and arithmetic on bounded sizes stays bounded (the
-// polynomial in docs/termination.md is a polynomial for exactly this reason).
-// Only the kernel's own functions count — a host may register another len.
-func (c *bytecodeCompiler) boundedCall(node *syntax.CallExpr) bool {
-	key, ok := c.inferred.Selections[node.ID]
-	if !ok {
-		return false
-	}
-	function, ok := c.registry.Resolve(key)
-	if !ok || !function.IsBuiltin() {
-		return false
-	}
-	switch function.Name {
-	case "len":
-		return true
-	case "add", "sub", "mul", "div", "mod":
-		return !slices.ContainsFunc(node.Args, func(arg syntax.Expr) bool { return !c.boundedExpr(arg) })
-	}
-	return false
-}
-
 func (c *bytecodeCompiler) compileFallback(node *syntax.CallExpr) error {
 	if len(node.Args) < 2 {
 		return errors.New("fallback requires at least 2 arguments")
@@ -565,142 +500,6 @@ func (c *bytecodeCompiler) patch(jumps []int, target int) {
 	}
 }
 
-func (c *bytecodeCompiler) compileFor(node *syntax.ForExpr) error {
-	if err := c.compile(node.Source); err != nil {
-		return err
-	}
-	resultType, ok := c.inferred.nodeType(node.ID)
-	if !ok || !hasElem(resultType) ||
-		(resultType.Kind() != machine.ArrayKind && resultType.Kind() != machine.DictKind) {
-		return errors.New("cannot compile for with unresolved result type")
-	}
-	return c.compileLoop(loopShape{
-		key: node.KeyVariable, value: node.Variable, where: node.Where, result: &resultType,
-		prelude: c.hoistInnerSource(node),
-		body:    func() error { return c.compileYield(node, resultType) },
-	})
-}
-
-// loopShape is a loop to lay out: the names it binds — accumulator is the
-// one a reduce folds into, and empty for a comprehension — its filter, its
-// type, and what it runs: prelude once, before the first item, when there is
-// one, and body for each item the filter keeps.
-type loopShape struct {
-	key, value, accumulator string
-	where                   syntax.Expr
-	result                  *machine.Type
-	prelude, body           func() error
-}
-
-// compileLoop lays out a loop over the source on the stack: loop_init, the
-// prelude, the condition, body, loop_next. A filtered item jumps straight to
-// loop_next, which goes back past the prelude.
-func (c *bytecodeCompiler) compileLoop(shape loopShape) error {
-	slot := c.bindLocal(shape.value)
-	defer c.unbindLocal(shape.value)
-	keySlot := c.bindLocal(shape.key)
-	defer c.unbindLocal(shape.key)
-	accSlot := c.bindLocal(shape.accumulator)
-	defer c.unbindLocal(shape.accumulator)
-
-	init := c.emit(machine.Instruction{Op: machine.OpLoopInit, B: slot, C: accSlot, D: keySlot, Type: shape.result})
-	if shape.prelude != nil {
-		if err := shape.prelude(); err != nil {
-			return err
-		}
-	}
-	loopStart := len(c.instructions)
-	var filtered []int
-	if shape.where != nil {
-		misses, err := c.compileCondition(shape.where)
-		if err != nil {
-			return err
-		}
-		filtered = misses
-	}
-	if err := shape.body(); err != nil {
-		return err
-	}
-	next := c.emit(machine.Instruction{Op: machine.OpLoopNext, A: loopStart, Type: shape.result})
-	c.patch(filtered, next)
-	c.instructions[init].A = len(c.instructions)
-	return nil
-}
-
-// compileYield emits the loop body and the instruction that takes its value.
-// An outer clause of a nested comprehension spreads: what it yields is the
-// inner loop's whole array, so the instruction checks it against the loop's own
-// type and splices the elements.
-func (c *bytecodeCompiler) compileYield(node *syntax.ForExpr, resultType machine.Type) error {
-	// A dictionary comprehension pushes the key first, so loop_collect finds
-	// the value on top and the key under it.
-	pairs := 0
-	if node.YieldKey != nil {
-		if err := c.compile(node.YieldKey); err != nil {
-			return err
-		}
-		pairs = 1
-	}
-	if err := c.compile(node.Yield); err != nil {
-		return err
-	}
-	if node.Flatten {
-		c.emit(machine.Instruction{Op: machine.OpLoopSpread, Type: &resultType})
-		return nil
-	}
-	yieldType := elemOf(resultType)
-	c.emit(machine.Instruction{Op: machine.OpLoopCollect, A: pairs, Type: &yieldType})
-	return nil
-}
-
-// bindLocal reserves a local slot for a name bound by `for` or `reduce`. The
-// slot is scoped: unbindLocal restores any outer binding of the same name. An
-// empty name — the key of a loop over an array, the accumulator of a
-// comprehension — takes no slot: it is NoKey, which is also NoAccumulator.
-func (c *bytecodeCompiler) bindLocal(name string) int {
-	if name == "" {
-		return machine.NoKey
-	}
-	slot := c.nextLocal
-	c.nextLocal++
-	c.names.push(name, nameSlot{index: slot})
-	return slot
-}
-
-func (c *bytecodeCompiler) unbindLocal(name string) {
-	if name == "" {
-		return
-	}
-	c.names.pop(name)
-}
-
-// compileReduce lays out: source, init, loop_init, condition, body,
-// loop_collect, loop_next. It shares the loop opcodes with for; the
-// accumulator slot in C is what makes it a fold instead of a mapping, and a
-// filtered item jumps straight to loop_next, leaving the accumulator alone.
-func (c *bytecodeCompiler) compileReduce(node *syntax.ReduceExpr) error {
-	resultType, ok := c.inferred.nodeType(node.ID)
-	if !ok || !resultType.IsConcrete() {
-		return errors.New("cannot compile reduce with unresolved result type")
-	}
-	if err := c.compile(node.Source); err != nil {
-		return err
-	}
-	if err := c.compile(node.Init); err != nil {
-		return err
-	}
-	return c.compileLoop(loopShape{
-		key: node.KeyVariable, value: node.Variable, accumulator: node.Accumulator, where: node.Where, result: &resultType,
-		body: func() error {
-			if err := c.compile(node.Body); err != nil {
-				return err
-			}
-			c.emit(machine.Instruction{Op: machine.OpLoopCollect, Type: &resultType})
-			return nil
-		},
-	})
-}
-
 // compileLet evaluates each binding in order, so a later binding can read an
 // earlier one, and keeps it bound through the body. A binding whose value is
 // fixed at compile time becomes a constant rather than a local slot: nothing
@@ -717,11 +516,15 @@ func (c *bytecodeCompiler) compileLet(node *syntax.LetExpr) error {
 			c.folded++
 			continue
 		}
+		// Whether the value is a size the inputs bound is asked where it is
+		// bound: a name in it may be hidden later.
+		bounded := c.boundedExpr(binding.Value)
 		if err := c.compile(binding.Value); err != nil {
 			return err
 		}
 		slot := c.bindLocal(binding.Name)
 		defer c.unbindLocal(binding.Name)
+		c.names[binding.Name][len(c.names[binding.Name])-1].bounded = bounded
 		c.emit(machine.Instruction{Op: machine.OpStoreLocal, A: slot})
 	}
 	return c.compile(node.Body)
@@ -750,10 +553,12 @@ func (c *bytecodeCompiler) compileIf(node *syntax.CallExpr) error {
 
 // scoped is names bound in nested scopes, each name's innermost binding last.
 // nameSlot is where a bound name's value is: the local slot index, or, for a
-// constant one, the constant-pool index.
+// constant one, the constant-pool index. bounded says a let bound it to a
+// size the inputs bound (boundedExpr).
 type nameSlot struct {
 	index    int
 	constant bool
+	bounded  bool
 }
 
 // foldedName reports whether name's innermost binding folded to a constant.

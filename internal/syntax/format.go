@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nethinwei/funroute/internal/kit"
+	"github.com/nethinwei/funroute/internal/machine"
 )
 
 // Format lays a program out the way a person would: on one line while it
@@ -320,7 +321,13 @@ func (p *printer) comprehensionSplit(node *ForExpr) split {
 	parts[0] = part{expr: inner.Yield}
 	if inner.YieldKey != nil {
 		opening, closing = "{", "}"
-		parts[0] = part{head: p.inline(inner.YieldKey, 0) + ": ", expr: inner.Yield}
+		key := p.inline(inner.YieldKey, 0)
+		if literal, ok := inner.YieldKey.(*LiteralExpr); ok && literal.Value.Kind() == machine.BoolKind {
+			// {true: …} is a record's field, which no name the syntax took
+			// can be.
+			key = "(" + key + ")"
+		}
+		parts[0] = part{head: key + ": ", expr: inner.Yield}
 	}
 	for _, clause := range clauses {
 		parts = append(parts, part{head: clause})

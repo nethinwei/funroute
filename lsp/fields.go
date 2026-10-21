@@ -2,9 +2,11 @@ package lsp
 
 import (
 	"fmt"
+	"iter"
 	"slices"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -19,10 +21,45 @@ import (
 // program with the update replaced by its base, which is the one thing it
 // does not need to see finished.
 func (s *Server) updateFields(doc *document, offset int) ([]completionItem, bool) {
+	if !inUpdate(doc, offset) {
+		return nil, false
+	}
 	return s.fieldsAt(doc, offset, placeholder+": 0", func(tree syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool) {
 		base, around, written, ok = syntax.UpdatedRecordAt(tree, offset, placeholder)
 		return base, around, recordOf, written, ok
 	})
+}
+
+// inUpdate reports a cursor inside the braces of an update, order with {|:
+// the innermost brace still open before it follows a with. Only there is the
+// text parsed to look for the update's fields.
+func inUpdate(doc *document, offset int) bool {
+	lexemes, depth := lexemesOf(doc), 0
+	for i, lexeme := range slices.Backward(lexemes) {
+		if lexeme.End > offset || lexeme.Class != syntax.ClassPunctuation {
+			continue
+		}
+		switch doc.text[lexeme.Start:lexeme.End] {
+		case "}":
+			depth++
+		case "{":
+			if depth == 0 {
+				return followsWith(doc, lexemes[:i])
+			}
+			depth--
+		}
+	}
+	return false
+}
+
+// followsWith reports that the last of lexemes, past comments, is a with.
+func followsWith(doc *document, lexemes []syntax.Lexeme) bool {
+	for _, lexeme := range slices.Backward(lexemes) {
+		if lexeme.Class != syntax.ClassComment {
+			return lexeme.Class == syntax.ClassIdentifier && doc.text[lexeme.Start:lexeme.End] == "with"
+		}
+	}
+	return false
 }
 
 // selectorFields is what a selector being written can name, sort_by(xs, .|):
@@ -30,10 +67,36 @@ func (s *Server) updateFields(doc *document, offset int) ([]completionItem, bool
 // fields it names before reach, read off the program with the call replaced
 // by that list.
 func (s *Server) selectorFields(doc *document, offset int) ([]completionItem, bool) {
+	if !typingSelector(doc, offset) {
+		return nil, false
+	}
 	return s.fieldsAt(doc, offset, placeholder, func(tree syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool) {
 		base, around, path, ok := syntax.SelectedListAt(tree, offset, placeholder)
 		return base, around, itemRecord(path), nil, ok
 	})
+}
+
+// typingSelector reports a cursor in a selector's name, after its dot or in
+// what is typed of the name — .|, .fe|, .a.|, or past spaces and comments
+// the parser reads between them, . fe| — and nowhere a selector cannot be.
+func typingSelector(doc *document, offset int) bool {
+	at := offset
+	for at > 0 && kit.IsNameChar(doc.text[at-1]) {
+		at--
+	}
+	if at > 0 && doc.text[at-1] == '.' {
+		return true
+	}
+	dot := false
+	for _, lexeme := range lexemesOf(doc) {
+		if lexeme.End > at {
+			break
+		}
+		if lexeme.Class != syntax.ClassComment {
+			dot = doc.text[lexeme.Start:lexeme.End] == "."
+		}
+	}
+	return dot
 }
 
 // itemRecord reaches, from a list's type, the record path leads to from its
@@ -60,23 +123,71 @@ func itemRecord(path []string) reach {
 // the span to stand the base in for (around), how the record is reached from
 // the base's type, and the fields already written.
 func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool)) ([]completionItem, bool) {
-	kept, closed := repaired(doc.text, offset, filler)
-	for _, candidate := range []string{kept, closed} {
-		tree, err := syntax.Parse(candidate)
+	for candidate := range fieldTexts(doc, offset, filler) {
+		tree, err := doc.parse(candidate)
 		if err != nil {
 			continue
 		}
 		base, around, record, written, ok := find(tree)
 		if !ok {
-			return nil, false
+			continue
 		}
-		typ, ok := s.baseType(candidate, base, around, record)
+		typ, ok := s.baseType(doc, candidate, syntax.ScopeAt(tree, base.Start), base, around, record)
 		if !ok {
-			return nil, false
+			continue
 		}
 		return fieldItems(typ, written), true
 	}
 	return nil, false
+}
+
+// keptTails are what fieldTexts writes around what follows the cursor: before
+// it, a comma or nothing; after it, an operand or nothing.
+var keptTails = [...]struct{ comma, operand string }{
+	{"", ""}, {"", "\n" + placeholder}, {", ", ""}, {", ", "\n" + placeholder},
+}
+
+// fieldTexts are the texts fields are looked for in, each made only when the
+// one before it was not the one: text with filler in place of the name being
+// typed at offset, keeping all that follows it, where a comprehension binds
+// the names its yield reads, [order with {|} for order in xs], so the tree
+// scopes the base as written. Each closes the brackets left open, on a line
+// of its own past any comment. Past the first, what follows is the next of a
+// list written without its comma before it, or ends in an operator still to
+// be given its operand. Last, where none of them parses — the cursor right
+// before a field written, order with {|fee: 0} — what follows is cut off and
+// the brackets closed, unless a for or a reduce follows: cut off, the names
+// it binds would be read as the arguments of the same names.
+func fieldTexts(doc *document, offset int, filler string) iter.Seq[string] {
+	text, end := doc.text, offset
+	for end < len(text) && kit.IsNameChar(text[end]) {
+		end++
+	}
+	return func(yield func(string) bool) {
+		for _, around := range keptTails {
+			kept := text[:offset] + filler + around.comma + text[end:] + around.operand
+			if !yield(kept + "\n" + openBrackets(kept)) {
+				return
+			}
+		}
+		if !bindsPast(doc, offset) {
+			yield(text[:offset] + filler + openBrackets(text[:offset]))
+		}
+	}
+}
+
+// bindsPast reports a for or a reduce written past offset, not in a string
+// or a comment.
+func bindsPast(doc *document, offset int) bool {
+	for _, lexeme := range lexemesOf(doc) {
+		if lexeme.Start < offset || lexeme.Class != syntax.ClassIdentifier {
+			continue
+		}
+		if name := doc.text[lexeme.Start:lexeme.End]; name == "for" || name == "reduce" {
+			return true
+		}
+	}
+	return false
 }
 
 // reach is how a record is found from a type: the record, and false when the
@@ -86,27 +197,82 @@ type reach func(machine.Type) (machine.Type, bool)
 func recordOf(typ machine.Type) (machine.Type, bool) { return typ, typ.Kind() == machine.RecordKind }
 
 // baseType is the record reached from a base's type, read off the program
-// with "(base)" where around was.
-func (s *Server) baseType(candidate string, base, around syntax.Span, record reach) (machine.Type, bool) {
-	stand := "(" + candidate[base.Start:base.End] + ")"
+// with "(base)" where around was, or, when that program does not compile —
+// the base stood in for the body a let or an if still lacks, let(x = (order))
+// — off "(base)" alone. locals are the names bound where the base is. An
+// argument named as the base is read off the contract at once; "(base)" alone
+// is asked only when every name the base reads is an argument none of locals
+// hides, since alone it knows no locals and would give an argument's fields
+// for a local of the same name.
+func (s *Server) baseType(doc *document, candidate string, locals []string, base, around syntax.Span, record reach) (machine.Type, bool) {
+	written := candidate[base.Start:base.End]
+	if arg, ok := s.argument(written, locals); ok {
+		return record(arg.Type)
+	}
+	stand := "(" + written + ")"
 	text := candidate[:around.Start] + stand + candidate[around.End:]
 	// The base's type follows from the arguments alone. A declared result is
 	// left out: a program half written rarely returns it yet, and holding it
 	// to one would lose the answer for no reason.
 	options := s.contract
 	options.Result, options.ResultDoc = nil, ""
-	analysis, _ := compile.Analyze(text, s.registry, options)
+	analysis, err := doc.analyze(text, s.registry, options)
+	if typ, ok := wholeType(analysis, around.Start, len(stand)); ok || err == nil {
+		return reached(typ, ok, record)
+	}
+	if !s.readsArguments(written, locals) {
+		return machine.Type{}, false
+	}
+	analysis, _ = doc.analyze(stand, s.registry, options)
+	typ, ok := wholeType(analysis, 0, len(stand))
+	return reached(typ, ok, record)
+}
+
+// argument is the contract's argument called name, unless locals hide it.
+func (s *Server) argument(name string, locals []string) (compile.ArgSpec, bool) {
+	at := slices.IndexFunc(s.contract.Args, func(arg compile.ArgSpec) bool { return arg.Name == name })
+	if at < 0 || slices.Contains(locals, name) {
+		return compile.ArgSpec{}, false
+	}
+	return s.contract.Args[at], true
+}
+
+// readsArguments reports that every name expr reads is an argument of the
+// contract, none hidden by locals.
+func (s *Server) readsArguments(expr string, locals []string) bool {
+	tree, err := syntax.Parse(expr)
+	if err != nil {
+		return false
+	}
+	for _, name := range syntax.FreeVariables(tree) {
+		if _, ok := s.argument(name, locals); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// reached is the record reached from typ, when there is a type to reach it
+// from.
+func reached(typ machine.Type, ok bool, record reach) (machine.Type, bool) {
+	if !ok {
+		return machine.Type{}, false
+	}
+	return record(typ)
+}
+
+// wholeType is the type of the node over the whole of the size bytes at
+// start — its span may take in the parentheses — never a part of it: in
+// order.fee with {…} the base is an int, whatever order is.
+func wholeType(analysis *compile.Analysis, start, size int) (machine.Type, bool) {
 	if analysis == nil {
 		return machine.Type{}, false
 	}
-	// Nodes are in pre-order, so the first one inside the parentheses that
-	// leads to a record is the base itself rather than a part of it.
-	end := around.Start + len(stand)
+	end := start + size
 	for _, node := range analysis.Nodes {
-		if node.Span.Start >= around.Start && node.Span.End <= end && node.Type != nil {
-			if typ, ok := record(*node.Type); ok {
-				return typ, true
-			}
+		whole := node.Span.Start >= start && node.Span.Start <= start+1 && node.Span.End >= end-1 && node.Span.End <= end
+		if whole && node.Type != nil {
+			return *node.Type, true
 		}
 	}
 	return machine.Type{}, false

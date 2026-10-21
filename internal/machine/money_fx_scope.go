@@ -25,15 +25,29 @@ func validateFxPush(in Instruction, fail failFunc) error {
 // popScope closes the innermost using.
 func (f *frame) popScope() { f.dropScopes(len(f.fxMarks) - 1) }
 
-// dropScopes closes every using past the first depth ones.
+// dropScopes closes every using past the first depth ones; with none open,
+// there is nothing to close.
 func (f *frame) dropScopes(depth int) {
-	if depth >= len(f.fxMarks) {
+	if depth < 0 || depth >= len(f.fxMarks) {
 		return
 	}
 	mark := f.fxMarks[depth]
 	clear(f.fxQuotes[mark:])
 	f.fxQuotes = f.fxQuotes[:mark]
 	f.fxMarks = f.fxMarks[:depth]
+	f.fxHit = fxHit{}
+}
+
+// fxHit is the innermost using's last answer to which of its quotes is
+// between two currencies, as the rate from→to — a quote the other way
+// already inverted: a loop converts one pair item after item, and a using
+// of a market's hundred quotes would be searched for it every time, an
+// inverse made each time. Its quotes do not change while it is open;
+// opening or closing a using forgets the answer.
+type fxHit struct {
+	from, to string
+	rate     money.FxRate
+	found    bool
 }
 
 // scopeQuotes is the innermost using's quotes; ok is false outside every
@@ -93,21 +107,32 @@ func (f *frame) rateBetween(table *money.Currencies, from, to string) (money.FxR
 		pair, err := money.PairOf(table, from, to)
 		return money.FxRateFrom(pair, money.RatioFromParts(1, 1)), err
 	}
+	if f.fxHit.found && f.fxHit.from == from && f.fxHit.to == to {
+		return f.fxHit.rate, nil
+	}
 	quotes, _ := f.scopeQuotes()
-	rate, found := quoteBetween(quotes, from, to)
+	quote, found := quoteBetween(quotes, from, to)
 	if !found {
 		return money.FxRate{}, fmt.Errorf("%w: the using has no quote between %s and %s, either way", ErrNoFxRate, from, to)
 	}
-	if rate.Base() == from {
-		return rate, nil
+	rate, err := directed(table, quote, from, to)
+	if err == nil {
+		f.fxHit = fxHit{from: from, to: to, rate: rate, found: true}
+	}
+	return rate, err
+}
+
+// directed is quote as the rate from→to: itself, or the other way round its
+// inverse.
+func directed(table *money.Currencies, quote money.FxRate, from, to string) (money.FxRate, error) {
+	if quote.Base() == from {
+		return quote, nil
 	}
 	pair, err := money.PairOf(table, from, to)
 	if err != nil {
 		return money.FxRate{}, err
 	}
-	_, ratio := money.FxRateParts(rate)
-	inverse, err := money.RatioFromParts(1, 1).Div(ratio)
-	return money.FxRateFrom(pair, inverse), err
+	return money.InverseFxRate(pair, quote)
 }
 
 // fxScopeKey is the context key a conversion finds the frame under.

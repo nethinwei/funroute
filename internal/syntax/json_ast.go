@@ -203,10 +203,14 @@ type exprJSONDocument struct {
 // is read exactly, never through a float64.
 func decodeDocument(data []byte) (exprJSONDocument, error) {
 	var document exprJSONDocument
-	var fields map[string]any
 	decoder := kit.NumberDecoder(data)
-	if err := decoder.Decode(&fields); err != nil {
+	value, err := decodeValue(decoder, 0)
+	if err != nil {
 		return document, fmt.Errorf("decode expression JSON: %w", err)
+	}
+	fields, ok := value.(map[string]any)
+	if !ok {
+		return document, errors.New("decode expression JSON: the document is not an object")
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
@@ -230,6 +234,58 @@ func decodeDocument(data []byte) (exprJSONDocument, error) {
 	}
 	document.expr, document.hasExpr = fields["expr"]
 	return document, nil
+}
+
+// maxJSONDepth is how deeply decodeValue nests arrays and objects, as
+// encoding/json's own limit has it; the nodes in them are held to maxNesting.
+const maxJSONDepth = 10000
+
+// decodeValue reads one JSON value as decoding it into an any would, but
+// refuses an object that writes a key twice: encoding/json keeps the last,
+// so a document whose readers could read two programs is none.
+func decodeValue(decoder *json.Decoder, depth int) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return token, nil
+	}
+	if depth == maxJSONDepth {
+		return nil, fmt.Errorf("exceeded max depth %d", maxJSONDepth)
+	}
+	if delim == '[' {
+		items := []any{}
+		for decoder.More() {
+			item, err := decodeValue(decoder, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+		}
+		_, err := decoder.Token()
+		return items, err
+	}
+	fields := map[string]any{}
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		// An object's key is a string: the decoder refuses anything else.
+		name, _ := key.(string)
+		if _, seen := fields[name]; seen {
+			return nil, fmt.Errorf("duplicate key %q", name)
+		}
+		value, err := decodeValue(decoder, depth+1)
+		if err != nil {
+			return nil, err
+		}
+		fields[name] = value
+	}
+	_, err = decoder.Token()
+	return fields, err
 }
 
 // errTooDeep is a document nested past maxNesting.

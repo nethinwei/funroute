@@ -97,3 +97,162 @@ func TestAPromotedFieldIsHeldAsTheRecordIs(t *testing.T) {
 		t.Errorf("promoted: %v, %v; whole: %v, %v; want NaN from both", got, gotErr, want, wantErr)
 	}
 }
+
+type promotedOrders struct {
+	Orders []promotedOrder `funroute:"orders"`
+}
+
+// The fields a loop reads of an item that is only read field by field are
+// loaded into registers of their own, whether a Program walks the host's
+// slice or the run is given an array of records, and answer as the records'
+// fields do; an item the loop uses any other way keeps its fields
+// unpromoted.
+func TestPromotedItemFieldsAnswerAsTheRecords(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := compile.Bind[promotedOrders, string](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := &promotedOrders{Orders: []promotedOrder{
+		{Amount: 1200, Currency: "SGD", Risk: 0.25, Flagged: true}, {Amount: 7, Currency: "HKD", Risk: 0.75},
+		{Amount: -3, Currency: "SGD", Risk: math.NaN(), Flagged: true},
+	}}
+	for _, tc := range []struct {
+		source, want string
+		promoted     int
+	}{
+		{`string(sum([o.amount for o in orders if o.flagged]))`, "1197", 2},
+		{`string(len([1 for o in orders if o.currency == "SGD" && o.risk < 0.5]))`, "1", 2},
+		{`first([o.currency for o in orders if !(o.risk < 0.5)])`, "HKD", 2},
+		{`string(len([1 for o in orders]))`, "3", 0},
+		{`string(sum([o.amount * p.amount for o in orders for p in orders if p.flagged]))`, "1441188", 3},
+		{`first([o for o in orders if o.amount < 10]).currency`, "HKD", 0},
+		{`first([o with {currency: "USD"} for o in orders if o.flagged]).currency`, "USD", 4},
+		{`string(sum([(o with {amount: o.amount * 2}).amount for o in orders]))`, "2408", 4},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			t.Parallel()
+			program, err := binding.Compile(tc.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := machine.ItemPromotions(program.Runtime()); got != tc.promoted {
+				t.Errorf("%d promoted item fields, want %d", got, tc.promoted)
+			}
+			answersBothWays(t, program, in, tc.want)
+		})
+	}
+}
+
+// A loop that collects its item as it is, filtered on the item's fields,
+// makes a view of the host's slice — no record of an item — and the array
+// answers as the records do: handed back to the host, measured, walked
+// again, sorted, picked from.
+func TestCollectedItemsAnswerAsTheRecords(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	in := &promotedOrders{Orders: []promotedOrder{
+		{Amount: 1200, Currency: "SGD", Risk: 0.25, Flagged: true}, {Amount: 7, Currency: "HKD", Risk: 0.75},
+		{Amount: -3, Currency: "MYR", Risk: math.NaN(), Flagged: true}, {Amount: 50, Currency: "THB", Flagged: true},
+	}}
+	binding, err := compile.Bind[promotedOrders, []promotedOrder](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(`[o for o in orders if o.flagged && o.amount < 1000]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := program.Run(t.Context(), in); err != nil || len(got) != 2 || got[0].Currency != "MYR" || got[1] != in.Orders[3] {
+		t.Errorf("the flagged orders under 1000 = %+v, %v; want MYR and THB", got, err)
+	}
+	updated, err := binding.Compile(`[o with {amount: 0} for o in orders if o.flagged]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := updated.Run(t.Context(), in); err != nil || len(got) != 3 || got[2] != (promotedOrder{Currency: "THB", Flagged: true}) {
+		t.Errorf("the flagged orders at no amount = %+v, %v; want three, THB last", got, err)
+	}
+	strings, err := compile.Bind[promotedOrders, string](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for source, want := range map[string]string{
+		`string(len([o for o in orders if o.flagged]))`:                                                      "3",
+		`first([o.currency for o in [p for p in orders if p.flagged] if o.amount > 0])`:                      "SGD",
+		`first([o for o in orders if !o.flagged]).currency`:                                                  "HKD",
+		`string(sum([o.amount for o in [p for p in orders if p.amount > 0]]))`:                               "1257",
+		`first(sort_by([o for o in orders if o.flagged], [o.amount for o in orders if o.flagged])).currency`: "MYR",
+	} {
+		program, err := strings.Compile(source)
+		if err != nil {
+			t.Fatalf("%s: %v", source, err)
+		}
+		answersBothWays(t, program, in, want)
+	}
+}
+
+// recordsOf is the orders as an array of records, which RunValues walks as
+// it is given.
+func recordsOf(t *testing.T, orders []promotedOrder) machine.Value {
+	t.Helper()
+	records := make([]machine.Value, len(orders))
+	for i := range orders {
+		records[i] = must(machine.ToValue(orders[i]))
+	}
+	return must(machine.Array(records[0].Type(), records))
+}
+
+// answersBothWays runs program on in as a Program, which walks the host's
+// slice, and on the same orders as an array of records, and checks both
+// answer want.
+func answersBothWays(t *testing.T, program *machine.Program[promotedOrders, string], in *promotedOrders, want string) {
+	t.Helper()
+	byStruct, err := program.Run(t.Context(), in)
+	if err != nil || byStruct != want {
+		t.Errorf("from the host's slice %q, %v; want %q", byStruct, err, want)
+	}
+	byRecords, err := program.Runtime().RunValues(t.Context(), []machine.Value{recordsOf(t, in.Orders)})
+	if text, _ := byRecords.String(); err != nil || text != want {
+		t.Errorf("from an array of records %q, %v; want %q", text, err, want)
+	}
+}
+
+// Collecting the items of a host's slice makes no record of any: what a run
+// allocates does not grow with the slice. The count is global, so this test
+// does not run in parallel.
+func TestCollectedItemsAllocateNoRecords(t *testing.T) {
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := compile.Bind[promotedOrders, []promotedOrder](registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(`[o for o in orders if o.flagged]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocs := func(n int) float64 {
+		in := &promotedOrders{Orders: make([]promotedOrder, n)}
+		for i := range in.Orders {
+			in.Orders[i].Flagged = i%2 == 0
+		}
+		return testing.AllocsPerRun(50, func() {
+			if _, err := program.Run(t.Context(), in); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if few, many := allocs(16), allocs(512); few != many {
+		t.Fatalf("collecting 16 items allocates %v times, 512 items %v; want the same", few, many)
+	}
+}

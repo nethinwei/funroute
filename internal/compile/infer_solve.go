@@ -12,6 +12,7 @@ package compile
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/nethinwei/funroute/internal/kit"
@@ -72,16 +73,26 @@ func (s *inferState) fits(c *choice, function *machine.RegisteredFunction) bool 
 }
 
 // trial starts a change to be taken back, and is where endTrial takes it
-// back to.
-func (s *inferState) trial() int {
+// back to: the trail's mark and how many variables there were.
+func (s *inferState) trial() (trail, vars int) {
 	s.probing++
-	return s.mark()
+	return s.mark(), len(s.vars)
 }
 
-// endTrial takes back every change since mark, and ends the trial.
-func (s *inferState) endTrial(mark int) {
-	s.undoTo(mark)
+// endTrial takes back every change since trail, drops the variables the
+// trial made, and ends the trial. Nothing outlives a trial that could name
+// them: its bindings are on the trail, and a trial spreads no watchers.
+func (s *inferState) endTrial(trail, vars int) {
+	s.undoTo(trail)
+	s.dropVars(vars)
 	s.probing--
+}
+
+// dropVars forgets the variables made since there were vars, once what made
+// them is taken back: only the trail named them.
+func (s *inferState) dropVars(vars int) {
+	clear(s.vars[vars:])
+	s.vars = s.vars[:vars]
 }
 
 func (s *inferState) commit(c *choice, function *machine.RegisteredFunction) error {
@@ -116,7 +127,8 @@ func (s *inferState) offer(c *choice, functions []*machine.RegisteredFunction) e
 // narrowChoice drops the candidates that no longer fit, taking the last one
 // standing. What the kinds already rule out is dropped without a trial, and
 // a last candidate is taken without one: if it does not fit after all, what
-// it changed is taken back, and nothing fits.
+// it changed is taken back — its bindings, what they queued and the
+// variables it made — and nothing fits.
 func (s *inferState) narrowChoice(c *choice) error {
 	open := kept(c.open, func(function *machine.RegisteredFunction) bool { return s.mayFit(c, function) })
 	if len(open) > 1 {
@@ -126,9 +138,11 @@ func (s *inferState) narrowChoice(c *choice) error {
 	case len(open) == 0:
 		return noOverloadError(c.node, s, c.args)
 	case len(open) == 1:
-		mark := s.mark()
+		mark, vars := s.mark(), len(s.vars)
 		if s.commit(c, open[0]) != nil {
 			s.undoTo(mark)
+			s.dropQueue()
+			s.dropVars(vars)
 			return noOverloadError(c.node, s, c.args)
 		}
 	case len(open) < len(c.open):
@@ -188,22 +202,36 @@ func kept[T any](items []T, keep func(T) bool) []T {
 // every deferred rule that can run, until nothing changes.
 func (s *inferState) propagate() error {
 	for {
-		for len(s.queue) > 0 {
-			c := s.queue[0]
-			s.queue = s.queue[1:]
+		// Walked by index, narrowing may queue more behind it; emptied after,
+		// so the array is the next walk's and holds no choice it walked.
+		for next := 0; next < len(s.queue); {
+			c := s.queue[next]
+			next++
 			c.queued = false
 			if c.open == nil {
 				continue
 			}
 			if err := s.narrowChoice(c); err != nil {
+				s.dropQueue()
 				return err
 			}
 		}
+		s.dropQueue()
 		ran, err := s.runDeferred()
 		if err != nil || !ran && len(s.queue) == 0 {
 			return err
 		}
 	}
+}
+
+// dropQueue empties the queue, unmarking what it held: what a failure left
+// there was queued by changes about to be taken back.
+func (s *inferState) dropQueue() {
+	for _, c := range s.queue {
+		c.queued = false
+	}
+	clear(s.queue)
+	s.queue = s.queue[:0]
 }
 
 func (s *inferState) runDeferred() (bool, error) {
@@ -270,12 +298,24 @@ func (s *inferState) decide() (bool, error) {
 		if !unique {
 			continue
 		}
-		mark := s.mark()
-		if err := s.commit(c, best); err == nil && s.propagate() == nil {
+		mark, vars := s.mark(), len(s.vars)
+		err := s.commit(c, best)
+		if err == nil {
+			err = s.propagate()
+		}
+		if err == nil {
 			return true, nil
 		}
 		s.undoTo(mark)
-		s.setOpen(c, kept(c.open, func(f *machine.RegisteredFunction) bool { return f != best }))
+		s.dropQueue()
+		s.dropVars(vars)
+		rest := kept(c.open, func(f *machine.RegisteredFunction) bool { return f != best })
+		if len(rest) == 0 {
+			// The last candidate failed: why it did is the program's error,
+			// not an ambiguity among none.
+			return false, err
+		}
+		s.setOpen(c, rest)
 		return true, nil
 	}
 	if first == nil {
@@ -288,7 +328,7 @@ func (s *inferState) decide() (bool, error) {
 // the same.
 func (s *inferState) cheapest(c *choice) (*machine.RegisteredFunction, bool) {
 	var best *machine.RegisteredFunction
-	bestCost, unique := 0, false
+	bestCost, unique := int64(0), false
 	for _, function := range c.open {
 		cost := s.cost(c, function)
 		switch {
@@ -303,14 +343,15 @@ func (s *inferState) cheapest(c *choice) (*machine.RegisteredFunction, bool) {
 
 // cost is what taking a candidate costs: every type it leaves open, every
 // literal it reads as another kind, a promotion, then the types it leaves
-// the call.
-func (s *inferState) cost(c *choice, function *machine.RegisteredFunction) int {
+// the call. It is an int64 whatever the platform's int: two open types are
+// past 2^31, and one source must type alike on every machine.
+func (s *inferState) cost(c *choice, function *machine.RegisteredFunction) int64 {
 	defer s.endTrial(s.trial())
 	before := s.converted
 	if s.apply(c, function) != nil {
-		return int(^uint(0) >> 1)
+		return math.MaxInt64
 	}
-	cost := (s.converted-before)*literalPenalty + s.scoreTerm(c.result)
+	cost := int64(s.converted-before)*literalPenalty + s.scoreTerm(c.result)
 	if isMixedNumeric(function.Params) {
 		cost += mixedPenalty
 	}
@@ -367,7 +408,7 @@ func isMixedNumeric(params []machine.Type) bool {
 // implicitScores is what a type of each kind costs when candidates are
 // ranked; a kind not listed costs 100, a container its element's plus 2 and
 // a type still open openPenalty.
-var implicitScores = map[machine.Kind]int{
+var implicitScores = map[machine.Kind]int64{
 	machine.IntKind:   0,
 	machine.BoolKind:  1,
 	machine.FloatKind: 10,
@@ -385,7 +426,7 @@ var implicitScores = map[machine.Kind]int{
 	machine.DurationKind: 20,
 }
 
-func (s *inferState) scoreTerm(term typeTerm) int {
+func (s *inferState) scoreTerm(term typeTerm) int64 {
 	term = s.deref(term)
 	switch {
 	case term.kind == machine.VarKind:

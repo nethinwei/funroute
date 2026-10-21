@@ -147,10 +147,14 @@ func (f *frame) resultTypeError(function *RegisteredFunction, value Value, typ T
 // prefetchedAt is small enough to inline, so the common case — no batch — is
 // one nil check on the call path.
 func (f *frame) prefetchedAt(call int) (Prefetched, bool) {
-	if f.prefetched == nil || !f.prefetched[call].ready {
+	if f.prefetched == nil {
 		return Prefetched{}, false
 	}
-	return f.prefetched[call], true
+	slot := f.runtime.batch.slots[call]
+	if slot < 0 || !f.prefetched[slot].ready {
+		return Prefetched{}, false
+	}
+	return f.prefetched[slot], true
 }
 
 // invokeBounded caps one call by the function's Timeout and, for a Detached
@@ -230,12 +234,21 @@ func keepsIdentity(err error) bool {
 }
 
 // callDetached runs the function on its own goroutine and stops waiting at the
-// deadline. The arguments are copied first: the stack window they live in is
-// reused once this returns, and the abandoned call may still be reading them.
+// deadline. The arguments are copied first, containers and all: the stack
+// window they live in is reused once this returns, the host may reuse the
+// memory of its own once the run does (docs/semantics.md S5), and the
+// abandoned call may still be reading either.
 func callDetached(ctx context.Context, function *RegisteredFunction, args []Value) (Value, error) {
-	owned := make([]Value, len(args))
-	copy(owned, args)
-	return detached(ctx, function, owned, callSafely)
+	return detached(ctx, function, ownedValues(args), callSafely)
+}
+
+// ownedValues is owned of each of values, in a slice of its own.
+func ownedValues(values []Value) []Value {
+	out := make([]Value, len(values))
+	for i, value := range values {
+		out[i] = owned(value)
+	}
+	return out
 }
 
 // detached makes call on its own goroutine and stops waiting when ctx is done;

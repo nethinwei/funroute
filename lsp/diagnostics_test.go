@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -130,4 +131,30 @@ func checkOneDiagnostic(t *testing.T, s *session, text, message string, want [4]
 		t.Errorf("%q: message = %q, want it to contain %q", text, diagnostic["message"], message)
 	}
 	checkRange(t, text, diagnostic["range"], want[0], want[1], want[2], want[3])
+}
+
+// A version parses and analyzes each text made of it once: the answer, a
+// failure too, is read again, and a new contract analyzes afresh.
+func TestADocumentReadsEachTextOnce(t *testing.T) {
+	t.Parallel()
+	s := newSession(t, standard(t), `{}`)
+	s.notify("funroute/setContract", contract("fee:int"))
+	s.open("file:///a.fr", "fee + 1")
+	doc := s.server.documents["file:///a.fr"]
+	first, _ := doc.parse("fee + 1")
+	if again, _ := doc.parse("fee + 1"); again != first {
+		t.Errorf("parsing %q again gives a new tree", "fee + 1")
+	}
+	_, failed := doc.parse("fee +")
+	if _, again := doc.parse("fee +"); failed == nil || !errors.Is(again, failed) {
+		t.Errorf("parsing %q again gives %v, want the first failure %v", "fee +", again, failed)
+	}
+	analysis, _ := doc.analyze("fee * 2", s.server.registry, s.server.contract)
+	if again, _ := doc.analyze("fee * 2", s.server.registry, s.server.contract); analysis == nil || again != analysis {
+		t.Errorf("analyzing %q again gives %p, want the first analysis %p", "fee * 2", again, analysis)
+	}
+	s.notify("funroute/setContract", contract("fee:float"))
+	if again, _ := doc.analyze("fee * 2", s.server.registry, s.server.contract); again == analysis {
+		t.Errorf("after a new contract %q is still the analysis of the old one", "fee * 2")
+	}
 }

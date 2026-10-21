@@ -44,6 +44,11 @@ func (d FunctionDescriptor) Variadic() bool { return d.f.Variadic }
 // Doc is a copy of what the host wrote about the function.
 func (d FunctionDescriptor) Doc() Doc { return cloneDoc(d.f.Doc) }
 
+// ShortCircuit reports a function whose call on a comprehension stops at
+// the item that decides it (Fold.Stops or First): the items after are
+// neither computed nor failing, which a reader of a rule should see.
+func (d FunctionDescriptor) ShortCircuit() bool { return d.f.ShortCircuit }
+
 type functionJSON struct {
 	Name      string `json:"name"`
 	Signature string `json:"signature"`
@@ -53,6 +58,8 @@ type functionJSON struct {
 	Wrap      string `json:"wrap,omitempty"`
 	Variadic  bool   `json:"variadic,omitempty"`
 	Doc       Doc    `json:"doc"`
+	// ShortCircuit is ShortCircuit's answer.
+	ShortCircuit bool `json:"short_circuit,omitempty"`
 }
 
 func (d FunctionDescriptor) MarshalJSON() ([]byte, error) {
@@ -210,14 +217,15 @@ func describeFunction(function *RegisteredFunction) FunctionDescriptor {
 		signature = "fallback(T,T,...)->T"
 	}
 	return FunctionDescriptor{functionJSON{
-		Name:      function.Name,
-		Signature: signature,
-		Params:    cloneTypes(function.Params),
-		Result:    function.Result,
-		Special:   function.special.String(),
-		Wrap:      function.special.wrap(),
-		Variadic:  variadic,
-		Doc:       cloneDoc(function.Doc),
+		Name:         function.Name,
+		Signature:    signature,
+		Params:       cloneTypes(function.Params),
+		Result:       function.Result,
+		Special:      function.special.String(),
+		Wrap:         function.special.wrap(),
+		Variadic:     variadic,
+		Doc:          cloneDoc(function.Doc),
+		ShortCircuit: function.Fold != nil && (function.Fold.Stops || function.Fold.First),
 	}}
 }
 

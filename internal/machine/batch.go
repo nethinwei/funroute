@@ -2,10 +2,10 @@ package machine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nethinwei/funroute/internal/kit"
@@ -20,8 +20,15 @@ import (
 // hoistable model call (see PrefetchSites) through the function's EvalBatch
 // with all requests' arguments at once, then runs each request's program with
 // those results already in hand. Calls the analysis cannot hoist, and
-// functions without EvalBatch, still run per request inside the program, so a
-// program behaves exactly as under Run — only faster.
+// functions without EvalBatch, still run per request inside the program.
+//
+// A program answers as under Run when the batched functions are pure and
+// read no more of a context than the first request's values: one engine call
+// serves the batch, so it is made once, under the first request's values,
+// and fails for all its requests if it fails. No request ends it for the
+// others — it is cancelled once none is waiting, and bounded by the latest
+// deadline among them — and each request waits no longer than its own
+// context (docs/semantics.md).
 type Batch struct {
 	runtime *Runtime
 	sites   []batchSite
@@ -31,7 +38,10 @@ type Batch struct {
 	pending  []*batchRequest
 	requests sync.Pool
 	timer    *time.Timer
-	closed   bool
+	// epoch counts the takes, so that a timer flushes only the requests it
+	// was set for (expire).
+	epoch  uint64
+	closed bool
 }
 
 // BatchOptions bounds a batch: it is flushed when MaxSize requests are waiting
@@ -44,8 +54,37 @@ type BatchOptions struct {
 type batchSite struct {
 	PrefetchSite
 	function *RegisteredFunction
-	// call is the call of the register form the site is.
-	call int
+}
+
+// batchPlan is the calls of a program a Batch hoists, found once when the
+// program loads: each site, and by call of the register form its slot among
+// the sites, -1 for a call no batch hoists. A request's answers are one slot
+// a site, not one a call. Empty for a program that calls no function with a
+// batch implementation.
+type batchPlan struct {
+	sites []batchSite
+	slots []int32
+}
+
+func planBatch(r *Runtime) batchPlan {
+	if !slices.ContainsFunc(r.functions, func(function *RegisteredFunction) bool { return function.EvalBatch != nil }) {
+		return batchPlan{}
+	}
+	plan := batchPlan{slots: slices.Repeat([]int32{-1}, len(r.reg.calls))}
+	callAt := make(map[int32]int, len(r.reg.calls))
+	for i, call := range r.reg.calls {
+		callAt[call.pc] = i
+	}
+	for _, site := range PrefetchSites(r.artifact) {
+		function := r.functions[site.Call]
+		call, found := callAt[int32(site.PC)]
+		if function.EvalBatch == nil || !found {
+			continue
+		}
+		plan.slots[call] = int32(len(plan.sites))
+		plan.sites = append(plan.sites, batchSite{PrefetchSite: site, function: function})
+	}
+	return plan
 }
 
 // batchRequest is one program run inside a batch. A request that someone is
@@ -56,17 +95,41 @@ type batchRequest struct {
 	args   []Value
 	done   chan batchResult
 	result batchResult
+	// state is whether the request is still waiting to be taken, taken by
+	// the batch that runs it, or abandoned by a Run whose context ended
+	// first: one the batch has not taken is never read.
+	state atomic.Int32
+	// run is the batch that takes the request, set before it is taken;
+	// stopped says the request no longer waits for it (stopWaiting).
+	run     *batchRun
+	stopped atomic.Bool
 	// typed says a codec produced args: typed by construction, with the slots
 	// the program never reads left empty (see Runtime.runTyped).
 	typed bool
 }
 
+const (
+	requestWaiting int32 = iota
+	requestTaken
+	requestAbandoned
+)
+
 func (r *batchRequest) finish(result batchResult) {
+	r.stopWaiting()
 	if r.done == nil {
 		r.result = result
 		return
 	}
 	r.done <- result
+}
+
+// stopWaiting is the request no longer waiting for the batch that took it:
+// answered, or its Run gave up. Either may come first, and the second does
+// nothing, so the batch's count goes down once a request.
+func (r *batchRequest) stopWaiting() {
+	if r.run != nil && r.stopped.CompareAndSwap(false, true) {
+		r.run.stop()
+	}
 }
 
 type batchResult struct {
@@ -83,14 +146,7 @@ func NewBatch(runtime *Runtime, options BatchOptions) *Batch {
 	if options.MaxWait <= 0 {
 		options.MaxWait = 2 * time.Millisecond
 	}
-	batch := &Batch{runtime: runtime, options: options}
-	for _, site := range PrefetchSites(runtime.artifact) {
-		function := runtime.functions[site.Call]
-		if function.EvalBatch != nil {
-			batch.sites = append(batch.sites, batchSite{PrefetchSite: site, function: function, call: runtime.callAt(site.PC)})
-		}
-	}
-	return batch
+	return &Batch{runtime: runtime, options: options, sites: runtime.batch.sites}
 }
 
 // Sites reports how many calls this batch hoists, so a host can see whether a
@@ -99,7 +155,7 @@ func (b *Batch) Sites() int { return len(b.sites) }
 
 // Run submits one request and blocks until its batch has run. It is safe to
 // call from many goroutines; that is the point. The hoisted engine calls run
-// under the earliest deadline in the batch, and each program under its own.
+// under the latest deadline in the batch, and each program under its own.
 func (b *Batch) Run(ctx context.Context, args []Value) (Value, error) {
 	// Only their number here: admit holds each to its type in the batch.
 	if err := b.runtime.checkKinds(args, true); err != nil {
@@ -117,6 +173,8 @@ func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, er
 	}
 	request := b.newRequest(ctx, args, typed)
 	if err := b.enqueue(request); err != nil {
+		// A closed batch never took it: it goes back as it came.
+		b.releaseRequest(request)
 		return Value{}, err
 	}
 	select {
@@ -125,8 +183,14 @@ func (b *Batch) submit(ctx context.Context, args []Value, typed bool) (Value, er
 		b.releaseRequest(request)
 		return result.value, result.err
 	case <-ctx.Done():
-		// The batch still holds the request and will answer it: it is not
-		// given back.
+		// Not taken yet, the request is dropped, and the batch never reads
+		// its arguments. Taken, its run reads them still: Run waits for it,
+		// so the caller may reuse them once Run returns.
+		if !request.state.CompareAndSwap(requestWaiting, requestAbandoned) {
+			request.stopWaiting()
+			<-request.done
+			b.releaseRequest(request)
+		}
 		return Value{}, kit.Classify(ErrDeadline, "", ctx.Err())
 	}
 }
@@ -141,12 +205,14 @@ func (b *Batch) newRequest(ctx context.Context, args []Value, typed bool) *batch
 		request = &batchRequest{done: make(chan batchResult, 1)}
 	}
 	request.ctx, request.args, request.typed = ctx, args, typed
+	request.state.Store(requestWaiting)
+	request.stopped.Store(false)
 	return request
 }
 
 // releaseRequest gives an answered request back: its channel is empty.
 func (b *Batch) releaseRequest(request *batchRequest) {
-	request.ctx, request.args, request.result = nil, nil, batchResult{}
+	request.ctx, request.args, request.result, request.run = nil, nil, batchResult{}, nil
 	b.requests.Put(request)
 }
 
@@ -154,7 +220,7 @@ func (b *Batch) enqueue(request *batchRequest) error {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
-		return errors.New("batch is closed")
+		return kit.Errorf(ErrContract, "batch is closed")
 	}
 	b.pending = append(b.pending, request)
 	if len(b.pending) >= b.options.MaxSize {
@@ -164,7 +230,8 @@ func (b *Batch) enqueue(request *batchRequest) error {
 		return nil
 	}
 	if len(b.pending) == 1 {
-		b.timer = time.AfterFunc(b.options.MaxWait, b.flush)
+		epoch := b.epoch
+		b.timer = time.AfterFunc(b.options.MaxWait, func() { b.expire(epoch) })
 	}
 	b.mu.Unlock()
 	return nil
@@ -174,11 +241,27 @@ func (b *Batch) enqueue(request *batchRequest) error {
 func (b *Batch) take() []*batchRequest {
 	requests := b.pending
 	b.pending = nil
+	b.epoch++
 	if b.timer != nil {
 		b.timer.Stop()
 		b.timer = nil
 	}
 	return requests
+}
+
+// expire is the timer's flush of the requests pending when it was set. A
+// timer that fired while a full batch took them was stopped too late: the
+// requests that came after are left to their own timer, not flushed before
+// their MaxWait.
+func (b *Batch) expire(epoch uint64) {
+	b.mu.Lock()
+	if b.epoch != epoch {
+		b.mu.Unlock()
+		return
+	}
+	requests := b.take()
+	b.mu.Unlock()
+	b.execute(requests)
 }
 
 func (b *Batch) flush() {
@@ -198,17 +281,60 @@ func (b *Batch) Close() {
 	b.flush()
 }
 
-// execute is one batch from the queue. Its requests carry contexts of their
-// own, so the engine calls run under the earliest of their deadlines, which
-// has to be a context of its own.
+// execute is one batch from the queue: the requests it can still take.
+// They carry contexts of their own, so the engine calls run under one made
+// for the batch: the first request's values, the latest deadline among the
+// requests — none when one has none — and a cancellation once every request
+// has stopped waiting (batchRun), so that none fails for another's sake.
 func (b *Batch) execute(requests []*batchRequest) {
-	active := b.rejectCanceled(requests)
+	run := &batchRun{}
+	ctx, cancel := context.WithCancel(context.WithoutCancel(requests[0].ctx))
+	run.cancel = cancel
+	defer cancel()
+	run.waiting.Store(int64(len(requests)))
+	active := b.rejectCanceled(b.taken(requests, run))
 	if len(active) == 0 {
 		return
 	}
-	ctx, cancel := earliestDeadline(active)
-	defer cancel()
+	if latest, bounded := latestDeadline(active); bounded {
+		var stop context.CancelFunc
+		ctx, stop = context.WithDeadline(ctx, latest)
+		defer stop()
+	}
 	b.executeUnder(ctx, active)
+}
+
+// batchRun counts the requests of one batch still waiting for it: each
+// whose context ends stops waiting — a Run that abandons it, or one that
+// finds it taken — and so does each the batch answers, one it refuses before
+// the engine calls among them; when none is left the engine calls are
+// cancelled. A request whose context never ends waits until it is answered.
+type batchRun struct {
+	waiting atomic.Int64
+	cancel  context.CancelFunc
+}
+
+func (r *batchRun) stop() {
+	if r.waiting.Add(-1) == 0 {
+		r.cancel()
+	}
+}
+
+// taken is the requests the batch takes: those no Run has abandoned, which
+// stop waiting and go back to the pool unread. Each learns its run first,
+// so a Run that finds it taken has one to tell.
+func (b *Batch) taken(requests []*batchRequest, run *batchRun) []*batchRequest {
+	kept := requests[:0]
+	for _, request := range requests {
+		request.run = run
+		if request.state.CompareAndSwap(requestWaiting, requestTaken) {
+			kept = append(kept, request)
+		} else {
+			run.stop()
+			b.releaseRequest(request)
+		}
+	}
+	return kept
 }
 
 // executeShared is one batch whose requests all carry ctx — a synchronous
@@ -224,21 +350,23 @@ func (b *Batch) executeShared(ctx context.Context, requests []*batchRequest) {
 // would refuse is answered first and left out: the engine sees only what a
 // run of its own would have handed it.
 func (b *Batch) executeUnder(ctx context.Context, active []*batchRequest) {
-	active = b.admitted(active)
-	// Every request's answers in one allocation: a share each, one slot
-	// for each call of the program.
-	calls := len(b.runtime.reg.calls)
-	var answers []Prefetched
-	if len(b.sites) > 0 {
-		answers = make([]Prefetched, len(active)*calls)
+	if active = b.admitted(active); len(active) == 0 {
+		return
 	}
-	for _, site := range b.sites {
-		b.prefetch(ctx, site, active, answers)
+	// Every request's answers in one allocation: a share each, one slot
+	// for each site the batch hoists.
+	sites := len(b.sites)
+	var answers []Prefetched
+	if sites > 0 {
+		answers = make([]Prefetched, len(active)*sites)
+	}
+	for slot, site := range b.sites {
+		b.prefetch(ctx, slot, site, active, answers)
 	}
 	for i, request := range active {
 		var prefetched []Prefetched
 		if answers != nil {
-			prefetched = answers[i*calls : (i+1)*calls]
+			prefetched = answers[i*sites : (i+1)*sites]
 		}
 		request.finish(b.run(request, prefetched))
 	}
@@ -279,42 +407,25 @@ func (b *Batch) rejectCanceled(requests []*batchRequest) []*batchRequest {
 	return active
 }
 
-// earliestDeadline is the budget a shared engine call runs under: the tightest
-// deadline among the batch, or none when no request has one.
-func earliestDeadline(requests []*batchRequest) (context.Context, context.CancelFunc) {
-	var earliest time.Time
+// latestDeadline is the latest deadline among the requests, and false when
+// one has none.
+func latestDeadline(requests []*batchRequest) (time.Time, bool) {
+	var latest time.Time
 	for _, request := range requests {
-		if deadline, ok := request.ctx.Deadline(); ok && (earliest.IsZero() || deadline.Before(earliest)) {
-			earliest = deadline
+		deadline, ok := request.ctx.Deadline()
+		if !ok {
+			return time.Time{}, false
+		}
+		if deadline.After(latest) {
+			latest = deadline
 		}
 	}
-	var ctx context.Context
-	var cancel context.CancelFunc
-	if earliest.IsZero() {
-		ctx, cancel = context.WithCancel(context.Background())
-	} else {
-		ctx, cancel = context.WithDeadline(context.Background(), earliest)
-	}
-	// Requests that share a context — a Done channel — are watched once.
-	stops := make([]func() bool, 0, len(requests))
-	watched := make([]<-chan struct{}, 0, len(requests))
-	for _, request := range requests {
-		if done := request.ctx.Done(); done != nil && !slices.Contains(watched, done) {
-			watched = append(watched, done)
-			stops = append(stops, context.AfterFunc(request.ctx, cancel))
-		}
-	}
-	return ctx, func() {
-		for _, stop := range stops {
-			stop()
-		}
-		cancel()
-	}
+	return latest, true
 }
 
 // prefetch runs one hoisted call for the whole batch and files each request's
 // share of the answer in its slot for the call.
-func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchRequest, answers []Prefetched) {
+func (b *Batch) prefetch(ctx context.Context, slot int, site batchSite, requests []*batchRequest, answers []Prefetched) {
 	calls := make([][]Value, len(requests))
 	operands := make([]Value, len(requests)*len(site.Operands))
 	for i, request := range requests {
@@ -326,14 +437,14 @@ func (b *Batch) prefetch(ctx context.Context, site batchSite, requests []*batchR
 	} else if len(results) != len(requests) {
 		err = fmt.Errorf("batch returned %d results for %d requests", len(results), len(requests))
 	}
-	stride := len(b.runtime.reg.calls)
+	stride := len(b.sites)
 	for i := range requests {
-		slot := &answers[i*stride+site.call]
+		answer := &answers[i*stride+slot]
 		if err != nil {
-			*slot = Prefetched{Err: err, ready: true} // the call site adds the function's name
+			*answer = Prefetched{Err: err, ready: true} // the call site adds the function's name
 			continue
 		}
-		*slot = Prefetched{Value: results[i], ready: true}
+		*answer = Prefetched{Value: results[i], ready: true}
 	}
 }
 
@@ -343,6 +454,10 @@ func invokeBatch(ctx context.Context, function *RegisteredFunction, calls [][]Va
 	var results []Value
 	var err error
 	if function.Doc.Detached {
+		// Each request's own, as a single detached call's are (callDetached).
+		for i, call := range calls {
+			calls[i] = ownedValues(call)
+		}
 		results, err = detached(ctx, function, calls, callBatchSafely)
 	} else {
 		results, err = callBatchSafely(ctx, function, calls)

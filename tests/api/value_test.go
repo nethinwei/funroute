@@ -442,10 +442,40 @@ func TestRecordsMatchByNameNotByCount(t *testing.T) {
 	if err != nil || wide.Amount != 7 || wide.Channel != "" {
 		t.Fatalf("FromValue[Wide] = %+v, %v; want {Amount:7 Channel:}", wide, err)
 	}
+	// A host's struct is matched the same way: its tagged fields the
+	// contract does not declare are left out, as Load leaves them.
+	type Order struct {
+		Note   string `funroute:"note"`
+		Amount int64  `funroute:"amount"`
+	}
+	value, err = runtime.Run(t.Context(), map[string]any{"order": Order{Note: "x", Amount: 8}})
+	if amount, _ := funroute.FromValue[Wide](value); err != nil || amount.Amount != 8 {
+		t.Fatalf("Run(order as a wider struct) = %v, %v; want amount 8", value.Any(), err)
+	}
 	// A field the contract does ask for is still required.
 	_, err = runtime.Run(t.Context(), map[string]any{"order": map[string]any{"extra": 9}})
 	if err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("Run(order without amount) error = %v, want \"missing\"", err)
+	}
+}
+
+// FromValue into an interface gives a record's Go form, a map, never what
+// holds it inside a Value; a pointer is no struct to fill, and is refused
+// rather than a panic.
+func TestFromValueOfARecordTakesAnInterfaceNotAPointer(t *testing.T) {
+	t.Parallel()
+	type Order struct {
+		Amount int64 `funroute:"amount"`
+	}
+	value, err := funroute.ToValue(Order{Amount: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if form, err := funroute.FromValue[any](value); err != nil || !reflect.DeepEqual(form, map[string]any{"amount": int64(7)}) {
+		t.Fatalf("FromValue[any] = %#v, %v; want map[amount:7]", form, err)
+	}
+	if _, err := funroute.FromValue[*Order](value); err == nil {
+		t.Fatal("FromValue[*Order] = nil error, want the pointer refused")
 	}
 }
 
@@ -734,5 +764,23 @@ func TestASliceSharesTheArraysBacking(t *testing.T) {
 	}
 	if _, ok := value.Slice(3, 5); ok {
 		t.Fatal("Slice(3, 5) of four items = ok, want false")
+	}
+}
+
+// A nil slice or map a host hands in is an empty container: Any gives the
+// empty slice or map, and both it and the value's own JSON write [] or {},
+// never null.
+func TestAnEmptyContainerIsNeverNull(t *testing.T) {
+	t.Parallel()
+	for _, input := range []any{[]float64(nil), []int64(nil), []string(nil), map[string]int64(nil)} {
+		value, err := funroute.ToValue(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fromAny, _ := json.Marshal(value.Any())
+		own, _ := json.Marshal(value)
+		if string(fromAny) == "null" || string(fromAny) != string(own) {
+			t.Errorf("ToValue(%T(nil)): JSON of Any = %s, its own JSON = %s; want the same, not null", input, fromAny, own)
+		}
 	}
 }

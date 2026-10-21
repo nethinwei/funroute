@@ -91,6 +91,10 @@ func TestAHostDrivesARuleFromDataToResult(t *testing.T) {
 	if _, err := funroute.DecodeArgs([]byte(`{} {}`)); !errors.Is(err, funroute.ErrContract) {
 		t.Fatalf("DecodeArgs(`{} {}`) error = %v, want ErrContract: trailing data must be refused", err)
 	}
+	// null is no arguments, as nothing at all is: a map the host can fill.
+	if none, err := funroute.DecodeArgs([]byte(" null ")); err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("DecodeArgs(`null`) = %#v, %v, want an empty map", none, err)
+	}
 	runtime, err := funroute.Instantiate(artifact, registry)
 	if err != nil {
 		t.Fatal(err)

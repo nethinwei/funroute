@@ -41,12 +41,26 @@ type document struct {
 
 	// What the language made of the text, worked out on first use: every
 	// request on one version reads the same answer. A change is a new
-	// document; a new contract clears the analysis (Server.setContract).
+	// document; a new contract clears the analyses (Server.setContract).
 	lexemes     []syntax.Lexeme
 	lexed       bool
 	analysis    *compile.Analysis
 	analysisErr error
 	analyzed    bool
+	// The same for the texts completion makes of this one, each repaired at
+	// the cursor: what parsing and analyzing each of them gave.
+	parses   map[string]parseResult
+	analyses map[string]analysisResult
+}
+
+type parseResult struct {
+	tree syntax.Expr
+	err  error
+}
+
+type analysisResult struct {
+	analysis *compile.Analysis
+	err      error
 }
 
 // wideChars is a line's characters of more than one byte, in order: where
@@ -134,7 +148,10 @@ func (d *document) offset(position Position, encoding string) int {
 		return len(d.text)
 	}
 	start, end := d.lines[line], d.ends[line]
-	column := max(position.Character, 0)
+	// A column past the line's bytes is past its end in any encoding — a
+	// character is never fewer bytes than UTF-16 units — and held there
+	// before it is added, so a huge one cannot wrap.
+	column := min(max(position.Character, 0), end-start)
 	w := d.wide[line]
 	if w == nil {
 		return min(start+column, end)

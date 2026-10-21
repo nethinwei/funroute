@@ -10,7 +10,7 @@ registry.DeclareMoney(funroute.MoneySpec{Currencies: std.ISO4217()})
 
 整套设计只有三条规则：
 
-1. **币种是值的属性，不是类型的一部分**。`money` 就是一个类型，和 Go 的 `funroute.Money{currency, minor}` 是同一个东西；两笔金额币种对不对，在它们相遇的运算上检查。
+1. **币种是值的属性，不是类型的一部分**。`money` 就是一个类型，和 Go 的 `funroute.Money{currency, minor}` 是同一个东西；两笔金额币种对不对，在它们相遇的运算上检查。这套代数（谁与谁相遇、相等何时有答案）写在[语义宪章 S1](semantics.md#s1-金额的代数)。
 2. **舍入永远写出来**。没有注册表级的默认舍入方式：会落到两个最小单位之间的运算，要么写在 `round(…, @mode)` 里，要么当场写出舍入方式。
 3. **汇率就是参数**。换汇只能写在 `using(汇率…, 主体)` 里，汇率要么写在规则里，要么是契约声明的参数；没有隐藏的运行时汇率表。
 
@@ -31,7 +31,7 @@ registry.DeclareMoney(funroute.MoneySpec{Currencies: std.ISO4217()})
 - **`%` 紧贴数字就是比例**：`2.9%`、`10%-3%`（即 `10% - 3%`）。取模要在 `%` 前留空格：`10 % 3`。`10%3` 是语法错误，报错会说明原因，不会悄悄读成取模。
 - **字面量 `0`** 可以当金额（`amount > 0`、`if(x, fee, 0)`），也可以当比例（`fee > 0`、`-fee`）；别的整数不行。
 
-**不带币种的零**：`0`、`sum([])`、Go 的 `funroute.Money{}` 都是不带币种的零，它与任何币种相加、比较都成立，JSON 写作 `0`。不带币种却不是零的金额不存在（`ErrCurrency`）。
+**不带币种的零**：`0`、`sum([])`、Go 的 `funroute.Money{}` 都是不带币种的零，它与任何币种相加、比较都成立，JSON 写作 `0`。不带币种却不是零的金额不存在（`ErrCurrency`）。只有它是多态的：`USD 0` 与 `EUR 0` 是两个币种各自的零，`USD 0 == EUR 0` 是 `ErrCurrency`，`0 == EUR 0` 是 `true`。所以"能相遇"不传递，相等也不是全序关系。
 
 **金额与普通计算按类型区分，逐个运算判定，没有模式。** 一个运算的操作数里有 `money`，它就按金额规则执行，否则一切照旧，同一条规则里两者可以并存：
 
@@ -81,7 +81,7 @@ mul(mul(USD 0.05, 50%, @half_up), 50%, @half_up)  // USD 0.02：每一步各舍�
 round(amount * (interchange + scheme + markup), @half_even)   // 三段比例先相加，整体只舍入一次
 ```
 
-- `round` 里没有这类运算是编译错误（`round(amount, @up)` 什么也没舍入）；嵌套时每一层只管自己的：`round(round(m * 50%, @up), @down)` 的外层同样是编译错误。
+- `round` 拿到的值里没有这类运算的结果是编译错误（`round(amount, @up)` 什么也没舍入；`round(if(amount * 2.9% > cap, amount, cap), @up)` 里的乘比例只拿去比较，也没到 `round` 手里）；嵌套时每一层只管自己的：`round(round(m * 50%, @up), @down)` 的外层同样是编译错误。
 - **精确值不出 `round`**：`round` 里的中间金额可以相加减、取负、乘整数、比较、进 `if`/`switch`/`let`/`fallback` 的分支，但不能进数组、字典、记录、推导式，不能交给宿主函数或 `minor`、`allocate`，也不能直接作结果——编译错误会指到那个位置。所以 `round` 外面看到的金额永远是整数个最小单位。
 - `round_to(m, 粒度, @mode)`、std 的 `avg(xs, @mode)`、`median(xs, @mode)` 本身就是一次舍入，只有写出舍入方式的形式。
 - 方式有 `half_even`、`half_up`、`half_down`、`down`、`up`、`ceiling`、`floor`，是注册表提供的枚举 `rounding` 的成员，所以契约不能再声明叫 `rounding` 的枚举。
@@ -100,7 +100,7 @@ using(market, using(fx(EUR, USD) * 103.5%, round(amount -> USD, @half_even)))   
 
 - **汇率是参数**。`using(报价, …, 主体)` 的每个报价是一个 `fxrate` 或一个 `array<fxrate>`。宿主的行情、清算价、协议价，就是契约里声明的参数（Go 传 `[]funroute.FxRate`，零拷贝）；要几套汇率就声明几个参数，每个 `using` 只用它列出的那些。
 - **`using` 永远隔离**：主体只用它自己列出的报价，外层 `using` 不参与，所以规则换汇用的是哪条汇率，看 `using` 本身就知道。要沿用外层的某个汇率就用 `fx(基准, 报价)` 读出来写进去：报价在进入主体之前、在 `using` 外面求值，所以 `fx` 读的是外层。
-- **单跳**：每个 `->` 只用这一对货币的汇率：这个方向的报价，或者反方向报价的倒数；同一货币对出现多次时后写的为准。它从不自己找中转货币，要经过别的货币就连写：`amount -> USD -> EUR`。`->` 左结合，每一跳只用自己那一对货币的汇率；和 `round` 里的其他运算一样，中间的 USD 保持精确，不落到最小单位，`round` 在最后只舍入一次，结果与在 Go 里用 `FxRate.Chain` 把交叉汇率乘好再换一次相同。清算里中间币种是一笔要各自入账的真实金额时，就一跳一跳写出舍入方式：`convert(convert(amount, USD, @half_even), EUR, @half_even)`。
+- **单跳**：每个 `->` 只用这一对货币的汇率：这个方向的报价，或者反方向报价的倒数；同一货币对出现多次时后写的为准。它从不自己找中转货币，要经过别的货币就连写：`amount -> USD -> EUR`。`->` 左结合，每一跳只用自己那一对货币的汇率；和 `round` 里的其他运算一样，中间的 USD 保持精确，不落到最小单位，`round` 在最后只舍入一次；起点与终点币种不同时，结果与在 Go 里用 `FxRate.Chain` 把交叉汇率乘好再换一次相同。串回起点（`amount -> USD -> EUR` 而 amount 是欧元）时规则照各跳汇率的乘积换，点差照算；`Chain` 只在乘积恰为 1 时给出同币种汇率，否则是 `ErrArithmetic`。清算里中间币种是一笔要各自入账的真实金额时，就一跳一跳写出舍入方式：`convert(convert(amount, USD, @half_even), EUR, @half_even)`。
 
 ```text
 using(150.5 JPY / USD, 0.5 EUR / JPY, round(USD 0.01 -> JPY -> EUR, @half_even))   // EUR 0.75：精确值 0.7525 欧元，只舍入一次
@@ -121,7 +121,7 @@ using(150.5 JPY / USD, 0.5 EUR / JPY, convert(convert(USD 0.01, JPY, @half_even)
 | 6 | USDT、USDC（按业务精度声明） | 0.000001 | 9,223,372,036,854.775807（约 9.2×10¹²） |
 | 8 | BTC、ETH（按业务精度声明） | 0.00000001 | 92,233,720,368.54775807（约 9.2×10¹⁰） |
 
-比例、汇率与 `round` 里的精确金额都是**约分后的 int64 分子/分母**：`1/3`、报价的倒数都精确，运算从不分配内存。代价是精度上限：分子、分母各自要放得进 int64（约 18 位数字），比例的小数文本至多 18 位小数。放不下就是 `ErrArithmetic`，从不悄悄舍入；中间积用 128 位计算，只有结果放不下才报错。
+比例、汇率与 `round` 里的精确金额都是**约分后的 int64 分子/分母**：`1/3`、报价的倒数都精确，运算从不分配内存。代价是精度上限：分子、分母各自要放得进 int64（约 18 位数字），比例的小数文本至多 18 位小数。放不下就是 `ErrArithmetic`，从不悄悄舍入；中间积用 128 位计算，放不下的只能是结果，或换汇时约分后的分母（汇率的分母乘上两种币种小数位之差的 10 的幂，要放得进 uint64：18 位小数的汇率从 8 位小数的币种换成 0 位的就放不下）。所以当场舍入与 `round` 里的同一步值域不同：`mul(m, 2.9%, @half_even)` 只要舍入后的金额放得下就有答案，`round(m * 2.9%, @half_even)` 还要精确值 `m × 29/1000` 的分子放得进 int64——金额接近 int64 上限时，前者有答案、后者是 `ErrArithmetic`。
 
 | 情况 | 结果 | 精确吗 | 何时报错 |
 |---|---|---|---|
@@ -141,7 +141,7 @@ using(150.5 JPY / USD, 0.5 EUR / JPY, convert(convert(USD 0.01, JPY, @half_even)
 
 ## 币种检查与函数
 
-**币种检查**：在运算发生的地方检查——加减、比较、`==`、`in`、金额相除、换汇、标准包的聚合（同一数组里的金额必须同币种）。两边都是写死的币种时，常量折叠在编译期就报出来（`USD 1 + EUR 1`）；其余在运行时比对，币种不一致、币种未声明都是 `ErrCurrency`，`fallback` 不接它。参数的币种没声明同时也是 `ErrContract`；宿主函数返回的金额币种没声明也是 `ErrCurrency`。比较两个 `currency` 值本身就是在问是否同一币种，永远有答案。
+**币种检查**：在运算发生的地方检查——加减、比较、金额相除、换汇、聚合与按键排序（同一数组里的金额必须同币种），以及所有相等判断：`==`、`!=`、`in`、`switch` 的值匹配、`index_of`、`unique`、`intersect`、`except`。容器按类型里的位置检查（一条字段路径一个位置，数组的元素、字典的值各算一个位置），所以答案与元素的顺序无关：`USD 1 in [EUR 1, USD 1]` 是 `ErrCurrency`。两边都是写死的币种时，常量折叠在编译期就报出来（`USD 1 + EUR 1`）；其余在运行时比对，币种不一致、币种未声明都是 `ErrCurrency`，`fallback` 不接它。参数的币种没声明同时也是 `ErrContract`；宿主函数返回的金额币种没声明也是 `ErrCurrency`。比较两个 `currency` 值本身就是在问是否同一币种，永远有答案。
 
 **函数**：
 
@@ -150,6 +150,6 @@ using(150.5 JPY / USD, 0.5 EUR / JPY, convert(convert(USD 0.01, JPY, @half_even)
 - `allocate(m, [权重])` 与 `allocate(m, n)` 分摊且一分不丢；策略是注册表提供的枚举 `allocation` 的成员，契约不能再用这个名字。
 - `prorate(m, part, whole)` 按比例取金额（part 与 whole 可以是整数，也可以是另一币种的两笔同币种金额）；`round_to(m, 粒度, @mode)` 做现金舍入。
 - `implied(到账额, 支付额)` 得成交汇率，`fx(基准, 报价)` 读出当前 `using` 里的汇率，`ratio(字符串)` 把十进制文本或分数精确读成比例（读不出是 `ErrArithmetic`）。
-- 标准包的 `sum`/`min`/`max`/`avg`/`median`/`sort`/`cumsum`/`sort_by`/`top_k` 等在声明了币种后也接受金额。
+- 声明了币种后，内核的 `sort_by`/`sort_by_desc`/`top_k`/`bottom_k` 接受金额键，`unique`/`intersect`/`except`/`index_of` 接受金额；标准包的 `sum`/`min`/`max`/`avg`/`median`/`sort`/`cumsum` 等也接受金额。
 
 **宿主那边**：Go 用 `funroute.Money`、`funroute.Ratio`、`funroute.FxRate`、`funroute.Currency`，由币种表构造（见[在 Go 里算钱](go.md#在-go-里算钱)），`[]funroute.Money`、`[]funroute.FxRate` 与规则之间零拷贝；JSON 输入认 `"USD 1.70"` 与 `{"currency": "USD", "minor": 170}` 两种，汇率是 `{"base": "USD", "quote": "JPY", "rate": "150.25"}`（`rate` 也可以是分数 `"1/3"`）；金额、比例与汇率里的数只收字符串、`json.Number` 与整数，float64 一律拒绝——解码成 `any` 的 JSON 数已经被舍入过，`funroute.DecodeArgs` 把数保留为原文；`Registry.EncodeJSON` 把金额写成 `"USD 1.70"`。

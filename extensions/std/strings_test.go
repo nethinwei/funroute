@@ -1,6 +1,7 @@
 package std_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/nethinwei/funroute"
@@ -83,5 +84,22 @@ func TestPaddingWidthIsBounded(t *testing.T) {
 	}
 	if _, err := run(t, `pad_left("1", width, "0")`, map[string]any{"width": 4_000_000_000}, width); err == nil {
 		t.Fatal("pad_left to a run-time width of 4000000000 succeeded, want it refused")
+	}
+}
+
+// repeat is bounded by what it builds, 0 to 10000 characters: an empty
+// text repeated any number of times is empty, and a count that would build
+// more is refused, however it overflows.
+func TestRepeatIsBoundedByWhatItBuilds(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]any{`repeat("", 10001)`: "", `repeat("", 9223372036854775807)`: "", `len(repeat("é", 10000))`: int64(10_000), `repeat("ab", 0)`: ""} {
+		if got, err := run(t, source, nil); err != nil || got != want {
+			t.Errorf("%s = %v, %v; want %v", source, got, err, want)
+		}
+	}
+	for _, source := range []string{`repeat("ab", 5001)`, `repeat("a", 0 - 1)`, `repeat("ab", 9223372036854775807)`} {
+		if _, err := run(t, source, nil); !errors.Is(err, funroute.ErrArithmetic) {
+			t.Errorf("%s error = %v, want ErrArithmetic", source, err)
+		}
 	}
 }

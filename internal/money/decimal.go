@@ -1,9 +1,11 @@
 package money
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -62,19 +64,28 @@ func accumulateDigits(total uint64, digits string, limit uint64) (uint64, error)
 // digits is "1.70". trim drops trailing zeros — a ratio reads 0.029 — while
 // money keeps its currency's places.
 func FormatDecimal(scaled int64, digits int, trim bool) string {
-	sign := ""
+	var figures [20]byte
+	text := strconv.AppendUint(figures[:0], magnitude(scaled), 10)
+	// Written into one buffer, the sign, the zeros that give it digits+1
+	// figures, the figures, and the point put in last: a single string.
+	var buf [48]byte
+	out := buf[:0]
 	if scaled < 0 {
-		sign = "-"
+		out = append(out, '-')
 	}
-	text := fmt.Sprintf("%0*d", digits+1, magnitude(scaled))
-	whole, fraction := text[:len(text)-digits], text[len(text)-digits:]
+	for range digits + 1 - len(text) {
+		out = append(out, '0')
+	}
+	out = append(out, text...)
+	point := len(out) - digits
+	fraction := out[point:]
 	if trim {
-		fraction = strings.TrimRight(fraction, "0")
+		fraction = bytes.TrimRight(fraction, "0")
 	}
-	if fraction == "" {
-		return sign + whole
+	if len(fraction) == 0 {
+		return string(out[:point])
 	}
-	return sign + whole + "." + fraction
+	return string(slices.Insert(out[:point+len(fraction)], point, '.'))
 }
 
 // Decimal is a number written in decimal — a sign, digits, a point, an

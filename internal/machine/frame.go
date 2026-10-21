@@ -39,9 +39,10 @@ type frame struct {
 	fxQuotes   []Value
 	fxMarks    []int
 	fxCtx      fxContext       // handed to a kernel function that reads rates
+	fxHit      fxHit           // the innermost using's last quote found
 	ctx        context.Context // the request's budget; extension calls see it
 	deadline   bool            // whether ctx can end, and a host's call or a loop looks
-	prefetched []Prefetched    // a Batch's answers for hoisted calls, by call
+	prefetched []Prefetched    // a Batch's answers for hoisted calls, by slot (batchPlan)
 	// turns is how many turns of a loop are left before the run looks at
 	// its context again, and budget, for an evaluation at compile time, how
 	// many it has left in all (limit.go).
@@ -64,15 +65,11 @@ type frame struct {
 	records []recordValue
 	views   []arenaSlot
 	// recordViews are, by argument, the arrays of plain records a Program
-	// hands over as the host's slice, and items, by loop, the record each
-	// loop over one loads its item into (host_view.go).
+	// hands over as the host's slice (host_view.go).
 	recordViews []recordsView
-	items       []recordValue
 	// borrows is the arguments this run loaded into records, views or
-	// recordViews, and walked whether a loop loaded its items into items:
-	// only those are cleared when the frame goes back.
+	// recordViews: only those are cleared when the frame goes back.
 	borrows []int
-	walked  bool
 	// onlyReads says a Program loaded the arguments: only the slots of the
 	// ones the program reads were written.
 	onlyReads bool
@@ -97,8 +94,8 @@ func (r *Runtime) newFrame() *frame {
 		runtime: r, banks: newBanks(r.reg.size, r.constants), argBase: int(r.reg.args), loops: make([]regLoop, 0, r.reg.nesting),
 		arena: make([]arenaSlot, r.reg.arenas), dest: make([]arenaSlot, r.reg.dests),
 		records: make([]recordValue, len(r.reg.fieldOnly)), views: make([]arenaSlot, len(r.reg.viewOnly)),
-		recordViews: make([]recordsView, len(r.reg.viewOnly)), items: make([]recordValue, len(r.reg.loops)),
-		borrows: make([]int, 0, len(r.reg.viewOnly)),
+		recordViews: make([]recordsView, len(r.reg.viewOnly)),
+		borrows:     make([]int, 0, len(r.reg.viewOnly)),
 	}
 	f.fxQuotes, f.fxMarks = f.fxQuotesArray[:0], f.fxMarksArray[:0]
 	f.fxCtx.frame = f
@@ -175,7 +172,20 @@ func (r *Runtime) finish(f *frame, value *Value, err *error, sink resultSink) {
 		*err = sink.deliver(*value)
 		*value = Value{}
 	}
+	if *err != nil {
+		f.arenaWrittenWhole()
+	}
 	r.releaseFrame(f)
+}
+
+// arenaWrittenWhole is the arena of a run that failed, or whose fallback
+// caught a failure in a loop: an array being built then never finished, so
+// how much of a slot's strings it wrote is unknown, and the release clears
+// all their memory.
+func (f *frame) arenaWrittenWhole() {
+	for i := range f.arena {
+		f.arena[i].written = cap(f.arena[i].strings)
+	}
 }
 
 // release drops what a run left, so a kept frame holds nothing alive: a
@@ -185,6 +195,9 @@ func (f *frame) release() {
 		clear(f.regs[f.argBase:])
 	}
 	f.onlyReads = false
+	if f.text.text != "" {
+		f.text = textCursor{}
+	}
 	f.ctx = nil
 	f.prefetched = nil
 	f.budget = 0
@@ -216,7 +229,7 @@ func (f *frame) returnMemory() {
 	for i := range f.arena {
 		f.arena[i].release()
 	}
-	if len(f.borrows) == 0 && !f.walked {
+	if len(f.borrows) == 0 {
 		return
 	}
 	for _, i := range f.borrows {
@@ -224,10 +237,6 @@ func (f *frame) returnMemory() {
 		f.views[i], f.recordViews[i] = arenaSlot{}, recordsView{}
 	}
 	f.borrows = f.borrows[:0]
-	for i := range f.items {
-		clear(f.items[i].fields)
-	}
-	f.walked = false
 }
 
 // slotFor is the slot an array is built in, or nil for memory of its own:

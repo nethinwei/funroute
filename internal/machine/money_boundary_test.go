@@ -137,6 +137,11 @@ func boundaryCases(t *testing.T) map[string]boundaryCase {
 		"an empty currency":         one("c", CurrencyType, CurrencyValue(""), "not declared"),
 		"items in two currencies":   one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1), money.Make("EUR", 1)), ""),
 		"an undeclared item":        one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1), money.Make("GBP", 1)), "item 1"),
+		// A currency is looked up when it changes: after a run of one, a
+		// change back is looked up again, and a zero with no currency does
+		// not vouch for the one after it.
+		"undeclared after a change": one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1), money.Make("USD", 2), money.Make("EUR", 1), money.Make("USD", 3), money.Make("GBP", 1)), "item 4"),
+		"no currency after a zero":  one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1), money.Make("", 0), money.Make("", 5)), "item 2: "),
 		"an undeclared entry":       one("d", DictOf(MoneyType), moneyDict(map[string]money.Money{"x": money.Make("GBP", 1)}), `entry "x"`),
 		"a record in two":           one("o", order, record(t, order, usd, CurrencyValue("EUR")), ""),
 		"an undeclared field":       one("o", order, record(t, order, usd, CurrencyValue("GBP")), `field "cur"`),

@@ -188,6 +188,8 @@ var kernelExamples = map[string][]Example{
 	"concat":        {{"concat([1, 2], [3])", "[1,2,3]"}},
 	"flatten":       {{"flatten([[1], [2, 3]])", "[1,2,3]"}},
 	"unique":        {{"unique([1, 2, 1, 3])", "[1,2,3]"}},
+	"intersect":     {{"intersect([1, 2, 3, 2], [2, 3, 4])", "[2,3]"}},
+	"except":        {{"except([1, 2, 3, 2], [2])", "[1,3]"}},
 	"sort":          {{"sort([2, 3, 1])", "[1,2,3]"}, {"sort([1.5, 2.5, 0.5])", "[0.5,1.5,2.5]"}, {`sort(["b", "c", "a"])`, `["a","b","c"]`}},
 	"sort_desc":     {{"sort_desc([2, 3, 1])", "[3,2,1]"}, {"sort_desc([1.5, 2.5, 0.5])", "[2.5,1.5,0.5]"}, {`sort_desc(["b", "c", "a"])`, `["c","b","a"]`}},
 	"abs":           {{"abs(-3)", "3"}, {"abs(-2.5)", "2.5"}},
@@ -200,10 +202,10 @@ var kernelExamples = map[string][]Example{
 	"percentile":    {{"percentile([1, 2, 3, 4], 0.5)", "2.5"}, {"percentile([10.0, 20.0], 0.95)", "19.5"}},
 	"arg_min":       libPositions("arg_min", "3"),
 	"arg_max":       libPositions("arg_max", "1"),
-	"top_k":         libByKey("top_k", ", 2)", `["b","a"]`),
-	"bottom_k":      libByKey("bottom_k", ", 2)", `["c","a"]`),
-	"sort_by":       libByKey("sort_by", ")", `["c","a","b"]`),
-	"sort_by_desc":  libByKey("sort_by_desc", ")", `["b","a","c"]`),
+	"top_k":         byKeyAndMoney("top_k", ", 2)", `["b","a"]`),
+	"bottom_k":      byKeyAndMoney("bottom_k", ", 2)", `["c","a"]`),
+	"sort_by":       byKeyAndMoney("sort_by", ")", `["c","a","b"]`),
+	"sort_by_desc":  byKeyAndMoney("sort_by_desc", ")", `["b","a","c"]`),
 	"min_by":        libByKey("min_by", ")", `"c"`),
 	"max_by":        libByKey("max_by", ")", `"b"`),
 	"indices":       {{`indices(["a", "b", "c"])`, "[0,1,2]"}},
@@ -291,6 +293,12 @@ func libPositions(name, integer string) []Example {
 
 // libByKey shows a function that orders ["a", "b", "c"] by keys of every
 // type, the keys ranking them b, a, c from the largest down.
+// byKeyAndMoney is libByKey with amounts for keys too, which the keyed
+// sorts and cuts also take when money is declared.
+func byKeyAndMoney(name, tail, result string) []Example {
+	return append(libByKey(name, tail, result), Example{name + `(["a", "b", "c"], [USD 2, USD 3, USD 1]` + tail, result})
+}
+
 func libByKey(name, tail, result string) []Example {
 	keys := []string{"[2, 3, 1]", "[0.2, 0.3, 0.1]", `["m", "z", "a"]`}
 	out := make([]Example, 0, len(keys))

@@ -67,6 +67,36 @@ func TestLoadingRefusesBytecodeThatDoesNotType(t *testing.T) {
 	}
 }
 
+// Loading also holds an artifact to what makes every run end without a
+// panic: the only way back is a loop_next, whose turns are counted, and a
+// loop's names are bound in slots of their own.
+func TestLoadingRefusesBytecodeThatMightNotEnd(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, source, contract string
+		forge                  func(*testing.T, *machine.ArtifactParts)
+	}{
+		{"a circle with no loop_next on it", "a + 1", "a: int", func(_ *testing.T, p *machine.ArtifactParts) {
+			p.Instructions = []machine.Instruction{{Op: machine.OpJump, A: 0}}
+		}},
+		{"a jump back into straight code", "if(f, a, a + 1)", "f: bool; a: int", func(t *testing.T, p *machine.ArtifactParts) {
+			op(t, p, machine.OpJumpIfFalse).A = 0
+		}},
+		{"a loop's item and key in one slot", "[v + 1 for k, v in d]", "d: dict<int>", func(t *testing.T, p *machine.ArtifactParts) {
+			loop := op(t, p, machine.OpLoopInit)
+			loop.D = loop.B
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := forgedLoad(t, test.source, test.contract, func(p *machine.ArtifactParts) { test.forge(t, p) })
+			if err == nil || !strings.Contains(err.Error(), "invalid") {
+				t.Fatalf("Instantiate of %s with %s = %v, want it refused", test.source, test.name, err)
+			}
+		})
+	}
+}
+
 // A fallback's handler starts from the state at begin_fallback, which is
 // what a failure cuts the run back to. A candidate that changes what was
 // there before it failed would hand the handler something else under the
@@ -103,6 +133,49 @@ func TestLoadingHoldsAFallbacksCandidateToWhatItBeganWith(t *testing.T) {
 			t.Parallel()
 			err := forgedLoad(t, "a", "a: int; r: fxrate", func(p *machine.ArtifactParts) {
 				p.Instructions, p.Constants, p.Locals = test.code, []machine.Constant{one, word}, 3
+			})
+			if err == nil || !strings.Contains(err.Error(), "invalid bytecode") || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Instantiate of a candidate where %s = %v, want the bytecode refused saying %q", test.name, err, test.want)
+			}
+		})
+	}
+}
+
+// Two fallbacks begun on two paths, a local bound on one and not on the
+// other, meet inside their candidates: a rebind after the meeting is refused
+// for the path whose handler reads the local, whichever path the walk takes
+// first — the meeting keeps what either has bound.
+func TestLoadingHoldsFallbacksThatMeetToBothBegins(t *testing.T) {
+	t.Parallel()
+	one := machine.Constant{Type: machine.IntType, Value: json.RawMessage(`1`)}
+	code := func(ops ...machine.Instruction) []machine.Instruction { return ops }
+	i := func(op machine.OpCode, a int) machine.Instruction { return machine.Instruction{Op: op, A: a} }
+	for _, test := range []struct {
+		name string
+		code []machine.Instruction
+		want string
+	}{
+		{"it rebinds a local bound on one of the paths it meets", code(
+			i(machine.OpLoadArg, 0), i(machine.OpLoadArg, 0), machine.Instruction{Op: machine.OpEqual}, i(machine.OpJumpIfFalse, 8),
+			i(machine.OpConstant, 0), i(machine.OpStoreLocal, 0), i(machine.OpBeginFallback, 14), i(machine.OpJump, 9),
+			i(machine.OpBeginFallback, 16),
+			i(machine.OpConstant, 0), i(machine.OpStoreLocal, 0), i(machine.OpLoadArg, 0), i(machine.OpEndFallback, 0), i(machine.OpJump, 17),
+			i(machine.OpLoadLocal, 0), i(machine.OpJump, 17),
+			i(machine.OpLoadArg, 0),
+		), "rebinds local 0"},
+		{"it rebinds a local bound on the other of the paths it meets", code(
+			i(machine.OpLoadArg, 0), i(machine.OpLoadArg, 0), machine.Instruction{Op: machine.OpEqual}, i(machine.OpJumpIfFalse, 6),
+			i(machine.OpBeginFallback, 16), i(machine.OpJump, 9),
+			i(machine.OpConstant, 0), i(machine.OpStoreLocal, 0), i(machine.OpBeginFallback, 14),
+			i(machine.OpConstant, 0), i(machine.OpStoreLocal, 0), i(machine.OpLoadArg, 0), i(machine.OpEndFallback, 0), i(machine.OpJump, 17),
+			i(machine.OpLoadLocal, 0), i(machine.OpJump, 17),
+			i(machine.OpLoadArg, 0),
+		), "rebinds local 0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := forgedLoad(t, "a", "a: int", func(p *machine.ArtifactParts) {
+				p.Instructions, p.Constants, p.Locals = test.code, []machine.Constant{one}, 1
 			})
 			if err == nil || !strings.Contains(err.Error(), "invalid bytecode") || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Instantiate of a candidate where %s = %v, want the bytecode refused saying %q", test.name, err, test.want)

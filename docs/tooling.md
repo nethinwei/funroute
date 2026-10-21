@@ -96,7 +96,7 @@ make wasm                                 # web/dist/funroute.wasm，在浏览�
 浏览器里跑不了宿主的深度模型或网络调用，开发工具里通常也不应该链接它们。语言服务需要的只是函数的**签名**：
 
 ```go
-manifest := hostRegistry.Manifest()   // 导出：签名、Doc、句柄、形式
+manifest := hostRegistry.Manifest()   // 导出：签名、Doc、折叠、句柄、形式
 json.Marshal(manifest)                 // 交给语言服务
 
 base := funroute.CoreRegistry()            // 内核 + 标准库是原生实现
@@ -106,7 +106,8 @@ manifest.Apply(base)                   // 宿主的函数只登记签名
 
 - 类型检查、悬停、补全、签名提示都照常工作。
 - 运行时调用只有签名的函数，会返回 `funroute.ErrUnavailable`（它同时也是 `ErrExtension`，所以 `fallback` 会照常兜底）。`funroute.TrackUnavailable(ctx)` 会记下这次运行调用了哪些这样的函数，试运行的结果里会标出来。
-- 清单和真实注册表的签名不一致时，`Apply` 会拒绝。
+- 清单和真实注册表的签名不一致时，`Apply` 会拒绝。`Apply` 不是原子的：出错前已登记的部分留在注册表里，失败后丢弃这个注册表，不要在它上面重试。
+- 函数声明的 `Fold`（融合与短路）也在清单里：同一段源码按清单编译与按真实注册表编译，求值顺序相同。
 - **部署用的 artifact 由宿主用真实注册表编译**：宿主的纯函数如果标了 `Constexpr`，两边的常量折叠结果会不同，digest 也会跟着不同。
 
 ## 策略工作台

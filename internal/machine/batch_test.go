@@ -150,8 +150,34 @@ func TestBatchFlushesOnTheTimerAndCloses(t *testing.T) {
 			t.Fatalf("lone result = %v, batched = %d, want 6 and 1", got, batched.Load())
 		}
 		quick.Close()
-		if _, err := quick.Run(t.Context(), []machine.Value{value}); err == nil {
-			t.Fatal("a closed batch accepted a request")
+		if _, err := quick.Run(t.Context(), []machine.Value{value}); !errors.Is(err, machine.ErrContract) {
+			t.Fatalf("a closed batch's answer to a request = %v, want ErrContract", err)
+		}
+	})
+}
+
+// A timer that fires as a full batch is taken is too late to stop, and
+// flushes nothing: the request that comes next still waits its MaxWait for
+// others to join it.
+func TestALateTimerLeavesTheNextRequestItsWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const wait = 5 * time.Millisecond
+		var single, batched atomic.Int64
+		runtime := modelRuntime(t, &single, &batched, `model.fraud_v1(model.embed_v1(features)) * 2.0`)
+		batch := machine.NewBatch(runtime, machine.BatchOptions{MaxSize: 2, MaxWait: wait})
+		runConcurrently(t, batch, 2)
+		value, _ := machine.ToValue([]float64{3})
+		started, answered := time.Now(), make(chan time.Duration)
+		go func() {
+			if _, err := batch.Run(t.Context(), []machine.Value{value}); err != nil {
+				t.Error(err)
+			}
+			answered <- time.Since(started)
+		}()
+		synctest.Wait()
+		machine.ExpireStale(batch)
+		if elapsed := <-answered; elapsed != wait {
+			t.Fatalf("the request after a full batch was answered after %s, want %s", elapsed, wait)
 		}
 	})
 }
@@ -339,10 +365,12 @@ func TestBatchHandsTheEngineOnlyAdmittedArguments(t *testing.T) {
 	t.Parallel()
 	registry := moneyRegistry(t)
 	var seen []string
+	batches := 0
 	err := registry.Register(machine.FunctionSpec{
 		Name: "m.score_v1", Params: []machine.Type{machine.MoneyType}, Result: machine.IntType,
 		Eval: func(context.Context, []machine.Value) (machine.Value, error) { return machine.Int(1), nil },
 		EvalBatch: func(_ context.Context, calls [][]machine.Value) ([]machine.Value, error) {
+			batches++
 			out := make([]machine.Value, len(calls))
 			for i, call := range calls {
 				m, _ := call[0].Money()
@@ -376,6 +404,10 @@ func TestBatchHandsTheEngineOnlyAdmittedArguments(t *testing.T) {
 	if want := []string{"USD 5"}; !slices.Equal(seen, want) {
 		t.Fatalf("the engine saw %q, want only %q", seen, want)
 	}
+	// A batch whose every request was refused calls no engine at all.
+	if batches != 1 {
+		t.Fatalf("the engine was called %d times, want once: never for a batch of none", batches)
+	}
 }
 
 // A batched engine's currency mismatch is the rule's error at every call it
@@ -399,4 +431,127 @@ func TestABatchedCurrencyMismatchIsNotAnExtensionFailure(t *testing.T) {
 	if got, err := batch.Run(t.Context(), []machine.Value{machine.Float(1)}); !errors.Is(err, machine.ErrCurrency) || errors.Is(err, machine.ErrExtension) {
 		t.Fatalf("batch.Run = %v, %v, want ErrCurrency and not ErrExtension", got.Any(), err)
 	}
+}
+
+// One engine call serves the batch under the first request's values, and no
+// request ends it for another: a request canceled while the call is under
+// way fails alone, and the others get their answers from the same call.
+func TestABatchedCallServesEveryWaitingRequest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		engine := blockingEngine(t)
+		valued := context.WithValue(t.Context(), traceKey{}, "trace-1")
+		canceled, cancel := context.WithCancel(valued)
+		answers := engine.serve([]context.Context{canceled, valued}, cancel)
+		if !errors.Is(answers[0], machine.ErrDeadline) || answers[1] != nil {
+			t.Fatalf("the canceled request = %v, the other = %v; want ErrDeadline and an answer", answers[0], answers[1])
+		}
+		if engine.trace.Load() != "trace-1" || engine.endedEarly.Load() {
+			t.Fatalf("the engine saw value %v and was canceled %v; want the request's value and no cancellation", engine.trace.Load(), engine.endedEarly.Load())
+		}
+	})
+}
+
+// Once no request of the batch is waiting, the engine call is canceled.
+func TestABatchedCallEndsWhenNoRequestWaits(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		engine := blockingEngine(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		answers := engine.serve([]context.Context{ctx, ctx}, cancel)
+		if !errors.Is(answers[0], machine.ErrDeadline) || !errors.Is(answers[1], machine.ErrDeadline) {
+			t.Fatalf("the requests = %v; want ErrDeadline for both", answers)
+		}
+		if !engine.endedEarly.Load() {
+			t.Fatal("the engine call went on with no request waiting for it")
+		}
+	})
+}
+
+// A request the batch answers before the engine calls — its arguments
+// refused — no longer waits either: the engine call ends once the rest stop.
+func TestABatchedCallEndsWhenTheRestOfTheBatchStopsWaiting(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		engine := blockingEngine(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		var refused, abandoned error
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			wrong, _ := machine.ToValue([]int64{1})
+			_, refused = engine.batch.Run(t.Context(), []machine.Value{wrong})
+		})
+		wg.Go(func() {
+			value, _ := machine.ToValue([]float64{1})
+			_, abandoned = engine.batch.Run(ctx, []machine.Value{value})
+		})
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+		close(engine.release)
+		wg.Wait()
+		if !errors.Is(refused, machine.ErrContract) || !errors.Is(abandoned, machine.ErrDeadline) {
+			t.Fatalf("the requests = %v, %v; want ErrContract and ErrDeadline", refused, abandoned)
+		}
+		if !engine.endedEarly.Load() {
+			t.Fatal("the engine call went on with no request waiting for it")
+		}
+	})
+}
+
+// heldEngine is a batch of two whose engine call holds until released, and
+// says what context it ran under.
+type heldEngine struct {
+	batch      *machine.Batch
+	release    chan struct{}
+	trace      atomic.Value
+	endedEarly atomic.Bool
+}
+
+func blockingEngine(t *testing.T) *heldEngine {
+	t.Helper()
+	engine := &heldEngine{release: make(chan struct{})}
+	registry := machine.CoreRegistry()
+	score := func(features []float64) (float64, error) { return features[0], nil }
+	scoreBatch := func(ctx context.Context, features [][]float64) ([]float64, error) {
+		engine.trace.Store(fmt.Sprint(ctx.Value(traceKey{})))
+		<-engine.release
+		engine.endedEarly.Store(ctx.Err() != nil)
+		out := make([]float64, len(features))
+		for i, row := range features {
+			out[i] = row[0]
+		}
+		return out, nil
+	}
+	if err := registry.Register(machine.FunctionSpec{Name: "model.score_v1", Go: score, GoBatch: scoreBatch}); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := compile.CompileExpr(`model.score_v1(features)`, registry, compile.CompileOptions{
+		Args: []compile.ArgSpec{{Name: "features", Type: machine.ArrayOf(machine.FloatType)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.batch = machine.NewBatch(runtime, machine.BatchOptions{MaxSize: 2, MaxWait: time.Second})
+	return engine
+}
+
+// serve runs one request under each context, cancels once the engine call
+// is under way, then lets it finish: what each Run returned.
+func (e *heldEngine) serve(contexts []context.Context, cancel context.CancelFunc) []error {
+	answers := make([]error, len(contexts))
+	var wg sync.WaitGroup
+	for i, ctx := range contexts {
+		wg.Go(func() {
+			value, _ := machine.ToValue([]float64{float64(i)})
+			_, answers[i] = e.batch.Run(ctx, []machine.Value{value})
+		})
+	}
+	synctest.Wait()
+	cancel()
+	synctest.Wait()
+	close(e.release)
+	wg.Wait()
+	return answers
 }

@@ -2,9 +2,13 @@ package machine
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
+
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 func sameBacking[T any](a, b []T) bool {
@@ -68,6 +72,25 @@ func TestBoundaryKeepsTheInvariants(t *testing.T) {
 	}
 }
 
+// A Go value of the language's own that is not one says why itself: the
+// zero FxRate is a currency error, a time past the years a time holds is out
+// of the domain — not a mismatch of types the lenient path then reports.
+func TestCoerceKeepsWhatTheGoValueSays(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		input    any
+		expected Type
+		want     error
+	}{
+		"the zero FxRate":       {[]money.FxRate{{}}, ArrayOf(FxRateType), ErrCurrency},
+		"a time past its years": {time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC), TimeType, ErrDomain},
+	} {
+		if value, err := coerce(test.input, test.expected); !errors.Is(err, test.want) {
+			t.Errorf("coerce(%s) = %v, %v, want %v", name, value.Any(), err, test.want)
+		}
+	}
+}
+
 func nan() float64 {
 	zero := 0.0
 	return zero / zero
@@ -108,5 +131,17 @@ func TestCoerceIntRefusesFloatsPastExactIntegers(t *testing.T) {
 		if got, err := coerceInt(input); err != nil || got.i != want {
 			t.Errorf("coerceInt(%v) = %d, %v, want %d", input, got.i, err, want)
 		}
+	}
+}
+
+// A value that is not of the type asked for gives the zero value with the
+// error, a currency as every other type: not what the value would have been.
+func TestAFailedConversionGivesTheZeroValue(t *testing.T) {
+	t.Parallel()
+	if got, err := FromValue[money.Currency](String("USD")); err == nil || got != (money.Currency{}) {
+		t.Errorf("FromValue[Currency](\"USD\") = %v, %v, want the zero currency and an error", got, err)
+	}
+	if got, err := FromValue[money.Money](String("USD 1")); err == nil || got != (money.Money{}) {
+		t.Errorf("FromValue[Money](\"USD 1\") = %v, %v, want the zero amount and an error", got, err)
 	}
 }

@@ -1,10 +1,12 @@
 package machine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 
@@ -68,6 +70,22 @@ type ManifestFunction struct {
 	Constexpr   bool   `json:"constexpr,omitempty"`
 	BoundedArgs bool   `json:"bounded_args,omitempty"`
 	ConstArgs   []int  `json:"const_args,omitempty"`
+	// Fold is the function's fold, which changes how a call of it on a
+	// comprehension runs — a stop or a first ends it early, the items after
+	// neither computed nor failing — so a program compiled against the
+	// manifest runs as one compiled against the registry.
+	Fold *ManifestFold `json:"fold,omitempty"`
+}
+
+// ManifestFold is a Fold as data: its Init as the constant of the
+// function's result type it is.
+type ManifestFold struct {
+	Step   string          `json:"step,omitempty"`
+	Init   json.RawMessage `json:"init,omitempty"`
+	Stops  bool            `json:"stops,omitempty"`
+	Stop   bool            `json:"stop,omitempty"`
+	Counts bool            `json:"counts,omitempty"`
+	First  bool            `json:"first,omitempty"`
 }
 
 // ErrUnavailable is what a function known only by its signature returns when
@@ -89,17 +107,64 @@ func (r *Registry) Manifest() Manifest {
 }
 
 func manifestFunction(function *RegisteredFunction) ManifestFunction {
-	return ManifestFunction{
+	described := ManifestFunction{
 		Name: function.Name, Params: function.Params, Result: function.Result, Special: function.special.String(),
 		Doc: cloneDoc(function.Doc), Constexpr: function.IsConstexpr(), BoundedArgs: function.Doc.BoundedArgs,
 		ConstArgs: slices.Clone(function.Doc.ConstArgs),
 	}
+	if fold := function.Fold; fold != nil {
+		described.Fold = &ManifestFold{Step: fold.Step, Stops: fold.Stops, Stop: fold.Stop, Counts: fold.Counts, First: fold.First}
+		if init, ok := ConstantOf(fold.Init, function.Result); ok {
+			described.Fold.Init = init.Value
+		}
+	}
+	return described
+}
+
+// compilesOtherwise is the field of have and want, one function described
+// twice, that changes what a call of it compiles to, or "" when none does.
+func compilesOtherwise(have, want ManifestFunction) string {
+	switch {
+	case have.Special != want.Special:
+		return "special"
+	case have.BoundedArgs != want.BoundedArgs:
+		return "bounded_args"
+	case !slices.Equal(have.ConstArgs, want.ConstArgs):
+		return "const_args"
+	case !sameFold(have.Fold, want.Fold):
+		return "fold"
+	}
+	return ""
+}
+
+func sameFold(a, b *ManifestFold) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	initA, initB := a.Init, b.Init
+	plainA, plainB := *a, *b
+	plainA.Init, plainB.Init = nil, nil
+	return reflect.DeepEqual(plainA, plainB) && bytes.Equal(initA, initB)
+}
+
+// fold is the Fold the manifest describes, its Init read as the function's
+// result type.
+func (m *ManifestFold) fold(result Type) (*Fold, error) {
+	fold := &Fold{Step: m.Step, Stops: m.Stops, Stop: m.Stop, Counts: m.Counts, First: m.First}
+	if len(m.Init) == 0 {
+		return fold, nil
+	}
+	init, err := Constant{Type: result, Value: m.Init}.value()
+	fold.Init = init
+	return fold, err
 }
 
 // Apply adds what the manifest describes and r lacks: its forms, its handle
 // types, and each function r has no implementation of, as its signature
 // alone. A function r does have must cost what the manifest says, or an
-// artifact compiled against one would not bind to the other.
+// artifact compiled against one would not bind to the other. Apply is not
+// atomic: what it added before an error stays, so a registry it failed on
+// is one to discard, not to retry on.
 func (m Manifest) Apply(r *Registry) error {
 	if m.parts.Version != ManifestVersion {
 		return fmt.Errorf("unsupported manifest version %d", m.parts.Version)
@@ -146,7 +211,10 @@ func (r *Registry) applyMoney(spec *money.MoneySpec) error {
 func (r *Registry) applyFunction(function ManifestFunction) error {
 	spec := FunctionSpec{Name: function.Name, Params: function.Params, Result: function.Result, Doc: function.Doc}
 	spec.Doc.BoundedArgs, spec.Doc.ConstArgs = function.BoundedArgs, function.ConstArgs
-	if _, ok := r.Resolve(spec.Signature()); ok {
+	if existing, ok := ResolveOf(r, spec.Signature()); ok {
+		if field := compilesOtherwise(manifestFunction(existing), function); field != "" {
+			return fmt.Errorf("%s: the manifest's %s is not this registry's, so a program would compile otherwise against each", spec.Signature(), field)
+		}
 		return nil
 	}
 	if function.Special != "" {
@@ -155,6 +223,13 @@ func (r *Registry) applyFunction(function ManifestFunction) error {
 	// There is nothing here to call, so folding must not try.
 	spec.Doc.Constexpr = false
 	spec.Eval = unavailable(function.Name)
+	if function.Fold != nil {
+		fold, err := function.Fold.fold(function.Result)
+		if err != nil {
+			return fmt.Errorf("%s: fold: %w", function.Name, err)
+		}
+		spec.Fold = fold
+	}
 	return r.Register(spec)
 }
 

@@ -21,12 +21,16 @@ type exactness struct {
 	// locals is whether each let-bound name holds exact money, innermost
 	// last; a loop's names hold none.
 	locals scoped[bool]
-	// rounds is how many rounds the walk is inside.
-	rounds *int
+	// rounds is how many rounds the walk is inside, usings how many usings.
+	rounds, usings *int
 }
 
 func checkExact(expr syntax.Expr, inferred *inference, registry *machine.Registry) error {
-	walk := exactness{inferred: inferred, registry: registry, locals: scoped[bool]{}, rounds: new(int)}
+	// A registry with no money has no exact money: nothing to walk.
+	if _, declared := registry.Currencies(); !declared {
+		return nil
+	}
+	walk := exactness{inferred: inferred, registry: registry, locals: scoped[bool]{}, rounds: new(int), usings: new(int)}
 	return walk.plain(expr, "the program's result")
 }
 
@@ -57,6 +61,8 @@ func (w exactness) of(expr syntax.Expr) (bool, error) {
 				return false, err
 			}
 		}
+		*w.usings++
+		defer func() { *w.usings-- }()
 		return w.of(node.Body)
 	case *syntax.ForExpr:
 		return false, w.loop([]syntax.Expr{node.Source}, []string{node.Variable, node.KeyVariable}, "a comprehension", node.Where, node.YieldKey, node.Yield)
@@ -152,10 +158,12 @@ func (w exactness) any(exprs []syntax.Expr) (bool, error) {
 }
 
 func (w exactness) call(node *syntax.CallExpr) (bool, error) {
-	function, ok := w.registry.Resolve(w.inferred.Selections[node.ID])
+	function, ok := machine.ResolveOf(w.registry, w.inferred.Selections[node.ID])
 	switch {
 	case !ok:
 		return false, w.children(node, "a call")
+	case function.ReadsRates() && *w.usings == 0:
+		return false, outsideUsing(node)
 	case function.IsLazyIf():
 		if err := w.plain(node.Args[0], "a condition"); err != nil {
 			return false, err
@@ -174,6 +182,11 @@ func (w exactness) call(node *syntax.CallExpr) (bool, error) {
 	exact, err := w.operands(node, function)
 	if err != nil {
 		return false, err
+	}
+	if function.IsRoundingScope() && !exact {
+		// A step written inside, whose answer only a comparison reads, does
+		// not reach the round: it would round nothing.
+		return false, syntax.Around(node, "type error: nothing inside round(…) lands between minor units; only money times or over a ratio, a conversion and prorate do")
 	}
 	return resultStaysExact(function, exact), nil
 }

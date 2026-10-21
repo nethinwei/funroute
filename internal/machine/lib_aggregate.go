@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"math"
 	"slices"
 )
 
@@ -68,7 +69,7 @@ func extremeSpecs() []FunctionSpec {
 	} {
 		doc := Doc{
 			Label:       extreme.label,
-			Description: "取数组里" + extreme.label + "；数值按大小、字符串按 UTF-8 字节序；空数组报错，因为没有可取的元素。",
+			Description: "取数组里" + extreme.label + "；数值按大小（-0 比 0 小，与两个数的 min、max 相同）、字符串按 UTF-8 字节序；空数组报错，因为没有可取的元素。",
 			Category:    "聚合",
 			Params:      []string{"数组"},
 			Result:      extreme.result,
@@ -106,33 +107,45 @@ func extremeIndex[T cmp.Ordered](smallest bool) func([]T) (int64, error) {
 }
 
 // best is the position of the smallest item, or the largest, the first of
-// equal ones; false when there are none. min, max, arg_min and arg_max are
-// all this one comparison.
+// equal ones; false when there are none. min, max, arg_min, arg_max, min_by
+// and max_by are all this one comparison, and it is the one min(a, b) and
+// max(a, b) make, Go's: a NaN is the answer, and -0 is less than 0.
 func best[T cmp.Ordered](items []T, smallest bool) (int, bool) {
 	if len(items) == 0 {
 		return 0, false
 	}
-	// One pass: a NaN is the answer when there is one, as Go's min and max
-	// have it, and the first NaN is where it is; otherwise only an item
-	// strictly past the best so far moves it, which keeps the first of equal
-	// ones — of 0 and -0 as well, which compare equal.
+	if first, ok := any(&items[0]).(*float64); ok {
+		return bestFloat(itemsAt(first, int64(len(items))), smallest), true
+	}
+	// One pass: only an item strictly past the best so far moves it, which
+	// keeps the first of equal ones.
 	at := 0
 	for i, item := range items {
-		switch {
-		case isNaN(item):
-			return i, true
-		case smallest && item < items[at], !smallest && item > items[at]:
+		if smallest && item < items[at] || !smallest && item > items[at] {
 			at = i
 		}
 	}
 	return at, true
 }
 
-// isNaN reports a NaN, the one value unequal to itself; of an int or a
-// string, never.
-func isNaN[T cmp.Ordered](x T) bool {
-	same := x
-	return x != same
+// bestFloat is best of floats, as IEEE 754-2019's minimum and maximum order
+// them: the first NaN is where the answer is, and of 0 and -0, which compare
+// equal, -0 is the smaller.
+func bestFloat(items []float64, smallest bool) int {
+	at := 0
+	for i, item := range items {
+		switch {
+		case math.IsNaN(item):
+			return i
+		case item == 0 && items[at] == 0:
+			if math.Signbit(item) != math.Signbit(items[at]) && math.Signbit(item) == smallest {
+				at = i
+			}
+		case smallest && item < items[at], !smallest && item > items[at]:
+			at = i
+		}
+	}
+	return at
 }
 
 // quantifierSpecs stop at the item that decides them: any([p(x) for x in

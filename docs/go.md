@@ -91,7 +91,7 @@ decision, _ := program.Run(ctx, &request)
 
 程序里的中间数组——只被遍历、取长度或下标的推导式与数组字面量——建在帧自己的内存里，帧跨运行复用，稳定之后 0 次分配。
 
-`program.RunInto(ctx, &request, &out)` 把结果写进 `out`，并在 `out` 已有的切片里建数组结果，宿主拿同一个 `out` 反复运行就不再为结果分配。`out` 里的切片若与参数共用内存，就不在上面建（避免边读边写）；出错时 `out` 的内容不确定。
+`program.RunInto(ctx, &request, &out)` 把结果写进 `out`，并在 `out` 已有的 `[]bool`、`[]int64`、`[]float64`、`[]string` 里建数组结果，宿主拿同一个 `out` 反复运行就不再为结果分配；元素是 struct 或其他类型的数组照 `Run` 的方式另建内存。`out` 指向哪里由调用者决定，`RunInto` 就写哪里。它只保证不边读边写：`out` 里的切片与**程序读到的**参数共用内存时不在上面建——顶层参数与 record 参数的字段逐个比对；程序读到的参数里有更深一层的原生数组（数组的数组、字典里的数组、record 里的 record）时，装载时就判定这个程序一律不借 `out`。与程序不读的参数共用内存时照常建，那块内存会被写，这是调用者的选择。出错时 `out` 的内容不确定。
 
 `Program.Run` 可以在任意多个 goroutine 里同时调用，每次从池里取一个帧、用完还回去。同一个 goroutine 要反复跑同一条规则时，用 `program.Session()`：会话自己持有一个帧，省掉每次取还的开销（`a + b` 从约 19 ns 到约 12 ns）。会话不能并发使用，每个 goroutine 各取一个：
 
@@ -135,16 +135,16 @@ table, _ := registry.Currencies()   // *funroute.Currencies，或 funroute.NewCu
 
 | 类别 | 入口 |
 |---|---|
-| 造金额 | `table.Parse("USD 1.70")`、`table.Of("USD", "1.70")`、`table.Minor("USD", 170)`；`table.Format(m)` 写回 `"USD 1.70"`，`table.Places("USD")` 是小数位 |
+| 造金额 | `table.Parse("USD 1.70")`（代码与数之间是一个或几个空格，不收 Tab）、`table.Of("USD", "1.70")`、`table.Minor("USD", 170)`；`table.Format(m)` 写回 `"USD 1.70"`，`table.Places("USD")` 是小数位 |
 | 读金额 | `m.Currency()`、`m.Minor()`、`m.Sign()`、`m.IsZero()` |
 | 加减比较 | `m.Add(o)`、`m.Sub(o)`、`m.Neg()`、`m.Abs()`、`m.Cmp(o)` |
 | 乘除（当场舍入） | `m.MulInt(n)`、`m.MulRatio(r, mode)`、`m.DivRatio(r, mode)`、`m.Ratio(o)`（同币种之比，得比例）、`m.Prorate(part, whole, mode)`、`m.ProrateBy(part, whole, mode)`（按比例取，只舍入一次）、`m.RoundTo(step, mode)`（现金舍入） |
-| 精确计算（规则里的 `round`） | `m.Exact()` 得 `ExactMoney`；`e.Add`/`Sub`/`Neg`/`MulInt`/`MulRatio`/`DivRatio`/`Cmp`/`Sign`、`table.ConvertExact(e, fx)` 都不舍入；`e.Round(mode)` 舍入一次得回 `Money` |
+| 精确计算（规则里的 `round`） | `m.Exact()` 得 `ExactMoney`；`e.Add`/`Sub`/`Neg`/`MulInt`/`MulRatio`/`DivRatio`/`MulPart`/`ProrateBy`/`Cmp`/`Sign`、`table.ConvertExact(e, fx)` 都不舍入；`e.Round(mode)` 舍入一次得回 `Money` |
 | 分摊与统计 | `m.Allocate(权重...)`、`m.Split(n)`（一分不丢，剩下的最小单位按最大余数法发出；n 为 1–10000，与规则里的 `allocate` 相同）、`m.AllocateBy(strategy, 权重...)`、`m.SplitBy(strategy, n)`（按 `funroute.AllocateAllLast` 等策略发）、`funroute.AverageMoney(ms, mode)`、`funroute.MedianMoney(ms, mode)`（与 std 的 `avg`/`median` 相同） |
 | 比例 | `funroute.ParseRatio("0.029")`（也读分数 `"1/3"`）、`funroute.Percent("2.9")`、`funroute.BasisPoints("25")`；`r.Add`/`Sub`/`Mul`/`Div`、`r.Cmp`、`r.Sign`、`r.IsZero`、`r.String()` |
-| 币种 | `table.Currency("USD")`，`c.Code()` |
-| 汇率 | `table.FxRate("USD", "JPY", "150.25")`、`table.Implied(over, under)`；`fx.Base()`、`fx.Quote()`、`fx.String()`（`150.25 JPY / USD`，与规则里的字面量同一写法）、`fx.Decimal(places)`（半偶舍入后的展示文本，汇率本身不变）、`fx.Inverse()`、`fx.Chain(next)`（串联，前一个的报价币种必须是后一个的基准币种）、`fx.MulRatio(r)`（加点，与规则里的 `fx * 101%` 相同）、`fx.Cmp(other)` |
-| 换汇 | `table.Convert(m, fx, mode)`：按一个汇率换并舍入一次，与规则里的 `convert(m, JPY, @mode)` 相同 |
+| 币种 | `table.Currency("USD")`，`c.Code()`；零值 `Currency{}` 不是币种，写 JSON 是 `ErrCurrency`（与零值 `FxRate` 一样） |
+| 汇率 | `table.FxRate("USD", "JPY", "150.25")`、`table.Implied(over, under)`；`fx.Base()`、`fx.Quote()`、`fx.String()`（`150.25 JPY / USD`，与规则里的字面量同一写法）、`fx.Decimal(places)`（半偶舍入后的展示文本，汇率本身不变）、`fx.Inverse()`、`fx.Chain(next)`（串联，前一个的报价币种必须是后一个的基准币种；串回起点时乘积必须恰为 1，带点差的回环是 `ErrArithmetic`）、`fx.MulRatio(r)`（加点，与规则里的 `fx * 101%` 相同）、`fx.Cmp(other)` |
+| 换汇 | `table.Convert(m, fx, mode)`：把 fx 基准币种的 m 按这个汇率换成报价币种并舍入一次，与规则里的 `convert(m, JPY, @mode)` 相同；m 是别的币种（不是不带币种的零）就是 `ErrCurrency` |
 
 汇率是精确比值：`"150.25"` 就是 601/4，`fx.Chain(next)` 是精确的乘积，只有换出来的金额舍入一次。同一币种之间恒为 1：`table.FxRate("USD", "USD", "1")` 合法，别的数是 `ErrArithmetic`。`table.Implied(over, under)` 是一笔交易隐含的汇率——over 是为 under 付出的：`Implied(JPY 15000, USD 100.00)` 是 `150 JPY / USD`，与规则里的 `implied(settled, paid)` 相同；两笔金额必须非零、同号、币种不同。
 
@@ -176,7 +176,7 @@ yen, _ := table.Convert(fee, usdJPY, funroute.RoundHalfUp)
 text, _ := table.Format(yen)                               // JPY 522
 ```
 
-`Parse` 读 `USD -1.70`，与规则里的字面量同一种写法（符号写在数上）；`Format` 写不出的金额（不带币种却不是零）返回 `ErrCurrency`，不会按错的小数位写出一段读不回来的文字。规则的结果经 `value.Money()`、`value.Ratio()`、`value.FxRate()`、`value.Currency()` 取出；Go 值交给规则用 `funroute.ToValue`。
+`Parse` 读 `USD -1.70`，与规则里的字面量同一种写法（符号写在数上）；`Format` 写不出的金额（不带币种却不是零）返回 `ErrCurrency`，不会按错的小数位写出一段读不回来的文字。规则的结果经 `value.Money()`、`value.Ratio()`、`value.FxRate()`、`value.Currency()` 取出；Go 值交给规则用 `funroute.ToValue`。宿主直接调的 `value.Equal(other)` 是安全的默认答案：两种币种的金额、句柄一律不相等；规则里的 `==` 对前者是 `ErrCurrency`，要语言的语义就写进规则。
 
 ## 注册扩展函数
 
@@ -203,7 +203,7 @@ registry.Register(funroute.FunctionSpec{
 - 语言服务从注册表读函数的说明与案例，用在悬停和补全里，新增函数不需要改任何前端代码。
 - 内核与标准库的每个函数都带案例，由测试逐条运行、比对结果，并要求它们合起来用到这个名字的每一个重载，所以案例不会与实现走样。
 
-扩展函数被当作**不可信的纯函数**：VM 会兜住 panic，但无法证明它真的没有副作用，生产环境仍需代码审查。完整的宿主范例见 `internal/demo/`（工作台用的演示控制台）。
+扩展函数的**纯度是宿主的承诺**：VM 会兜住 panic，但无法证明它真的没有副作用，生产环境仍需代码审查。依赖纯度的优化都要宿主显式声明才启用：`Constexpr`（编译期折叠）、`Fold`（融合与短路）、`GoBatch`（合批）；见[语义宪章](semantics.md#术语表)。完整的宿主范例见 `internal/demo/`（工作台用的演示控制台）。
 
 **容器不拷贝**：`func(xs []float64)` 收到的就是宿主传进来的那个切片，返回的切片也原样进入 VM。代价是一条约定：交给 `Value` 的切片或映射，从那一刻起只读。
 
@@ -260,19 +260,21 @@ defer batch.Close()
 decision, err := batch.Run(ctx, &request)
 ```
 
-`RunBatch(ctx, n, in func(i int) *In, out func(i int) *Out, opts, failed)` 只有这一个入口：**一个下标同时指请求、结果和失败**，请求从 `in(i)` 读，结果写进 `out(i)`，`failed(i, err)` 说的就是第 i 条。请求与结果放在哪由宿主说：两个切片、每个请求自己的响应对象（结果直接写进去，不分配也不复制）、更大对象里的字段、跨批复用的缓冲区都是同一个调用。`in(i)` 在运行前调用一次，`out(i)` 在该条跑完后调用一次；返回 nil 只让那一条失败（`ErrContract`）。
+`RunBatch(ctx, n, in func(i int) *In, out func(i int) *Out, opts, failed)` 只有这一个入口：**一个下标同时指请求、结果和失败**，请求从 `in(i)` 读，结果写进 `out(i)`，`failed(i, err)` 说的就是第 i 条。请求与结果放在哪由宿主说：两个切片、每个请求自己的响应对象（结果直接写进去，不分配也不复制）、更大对象里的字段、跨批复用的缓冲区都是同一个调用。`in(i)` 在运行前调用一次，`out(i)` 在该条跑完后调用一次；返回 nil 只让那一条失败（`ErrContract`）。`n` 不大于零时什么也不做。
 
 几条共同的保证：
 
 - **写回的 `Out` 总是完整的结果**：先清零再写，artifact 没声明的字段也是零，和 `Run` 返回的一样，跨规则复用的缓冲区不会残留上一条规则的值；失败那条保持零值，不会写一半。因此宿主自己的数据不要和规则结果放在同一个 `Out` 里。
-- **ctx 一路传到引擎**：整批在宿主传入的 `ctx` 下运行，deadline 和 ctx 里的值（trace 等）都能到达模型调用。
+- **合批只改变调用次数**：扩展函数是纯的、只依赖第一条请求 ctx 里的值时，每条请求的答案与单独 `Run` 相同；一次引擎调用失败，同批每条请求都在这一步失败。
+- **共享调用的 ctx**：值（trace 等）取批内第一条请求的 ctx；截止时间取批内最晚的那个，有请求没设就不设；只有批内所有请求都不再等待时才取消，一条请求取消不连累同批其他请求。`RunBatch` 的整批共用宿主传入的 `ctx`。
+- **每条请求只等自己的 ctx**：`batch.Run` 的请求还没被取走时 ctx 结束，就立即返回、这条请求作废；已经开始运行的，等它这一次运行结束再返回。所以 `Run` 返回之后，`args` 与 `In` 指向的内存总能安全复用。详见[语义宪章 S5](semantics.md#s5-批处理契约)。
 - **分配**：`RunBatch` 的全部参数共用一次分配；`program.Batch` 每条请求多分配一次参数切片，因为请求要排队。和 `Program.Run` 一样，只转换程序读到的参数。
 - **只合批不改变结果的调用**：参数直接来自入参或常量，且不在循环或条件分支里。`if`、`switch`、`fallback` 里的调用仍按需逐条执行。
 
 ## 超时、兜底与错误
 
-- 请求的时间预算通过 `ctx` 传入，VM 在每次调用扩展函数前检查（标了 `Constexpr` 的纯函数除外：它们快、不等待任何东西）；循环每 32768 轮也检查一次（最慢的常见循环体约 1 ms 一次），所以规则在截止时间后约 1 ms 内停下，报 `ErrDeadline`。`ctx` 既没有截止时间也不能取消时一次也不查。语言必然终止，但遍历很长的输入、嵌套遍历字面量仍可能跑很久：给 `ctx` 设截止时间就是给规则设上限。
-- `Doc.Timeout` 是单个函数的上限，实际 deadline 取 `min(请求剩余时间, Timeout)`。合批时取批内最早的 deadline，所以 `MaxWait` 要远小于请求预算。
+- 请求的时间预算通过 `ctx` 传入，VM 在每次调用扩展函数前检查（标了 `Constexpr` 的纯函数除外：它们快、不等待任何东西）；循环每 32768 轮也检查一次（最慢的常见循环体约 1 ms 一次），所以规则在截止时间后约 1 ms 内停下，报 `ErrDeadline`。`ctx` 既没有截止时间也不能取消时一次也不查。语言必然终止，但遍历很长的输入、嵌套遍历字面量仍可能跑很久：给 `ctx` 设截止时间就是给规则设上限。内核函数单次调用不查截止时间，它的工作量随输入的规模增长（排序、`unique`、`median` 读整个数组，`s[i]` 跳到很长文本的远处）：循环体每轮都对一个很大的输入调用它们时，两次检查之间可能远超 1 ms。
+- `Doc.Timeout` 是单个函数的上限，实际 deadline 取 `min(请求剩余时间, Timeout)`。合批时共享的调用取批内最晚的 deadline，每条请求仍在自己的 deadline 到时返回，所以 `MaxWait` 要远小于请求预算。
 - 无法取消的引擎绑定注册时标 `Doc.Detached: true`，VM 在独立 goroutine 中等它，到点就放弃。
 
 规则里用 `fallback` 做兜底，按顺序尝试，前一个失败才试下一个：
@@ -341,7 +343,7 @@ minimal.EnableForm(funroute.SwitchForm)   // 只给多分支，不给遍历
 
 **执行本身不分配内存**。装载时的值流分析知道每个数组去了哪里：只在程序里被遍历、取长度或下标的数组建在帧自己的内存里，帧跨运行复用，稳定之后 0 次分配；只有交给宿主的结果才要自己的内存，而 `Program.RunInto` 可以把它建在宿主给的切片里。金额也一样：边界上的币种扫描、金额运算、换汇与 `using` 都是 0 次分配。
 
-编译器另做两处不改变结果的改写：声明了 `Fold` 的函数（`sum`、`any`、`all`、`first`、`len`）套推导式时编译成单遍折叠，不建中间数组；嵌套推导的内层源不依赖外层元素时只算一次。`any`/`all` 因此在决定答案的元素处停下，后面的元素不再计算，也不会报错，和 `||`、`&&` 一样。
+声明了 `Fold` 的函数（`sum`、`any`、`all`、`first`、`len`）套推导式时编译成单遍折叠，不建中间数组；嵌套推导的内层源不依赖外层元素时只算一次。对 `sum`、`len` 这只改执行方式；`any`/`all`/`first` 却是**短路形式**：在决定答案的元素处停下，后面的元素不再计算，也不会报错，和 `||`、`&&` 一样，这是语义的一部分（[语义宪章 S4](semantics.md#s4-求值策略)）。`Fold` 记在签名清单里，按清单编译与按注册表编译得出同一个 Artifact。
 
 Apple M5 上的几个数（2026-09-28；完整的表见 [`docs/perf.md`](perf.md)，由 `make perf` 生成，那里每项都与同一件事直接用 Go 写的耗时对照，并与 expr 逐行对照）：
 

@@ -101,6 +101,9 @@ const (
 	rCollect // adds register a, under the key in b unless b is -1: of kind c
 	rCollectI
 	rCollectF
+	// rCollectItem adds the item of the innermost loop as it is: of a view,
+	// where it is in the host's slice (rloop.collectsItem).
+	rCollectItem
 	rSpread // adds the items of the array in a
 	// rLoopBreak ends loops[c] with register a as its answer, and goes to
 	// b: the loop's exit, or wherever the stack instruction went on to.
@@ -109,6 +112,24 @@ const (
 	rEndFallback
 	rFxPush // opens a using of the b quotes from a
 	rFxPop
+	// The kernel operations added after the hot loop's range was laid out:
+	// placed before rCall they would push the hot ones after it up, and the
+	// hot loop measurably slower. cold runs them by coldKernels too
+	// (kernelRop). The extremes of two values and an absolute value:
+	// min(fee, cap).
+	rMinI
+	rMaxI
+	rMinF
+	rMaxF
+	rAbsI // c = |a|, refusing the smallest int, which has none
+	rAbsF
+	// A text's character, its length and a slice of it, from where the last
+	// of them on the same text left off (banks.text): s[i] down a text steps
+	// a character, not the text up to it. rSliceS takes a third operand, the
+	// end, in c's int, ahead of writing the slice to c's value.
+	rAtS
+	rLenS
+	rSliceS
 	ropCount
 )
 
@@ -122,11 +143,12 @@ var ropNames = [ropCount]string{
 	rBranchLeF: "branch_le_f", rBranchLtS: "branch_lt_s", rBranchLeS: "branch_le_s", rBranchEq: "branch_eq",
 	rBranchEqI: "branch_eq_i", rBranchEqF: "branch_eq_f", rEq: "eq", rEqI: "eq_i", rEqF: "eq_f",
 	rLen: "len", rAt: "at", rAtI: "at_i", rAtF: "at_f", rAtB: "at_b",
-	rAtD: "at_d", rAtDI: "at_d_i", rAtDF: "at_d_f", rAtDB: "at_d_b", rIntToF: "int_to_f", rFloatToI: "float_to_i", rAtA: "at_a", rTake: "take", rCall: "call",
+	rAtD: "at_d", rAtDI: "at_d_i", rAtDF: "at_d_f", rAtDB: "at_d_b", rIntToF: "int_to_f", rFloatToI: "float_to_i", rAtA: "at_a", rTake: "take",
+	rMinI: "min_i", rMaxI: "max_i", rMinF: "min_f", rMaxF: "max_f", rAbsI: "abs_i", rAbsF: "abs_f", rAtS: "at_s", rLenS: "len_s", rSliceS: "slice_s", rCall: "call",
 	rField: "field", rFieldI: "field_i", rFieldF: "field_f", rFieldB: "field_b", rBranchField: "branch_field", rHasKey: "has_key",
 	rMakeArray: "make_array", rMakeDict: "make_dict", rMakeRecord: "make_record", rRecordWith: "record_with",
 	rLoopInit: "loop_init", rCollect: "collect", rSpread: "spread", rLoopNext: "loop_next", rLoopBreak: "loop_break", rCollectNext: "collect_next",
-	rCollectI: "collect_i", rCollectF: "collect_f", rCollectNextI: "collect_next_i", rCollectNextF: "collect_next_f",
+	rCollectI: "collect_i", rCollectF: "collect_f", rCollectItem: "collect_item", rCollectNextI: "collect_next_i", rCollectNextF: "collect_next_f",
 	rBeginFallback: "begin_fallback", rEndFallback: "end_fallback", rFxPush: "fx_push", rFxPop: "fx_pop",
 	rHalt: "halt",
 }
@@ -161,6 +183,10 @@ type regProgram struct {
 	calls   []rcall
 	loops   []rloop
 	makes   []rmake
+	// hidesArrays says an argument may hold a native array deeper than the
+	// answer's slots are checked against (overlapsAny): RunInto then builds
+	// in memory of its own rather than in what the host lent.
+	hidesArrays bool
 	// args is where the arguments start, and size how many registers there
 	// are.
 	args, size int32
@@ -228,11 +254,21 @@ type rloop struct {
 	dst            int32
 	exit           int32
 	spread         bool
+	// filters says some items reach the loop's end uncollected — a filter
+	// the compiler wrote as a jump to its loop_next — so the array it makes
+	// is sized as it fills past filteredStart, not by its source.
+	filters bool
 	// itemsInPlace is set for a loop over an array of plain records whose
 	// item is only read field by field (lower_escape.go), and fields is the
 	// fields the body reads: each item loads those alone.
 	itemsInPlace bool
 	fields       []int32
+	// promoted is the register each of fields is loaded into, in the file
+	// of its kind: a read of the field reads the register. collectsItem says
+	// the loop collects its item as it is (rCollectItem): over a view, the
+	// array it makes is a view of the items it collected.
+	promoted     []int32
+	collectsItem bool
 	built
 	// vec is the plan a vector runs the loop's body by, when it can.
 	vec *vecPlan
@@ -255,6 +291,13 @@ type rmake struct {
 	boxes []scalarArg
 	built
 	// answer marks the record the program answers, built in the frame's
-	// own record when the host reads it before the frame goes.
+	// own record when the host reads it before the frame goes; sink a
+	// record a loop collects as soon as it is made, built in its array's
+	// slab (arrayBuilder.record).
 	answer bool
+	sink   bool
+	// base is, for an update of a loop's item whose fields are in registers
+	// of their own (itemRegsOf), the register of each field: the update
+	// starts from those.
+	base []int32
 }

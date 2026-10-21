@@ -223,6 +223,11 @@ func TestMoneyTimesACountIsExact(t *testing.T) {
 		"half of MinInt64 x2":  {usd(math.MinInt64 / 2), 2, usd(math.MinInt64), false},
 		"past MinInt64 by one": {usd(math.MinInt64/2 - 1), 2, Money{}, true},
 		"MaxInt64 times -1":    {usd(math.MaxInt64), -1, usd(-math.MaxInt64), false},
+		"-1 times MinInt64":    {usd(-1), math.MinInt64, Money{}, true},
+		"1 times MinInt64":     {usd(1), math.MinInt64, usd(math.MinInt64), false},
+		"MinInt64 squared":     {usd(math.MinInt64), math.MinInt64, Money{}, true},
+		"MaxInt64 squared":     {usd(math.MaxInt64), math.MaxInt64, Money{}, true},
+		"-1 times -1":          {usd(-1), -1, usd(1), false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -232,6 +237,32 @@ func TestMoneyTimesACountIsExact(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A count multiplies as the 128-bit product would, refusing what does not
+// fit: on every pair of edge values, the same answer as a·b/1.
+func TestMulInt64IsTheWideProduct(t *testing.T) {
+	t.Parallel()
+	edges := []int64{0, 1, -1, 2, -2, 3, math.MaxInt64, math.MinInt64, math.MaxInt64 / 2, math.MinInt64 / 2,
+		math.MinInt64/2 - 1, math.MaxInt64/2 + 1, 1 << 32, -1 << 32, 1<<31 + 1, 3037000499, 3037000500, -3037000500}
+	for _, a := range edges {
+		for _, b := range edges {
+			got, err := mulInt64(a, b)
+			want, wantErr := mulDivRound(a, b, 1, RoundDown)
+			if got != want || (err == nil) != (wantErr == nil) || (err != nil && err.Error() != wantErr.Error()) {
+				t.Fatalf("mulInt64(%d, %d) = %d, %v, want %d, %v", a, b, got, err, want, wantErr)
+			}
+		}
+	}
+}
+
+func BenchmarkMoneyMulInt(b *testing.B) {
+	m := usd(123456789)
+	var sink Money
+	for b.Loop() {
+		sink, _ = m.MulInt(37)
+	}
+	_ = sink
 }
 
 // Money times a ratio lands on the minor unit once, by the mode the caller
@@ -374,6 +405,8 @@ func TestMethodsCheckWhatTheyAreHanded(t *testing.T) {
 			_, err := (Money{currency: "USD", minor: 5}).MulRatio(ratio(1, 3), Rounding(99))
 			return err
 		}, ErrArithmetic},
+		"an unknown rounding's name": {func() error { _, err := ParseRounding("nearest"); return err }, ErrArithmetic},
+		"an unknown strategy's name": {func() error { _, err := ParseAllocation("random"); return err }, ErrArithmetic},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -445,5 +478,29 @@ func TestRoundToTakesWholeSteps(t *testing.T) {
 	}
 	if _, err := chf(100).RoundTo(usd(5), RoundHalfUp); !errors.Is(err, ErrCurrency) {
 		t.Fatalf("a step in another currency: error = %v, want ErrCurrency", err)
+	}
+}
+
+// DivRatio divides by the ratio itself, never by its inverse: dividing by
+// MinInt64, whose inverse fits no ratio, is an answer like any other.
+func TestMoneyDividedByARatioNeedsNoInverse(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		m    Money
+		r    Ratio
+		want Money
+	}{
+		"zero by MinInt64":     {usd(0), ratio(math.MinInt64, 1), usd(0)},
+		"MinInt64 by itself":   {usd(math.MinInt64), ratio(math.MinInt64, 1), usd(1)},
+		"a net of 97.1%":       {usd(9710), ratio(971, 1000), usd(10000)},
+		"by a negative, up":    {usd(1), ratio(-3, 1), usd(-1)},
+		"by a negative, plain": {usd(3), ratio(-3, 2), usd(-2)},
+	} {
+		if got, err := test.m.DivRatio(test.r, RoundUp); err != nil || got != test.want {
+			t.Errorf("%s: %v ÷ %s = %v, %v, want %v", name, test.m, test.r, got, err, test.want)
+		}
+	}
+	if _, err := usd(1).DivRatio(Ratio{}, RoundUp); !errors.Is(err, ErrArithmetic) {
+		t.Fatalf("DivRatio by zero error = %v, want ErrArithmetic", err)
 	}
 }

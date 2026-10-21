@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"sort"
 	"strconv"
@@ -181,4 +182,16 @@ func everyPosition(doc *document) {
 // position names a character on the first line of the document at uri.
 func position(uri string, character int) map[string]any {
 	return map[string]any{"textDocument": map[string]string{"uri": uri}, "position": map[string]int{"line": 0, "character": character}}
+}
+
+// A column as large as an int holds is past the line's end, in every
+// encoding: it is held there, never wrapped to a negative offset.
+func TestAHugeColumnIsTheLinesEnd(t *testing.T) {
+	t.Parallel()
+	doc := newDocument("x", 0, "a + é\nb")
+	for _, encoding := range []string{utf8Encoding, utf16Encoding} {
+		if got := doc.offset(Position{Line: 0, Character: math.MaxInt}, encoding); got != len("a + é") {
+			t.Errorf("%s: the offset of a huge column is %d, want the line's end %d", encoding, got, len("a + é"))
+		}
+	}
 }

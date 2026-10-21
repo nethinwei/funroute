@@ -1,10 +1,12 @@
 package lsp
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/nethinwei/funroute/internal/compile"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -27,6 +29,46 @@ func TestFormattingAndHover(t *testing.T) {
 	if value := as[string](t, as[map[string]any](t, argument["contents"])["value"]); !strings.Contains(value, "fee 的说明") {
 		t.Errorf("hover on an argument is %q, want its contract doc \"fee 的说明\"", value)
 	}
+	// In parentheses an argument is the same argument.
+	s.open("file:///b.fr", "(fee) + x")
+	grouped := as[map[string]any](t, s.request("textDocument/hover", position("file:///b.fr", 2)))
+	if value := as[string](t, as[map[string]any](t, grouped["contents"])["value"]); !strings.Contains(value, "fee: int") || !strings.Contains(value, "fee 的说明") {
+		t.Errorf("hover on an argument in parentheses is %q, want \"fee: int\" and its contract doc", value)
+	}
+}
+
+// A program formatting would lose a comment of is refused with the reason,
+// which no diagnostic gives; one that does not parse is left as it is, its
+// diagnostics saying why.
+func TestFormattingSaysWhyItCannot(t *testing.T) {
+	t.Parallel()
+	s := newSession(t, standard(t), `{}`)
+	s.notify("funroute/setContract", contract("fee:int"))
+	s.open("file:///a.fr", "let(rate = fee, // the fee\n rate)")
+	failure := as[map[string]any](t, s.request("textDocument/formatting", docParams("file:///a.fr")))
+	if message, _ := failure["message"].(string); !strings.Contains(message, "comment inside the expression") {
+		t.Errorf("formatting a comment inside the expression answers %v, want the reason", failure)
+	}
+	s.open("file:///b.fr", "let(")
+	if edits := as[[]any](t, s.request("textDocument/formatting", docParams("file:///b.fr"))); len(edits) != 0 {
+		t.Errorf("formatting a text that does not parse gives %v, want no edit", edits)
+	}
+}
+
+// On a selector the hover says what it reads of each item: .fee is an int,
+// not the array of every item's.
+func TestHoverOnASelectorIsTheFieldsType(t *testing.T) {
+	t.Parallel()
+	s := newSession(t, standard(t), `{}`)
+	s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
+		{"name": "quotes", "type": "array<record{fee: int, channel: string}>"},
+	}}})
+	text := "sort_by(quotes, .fee)"
+	s.open("file:///a.fr", text)
+	shown := as[map[string]any](t, s.request("textDocument/hover", position("file:///a.fr", strings.Index(text, "fee"))))
+	if value := as[string](t, as[map[string]any](t, shown["contents"])["value"]); !strings.Contains(value, ".fee: int") {
+		t.Errorf("hover on .fee is %q, want \".fee: int\"", value)
+	}
 }
 
 func TestCompletionOffersWhatThePositionCanName(t *testing.T) {
@@ -46,6 +88,15 @@ func TestCompletionOffersWhatThePositionCanName(t *testing.T) {
 	if got := labels(t, s.request("textDocument/completion", position("file:///b.fr", 7))); strings.Join(got, ",") != "adyen,stripe" {
 		t.Errorf("after @ the completion is %v, want [adyen stripe]", got)
 	}
+	// A member half typed is still one; an @ in a string is no member.
+	s.open("file:///c.fr", "ch == @ad")
+	if got := labels(t, s.request("textDocument/completion", position("file:///c.fr", 9))); strings.Join(got, ",") != "adyen,stripe" {
+		t.Errorf("after @ad the completion is %v, want [adyen stripe]", got)
+	}
+	s.open("file:///d.fr", `ch == "@"`)
+	if got := labels(t, s.request("textDocument/completion", position("file:///d.fr", 8))); slices.Contains(got, "adyen") {
+		t.Errorf("inside a string after @ the completion is %v, want no enum member", got)
+	}
 }
 
 // Signature help works on a call still being typed, which does not parse.
@@ -60,11 +111,29 @@ func TestSignatureHelpFindsTheCallBeingTyped(t *testing.T) {
 	}
 }
 
+// A comment between a function's name and its parenthesis leaves the call
+// what it is, as it does for the parser.
+func TestSignatureHelpLooksPastAComment(t *testing.T) {
+	t.Parallel()
+	s := newSession(t, standard(t), `{}`)
+	s.open("file:///a.fr", "len // the length\n(")
+	help := as[map[string]any](t, s.request("textDocument/signatureHelp", map[string]any{
+		"textDocument": map[string]string{"uri": "file:///a.fr"}, "position": map[string]int{"line": 1, "character": 1},
+	}))
+	if first := as[map[string]any](t, as[[]any](t, help["signatures"])[0]); !strings.HasPrefix(as[string](t, first["label"]), "len(") {
+		t.Errorf("signature help is %v, want len's", help)
+	}
+}
+
 // A record's colon or a field's dot inside an earlier argument does not
 // reset the count.
 func TestSignatureHelpCountsPastRecordsAndFields(t *testing.T) {
 	t.Parallel()
-	for text, want := range map[string]float64{"if(true, {a: 1}, ": 2, "if(r.a, ": 1, "if(true, [x for x in xs], ": 2} {
+	// Past the last parameter, the last one stays active: the index never
+	// leaves the signature shown.
+	// A paren that only groups is no call: the call is the one around it.
+	for text, want := range map[string]float64{"if(true, {a: 1}, ": 2, "if(r.a, ": 1, "if(true, [x for x in xs], ": 2, "if(true, 1, 2, 3, ": 2,
+		"if(a, (b": 1, "if(a, (b + (c": 1, "if((a), b, ": 2} {
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
 			s := newSession(t, standard(t), `{}`)
@@ -266,6 +335,7 @@ func TestHoverSaysAnAmountInMinorUnits(t *testing.T) {
 		{"KWD 1.234", "KWD 1.234: money", "最小单位 1234（KWD 保留 3 位小数）", 0, 0, 9},
 		{"k + KWD -0.001", "KWD -0.001: money", "最小单位 -1（KWD 保留 3 位小数）", 6, 4, 14},
 		{"USD 0", "USD 0: money", "最小单位 0（USD 保留 2 位小数）", 4, 0, 5},
+		{"k + (USD 1.70)", "(USD 1.70): money", "最小单位 170（USD 保留 2 位小数）", 6, 4, 14},
 	} {
 		t.Run(test.text, func(t *testing.T) {
 			t.Parallel()
@@ -332,6 +402,69 @@ func TestHoverAndCompletionShowExamples(t *testing.T) {
 	for label, want := range map[string]string{"len": `len("日本円")  // 3`, "switch": `else => "many")  // "few"`} {
 		if !strings.Contains(documented[label], want) {
 			t.Errorf("completion of %s documents %q, want it to contain %q", label, documented[label], want)
+		}
+	}
+}
+
+// Inside a string or a comment no name is written, so none is offered; right
+// after a string, or on the line after a comment, names are again.
+func TestCompletionOffersNothingInsideTextOrAComment(t *testing.T) {
+	t.Parallel()
+	for text, offered := range map[string]bool{
+		`upper("ab|")`:               false,
+		`upper("ab|`:                 false,
+		`len("x") // a note|`:        false,
+		`len("x") // a| note`:        false,
+		`len("x")| // a note`:        true,
+		`upper("ab")|`:               true,
+		`len("x") // a note` + "\n|": true,
+	} {
+		s := newSession(t, standard(t), `{}`)
+		cursor := strings.Index(text, "|")
+		source := strings.Replace(text, "|", "", 1)
+		s.open("file:///a.fr", source)
+		line := strings.Count(source[:cursor], "\n")
+		character := cursor - (strings.LastIndex(source[:cursor], "\n") + 1)
+		got := labels(t, s.request("textDocument/completion", map[string]any{"textDocument": map[string]string{"uri": "file:///a.fr"}, "position": map[string]int{"line": line, "character": character}}))
+		if offered != slices.Contains(got, "len") {
+			t.Errorf("%q: completion offers %d names, want them offered %v", text, len(got), offered)
+		}
+	}
+}
+
+// A completion in a rule of some 3 KB, in the fields of an update and among
+// the locals: on a version just opened, as after every keystroke, and again
+// on the same version, which reads what the first request worked out.
+func BenchmarkCompletionInALongRule(b *testing.B) {
+	var rule strings.Builder
+	rule.WriteString("let(\n")
+	for i := 0; rule.Len() < 3000; i++ {
+		fmt.Fprintf(&rule, "  b%d = order.fee * %d + order.amount,\n", i, i+1)
+	}
+	head := rule.String()
+	for name, text := range map[string]string{
+		"update": head + "  order with {fee: 0, ",
+		"locals": head + "  o = order with {fee: 1},\n  o.fee + ",
+	} {
+		s := New(standard(b), func([]byte) {})
+		s.applyContract(&compile.TextContract{Args: []compile.TextArg{{Name: "order", Type: "record{amount: int, fee: int, currency: string}"}}})
+		same := newDocument("x", 0, text)
+		b.Run(name+"/fresh", func(b *testing.B) {
+			completeAtEnd(b, s, func() *document { return newDocument("x", 0, text) })
+		})
+		b.Run(name+"/same", func(b *testing.B) {
+			completeAtEnd(b, s, func() *document { return same })
+		})
+	}
+}
+
+// completeAtEnd completes at the end of the document doc gives, once a loop.
+func completeAtEnd(b *testing.B, s *Server, doc func() *document) {
+	b.Helper()
+	for b.Loop() {
+		d := doc()
+		if _, err := s.completion(d, len(d.text)); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

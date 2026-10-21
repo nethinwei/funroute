@@ -156,3 +156,21 @@ func TestAStraightProgramHonoursTheDeadline(t *testing.T) {
 		t.Errorf("straight %v: %v; ordinary: %v; want the same failure", machine.Straight(program), got, want)
 	}
 }
+
+type goIntIn struct {
+	Count int    `funroute:"count"`
+	Name  string `funroute:"name"`
+}
+
+// A Go int field is loaded straight into its file as an int64 is: as wide
+// as the platform makes it, never read as eight bytes it may not have.
+func TestAGoIntFieldIsLoadedStraight(t *testing.T) {
+	t.Parallel()
+	program := bindProgram[goIntIn, int64](t, machine.CoreRegistry(), `count * 2 + len(name)`)
+	if !machine.PlainLoads(program) {
+		t.Fatal("an int field is loaded the slow way")
+	}
+	if got, err := program.Run(t.Context(), &goIntIn{Count: -21, Name: "ab"}); err != nil || got != -40 {
+		t.Fatalf("count * 2 + len(name) = %v, %v; want -40", got, err)
+	}
+}

@@ -1,6 +1,11 @@
 package machine
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+
+	"github.com/nethinwei/funroute/internal/kit"
+)
 
 // instruction lowers one stack instruction.
 func (l *lowerer) instruction(in Instruction) {
@@ -157,18 +162,32 @@ func (l *lowerer) build(in Instruction) {
 		op, count = rRecordWith, len(in.Keys)+1
 	}
 	answers := in.Op == OpMakeRecord || in.Op == OpRecordWith
-	made := rmake{typ: in.Type, keys: in.Keys, built: built{arena: -1, dest: -1}, answer: answers && l.flow.answer == l.pc}
+	made := rmake{typ: in.Type, keys: in.Keys, built: built{arena: -1, dest: -1}, answer: answers && l.flow.answer == l.pc, sink: answers && l.collectedNext()}
 	if in.Op == OpMakeArray {
 		made.built = l.builtFor(l.pc)
 	}
 	if in.Op == OpRecordWith {
 		made.keys, made.fields = nil, fieldIndexes(in)
+		if loop := l.flow.at[l.pc].itemOf; loop > 0 {
+			made.base = l.itemRegs[int(loop-1)]
+		}
 	}
 	made.boxes = l.boxes(count)
 	l.out.makes = append(l.out.makes, made)
 	first := l.window(count)
 	l.emit(op, first, int32(count), int32(len(l.out.makes)-1))
 	l.push(first)
+}
+
+// collectedNext reports a value the instruction after this one collects
+// into an array, in the same block: nothing else sees it in between.
+func (l *lowerer) collectedNext() bool {
+	next := l.pc + 1
+	if next >= len(l.code) || l.leaders[next] || len(l.open) == 0 {
+		return false
+	}
+	in := l.code[next]
+	return in.Op == OpLoopCollect && !in.collectsKey() && l.out.loops[l.open[len(l.open)-1]].acc < 0
 }
 
 // fieldIndexes is where each field a record update names is in the record.
@@ -226,17 +245,33 @@ func (l *lowerer) kernel(kernel kernelOp) {
 	case rAtD:
 		op = entryOp(l.pushedKind())
 	}
-	if kernel.unary {
+	switch {
+	case kernel.unary:
 		l.unary(op, 0)
-	} else {
+	case kernel.ternary:
+		l.ternary(op)
+	default:
 		l.binary(op, kernel.swap)
 	}
 }
 
+// ternary replaces the top three values with op of them: the last is moved
+// to the int of the register the answer goes in, which op reads before it
+// writes the answer there, and fault reads when op refuses.
+func (l *lowerer) ternary(op rop) {
+	last, right, left := l.pop(), l.pop(), l.pop()
+	l.move(last.kind, last.reg, l.top())
+	l.emitOn(op, left.reg, right.reg, l.top(), opKinds{a: left.kind, b: right.kind})
+	l.push(l.top())
+}
+
 // fusedBranch is the branch the operation at last makes one with, when it is
-// this block's ordering of condition.
+// this block's ordering of condition. Fusing drops the operation's write, so
+// condition must be a stack temporary, which the jump is the last to read: a
+// let's local the ordering was retargeted to (store) is read again by every
+// later load_local, and must keep its value.
 func (l *lowerer) fusedBranch(last int, condition int32) (rop, bool) {
-	if int32(last) < l.blockStart || l.out.code[last].c != condition {
+	if int32(last) < l.blockStart || l.out.code[last].c != condition || condition < l.stackBase || condition >= l.localBase {
 		return rInvalid, false
 	}
 	fused, ok := branchOps[l.out.code[last].op]
@@ -279,6 +314,18 @@ var branchOps = map[rop]rop{
 	rEqI: rBranchEqI, rEqF: rBranchEqF, rFieldB: rBranchField,
 }
 
+// skipsItems reports a loop whose body jumps straight to its loop_next, the
+// instruction before its exit: an item that goes there is not collected.
+func (l *lowerer) skipsItems(in Instruction) bool {
+	next := in.A - 1
+	if next <= l.pc || next >= len(l.code) || l.code[next].Op != OpLoopNext {
+		return false
+	}
+	return slices.ContainsFunc(l.code[l.pc+1:next], func(body Instruction) bool {
+		return (body.Op == OpJumpIfFalse || body.Op == OpJump) && body.A == next
+	})
+}
+
 // loopInit lowers the start of a loop: the source, and a fold's seed.
 func (l *lowerer) loopInit(in Instruction) {
 	seed := slot{reg: -1}
@@ -288,7 +335,11 @@ func (l *lowerer) loopInit(in Instruction) {
 	source := l.pop()
 	l.flush(0)
 	loop := rloop{typ: in.Type, item: l.localBase + int32(in.B), key: -1, acc: -1, dst: l.top(), exit: int32(in.A), built: l.builtFor(l.pc),
-		itemsInPlace: l.flow.at[l.pc].itemsInPlace, fields: l.flow.at[l.pc].itemFields}
+		itemsInPlace: l.flow.at[l.pc].itemsInPlace, fields: l.flow.at[l.pc].itemFields, filters: l.skipsItems(in)}
+	if regs, promoted := l.itemRegs[l.pc]; promoted {
+		loop.promoted = kit.Map(loop.fields, func(field int32) int32 { return regs[field] })
+		loop.collectsItem = l.flow.at[l.pc].collectsItem
+	}
 	if in.D != NoKey {
 		loop.key = l.localBase + int32(in.D)
 	}
@@ -323,7 +374,7 @@ func (l *lowerer) fold(in Instruction) {
 		l.emitOn(op, left.reg, right.reg, acc.reg, opKinds{a: left.kind, b: right.kind})
 		return
 	}
-	scratch := l.scratch()
+	scratch := l.scratchRegs()
 	l.move(acc.kind, acc.reg, scratch)
 	l.move(item.kind, item.reg, scratch+1)
 	var boxes []scalarArg
@@ -339,12 +390,12 @@ func (l *lowerer) fold(in Instruction) {
 	l.emit(rCall, int32(len(l.out.calls)-1), 0, 0)
 }
 
-// scratch is the first of the two registers past the locals a folding call
-// takes its arguments from, made there the first time one is asked for.
-func (l *lowerer) scratch() int32 {
-	first := l.localBase + l.locals
-	l.out.size = max(l.out.size, first+2)
-	return first
+// scratchRegs is the first of the two registers past the locals and the
+// promoted fields a folding call takes its arguments from, made there the
+// first time one is asked for.
+func (l *lowerer) scratchRegs() int32 {
+	l.out.size = max(l.out.size, l.scratch+2)
+	return l.scratch
 }
 
 // collect lowers what one iteration adds: a fold's accumulator is stored
@@ -356,7 +407,12 @@ func (l *lowerer) collect(in Instruction) {
 		return
 	}
 	value := l.pop()
-	if in.A == 1 {
+	if loop.collectsItem && value.reg == loop.item {
+		// The item is in no register: it is where the loop is.
+		l.emit(rCollectItem, 0, 0, 0)
+		return
+	}
+	if in.collectsKey() {
 		// A dictionary's entry is read out of the file its kind says, c.
 		key := l.pop()
 		l.emitOn(rCollect, value.reg, key.reg, int32(value.kind), opKinds{a: value.kind})

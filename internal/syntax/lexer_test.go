@@ -75,7 +75,9 @@ func TestAPercentAgainstANumberIsAlwaysARatio(t *testing.T) {
 			t.Fatalf("Parse(%q) error = %v, want one saying the %% makes a ratio", source, err)
 		}
 	}
-	for _, source := range []string{"1e3%", "USD 1e3", "25bpsx", "USD // x\n1", "USD -0", "USD -0.00"} {
+	// bps, like a duration's unit, is followed by nothing a name is made of,
+	// a dot included.
+	for _, source := range []string{"1e3%", "USD 1e3", "25bpsx", "25bps.x", "USD // x\n1", "USD -0", "USD -0.00"} {
 		if _, err := Parse(source); err == nil {
 			t.Fatalf("Parse(%q) succeeded, want an error", source)
 		}

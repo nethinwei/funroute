@@ -219,3 +219,27 @@ func TestRoundingModesIsACopy(t *testing.T) {
 		t.Fatal("writing to RoundingModes()'s result renamed a mode")
 	}
 }
+
+// A mode is written and read by its name, as a rule writes it after @; what
+// is no mode is refused both ways.
+func TestARoundingModeIsTextByItsName(t *testing.T) {
+	t.Parallel()
+	for _, name := range RoundingModes() {
+		mode, err := ParseRounding(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, err := mode.MarshalText()
+		var back Rounding
+		if err != nil || string(text) != name || back.UnmarshalText(text) != nil || back != mode {
+			t.Errorf("%s writes %q, %v and reads back %v, want its name both ways", name, text, err, back)
+		}
+	}
+	if text, err := Rounding(0).MarshalText(); err == nil {
+		t.Errorf("Rounding(0).MarshalText() = %q, want an error", text)
+	}
+	var r Rounding
+	if err := r.UnmarshalText([]byte("half")); err == nil {
+		t.Errorf("UnmarshalText(half) = %v, want an error", r)
+	}
+}

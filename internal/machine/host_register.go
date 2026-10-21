@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 )
@@ -91,13 +92,17 @@ func (r *Registry) reflectSpec(spec *FunctionSpec) error {
 		return fmt.Errorf("function %s: %w", spec.Name, err)
 	}
 	spec.Params, spec.Result, spec.Eval = single.params, single.result, single.call
-	if direct, ok := directEval(spec.Go); ok {
+	// The shapes called straight are read by Go type alone: a Go type the
+	// registry defined as a handle is not the scalar it looks like, so a
+	// signature holding one is called by reflection, which knows it.
+	straight := !slices.ContainsFunc(append(slices.Clip(single.params), single.result), typeHoldsHandle)
+	if direct, ok := directEval(spec.Go); ok && straight {
 		spec.Eval, spec.madeResult = direct, true
 	}
 	// A Go function called as itself is called straight from the registers
 	// when it is of a common shape; a pure one — a kernel function is pure
 	// without saying so (IsConstexpr) — without a look at the deadline.
-	if spec.Doc.Timeout == 0 && !spec.Doc.Detached && spec.GoBatch == nil {
+	if straight && spec.Doc.Timeout == 0 && !spec.Doc.Detached && spec.GoBatch == nil {
 		spec.banked = pureOf(spec.Go)
 		if spec.Doc.Constexpr || spec.builtin {
 			spec.pure = spec.banked
@@ -111,7 +116,7 @@ func (r *Registry) reflectSpec(spec *FunctionSpec) error {
 		return fmt.Errorf("function %s batch: %w", spec.Name, err)
 	}
 	spec.EvalBatch = batched.callBatch
-	if direct, ok := directBatch(spec.GoBatch); ok {
+	if direct, ok := directBatch(spec.GoBatch); ok && straight {
 		spec.EvalBatch = direct
 	}
 	return nil
@@ -130,6 +135,11 @@ type reflected struct {
 	goTypes []reflect.Type
 }
 
+// errVariadic is a variadic Go function, which a call of fixed arity
+// cannot reach: reflection would have to be handed the last parameter's
+// slice spread out.
+var errVariadic = errors.New("variadic Go functions are not supported")
+
 var (
 	contextType = reflect.TypeFor[context.Context]()
 	errorType   = reflect.TypeFor[error]()
@@ -140,6 +150,9 @@ func reflectSignature(registry *Registry, fn any) (*reflected, error) {
 	typ := value.Type()
 	if typ.Kind() != reflect.Func {
 		return nil, fmt.Errorf("want a func, got %T", fn)
+	}
+	if typ.IsVariadic() {
+		return nil, errVariadic
 	}
 	fails, ok := resultShape(typ)
 	if !ok {
@@ -172,6 +185,9 @@ func reflectSignature(registry *Registry, fn any) (*reflected, error) {
 func reflectBatch(batch any, single *reflected) (*reflected, error) {
 	value := reflect.ValueOf(batch)
 	typ := value.Type()
+	if typ.Kind() == reflect.Func && typ.IsVariadic() {
+		return nil, errVariadic
+	}
 	fails, ok := resultShape(typ)
 	if !ok {
 		return nil, errors.New("must be a func returning results, or (results, error)")

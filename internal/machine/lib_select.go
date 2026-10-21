@@ -65,7 +65,10 @@ func indexOfItem(_ context.Context, args []Value) (Value, error) {
 	case *bool:
 		at = slices.Index(itemsAt(first, args[0].i), wanted.b)
 	default:
-		at = slices.IndexFunc(valuesOf(args[0]), wanted.Equal)
+		var err error
+		if at, err = indexOfValue(args[0], wanted); err != nil {
+			return Value{}, err
+		}
 	}
 	if at < 0 {
 		return Value{}, errNotInArray
@@ -81,16 +84,21 @@ func valuesOf(array Value) []Value {
 
 // keyedSpecs are the keyed sorts, both ways, and the keyed cuts: sort_by
 // with a direction and a count, because "the three cheapest" and "the three
-// best" are what a rule asks for. A key is a fee, a rate or a name; the
-// money keys are money's (the standard pack's).
-func keyedSpecs() []FunctionSpec {
-	keys := []Type{IntType, FloatType, StringType}
+// best" are what a rule asks for. A key is a fee, a rate or a name; money
+// keys are registered with money (moneyKeyedSpecs).
+func keyedSpecs() []FunctionSpec { return keyedOn(IntType, FloatType, StringType) }
+
+// moneyKeyedSpecs are the keyed sorts and cuts by amounts, in one currency:
+// the cheapest channels by fee.
+func moneyKeyedSpecs() []FunctionSpec { return keyedOn(MoneyType) }
+
+func keyedOn(keys ...Type) []FunctionSpec {
 	specs := make([]FunctionSpec, 0, 4*len(keys))
 	for _, keyed := range []keyedFunction{
-		{"sort_by", "按键排序", "按第二个数组的键把第一个数组升序排好，两者长度必须相同；相等的保持原顺序。取最便宜的三个写 take(sort_by(channels, fees), 3)。", true, false},
-		{"sort_by_desc", "按键降序", "sort_by 的反向：按键从大到小排。相等的保持原顺序。", false, false},
-		{"bottom_k", "取最小的 k 个", "按键升序取前 k 个候选：最便宜的几个渠道。k 大于长度就取完。", true, true},
-		{"top_k", "取最大的 k 个", "按键降序取前 k 个候选：成功率最高的几个渠道。k 大于长度就取完。", false, true},
+		{"sort_by", "按键排序", "按第二个数组的键把第一个数组升序排好，两者长度必须相同；相等的保持原顺序，float 的 NaN 排最前。取最便宜的三个写 take(sort_by(channels, fees), 3)。", true, false},
+		{"sort_by_desc", "按键降序", "sort_by 的反向：按键从大到小排。相等的保持原顺序，float 的 NaN 排最后。", false, false},
+		{"bottom_k", "取最小的 k 个", "按键升序取前 k 个候选：最便宜的几个渠道。k 大于长度就取完；float 的 NaN 排最前。", true, true},
+		{"top_k", "取最大的 k 个", "按键降序取前 k 个候选：成功率最高的几个渠道。k 大于长度就取完；float 的 NaN 排最后。", false, true},
 	} {
 		for _, key := range keys {
 			specs = append(specs, keyed.spec(key))
@@ -106,11 +114,11 @@ type keyedFunction struct {
 
 func (k keyedFunction) spec(key Type) FunctionSpec {
 	list := ArrayOf(TypeVar("T"))
-	ascending := k.ascending
+	ascending, name := k.ascending, k.name
 	spec := FunctionSpec{
 		Name: k.name, Params: []Type{list, ArrayOf(key)}, Result: list,
 		Eval: func(_ context.Context, args []Value) (Value, error) {
-			return sortedBy(args, ascending)
+			return sortedBy(name, args, ascending)
 		},
 		Doc: Doc{
 			Label: k.label, Category: "选择", Description: k.description,
@@ -120,7 +128,7 @@ func (k keyedFunction) spec(key Type) FunctionSpec {
 	if k.ranked {
 		spec.Params = append(spec.Params, IntType)
 		spec.Eval = func(_ context.Context, args []Value) (Value, error) {
-			return rankedBy(args, ascending)
+			return rankedBy(name, args, ascending)
 		}
 		spec.Doc.Params, spec.Doc.Result = []string{"候选", "键", "个数"}, "选出的候选"
 	}
@@ -129,12 +137,12 @@ func (k keyedFunction) spec(key Type) FunctionSpec {
 
 // sortedBy is the candidates in the order of their keys, ties in place: an
 // order worked out on the keys' own backing, the candidates rearranged by it.
-func sortedBy(args []Value, ascending bool) (Value, error) {
-	items, keys := args[0], args[1]
-	n := items.length()
-	if count := keys.length(); count != n {
-		return Value{}, fmt.Errorf("%w: sort_by has %d candidates and %d keys", ErrDomain, n, count)
+func sortedBy(name string, args []Value, ascending bool) (Value, error) {
+	items, keys, err := keyedArgs(name, args)
+	if err != nil {
+		return Value{}, err
 	}
+	n := items.length()
 	var order []int
 	switch box := keys.box.(type) {
 	case *int64:
@@ -151,12 +159,12 @@ func sortedBy(args []Value, ascending bool) (Value, error) {
 
 // rankedBy is the count first candidates in the order of their keys, ties
 // in place: sortedBy's first count, found without sorting the rest.
-func rankedBy(args []Value, ascending bool) (Value, error) {
-	items, keys, count := args[0], args[1], args[2].i
-	n := items.length()
-	if m := keys.length(); m != n {
-		return Value{}, fmt.Errorf("%w: sort_by has %d candidates and %d keys", ErrDomain, n, m)
+func rankedBy(name string, args []Value, ascending bool) (Value, error) {
+	items, keys, err := keyedArgs(name, args)
+	if err != nil {
+		return Value{}, err
 	}
+	n, count := items.length(), args[2].i
 	if count < 0 {
 		return Value{}, fmt.Errorf("%w: a count of candidates cannot be negative, got %d", ErrArithmetic, count)
 	}
@@ -175,11 +183,30 @@ func rankedBy(args []Value, ascending bool) (Value, error) {
 	return rearranged(items, k, func(i int) int { return order[i] }), nil
 }
 
+// keyedArgs is a keyed function's candidates and keys, as many as each
+// other: amounts as their minor units, once they are in one currency.
+func keyedArgs(name string, args []Value) (items, keys Value, err error) {
+	items, keys = args[0], args[1]
+	if n, m := items.length(), keys.length(); n != m {
+		return Value{}, Value{}, fmt.Errorf("%w: %s has %d candidates and %d keys", ErrDomain, name, n, m)
+	}
+	if amounts, ok := nativeItems[money.Money](keys); ok {
+		if err := meetValue(keys); err != nil {
+			return Value{}, Value{}, err
+		}
+		keys = arrayOf(minorsOf(amounts))
+	}
+	return items, keys, nil
+}
+
 // firstOf is the positions of the k first keys in order, ties by position —
 // a stable sort's first k — kept in a heap whose root is the last of them,
 // so the work is n log k. When k is most of the keys, sorting them all is
 // quicker.
 func firstOf[T cmp.Ordered](keys []T, k int, ascending bool) []int {
+	if k == 0 {
+		return []int{} // none of them: no key need be read
+	}
 	if 4*k >= len(keys) {
 		return orderBy(keys, ascending)[:k]
 	}
@@ -196,7 +223,7 @@ func firstOf[T cmp.Ordered](keys []T, k int, ascending bool) []int {
 		case len(kept) < k:
 			kept = append(kept, i)
 			siftUp(kept, len(kept)-1, before)
-		case k > 0 && before(i, kept[0]):
+		case before(i, kept[0]):
 			kept[0] = i
 			siftDown(kept, before)
 		}
@@ -265,8 +292,8 @@ func positionSpecs() []FunctionSpec {
 		name, label, description string
 		smallest                 bool
 	}{
-		{"arg_min", "最小值的位置", "最小元素的下标；并列取第一个，空数组报错。channels[arg_min(fees)] 就是最便宜的那个。", true},
-		{"arg_max", "最大值的位置", "最大元素的下标；并列取第一个，空数组报错。", false},
+		{"arg_min", "最小值的位置", "最小元素的下标；并列取第一个（-0 比 0 小，与 min 相同），遇 NaN 取它的下标，空数组报错。channels[arg_min(fees)] 就是最便宜的那个。", true},
+		{"arg_max", "最大值的位置", "最大元素的下标；并列取第一个（0 比 -0 大，与 max 相同），遇 NaN 取它的下标，空数组报错。", false},
 	} {
 		doc := Doc{
 			Label: extreme.label, Category: "选择",
@@ -289,8 +316,8 @@ func extremeBySpecs() []FunctionSpec {
 		name, label, description string
 		smallest                 bool
 	}{
-		{"min_by", "键最小的候选", "键最小的那个候选；并列取第一个。两者长度必须相同，空数组报错。min_by(channels, .fee) 就是最便宜的渠道。", true},
-		{"max_by", "键最大的候选", "键最大的那个候选；并列取第一个。两者长度必须相同，空数组报错。", false},
+		{"min_by", "键最小的候选", "键最小的那个候选；并列取第一个，float 的键 -0 比 0 小、遇 NaN 取它的候选（与 min 相同，而 sort_by 把 NaN 排最前）。两者长度必须相同，空数组报错。min_by(channels, .fee) 就是最便宜的渠道。", true},
+		{"max_by", "键最大的候选", "键最大的那个候选；并列取第一个，float 的键 0 比 -0 大、遇 NaN 取它的候选（与 max 相同，而 top_k 把 NaN 排最后）。两者长度必须相同，空数组报错。", false},
 	} {
 		name, smallest := extreme.name, extreme.smallest
 		for _, key := range []Type{IntType, FloatType, StringType} {
@@ -372,25 +399,33 @@ func evalGet(_ context.Context, args []Value) (Value, error) {
 func evalMerge(_ context.Context, args []Value) (Value, error) {
 	switch base := args[0].box.(type) {
 	case map[string]bool:
-		return merged(base, args[1].box), nil
+		return merged(base, args[1].box)
 	case map[string]int64:
-		return merged(base, args[1].box), nil
+		return merged(base, args[1].box)
 	case map[string]float64:
-		return merged(base, args[1].box), nil
+		return merged(base, args[1].box)
 	case map[string]string:
-		return merged(base, args[1].box), nil
+		return merged(base, args[1].box)
 	case map[string]money.Money:
-		return merged(base, args[1].box), nil
+		return merged(base, args[1].box)
 	case *nestedDict:
-		over, _ := args[1].box.(*nestedDict)
-		return Value{kind: DictKind, box: &nestedDict{elem: base.elem, entries: overlaid(base.entries, over.entries)}}, nil
+		if over, ok := args[1].box.(*nestedDict); ok {
+			return Value{kind: DictKind, box: &nestedDict{elem: base.elem, entries: overlaid(base.entries, over.entries)}}, nil
+		}
 	}
-	return Value{}, errors.New("merge needs two dictionaries")
+	return Value{}, errMergeBackings
 }
 
-func merged[T any](base map[string]T, over any) Value {
-	top, _ := over.(map[string]T)
-	return Value{kind: DictKind, box: overlaid(base, top)}
+// errMergeBackings is a merge of two dictionaries that are not of one
+// backing, which one type always is: refused, never one of them dropped.
+var errMergeBackings = errors.New("merge needs two dictionaries of one type")
+
+func merged[T any](base map[string]T, over any) (Value, error) {
+	top, ok := over.(map[string]T)
+	if !ok {
+		return Value{}, errMergeBackings
+	}
+	return Value{kind: DictKind, box: overlaid(base, top)}, nil
 }
 
 // overlaid is base with top's entries over it, in a map of its own.

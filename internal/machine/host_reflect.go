@@ -18,6 +18,30 @@ import (
 // reflectType is the FunRoute type of a Go type, or the handle it was defined
 // as.
 func reflectType(registry *Registry, typ reflect.Type) (Type, error) {
+	return reflectTypeOn(registry, typ, nil)
+}
+
+// typePath is the containers being derived around a type, innermost first.
+// It lives on the stack: deriving a struct's fields allocates nothing more.
+type typePath struct {
+	typ reflect.Type
+	up  *typePath
+}
+
+func (p *typePath) holds(typ reflect.Type) bool {
+	for ; p != nil; p = p.up {
+		if p.typ == typ {
+			return true
+		}
+	}
+	return false
+}
+
+// reflectTypeOn is reflectType for a type met on path: a container met again
+// inside itself would be derived forever, and the language has no recursive
+// types. Only the path counts, so two fields of the same type side by side
+// are fine.
+func reflectTypeOn(registry *Registry, typ reflect.Type, path *typePath) (Type, error) {
 	if name, ok := registry.handleName(typ); ok {
 		return HandleOf(name), nil
 	}
@@ -34,29 +58,41 @@ func reflectType(registry *Registry, typ reflect.Type) (Type, error) {
 		return FloatType, nil
 	case reflect.String:
 		return StringType, nil
+	case reflect.Slice, reflect.Struct, reflect.Map:
+		if path.holds(typ) {
+			return Type{}, fmt.Errorf("unsupported Go type %s: it contains itself, and the language has no recursive types", typ)
+		}
+		return reflectContainer(registry, typ, &typePath{typ: typ, up: path})
+	default:
+		return Type{}, fmt.Errorf("unsupported Go type %s", typ)
+	}
+}
+
+// reflectContainer is reflectTypeOn for a slice, a struct or a map, already
+// on path.
+func reflectContainer(registry *Registry, typ reflect.Type, path *typePath) (Type, error) {
+	switch typ.Kind() {
 	case reflect.Slice:
-		elem, err := reflectType(registry, typ.Elem())
+		elem, err := reflectTypeOn(registry, typ.Elem(), path)
 		if err != nil {
 			return Type{}, err
 		}
 		return ArrayOf(elem), nil
 	case reflect.Struct:
-		fields, _, err := structFields(registry, typ)
+		fields, _, err := structFieldsOn(registry, typ, path)
 		if err != nil {
 			return Type{}, err
 		}
 		return RecordOf(fields...), nil
-	case reflect.Map:
+	default:
 		if typ.Key().Kind() != reflect.String {
 			return Type{}, fmt.Errorf("unsupported Go type %s: dictionary keys must be strings", typ)
 		}
-		elem, err := reflectType(registry, typ.Elem())
+		elem, err := reflectTypeOn(registry, typ.Elem(), path)
 		if err != nil {
 			return Type{}, err
 		}
 		return DictOf(elem), nil
-	default:
-		return Type{}, fmt.Errorf("unsupported Go type %s", typ)
 	}
 }
 
@@ -159,14 +195,25 @@ func intoMap(registry *Registry, value Value, typ reflect.Type) (reflect.Value, 
 		return reflect.Value{}, fmt.Errorf("argument is %s, want a dictionary", value.Type())
 	}
 	out := reflect.MakeMapWithSize(typ, value.length())
-	for _, key := range value.keys() {
-		entry, _ := value.lookup(key)
+	put := func(key string, entry Value) error {
 		item, err := intoGo(registry, entry, typ.Elem())
 		if err != nil {
-			return reflect.Value{}, fmt.Errorf("entry %q: %w", key, err)
+			return fmt.Errorf("entry %q: %w", key, err)
 		}
 		// A named key type (map[Code]T) takes the key converted, not as a string.
 		out.SetMapIndex(reflect.ValueOf(key).Convert(typ.Key()), item)
+		return nil
+	}
+	// In the map's order, which costs nothing; an entry that does not fit is
+	// found again in key order, so the error names the same one every time.
+	if value.eachEntry(put) == nil {
+		return out, nil
+	}
+	for _, key := range value.keys() {
+		entry, _ := value.lookup(key)
+		if err := put(key, entry); err != nil {
+			return reflect.Value{}, err
+		}
 	}
 	return out, nil
 }
@@ -220,7 +267,7 @@ func outOfGo(registry *Registry, value reflect.Value, typ Type) (Value, error) {
 		return String(value.String()), nil
 	case HandleKind:
 		return NewHandle(typ.name, value.Interface()), nil
-	case MoneyKind, RatioKind, CurrencyKind, TimeKind, DurationKind:
+	case MoneyKind, RatioKind, FxRateKind, CurrencyKind, TimeKind, DurationKind:
 		return outOfOwnGo(value)
 	case ArrayKind:
 		return outOfSlice(registry, value, typ)
@@ -259,6 +306,9 @@ func outOfSlice(registry *Registry, value reflect.Value, typ Type) (Value, error
 func outOfMap(registry *Registry, value reflect.Value, typ Type) (Value, error) {
 	if wrapped, err := fromGo(value.Interface()); err == nil && wrapped.hasType(typ) {
 		return wrapped, nil
+	}
+	if value.Kind() != reflect.Map {
+		return Value{}, fmt.Errorf("%s is not a map, want %s", value.Type(), typ.Summary())
 	}
 	entries := make(map[string]Value, value.Len())
 	iter := value.MapRange()

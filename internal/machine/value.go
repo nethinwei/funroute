@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"reflect"
 	"slices"
 	"time"
 
@@ -321,9 +322,10 @@ func (v Value) Dict() (map[string]Value, bool) {
 		return nested.entries, true
 	}
 	out := make(map[string]Value, v.length())
-	for _, key := range v.keys() {
-		out[key], _ = v.lookup(key)
-	}
+	_ = v.eachEntry(func(key string, entry Value) error {
+		out[key] = entry
+		return nil
+	})
 	return out, true
 }
 
@@ -394,8 +396,26 @@ func (v Value) containerAny() any {
 		}
 		return out
 	default:
-		return nativeAny(v)
+		backing := nativeAny(v)
+		if v.length() == 0 {
+			return nonNil(backing)
+		}
+		return backing
 	}
+}
+
+// nonNil is an empty backing as an empty slice or map where a host handed
+// in a nil one: JSON writes it [] or {}, as MarshalJSON does, never null —
+// the language has no null.
+func nonNil(backing any) any {
+	value := reflect.ValueOf(backing)
+	switch {
+	case value.Kind() == reflect.Slice && value.IsNil():
+		return reflect.MakeSlice(value.Type(), 0, 0).Interface()
+	case value.Kind() == reflect.Map && value.IsNil():
+		return reflect.MakeMap(value.Type()).Interface()
+	}
+	return backing
 }
 
 // MarshalJSON writes a record's fields in the type's order. A Go map would come
@@ -437,7 +457,13 @@ func opensForJSON(v Value) bool {
 	case *nestedArray, *nestedDict:
 		return true
 	}
-	return v.kind == RecordKind || (v.kind == ArrayKind || v.kind == DictKind) && TypeContains(v.Type(), RecordKind)
+	return opensWith(v, func(kind Kind) bool { return kind == RecordKind })
+}
+
+// opensWith reports a record, or a container whose element type holds a kind
+// has accepts.
+func opensWith(v Value, has func(Kind) bool) bool {
+	return v.kind == RecordKind || (v.kind == ArrayKind || v.kind == DictKind) && typeHas(v.elemType(), has)
 }
 
 // jsonTree is v as the tree json.Marshal writes. The values walk accepts are
@@ -469,10 +495,10 @@ func jsonTree(v Value, walk func(Value) bool, leaf func(Value) any) any {
 		return items
 	case DictKind:
 		entries := make(map[string]any, v.length())
-		for _, key := range v.keys() {
-			entry, _ := v.lookup(key)
+		_ = v.eachEntry(func(key string, entry Value) error {
 			entries[key] = jsonTree(entry, walk, leaf)
-		}
+			return nil
+		})
 		return entries
 	}
 	return leaf(v)
@@ -482,13 +508,16 @@ func jsonTree(v Value, walk func(Value) bool, leaf func(Value) any) any {
 // language cannot see into them, and the VM refuses to compare them at all
 // (see compareEqual), so this answer is only a safe default.
 func (v Value) Equal(other Value) bool {
+	if v.kind == HandleKind || other.kind == HandleKind {
+		return false
+	}
 	if equal, native := nativeEqual(v, other); native {
 		return equal
 	}
 	if IsUnitKind(v.kind) {
 		return v.kind == other.kind && v.equalUnits(other)
 	}
-	if !v.hasType(other.Type()) {
+	if !v.sameTypeAs(other) {
 		return false
 	}
 	switch v.kind {
@@ -496,8 +525,7 @@ func (v Value) Equal(other Value) bool {
 		// A scalar's other fields are zero, so they match too.
 		return v.b == other.b && v.i == other.i && v.f == other.f && v.s == other.s
 	case ArrayKind, DictKind, RecordKind:
-		equal, _ := equalItems(v, other, func(a, b Value) (bool, error) { return a.Equal(b), nil })
-		return equal
+		return equalItems(v, other)
 	case RatioKind:
 		return ratioFrom(v).Cmp(ratioFrom(other)) == 0
 	default:
@@ -505,52 +533,96 @@ func (v Value) Equal(other Value) bool {
 	}
 }
 
-// equalItems compares two containers or records of one type item by item
-// with same. The first difference or error decides; containers of different
-// sizes, and a key only one dictionary has, are simply unequal.
-func equalItems(left, right Value, same func(a, b Value) (bool, error)) (bool, error) {
+// equalItems compares two containers or records of one type item by item.
+// Containers of different sizes, and a key only one dictionary has, are
+// simply unequal.
+func equalItems(left, right Value) bool {
 	n, m := left.length(), right.length()
 	pair := func(i int) (Value, Value, bool) { return left.at(i), right.at(i), true }
 	switch left.kind {
 	case DictKind:
-		keys := left.keys()
-		pair = func(i int) (Value, Value, bool) {
-			a, _ := left.lookup(keys[i])
-			b, ok := right.lookup(keys[i])
-			return a, b, ok
+		// Whether they are equal does not hang on the order the entries are
+		// compared in: the map's, without sorting the keys.
+		return n == m && left.eachEntry(func(key string, a Value) error {
+			if b, ok := right.lookup(key); !ok || !a.Equal(b) {
+				return errUnequal
+			}
+			return nil
+		}) == nil
+	case ArrayKind:
+		if a, ok := left.box.(*recordsView); ok {
+			if b, ok := right.box.(*recordsView); ok && a.plan == b.plan {
+				return n == m && a.equalTo(b)
+			}
 		}
 	case RecordKind:
 		a, aOK := left.box.(*recordValue)
 		b, bOK := right.box.(*recordValue)
 		if !aOK || !bOK {
-			return false, nil
+			return false
 		}
 		n, m = len(a.fields), len(b.fields)
 		pair = func(i int) (Value, Value, bool) { return a.fields[i], b.fields[i], true }
 	}
 	if n != m {
-		return false, nil
+		return false
 	}
 	for i := range n {
-		a, b, ok := pair(i)
-		if !ok {
-			return false, nil
-		}
-		if equal, err := same(a, b); err != nil || !equal {
-			return false, err
+		if a, b, ok := pair(i); !ok || !a.Equal(b) {
+			return false
 		}
 	}
-	return true, nil
+	return true
+}
+
+// errUnequal stops a walk over a dictionary at the first entry the other
+// does not have alike.
+var errUnequal = errors.New("unequal")
+
+// errHandleEquality is an equality asked of a handle, which the language
+// cannot see into.
+var errHandleEquality = errors.New("handles cannot be compared")
+
+// holdsHandle reports a value a handle is or may be in: its type says so,
+// not its items, so an empty array of handles does too, and nothing is
+// walked but the type.
+func holdsHandle(v Value) bool {
+	switch v.kind {
+	case HandleKind:
+		return true
+	case ArrayKind, DictKind:
+		return typeHoldsHandle(v.elemType())
+	case RecordKind:
+		return typeHoldsHandle(v.Type())
+	}
+	return false
+}
+
+// typeHoldsHandle is TypeContains(t, HandleKind) without the closure the
+// walk takes, which would allocate on every comparison; a record answers
+// from its shape.
+func typeHoldsHandle(t Type) bool {
+	switch t.kind {
+	case HandleKind:
+		return true
+	case RecordKind:
+		return t.shape != nil && t.shape.handle
+	case ArrayKind, DictKind:
+		return t.elem != nil && typeHoldsHandle(*t.elem)
+	}
+	return false
 }
 
 // compareEqual is the VM's equality: eq and switch both use it. Handles are
-// opaque, so comparing them is an error rather than a guess.
+// opaque, so comparing them — or anything holding one — is an error rather
+// than a guess.
 func compareEqual(left, right Value) (Value, error) {
+	// A handle's payload may be a map nativeEqual would compare.
+	if left.kind == HandleKind || right.kind == HandleKind {
+		return Value{}, errHandleEquality
+	}
 	if equal, native := nativeEqual(left, right); native {
 		return Bool(equal), nil
-	}
-	if left.kind == HandleKind || right.kind == HandleKind {
-		return Value{}, errors.New("handles cannot be compared")
 	}
 	if err := sameUnits(left, right); err != nil {
 		return Value{}, err
@@ -558,15 +630,30 @@ func compareEqual(left, right Value) (Value, error) {
 	if IsUnitKind(left.kind) && left.kind == right.kind {
 		return Bool(left.Equal(right)), nil
 	}
-	typ := right.Type()
-	if !left.hasType(typ) {
-		return Value{}, fmt.Errorf("equality requires one type, got %s and %s", left.Type(), typ)
+	if !left.sameTypeAs(right) {
+		return Value{}, fmt.Errorf("equality requires one type, got %s and %s", left.Type(), right.Type())
 	}
-	if (typ.kind == ArrayKind || typ.kind == DictKind || typ.kind == RecordKind) && containsUnits(typ) {
-		equal, err := equalInUnits(left, right)
-		return Bool(equal), err
+	// Two containers of one type hold a handle alike, and are refused for
+	// it; ones that hold money meet first, whatever else differs.
+	if right.kind == ArrayKind || right.kind == DictKind || right.kind == RecordKind {
+		if holdsHandle(right) {
+			return Value{}, errHandleEquality
+		}
+		if err := meetPair(left, right); err != nil {
+			return Value{}, err
+		}
 	}
 	return Bool(left.Equal(right)), nil
+}
+
+// sameTypeAs is v.hasType(other.Type()), without building the type of an
+// array or a dictionary, which allocates: two are of one type when their
+// elements are.
+func (v Value) sameTypeAs(other Value) bool {
+	if v.kind == other.kind && (v.kind == ArrayKind || v.kind == DictKind) {
+		return v.elemType().Equal(other.elemType())
+	}
+	return v.hasType(other.Type())
 }
 
 // CheckedFloat builds a float value, refusing the non-finite ones: what a
@@ -591,7 +678,9 @@ func nativeEqual(left, right Value) (equal, native bool) {
 	case *int64:
 		return sameSlice(itemsAt(a, left.i), right)
 	case *float64:
-		return sameSlice(itemsAt(a, left.i), right)
+		// Item by item even over one backing: a NaN is not equal to itself.
+		b, ok := nativeItems[float64](right)
+		return ok && slices.Equal(itemsAt(a, left.i), b), ok
 	case *string:
 		return sameSlice(itemsAt(a, left.i), right)
 	case *bool:

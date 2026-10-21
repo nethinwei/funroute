@@ -220,8 +220,17 @@ func formatSource(args []string) error {
 	if err != nil {
 		return locate(err, source)
 	}
-	fmt.Println(formatted)
+	fmt.Print(endLine(formatted))
 	return nil
+}
+
+// endLine ends text with one newline: Format keeps the one a file ends
+// with, and text without one gets one.
+func endLine(text string) string {
+	if strings.HasSuffix(text, "\n") {
+		return text
+	}
+	return text + "\n"
 }
 
 func compile(args []string) error {

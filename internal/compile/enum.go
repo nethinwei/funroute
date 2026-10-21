@@ -1,10 +1,10 @@
 package compile
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -13,8 +13,10 @@ import (
 // program through the host contract, so this map is the whole set a bare
 // @member can refer to — which is why resolution needs no type context.
 func collectEnums(dst map[string]machine.Type, hints map[string]machine.Type, ret *machine.Type) error {
-	for _, hint := range hints {
-		if err := collectEnum(dst, hint); err != nil {
+	// By argument name, so a conflict is said, and Enums keeps, the same
+	// every time.
+	for _, name := range kit.SortedKeys(hints) {
+		if err := collectEnum(dst, hints[name]); err != nil {
 			return err
 		}
 	}
@@ -44,7 +46,7 @@ func collectEnum(dst map[string]machine.Type, typ machine.Type) error {
 			return nil
 		}
 		if existing, ok := dst[inner.Name()]; ok && !existing.Equal(inner) {
-			return fmt.Errorf("the contract declares %s and %s under the same name", existing.Summary(), inner.Summary())
+			return kit.Errorf(machine.ErrContract, "the contract declares %s and %s under the same name", existing.Summary(), inner.Summary())
 		}
 		dst[inner.Name()] = inner
 		return nil
@@ -68,7 +70,8 @@ func resolveEnumReference(node *syntax.EnumExpr, enums map[string]machine.Type) 
 	// The contract's own enums come first: declaring money must not make a
 	// rule that already wrote @last for a contract member ambiguous. The
 	// registry's strategy is then @allocation.last.
-	if contract := slices.DeleteFunc(slices.Clone(found), isRegistryEnum); len(contract) > 0 {
+	fromRegistry := func(name string) bool { return isRegistryEnum(name, enums[name]) }
+	if contract := slices.DeleteFunc(slices.Clone(found), fromRegistry); len(contract) > 0 {
 		found = contract
 	}
 	switch len(found) {
@@ -83,11 +86,25 @@ func resolveEnumReference(node *syntax.EnumExpr, enums map[string]machine.Type) 
 	}
 }
 
+// registryEnumName reports a name money's enums take, which a contract under
+// money may not give an enum of its own.
+func registryEnumName(name string) bool {
+	return name == machine.RoundingEnum || name == machine.AllocationEnum
+}
+
 // isRegistryEnum reports an enum the language brings rather than a type of
 // the contract: the rounding modes and the allocation strategies money
-// brings. A contract's own enum member comes first.
-func isRegistryEnum(name string) bool {
-	return name == machine.RoundingEnum || name == machine.AllocationEnum
+// brings. A contract's own enum member comes first. Without money a contract
+// may name an enum of its own rounding or allocation, which is the
+// contract's like any other.
+func isRegistryEnum(name string, typ machine.Type) bool {
+	switch name {
+	case machine.RoundingEnum:
+		return typ.Equal(machine.RoundingEnumType())
+	case machine.AllocationEnum:
+		return typ.Equal(machine.AllocationEnumType())
+	}
+	return false
 }
 
 func resolveQualifiedEnum(node *syntax.EnumExpr, enums map[string]machine.Type) (machine.Type, error) {

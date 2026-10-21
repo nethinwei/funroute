@@ -22,7 +22,7 @@ const feeRule = "amount * bps / 10000 + fixed"
 
 func singleRows(registry *funroute.Registry) ([]row, error) {
 	var rows []row
-	for _, section := range []func(*funroute.Registry) ([]row, error){feeRows, callRows, loopRows, vectorRows, batchRows} {
+	for _, section := range []func(*funroute.Registry) ([]row, error){feeRows, callRows, loopRows, shapeRows, moneyRows, vectorRows, batchRows} {
 		more, err := section(registry)
 		if err != nil {
 			return nil, err

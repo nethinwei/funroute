@@ -2,6 +2,7 @@ package machine_test
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -16,8 +17,9 @@ import (
 // each in its file: a value that is only read is read where it is, a result
 // is made where it goes, a comparison is one with its branch, a
 // comprehension's collect is one with its next — a filtered one's too, the
-// next staying for the items the filter skips — and a nested one's inner
-// clause fills the outer's array.
+// next staying for the items the filter skips — a nested one's inner clause
+// fills the outer's array, and the fields a loop reads of a record item are
+// loaded into registers, read with no field operation.
 func TestLoweringFusesTheCommonShapes(t *testing.T) {
 	t.Parallel()
 	registry := randomRegistry(t)
@@ -25,13 +27,15 @@ func TestLoweringFusesTheCommonShapes(t *testing.T) {
 		{`a * b / 10000 + a`, "mul_i div_i add_i halt"},
 		{`if(a < b, a, b)`, "branch_lt_i move_i jump move_i halt"},
 		{`let(c = a * b, c + a)`, "mul_i add_i halt"},
+		{`let(c = min(a, b), c + a)`, "min_i add_i halt"},
+		{`let(c = abs(f), c * f)`, "abs_f mul_f halt"},
 		{`reduce(x in xs, t = 0, t + x)`, "loop_init add_i loop_next halt"},
 		{`[x + 1 for x in xs]`, "loop_init add_i collect_next_i halt"},
 		{`[x for x in xs if x > 0]`, "loop_init branch_lt_i collect_next_i loop_next halt"},
 		{`[x * y for x in xs for y in xs]`, "loop_init loop_init mul_i collect_next_i loop_next halt"},
 		{`[x for x in xs if x > 0 && x < 9]`, "loop_init branch_lt_i branch_lt_i collect_next_i loop_next halt"},
 		{`[x for x in xs if !(x > 0) || x == 5]`, "loop_init branch_lt_i branch_eq_i collect_next_i loop_next halt"},
-		{`len([c for c in cs if c.ok && c.fee < 50])`, "loop_init branch_field field_i branch_lt_i add_i loop_next halt"},
+		{`len([c for c in cs if c.ok && c.fee < 50])`, "loop_init branch branch_lt_i add_i loop_next halt"},
 		{`"k" in d`, "has_key halt"},
 	} {
 		artifact, err := compile.CompileExpr(test.source, registry, shapesContract)
@@ -53,6 +57,37 @@ func TestLoweringFusesTheCommonShapes(t *testing.T) {
 	}
 }
 
+// A comparison or a field read stored in a let's local is read again by
+// every read of the local: a branch on it does not take the store away. The
+// answers are written out — a fold runs the same lowering, so a closed
+// version agreeing with the open one would prove nothing.
+func TestALocalAnOrderingWroteIsReadAgain(t *testing.T) {
+	t.Parallel()
+	registry := randomRegistry(t)
+	for _, test := range []struct {
+		source string
+		args   map[string]any
+		want   string
+	}{
+		{`let(c = a < b, add(if(c, 10, 20), if(c, 1, 0)))`, map[string]any{"a": 1, "b": 2}, `11`},
+		{`let(c = a >= b, add(if(c, 10, 20), if(c, 1, 0)))`, map[string]any{"a": 2, "b": 1}, `11`},
+		{`let(c = a == b, add(if(c, 10, 20), if(c, 1, 0)))`, map[string]any{"a": 2, "b": 2}, `11`},
+		{`let(c = 1 < 2, add(if(c, 10, 20), if(c, 1, 0)))`, map[string]any{}, `11`},
+		{`sum([let(c = x > 0, if(c, 1, 0) + if(c, 2, 3)) for x in xs])`, map[string]any{"xs": []any{int64(-1), int64(2)}}, `6`},
+		{`let(r = {ok: a > 0}, let(ok = r.ok, add(if(ok, 10, 20), if(ok, 1, 0))))`, map[string]any{"a": 1}, `11`},
+	} {
+		runtime, err := load(test.source, registry, randomContract)
+		if err != nil {
+			t.Fatalf("%s: %v", test.source, err)
+		}
+		args := map[string]any{"a": 0, "b": 0, "f": 0.0, "s": "", "flag": false, "xs": []any{}, "fs": []any{}}
+		maps.Copy(args, test.args)
+		if got := outcome(t, runtime, args); got != test.want {
+			t.Errorf("%s with %v = %s, want %s", test.source, test.args, got, test.want)
+		}
+	}
+}
+
 // shapesContract is randomContract with an array of records and a
 // dictionary.
 var shapesContract = compile.CompileOptions{Args: append(slices.Clone(randomContract.Args),
@@ -64,9 +99,10 @@ var shapesContract = compile.CompileOptions{Args: append(slices.Clone(randomCont
 // outside their arrays, and a host function fallback takes the failures of.
 type generator struct {
 	rand *rand.Rand
-	// ints and arrays are the names in scope of type int and array<int>.
-	ints, arrays []string
-	fresh        int
+	// ints, bools and arrays are the names in scope of type int, bool and
+	// array<int>.
+	ints, bools, arrays []string
+	fresh               int
 }
 
 func (g *generator) pick(options ...string) string { return options[g.rand.IntN(len(options))] }
@@ -101,7 +137,7 @@ func (g *generator) leaf(typ string) string {
 	case "float":
 		return g.pick("f", "1.5", "0.0", "-2.25")
 	case "bool":
-		return g.pick("flag", "true", "false")
+		return g.pick(append([]string{"flag", "true", "false"}, g.bools...)...)
 	case "string":
 		return g.pick("s", `"a"`, `"zz"`)
 	}
@@ -109,9 +145,11 @@ func (g *generator) leaf(typ string) string {
 }
 
 func (g *generator) integer(d int) string {
-	switch g.rand.IntN(13) {
+	switch g.rand.IntN(14) {
 	case 0:
 		return fmt.Sprintf("(%s %s %s)", g.of("int", d), g.pick("+", "-", "*", "/", "%"), g.of("int", d))
+	case 12:
+		return fmt.Sprintf("if(%s[%s], %s, %s)", g.flags(d), g.of("int", d), g.of("int", d), g.of("int", d))
 	case 1:
 		return fmt.Sprintf("if(%s, %s, %s)", g.of("bool", d), g.of("int", d), g.of("int", d))
 	case 2:
@@ -161,8 +199,17 @@ func (g *generator) dictionary(d int) string {
 }
 
 // let binds a new int name for its body.
+// let binds an int, or a bool a body may read more than once.
 func (g *generator) let(d int) string {
-	value, name := g.of("int", d), g.name()
+	name := g.name()
+	if g.rand.IntN(3) == 0 {
+		value := g.of("bool", d)
+		g.bools = append(g.bools, name)
+		body := g.of("int", d)
+		g.bools = g.bools[:len(g.bools)-1]
+		return fmt.Sprintf("let(%s = %s, %s)", name, value, body)
+	}
+	value := g.of("int", d)
 	g.ints = append(g.ints, name)
 	body := g.of("int", d)
 	g.ints = g.ints[:len(g.ints)-1]
@@ -253,6 +300,16 @@ func (g *generator) comprehension(d int, filter string) string {
 	}
 	g.ints = g.ints[:len(g.ints)-1]
 	return fmt.Sprintf("[%s for %s in %s%s]", body, item, source, filter)
+}
+
+// flags maps an array to bools: what the body computes in the int file
+// before it compares is collected as another kind.
+func (g *generator) flags(d int) string {
+	source, item := g.of("array", d), g.name()
+	g.ints = append(g.ints, item)
+	body := fmt.Sprintf("(%s %s %s)", g.of("int", d), g.pick("<", "<=", ">", ">=", "==", "!="), g.of("int", d))
+	g.ints = g.ints[:len(g.ints)-1]
+	return fmt.Sprintf("[%s for %s in %s]", body, item, source)
 }
 
 // nested is a comprehension of two clauses.

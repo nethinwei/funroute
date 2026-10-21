@@ -13,6 +13,21 @@ import (
 	"github.com/nethinwei/funroute/internal/syntax"
 )
 
+// checkLiterals holds every literal of expr to what it was written as, before
+// anything compiles: a count does not compile what it counts, and a float no
+// float64 is is an error in len([0.1000000000000000055511151231257827 for x in
+// xs]) as in sum of it.
+func (c *bytecodeCompiler) checkLiterals(expr syntax.Expr) error {
+	for node := range syntax.Nodes(expr) {
+		if literal, ok := node.(*syntax.LiteralExpr); ok {
+			if _, err := c.literalValue(literal); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // literalValue is the value a literal compiles to: what it was written as,
 // unless inference read a decimal or 0 as a ratio, or 0 as money. A decimal
 // becomes a ratio from its digits, never through a float64.
@@ -44,7 +59,7 @@ func (c *bytecodeCompiler) literalValue(node *syntax.LiteralExpr) (machine.Value
 // exchange rate as written. Too many places for an amount or a rate is a
 // compile error rather than a rounding.
 func moneyLiteral(expr syntax.Expr, registry *machine.Registry) (machine.Value, error) {
-	if _, declared := registry.Money(); !declared {
+	if _, declared := registry.Currencies(); !declared {
 		return machine.Value{}, syntax.Around(expr, "type error: this registry declares no money")
 	}
 	var value machine.Value
@@ -90,7 +105,7 @@ func (c *bytecodeCompiler) enumValue(node *syntax.EnumExpr) machine.Value {
 // resolves in, where money is declared: the rounding modes (@half_up) and
 // the allocation strategies (@last).
 func addRegistryEnums(enums map[string]machine.Type, registry *machine.Registry) {
-	if _, ok := registry.Money(); ok {
+	if _, ok := registry.Currencies(); ok {
 		enums[machine.RoundingEnum] = machine.RoundingEnumType()
 		enums[machine.AllocationEnum] = machine.AllocationEnumType()
 	}
@@ -110,7 +125,7 @@ func EnumNamespace(options CompileOptions, registry *machine.Registry) map[strin
 // registry's enum names are not the contract's to take. A currency is a
 // value's, never a type's, so a type names none to check.
 func validateMoneyContract(options CompileOptions, registry *machine.Registry) error {
-	_, declared := registry.Money()
+	_, declared := registry.Currencies()
 	for _, arg := range options.Args {
 		if err := validateMoneyType(arg.Type, declared); err != nil {
 			return kit.Errorf(machine.ErrContract, "%v", err)
@@ -126,7 +141,7 @@ func validateMoneyContract(options CompileOptions, registry *machine.Registry) e
 
 func validateMoneyType(typ machine.Type, declared bool) error {
 	return machine.WalkTypes(typ, func(inner machine.Type) error {
-		if inner.Kind() == machine.EnumKind && isRegistryEnum(inner.Name()) && declared {
+		if inner.Kind() == machine.EnumKind && registryEnumName(inner.Name()) && declared {
 			return fmt.Errorf("enum<%s> is the registry's; name the contract's enum something else", inner.Name())
 		}
 		if !machine.IsMoneyKind(inner.Kind()) {

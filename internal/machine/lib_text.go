@@ -229,7 +229,9 @@ func pattern(text string) (*regexp.Regexp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid pattern %q: %s", text, strings.TrimPrefix(err.Error(), "error parsing regexp: "))
 	}
-	if patternsCount.Add(1) <= maxPatterns {
+	// Once full, the count is no longer added to, so it never wraps round
+	// to admit patterns again.
+	if patternsCount.Load() < maxPatterns && patternsCount.Add(1) <= maxPatterns {
 		patterns.Store(text, compiled)
 	}
 	return compiled, nil

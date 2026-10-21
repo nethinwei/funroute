@@ -1,6 +1,6 @@
 // Package std is the standard pack: the functions a payment rule writes
-// less often than the kernel's library — sliding windows and batches, set
-// differences, padding, grouping and ranking, cutting a list where a test
+// less often than the kernel's library — sliding windows and batches,
+// padding, grouping and ranking, cutting a list where a test
 // stops holding — and the money overloads of the library's aggregates and
 // selections, for a registry that declares money. It is written against the
 // public package only, as any host's extension is.
@@ -8,14 +8,10 @@ package std
 
 import (
 	"errors"
-	"fmt"
-	"math"
 	"slices"
 
 	"github.com/nethinwei/funroute"
 )
-
-var errIntegerOverflow = fmt.Errorf("%w: integer overflow in sum", funroute.ErrArithmetic)
 
 // Register adds the pack to a registry. The order is the pack's: the order a
 // name's overloads are registered in is the order the compiler tries them,
@@ -26,7 +22,7 @@ func Register(registry *funroute.Registry) error {
 		return errors.New("registry is required")
 	}
 	specs := slices.Concat(paddingSpecs(), sequenceSpecs(), whileSpecs(), groupSpecs())
-	if _, declared := registry.Money(); declared {
+	if _, declared := registry.Currencies(); declared {
 		specs = append(specs, moneySpecs()...)
 	}
 	for _, spec := range specs {
@@ -40,17 +36,6 @@ func Register(registry *funroute.Registry) error {
 		}
 	}
 	return nil
-}
-
-func sumInts(items []int64) (int64, error) {
-	total := int64(0)
-	for _, item := range items {
-		if item > 0 && total > math.MaxInt64-item || item < 0 && total < math.MinInt64-item {
-			return 0, errIntegerOverflow
-		}
-		total += item
-	}
-	return total, nil
 }
 
 // logic is a Go function as a spec.

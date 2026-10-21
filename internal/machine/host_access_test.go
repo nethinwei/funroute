@@ -3,6 +3,7 @@ package machine_test
 import (
 	"math"
 	"testing"
+	"unsafe"
 
 	"github.com/nethinwei/funroute/internal/compile"
 	"github.com/nethinwei/funroute/internal/machine"
@@ -64,5 +65,22 @@ func TestAnInfinityGoesIntoAFloat32(t *testing.T) {
 		if (err == nil) != test.fits || test.fits && got != test.want {
 			t.Errorf("x + x at x = %v into a float32 = %v, %v; want %v, fits %v", test.x, got, err, test.want, test.fits)
 		}
+	}
+}
+
+// A slice the host lends for an answer is held against the arguments of its
+// own kind: one that shares its memory is found, and an array of another
+// kind next to it — inside its length counted in that kind's items — is not.
+func TestALentSliceMeetsOnlyItsOwnKind(t *testing.T) {
+	t.Parallel()
+	words := make([]int64, 20)
+	out := unsafe.Slice((*bool)(unsafe.Pointer(&words[0])), 8) // the first word
+	beside, _ := machine.ToValue(words[1:])
+	if machine.OverlapsBools(&out, beside) {
+		t.Error("the ints after the bools meet them; want apart")
+	}
+	shared, _ := machine.ToValue(out[2:])
+	if !machine.OverlapsBools(&out, shared) {
+		t.Error("the bools inside the bools do not meet them; want them to")
 	}
 }

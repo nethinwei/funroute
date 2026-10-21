@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -127,7 +128,12 @@ func coerceFxRate(input any) (Value, error) {
 	}
 	text, ok := numberText(entries["rate"])
 	if !ok {
-		return Value{}, errors.New("an exchange rate needs a \"rate\", such as \"150.25\"")
+		// An int is a rate as well, as it is an amount's or a ratio's figure.
+		whole, err := coerceInt(entries["rate"])
+		if err != nil {
+			return Value{}, errors.New("an exchange rate needs a \"rate\", such as \"150.25\"")
+		}
+		text = strconv.FormatInt(whole.i, 10)
 	}
 	fx, err := money.ReadFxRate(base, quote, text)
 	return FxRateValue(fx), err

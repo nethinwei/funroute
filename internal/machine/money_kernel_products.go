@@ -63,10 +63,12 @@ func (k moneyKernel) registerProducts(registry *Registry) {
 	byRatio := moneyDoc("mul", "金额乘比例得到同币种金额；落在两个最小单位之间时按舍入方式取整。", "金额", "比例")
 	registerRounded(registry, FunctionSpec{Name: "mul", Params: []Type{MoneyType, RatioType}, Result: MoneyType, Doc: byRatio},
 		exactTimesRatio(0, 1), moneyTimesRatio(0, 1))
+	byRatio.Params = []string{"比例", "金额"}
 	registerRounded(registry, FunctionSpec{Name: "mul", Params: []Type{RatioType, MoneyType}, Result: MoneyType, Doc: byRatio},
 		exactTimesRatio(1, 0), moneyTimesRatio(1, 0))
 	byInt := moneyDoc("mul", "金额乘整数（数量），精确。", "金额", "数量")
 	registerExactOp(registry, "mul", []Type{MoneyType, IntType}, MoneyType, byInt, moneyTimesInt(0, 1))
+	byInt.Params = []string{"数量", "金额"}
 	registerExactOp(registry, "mul", []Type{IntType, MoneyType}, MoneyType, byInt, moneyTimesInt(1, 0))
 	registerMoneyOp(registry, "mul", []Type{RatioType, RatioType}, RatioType,
 		moneyDoc("mul", "两个比例相乘，比如费上加费。", "左值", "右值"), ratioProduct)

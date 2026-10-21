@@ -18,6 +18,7 @@ type banks struct {
 	regs   []Value
 	ints   []int64
 	floats []float64
+	text   textCursor
 }
 
 // bank is the file a value of a kind is in.

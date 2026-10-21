@@ -22,29 +22,31 @@ func moneySpecs() []funroute.FunctionSpec {
 	item := funroute.TypeVar("T")
 	list := funroute.ArrayOf(item)
 	return slices.Concat([]funroute.FunctionSpec{
-		moneySpec("sum", []funroute.Type{amounts}, c, "求和", "同币种金额相加；空数组是不带币种的 0。", sumMoney),
-		moneySpec("min", []funroute.Type{amounts}, c, "最小值", "最小的金额；空数组报错。", extremeMoney(true)),
-		moneySpec("max", []funroute.Type{amounts}, c, "最大值", "最大的金额；空数组报错。", extremeMoney(false)),
-		moneySpec("min", []funroute.Type{c, c}, c, "较小者", "两笔同币种金额里较小的。", pairMoney(true)),
-		moneySpec("max", []funroute.Type{c, c}, c, "较大者", "两笔同币种金额里较大的。", pairMoney(false)),
-		moneySpec("abs", []funroute.Type{c}, c, "绝对值", "金额的绝对值。", absMoney),
-		moneySpec("sort", []funroute.Type{amounts}, amounts, "排序", "金额从小到大。", sortMoney(true)),
-		moneySpec("sort_desc", []funroute.Type{amounts}, amounts, "降序", "金额从大到小。", sortMoney(false)),
-		moneySpec("cumsum", []funroute.Type{amounts}, amounts, "累加", "逐项累加出的金额序列。", cumulativeMoney),
-		moneySpec("deltas", []funroute.Type{amounts}, amounts, "差分", "相邻两笔金额之差。", deltasMoney),
-		moneySpec("arg_min", []funroute.Type{amounts}, funroute.IntType, "最小值下标", "最小金额的下标；空数组报错。", argExtremeMoney(true)),
-		moneySpec("arg_max", []funroute.Type{amounts}, funroute.IntType, "最大值下标", "最大金额的下标；空数组报错。", argExtremeMoney(false)),
-		moneySpec("min_by", []funroute.Type{list, amounts}, item, "金额最小的候选", "金额键最小的那个候选；并列取第一个，空数组报错。", extremeByMoney(true)),
-		moneySpec("max_by", []funroute.Type{list, amounts}, item, "金额最大的候选", "金额键最大的那个候选；并列取第一个，空数组报错。", extremeByMoney(false)),
-	}, roundedMoneySpecs(amounts, c), keyedSpecs(true))
+		moneySpec("sum", []funroute.Type{amounts}, c, moneyDoc("求和", "同币种金额相加；空数组是不带币种的 0。", "总和", "数组"), sumMoney),
+		moneySpec("min", []funroute.Type{amounts}, c, moneyDoc("最小值", "最小的金额；空数组报错。", "最小的元素", "数组"), extremeMoney(true)),
+		moneySpec("max", []funroute.Type{amounts}, c, moneyDoc("最大值", "最大的金额；空数组报错。", "最大的元素", "数组"), extremeMoney(false)),
+		moneySpec("min", []funroute.Type{c, c}, c, moneyDoc("较小者", "两笔同币种金额里较小的。", "结果", "左值", "右值"), pairMoney(true)),
+		moneySpec("max", []funroute.Type{c, c}, c, moneyDoc("较大者", "两笔同币种金额里较大的。", "结果", "左值", "右值"), pairMoney(false)),
+		moneySpec("abs", []funroute.Type{c}, c, moneyDoc("绝对值", "金额的绝对值。", "绝对值", "金额"), absMoney),
+		moneySpec("sort", []funroute.Type{amounts}, amounts, moneyDoc("排序", "金额从小到大。", "升序数组", "数组"), sortMoney(true)),
+		moneySpec("sort_desc", []funroute.Type{amounts}, amounts, moneyDoc("降序", "金额从大到小。", "降序数组", "数组"), sortMoney(false)),
+		moneySpec("cumsum", []funroute.Type{amounts}, amounts, moneyDoc("累加", "逐项累加出的金额序列。", "累计序列", "数组"), cumulativeMoney),
+		moneySpec("deltas", []funroute.Type{amounts}, amounts, moneyDoc("差分", "相邻两笔金额之差。", "差值序列", "数组"), deltasMoney),
+		moneySpec("arg_min", []funroute.Type{amounts}, funroute.IntType, moneyDoc("最小值下标", "最小金额的下标；空数组报错。", "下标", "键"), argExtremeMoney(true)),
+		moneySpec("arg_max", []funroute.Type{amounts}, funroute.IntType, moneyDoc("最大值下标", "最大金额的下标；空数组报错。", "下标", "键"), argExtremeMoney(false)),
+		moneySpec("min_by", []funroute.Type{list, amounts}, item, moneyDoc("金额最小的候选", "金额键最小的那个候选；并列取第一个，空数组报错。", "候选", "候选", "键"), extremeByMoney(true)),
+		moneySpec("max_by", []funroute.Type{list, amounts}, item, moneyDoc("金额最大的候选", "金额键最大的那个候选；并列取第一个，空数组报错。", "候选", "候选", "键"), extremeByMoney(false)),
+	}, roundedMoneySpecs(amounts, c))
 }
 
-func moneySpec(name string, params []funroute.Type, result funroute.Type, label, description string, eval funroute.EvalFunc) funroute.FunctionSpec {
-	return funroute.FunctionSpec{Name: name, Params: params, Result: result, Eval: eval, Doc: moneyDoc(label, description)}
+func moneySpec(name string, params []funroute.Type, result funroute.Type, doc funroute.Doc, eval funroute.EvalFunc) funroute.FunctionSpec {
+	return funroute.FunctionSpec{Name: name, Params: params, Result: result, Eval: eval, Doc: doc}
 }
 
-func moneyDoc(label, description string) funroute.Doc {
-	return funroute.Doc{Label: label, Category: "金额", Description: description}
+// moneyDoc names the result and each parameter as the overloads of the same
+// name over other elements do, so a signature reads alike whichever is shown.
+func moneyDoc(label, description, result string, params ...string) funroute.Doc {
+	return funroute.Doc{Label: label, Category: "金额", Description: description, Params: params, Result: result}
 }
 
 // roundedMoneySpecs are avg and median, whose results fall between minor
@@ -53,15 +55,15 @@ func moneyDoc(label, description string) funroute.Doc {
 func roundedMoneySpecs(amounts, c funroute.Type) []funroute.FunctionSpec {
 	specs := make([]funroute.FunctionSpec, 0, 2)
 	for _, aggregate := range []struct {
-		name, label, description string
-		of                       func([]funroute.Money, funroute.Rounding) (funroute.Money, error)
+		name, label, description, result string
+		of                               func([]funroute.Money, funroute.Rounding) (funroute.Money, error)
 	}{
-		{"avg", "平均值", "同币种金额的平均，落在两个最小单位之间时按舍入方式取整；空数组报错。", funroute.AverageMoney},
-		{"median", "中位数", "同币种金额的中位数，偶数个时取中间两笔的平均并按舍入方式取整；空数组报错。", funroute.MedianMoney},
+		{"avg", "平均值", "同币种金额的平均，落在两个最小单位之间时按舍入方式取整；空数组报错。", "平均值", funroute.AverageMoney},
+		{"median", "中位数", "同币种金额的中位数，偶数个时取中间两笔的平均并按舍入方式取整；空数组报错。", "中位数", funroute.MedianMoney},
 	} {
 		of := aggregate.of
 		specs = append(specs,
-			moneySpec(aggregate.name, []funroute.Type{amounts, funroute.RoundingEnumType()}, c, aggregate.label, aggregate.description,
+			moneySpec(aggregate.name, []funroute.Type{amounts, funroute.RoundingEnumType()}, c, moneyDoc(aggregate.label, aggregate.description, aggregate.result, "数组", "舍入方式"),
 				func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
 					text, _ := args[1].String()
 					mode, err := funroute.ParseRounding(text)
@@ -80,16 +82,6 @@ func roundedMoneySpecs(amounts, c funroute.Type) []funroute.FunctionSpec {
 				}))
 	}
 	return specs
-}
-
-// uniformKeys checks the money keys at index share a currency before eval.
-func uniformKeys(index int, eval funroute.EvalFunc) funroute.EvalFunc {
-	return func(ctx context.Context, args []funroute.Value) (funroute.Value, error) {
-		if _, _, err := amountsOf(args[index]); err != nil {
-			return funroute.Value{}, err
-		}
-		return eval(ctx, args)
-	}
 }
 
 // amountsOf is an array of money's backing and the zero of the one currency
@@ -200,13 +192,27 @@ func extremeMoneyIndex(amounts []funroute.Money, smallest bool) (int, error) {
 	return at, nil
 }
 
+// pairMoney is extremeMoney over two amounts, compared where they are: the
+// currency-less zero takes the other's currency, as it would in a list.
 func pairMoney(smallest bool) funroute.EvalFunc {
 	return func(_ context.Context, args []funroute.Value) (funroute.Value, error) {
-		pair, err := funroute.Array(funroute.MoneyType, args)
-		if err != nil {
-			return funroute.Value{}, err
+		first, _ := args[0].Money()
+		second, _ := args[1].Money()
+		if first.Currency() != "" && second.Currency() != "" && first.Currency() != second.Currency() {
+			return funroute.Value{}, fmt.Errorf("%w: %s and %s in one list", funroute.ErrCurrency, first.Currency(), second.Currency())
 		}
-		return extremeMoney(smallest)(context.Background(), []funroute.Value{pair})
+		best, other := first, second
+		if smallest && second.Minor() < first.Minor() || !smallest && second.Minor() > first.Minor() {
+			best, other = second, first
+		}
+		if best.Currency() == "" && other.Currency() != "" {
+			zero, err := other.MulInt(0)
+			if err != nil {
+				return funroute.Value{}, err
+			}
+			best = zero
+		}
+		return funroute.ToValue(best)
 	}
 }
 

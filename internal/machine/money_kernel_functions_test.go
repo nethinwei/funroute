@@ -108,13 +108,14 @@ func TestAllocateRefusesSharesItCannotMake(t *testing.T) {
 	t.Parallel()
 	usd := machine.MoneyValue(100, "USD")
 	for name, test := range map[string]moneyCase{
-		"no shares":          {"allocate(a, len(xs))", "a: money; xs: array<int>", []machine.Value{usd, intArray(t)}, "1 to 10000 shares, got 0"},
-		"fewer than none":    {"allocate(a, len(xs) - 2)", "a: money; xs: array<int>", []machine.Value{usd, intArray(t, 1)}, "got -1"},
-		"one past the limit": {"allocate(a, 10001)", "a: money", []machine.Value{usd}, "got 10001"},
-		"weights all zero":   {"allocate(a, [0, 0])", "a: money", []machine.Value{usd}, "positive weight"},
-		"no weights":         {"allocate(a, xs)", "a: money; xs: array<int>", []machine.Value{usd, intArray(t)}, "positive weight"},
-		"a negative weight":  {"allocate(a, [1, -1])", "a: money", []machine.Value{usd}, "cannot be negative"},
-		"weights past int64": {"allocate(a, xs)", "a: money; xs: array<int>", []machine.Value{usd, intArray(t, 1<<62, 1<<62)}, "overflows"},
+		"no shares":              {"allocate(a, len(xs))", "a: money; xs: array<int>", []machine.Value{usd, intArray(t)}, "1 to 10000 shares, got 0"},
+		"fewer than none":        {"allocate(a, len(xs) - 2)", "a: money; xs: array<int>", []machine.Value{usd, intArray(t, 1)}, "got -1"},
+		"one past the limit":     {"allocate(a, 10001)", "a: money", []machine.Value{usd}, "got 10001"},
+		"weights all zero":       {"allocate(a, [0, 0])", "a: money", []machine.Value{usd}, "positive weight"},
+		"no weights":             {"allocate(a, xs)", "a: money; xs: array<int>", []machine.Value{usd, intArray(t)}, "positive weight"},
+		"a negative weight":      {"allocate(a, [1, -1])", "a: money", []machine.Value{usd}, "cannot be negative"},
+		"weights past int64":     {"allocate(a, xs)", "a: money; xs: array<int>", []machine.Value{usd, intArray(t, 1<<62, 1<<62)}, "overflows"},
+		"weights past the limit": {"allocate(a, xs)", "a: money; xs: array<int>", []machine.Value{usd, intArray(t, slices.Repeat([]int64{1}, 10001)...)}, "got 10001"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -318,6 +319,15 @@ func TestAProportionOfTheSmallestAmountIsReducedFirst(t *testing.T) {
 		"prorate(USD 0.02, minor(m), 4, @down)":        "{USD -4611686018427387904}",
 		"round(prorate(USD 0.02, minor(m), 4), @down)": "{USD -4611686018427387904}",
 		"m / USD 0.02": "-4611686018427387904",
+		// 1/MinInt64 fits no ratio, and a round needs none.
+		"prorate(USD 1.00, 1, minor(m), @down)":        "{USD 0}",
+		"round(prorate(USD 1.00, 1, minor(m)), @down)": "{USD 0}",
+		// So too by amounts: USD 0.01 over the smallest amount is no ratio,
+		// and the product, half a cent's worth of 2^-62, needs none.
+		"prorate(USD 0.02, USD 0.01, m, @half_even)":        "{USD 0}",
+		"round(prorate(USD 0.02, USD 0.01, m), @half_even)": "{USD 0}",
+		"prorate(USD 0.02, USD 0.01, m, @floor)":            "{USD -1}",
+		"round(prorate(USD 0.02, USD 0.01, m), @floor)":     "{USD -1}",
 	} {
 		value, err := evalMoney(t, source, "m: money", args)
 		if got := fmt.Sprint(value.Any()); err != nil || got != want {

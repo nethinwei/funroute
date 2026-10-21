@@ -30,6 +30,17 @@ func inferQuotedRate(rate syntax.Expr, state *inferState, context inferContext) 
 		return err
 	}
 	rateTerm := scalarTerm(machine.FxRateKind)
+	// Whichever way the quote fails to be a rate — its type, or a literal
+	// that cannot become one — the error is the quote's.
+	notARate := func() error {
+		return syntax.Around(rate, "type error: using quotes exchange rates — an fxrate such as 150 JPY / USD or implied(settled, paid), or an array<fxrate> — and this is %s", state.describe(quote))
+	}
+	toRate := func(term typeTerm) error {
+		if state.unify(term, rateTerm) != nil {
+			return notARate()
+		}
+		return nil
+	}
 	return state.waitFor(func() (bool, error) {
 		found := state.deref(quote)
 		if found.kind == machine.VarKind {
@@ -38,14 +49,21 @@ func inferQuotedRate(rate syntax.Expr, state *inferState, context inferContext) 
 		if found.kind == machine.ArrayKind {
 			found = state.deref(*found.elem)
 			if found.kind == machine.VarKind {
-				return true, state.unify(found, rateTerm)
+				return true, toRate(found)
 			}
 		}
 		if found.kind != machine.FxRateKind {
-			return false, syntax.Around(rate, "type error: using quotes exchange rates — an fxrate such as 150 JPY / USD or implied(settled, paid), or an array<fxrate> — and this is %s", state.describe(quote))
+			return false, notARate()
 		}
 		return true, nil
-	}, func() error { return state.unify(quote, rateTerm) })
+	}, func() error { return toRate(quote) })
+}
+
+// outsideUsing is the error of a call that reads exchange rates where no
+// using gives it any. checkExact says it before it says such a call is a step
+// outside a round: the round it would ask for would not be enough.
+func outsideUsing(node *syntax.CallExpr) error {
+	return syntax.Around(node, "type error: %s reads exchange rates, which only a using has: write it inside using(150 JPY / USD, …), or using(rates, …) with the rates as an argument", operatorName(node))
 }
 
 // compileUsing leaves the exchange rates on the stack, opens the scope with

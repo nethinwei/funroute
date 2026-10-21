@@ -9,6 +9,12 @@ package money
 // money it already holds as a value.
 func Make(currency string, minor int64) Money { return newMoney(currency, minor) }
 
+// SplitCount is m.SplitBy of a rule's count, an int64 whatever the
+// platform's int.
+func SplitCount(m Money, strategy AllocationStrategy, n int64) ([]Money, error) {
+	return m.splitBy(strategy, n)
+}
+
 // CurrencyOf is a currency code as a Currency, unchecked.
 func CurrencyOf(code string) Currency { return Currency{code: code} }
 
@@ -32,6 +38,12 @@ func FxRateParts(fx FxRate) (*Pair, Ratio) { return fx.pair, fx.rate }
 
 // FxRateFrom is the exchange rate FxRateParts gave.
 func FxRateFrom(pair *Pair, r Ratio) FxRate { return FxRate{pair: pair, rate: r} }
+
+// InverseFxRate is fx the other way round, on the table's pair for it.
+func InverseFxRate(pair *Pair, fx FxRate) (FxRate, error) {
+	inverse, err := fx.rate.inverse()
+	return FxRate{pair: pair, rate: inverse}, err
+}
 
 // ExactFrom is exact money of minor units in a currency, unchecked.
 func ExactFrom(currency string, minor Ratio) ExactMoney {

@@ -74,7 +74,7 @@ func (c *bytecodeCompiler) connectiveOf(cond syntax.Expr) (connective, syntax.Ex
 	if _, hoisted := c.hoisted[node.ID]; hoisted || c.constantExpr(node) {
 		return notConnective, nil, nil
 	}
-	if function, found := c.registry.Resolve(c.inferred.Selections[node.ID]); !found || !function.IsLazyIf() {
+	if function, found := machine.ResolveOf(c.registry, c.inferred.Selections[node.ID]); !found || !function.IsLazyIf() {
 		return notConnective, nil, nil
 	}
 	whenTrue, trueLiteral := boolLiteral(node.Args[1])

@@ -1,6 +1,7 @@
 package syntax
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -34,8 +35,9 @@ type reading struct {
 }
 
 // read lexes and parses source. The lexer carries on past a bad character, so
-// the parser always has tokens to read; the error is the lexer's if it had
-// one, else the parser's.
+// the parser always has tokens to read; the error is the one that comes first
+// in the source, the lexer's where the two meet: it says what the bad piece
+// is.
 func read(source string, roles bool) reading {
 	lex := &lexer{source: source}
 	tokens, err := lex.tokens()
@@ -44,10 +46,17 @@ func read(source string, roles bool) reading {
 		p.roles = map[int]roleMark{}
 	}
 	expr, parseErr := p.program()
-	if err == nil {
+	if err == nil || before(parseErr, err) {
 		err = parseErr
 	}
 	return reading{lex: lex, parser: p, tokens: tokens, expr: expr, err: err}
+}
+
+// before reports a parser's error placed ahead of the lexer's.
+func before(parseErr, lexErr error) bool {
+	parsed, ok := errors.AsType[*PosError](parseErr)
+	lexed, lexOK := errors.AsType[*PosError](lexErr)
+	return ok && lexOK && parsed.Offset() < lexed.Offset()
 }
 
 // Parse reads an expression. A program is only an expression: the contract it
@@ -308,28 +317,30 @@ func (p *parser) parseFieldRead(base Expr) (Expr, error) {
 	p.index++
 	// The lexer keeps a name and the dots in it together, so f(x).a.b arrives
 	// as one name "a.b": it is two reads, as order.a.b is.
-	return p.fieldChain(base, dot, dot.pos, name.text, true)
+	return p.fieldChain(base, dot, dot.pos, name.pos, name.text, true)
 }
 
 // fieldChain reads the dotted field names in fields off expr, the first
-// after the dot at at. Each read covers the source from expr's start through
-// its name, and its errors are placed at from. A postfix read, f(x).a.b,
-// points at its own dot and marks its name as it goes; the fields of a
-// dotted name, order.a.b, point at the name, which is already marked.
-func (p *parser) fieldChain(expr Expr, from token, at int, fields string, postfix bool) (Expr, error) {
+// after the dot at at and written from name: blanks may part a postfix dot
+// from its name, f(x) . a, never the dots inside a name. Each read covers
+// the source from expr's start through its name, and its errors are placed
+// at from. A postfix read, f(x).a.b, points at its own dot and marks its
+// name as it goes; the fields of a dotted name, order.a.b, point at the
+// name, which is already marked.
+func (p *parser) fieldChain(expr Expr, from token, at, name int, fields string, postfix bool) (Expr, error) {
 	start := expr.Extent().Start
 	for field := range strings.SplitSeq(fields, ".") {
-		end := at + 1 + len(field)
+		end := name + len(field)
 		pos := from.pos
 		if postfix {
 			pos = at
-			p.markSpan(at+1, end, RoleField)
+			p.markSpan(name, end, RoleField)
 		}
 		node, err := p.node(from, &FieldExpr{Node: Node{ID: p.id(), Pos: pos, Span: Span{start, end}}, Value: expr, Field: field})
 		if err != nil {
 			return nil, err
 		}
-		at, expr = end, node
+		at, name, expr = end, end+1, node
 	}
 	return expr, nil
 }
@@ -344,8 +355,11 @@ func (p *parser) pick(at token, condition, whenTrue, whenFalse Expr) Expr {
 	return p.call(at, "if", condition, whenTrue, whenFalse)
 }
 
+// boolean is a bool an operator's expansion writes in: a message about it
+// points at the operator, but it covers no source, so the node a cursor is
+// in and the tree of what was written never find it there.
 func (p *parser) boolean(at token, value bool) Expr {
-	return &LiteralExpr{Node: Node{ID: p.id(), Pos: at.pos, Span: tokenSpan(at)}, Value: machine.Bool(value)}
+	return &LiteralExpr{Node: Node{ID: p.id(), Pos: at.pos, Span: Span{Start: at.pos, End: at.pos}}, Value: machine.Bool(value)}
 }
 
 func tokenSpan(tok token) Span { return Span{Start: tok.pos, End: tok.end} }
@@ -527,7 +541,7 @@ func (p *parser) variableWithFields(tok token) (Expr, error) {
 	if !dotted {
 		return expr, nil
 	}
-	return p.fieldChain(expr, tok, end, fields, false)
+	return p.fieldChain(expr, tok, end, end+1, fields, false)
 }
 
 // callForm is the rule that reads a form written like a call, name(…), and
@@ -552,6 +566,11 @@ func (p *parser) parseCall(name token) (Expr, error) {
 	if form := callForm(name.text); form != nil {
 		p.mark(name, RoleForm)
 		return form(p, name)
+	}
+	// What ExprJSON refuses to call, the source does too: a call named for
+	// would not read back from the JSON it exports to.
+	if err := validName(name.text, "fn"); err != nil {
+		return nil, p.errorf(name, "%v", err)
 	}
 	args, err := p.parseList(tokenRightParen)
 	if err != nil {

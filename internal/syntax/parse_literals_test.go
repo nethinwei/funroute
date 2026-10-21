@@ -37,12 +37,15 @@ func TestAMinusIsALiteralOnlyBeforeANumberAlone(t *testing.T) {
 }
 
 // A decimal literal is the decimal it is written as. Read as a float it is
-// the float64 it is written as, or refused, naming the one it would have
-// been: rounded on the way in, a rule would say one number and compute
-// another. Exponents far out of range are refused without being worked out.
+// the float64 it is written as — the one whose shortest text is that number,
+// or one that is that number exactly, as 2^60 written out in full is — or
+// refused, naming the one it would have been: rounded on the way in, a rule
+// would say one number and compute another. Exponents far out of range are
+// refused without being worked out.
 func TestADecimalLiteralIsExactlyAFloat(t *testing.T) {
 	t.Parallel()
-	for _, source := range []string{"0.1", "1.50", "1e300", "1.5e-3", "2.5", "0.0", "1e-320", "15e-1", "0.000125"} {
+	for _, source := range []string{"0.1", "1.50", "1e300", "1.5e-3", "2.5", "0.0", "1e-320", "15e-1", "0.000125",
+		"1152921504606846976.0", "-9223372036854775808.0", "1.152921504606846976e18", "9007199254740992.0"} {
 		if _, err := floatOf(t, source); err != nil {
 			t.Errorf("Parse(%q).Float() error = %v, want the float", source, err)
 		}

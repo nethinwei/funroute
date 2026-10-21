@@ -86,10 +86,12 @@ func (p *parser) dictComprehension(start token, key, value Expr) (Expr, error) {
 	return p.nestClauses(start, clauses, key, value)
 }
 
-// loopClause is one "for x in xs if c" of a comprehension.
+// loopClause is one "for x in xs if c" of a comprehension, at is where its
+// for is.
 type loopClause struct {
 	key, variable string
 	source, where Expr
+	at            int
 }
 
 // loopClauses reads the clauses back to back, starting on a "for". Python
@@ -98,6 +100,7 @@ type loopClause struct {
 func (p *parser) loopClauses() ([]loopClause, error) {
 	var clauses []loopClause
 	for {
+		at := p.peek().pos
 		p.takeKeyword() // for
 		key, variable, err := p.loopVariables()
 		if err != nil {
@@ -108,7 +111,7 @@ func (p *parser) loopClauses() ([]loopClause, error) {
 		if err != nil {
 			return nil, err
 		}
-		clauses = append(clauses, loopClause{key: key, variable: variable, source: source, where: where})
+		clauses = append(clauses, loopClause{key: key, variable: variable, source: source, where: where, at: at})
 		if !p.keyword("for") {
 			return clauses, nil
 		}
@@ -117,7 +120,9 @@ func (p *parser) loopClauses() ([]loopClause, error) {
 
 // nestClauses builds the ForExpr chain from the inside out. The innermost
 // clause yields the element and carries the dictionary key if there is one;
-// every clause outside it splices what the one inside yielded.
+// every clause outside it splices what the one inside yielded. Each covers
+// the comprehension that was written, and is positioned at its own for,
+// where what it binds begins (continues).
 func (p *parser) nestClauses(start token, clauses []loopClause, yieldKey, yield Expr) (Expr, error) {
 	node := yield
 	for i, clause := range slices.Backward(clauses) {
@@ -127,7 +132,7 @@ func (p *parser) nestClauses(start token, clauses []loopClause, yieldKey, yield 
 			key = yieldKey
 		}
 		expr, err := p.node(start, &ForExpr{
-			Node: p.at(start.pos), Source: clause.source, Variable: clause.variable,
+			Node: p.at(clause.at), Source: clause.source, Variable: clause.variable,
 			KeyVariable: clause.key, Where: clause.where, YieldKey: key, Yield: node,
 			Flatten: !innermost,
 		})

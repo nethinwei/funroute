@@ -1,6 +1,7 @@
 package money
 
 import (
+	"errors"
 	"math"
 	"math/big"
 	"math/rand/v2"
@@ -108,6 +109,13 @@ func TestAllocateRefusesWeightsThatShareNothing(t *testing.T) {
 	for _, n := range []int{0, -1, math.MinInt} {
 		if shares, err := usd(100).Split(n); err == nil || shares != nil {
 			t.Fatalf("Split(%d) = %v, %v, want an error", n, shares, err)
+		}
+	}
+	// A rule's count is an int64, held to the bound before it is an int:
+	// 2³² + 1 is not one share on a platform whose int is 32 bits.
+	for _, n := range []int64{1<<32 + 1, math.MaxInt64, math.MinInt64} {
+		if shares, err := usd(100).splitBy(AllocateLargestRemainder, n); !errors.Is(err, ErrArithmetic) || shares != nil {
+			t.Fatalf("splitBy(%d) = %v, %v, want ErrArithmetic", n, shares, err)
 		}
 	}
 }
@@ -290,5 +298,34 @@ func TestAllocationStrategiesAreNamed(t *testing.T) {
 	var strategy AllocationStrategy
 	if err := strategy.UnmarshalText([]byte("all_last")); err != nil || strategy != AllocateAllLast {
 		t.Fatalf("UnmarshalText(all_last) = %v, %v", strategy, err)
+	}
+}
+
+// Splitting into n equal shares is AllocateBy of n weights of one, share for
+// share and error for error, by every strategy: the extremes of int64, the
+// currency-less zero and counts up to the bound.
+func TestSplitAnswersAsEqualWeights(t *testing.T) {
+	t.Parallel()
+	random := rand.New(rand.NewPCG(9, 10))
+	minors := []int64{0, 1, -1, 7, -7, 100, math.MaxInt64, math.MinInt64, math.MinInt64 + 1}
+	for range 2000 {
+		minor := random.Int64N(2_000_001) - 1_000_000
+		if random.IntN(3) == 0 {
+			minor = minors[random.IntN(len(minors))]
+		}
+		n := 1 + random.IntN(40)
+		if random.IntN(50) == 0 {
+			n = maxAllocation
+		}
+		m := usd(minor)
+		if minor == 0 && random.IntN(2) == 0 {
+			m = Money{}
+		}
+		strategy := AllocationStrategy(random.IntN(int(AllocateAllLast) + 2)) // one past the last is no strategy
+		got, gotErr := m.SplitBy(strategy, n)
+		want, wantErr := m.AllocateBy(strategy, slices.Repeat([]int64{1}, n)...)
+		if !slices.Equal(got, want) || (gotErr == nil) != (wantErr == nil) || gotErr != nil && gotErr.Error() != wantErr.Error() {
+			t.Fatalf("%v.SplitBy(%s, %d) = %v, %v; AllocateBy of ones = %v, %v", m, strategy, n, got, gotErr, want, wantErr)
+		}
 	}
 }
