@@ -36,9 +36,12 @@ func ratioOf(num, den int64) (Ratio, error) {
 }
 
 // ratioFrom is ±num/den from magnitudes, reduced before it is held to int64:
-// -9223372036854775808/2 is -4611686018427387904, not an overflow. den is not
-// zero.
+// -9223372036854775808/2 is -4611686018427387904, not an overflow. A den of
+// zero is refused: every caller checks first, and no ratio is held over zero.
 func ratioFrom(negative bool, num, den uint64) (Ratio, error) {
+	if den == 0 {
+		return Ratio{}, errDivisionByZero
+	}
 	if num == 0 {
 		return Ratio{}, nil
 	}

@@ -91,8 +91,11 @@ func (m Money) AllocateBy(strategy AllocationStrategy, weights ...int64) ([]Mone
 		magnitudes[i], remainders[i] = part, rest
 		left -= part
 	}
-	for _, i := range receivers(strategy, weights, remainders, int(left)) {
-		magnitudes[i]++
+	// Divided evenly, there is no unit left to give, and no one to choose.
+	if left > 0 {
+		for _, i := range receivers(strategy, weights, remainders, int(left)) {
+			magnitudes[i]++
+		}
 	}
 	return signedShares(m, magnitudes)
 }

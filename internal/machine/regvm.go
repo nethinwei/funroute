@@ -112,7 +112,7 @@ func (f *frame) fault(pc int) error {
 	origin := int(f.runtime.reg.origins[pc])
 	source := f.runtime.artifact.parts.Instructions[origin]
 	// The operands as the function takes them: values, out of their files.
-	left, right := unarena(f.valueAt(in.a, kinds.a)), f.valueAt(in.b, kinds.b)
+	left, right := unarena(f.valueAt(in.a, kinds.a)), unarena(f.valueAt(in.b, kinds.b))
 	if source.Op == OpEqual {
 		_, err := compareEqual(left, right)
 		return err

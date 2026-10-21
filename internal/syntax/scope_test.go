@@ -28,6 +28,13 @@ func TestScopeAtFollowsTheBindsTags(t *testing.T) {
 		{`[x + y for x in xs for y in ys]`, "x + y", []string{"x", "y"}},
 		{`[x + y + z for x in xs for y in ys for z in zs if z > y]`, "ys", []string{"x"}},
 		{`[x + y + z for x in xs for y in ys for z in zs if z > y]`, "z > y", []string{"x", "y", "z"}},
+		// Between the parts of a form, on a keyword, a comma or a space, the
+		// cursor sees what the part after it does.
+		{`let(a = 1, a + 1)`, " a + 1", []string{"a"}},
+		{`let(a = 1, b = 2, a + b)`, " b = 2", []string{"a"}},
+		{`[x + 1 for x in xs if x > 0]`, "if", []string{"x"}},
+		{`[x + 1 for x in xs if x > 0]`, " xs", []string{}},
+		{`reduce(p in ps, t = 0, t + p)`, " t + p", []string{"p", "t"}},
 	}
 	for _, c := range cases {
 		t.Run(c.source+" at "+c.at, func(t *testing.T) {

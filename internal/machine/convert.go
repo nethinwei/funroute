@@ -180,12 +180,7 @@ func FromValue[T any](value Value) (T, error) {
 	case *time.Duration:
 		return out, assign(target, Value.Duration, value)
 	case *money.Currency:
-		code, ok := value.Currency()
-		*target = code
-		if !ok {
-			return out, fmt.Errorf("argument is %s, want %T", value.Type(), out)
-		}
-		return out, nil
+		return out, assign(target, Value.Currency, value)
 	}
 	// An interface takes the value's Go form, never what holds it inside a
 	// Value; a handle's Go form is its payload.

@@ -247,7 +247,10 @@ func (p *parser) fxRateLiteral(figure token) (Expr, error) {
 // would have been. 0.30000000000000001 would be 0.3, and a rule would say
 // one thing and compute another.
 func (e *LiteralExpr) Float() (machine.Value, error) {
-	number, _ := e.Value.Float()
+	number, ok := e.Value.Float()
+	if !ok {
+		return machine.Value{}, Around(e, "type error: %s is not a float literal", e.Value.Type())
+	}
 	// As written is as a number, not as text: 0.1 is the float64 whose
 	// shortest text is 0.1, and 2^60 written out in full is a float64
 	// exactly, though strconv writes it shorter.

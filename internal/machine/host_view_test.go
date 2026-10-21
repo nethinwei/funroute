@@ -468,3 +468,30 @@ func TestAViewOfPricedRecordsAllocatesNothing(t *testing.T) {
 		t.Errorf("a run allocated %v times, want 0", allocs)
 	}
 }
+
+// Two views compared, and the amounts of a view met before they are, are
+// read where they are: what == costs does not grow with the arrays.
+func TestComparingViewsAllocatesByNothing(t *testing.T) {
+	binding, err := compile.Bind[pricedIn, bool](pricedRegistry(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(`channels == channels && [channels[0]] != channels`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocs := func(n int) float64 {
+		in := &pricedIn{}
+		for i := range n {
+			in.Channels = append(in.Channels, pricedChannel{Name: "c", Fee: machine.NewMoney("USD", int64(i)), Cur: machine.NewCurrency("EUR")})
+		}
+		return testing.AllocsPerRun(100, func() {
+			if same, err := program.Run(t.Context(), in); err != nil || !same {
+				t.Fatalf("channels == channels = %v, %v, want true", same, err)
+			}
+		})
+	}
+	if short, long := allocs(10), allocs(1000); short != long {
+		t.Fatalf("comparing views allocates %v times over 10 channels and %v over 1000; want the same", short, long)
+	}
+}

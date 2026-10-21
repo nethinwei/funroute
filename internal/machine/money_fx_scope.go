@@ -25,9 +25,10 @@ func validateFxPush(in Instruction, fail failFunc) error {
 // popScope closes the innermost using.
 func (f *frame) popScope() { f.dropScopes(len(f.fxMarks) - 1) }
 
-// dropScopes closes every using past the first depth ones.
+// dropScopes closes every using past the first depth ones; with none open,
+// there is nothing to close.
 func (f *frame) dropScopes(depth int) {
-	if depth >= len(f.fxMarks) {
+	if depth < 0 || depth >= len(f.fxMarks) {
 		return
 	}
 	mark := f.fxMarks[depth]

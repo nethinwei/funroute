@@ -189,9 +189,11 @@ func kept[T any](items []T, keep func(T) bool) []T {
 // every deferred rule that can run, until nothing changes.
 func (s *inferState) propagate() error {
 	for {
-		for len(s.queue) > 0 {
-			c := s.queue[0]
-			s.queue = s.queue[1:]
+		// Walked by index, narrowing may queue more behind it; emptied after,
+		// so the array is the next walk's and holds no choice it walked.
+		for next := 0; next < len(s.queue); {
+			c := s.queue[next]
+			next++
 			c.queued = false
 			if c.open == nil {
 				continue
@@ -200,6 +202,8 @@ func (s *inferState) propagate() error {
 				return err
 			}
 		}
+		clear(s.queue)
+		s.queue = s.queue[:0]
 		ran, err := s.runDeferred()
 		if err != nil || !ran && len(s.queue) == 0 {
 			return err

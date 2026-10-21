@@ -388,7 +388,7 @@ func sortSpecs() []FunctionSpec {
 		Params:      []string{"数组"}, Result: "升序数组",
 	}, sorter[int64](false, nil), sorter(false, hasNegativeZero), sorter[string](false, nil)), libEach("sort_desc", Doc{
 		Label: "降序排序", Category: "数组",
-		Description: "按自然顺序降序排列，省得写 reverse(sort(xs))。",
+		Description: "按自然顺序降序排列。相等的元素（如 0 与 -0）保持原来的先后，所以不一定与 reverse(sort(xs)) 逐个相同。",
 		Params:      []string{"数组"}, Result: "降序数组",
 	}, sorter[int64](true, nil), sorter(true, hasNegativeZero), sorter[string](true, nil)))
 }

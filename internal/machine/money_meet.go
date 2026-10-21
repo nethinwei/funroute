@@ -2,6 +2,7 @@ package machine
 
 import (
 	"strings"
+	"unsafe"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -213,9 +214,29 @@ func (m *unitsMeet) meetItems(plan *unitPlan, v Value) error {
 		}
 		return nil
 	}
+	if view, ok := v.box.(*recordsView); ok && plan.elem.kind == RecordKind {
+		return m.meetView(plan.elem, view)
+	}
 	for i := range v.length() {
 		if err := m.meet(plan.elem, v.at(i)); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// meetView is meetItems of a view: item by item, each amount — the only
+// unit a view holds at a place — read where it is in the host's memory, no
+// record made of an item.
+func (m *unitsMeet) meetView(plan *unitPlan, view *recordsView) error {
+	fields := view.plan.elem.fields
+	for i := range view.length {
+		item := view.item(i)
+		for _, field := range plan.fields {
+			amount := (*money.Money)(unsafe.Add(item, fields[field.at].offset))
+			if err := m.see(field.plan.place, amount.Currency(), false); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

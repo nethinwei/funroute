@@ -225,11 +225,9 @@ func (c *bytecodeCompiler) foldable(expr syntax.Expr) bool {
 	return c.constantExpr(expr) && c.callsConstexpr(expr)
 }
 
-// callsConstexpr is constexprOnly, each node's answer found once.
+// callsConstexpr is constexprOnly, each node's answer found once: every
+// compiler has the memo, a nested one its parent's.
 func (c *bytecodeCompiler) callsConstexpr(expr syntax.Expr) bool {
-	if c.constexpr == nil {
-		return constexprOnly(expr, c.inferred, c.registry)
-	}
 	return c.constexpr.of(expr, c.inferred, c.registry)
 }
 

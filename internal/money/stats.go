@@ -22,10 +22,14 @@ func AverageMoney(amounts []Money, mode Rounding) (Money, error) {
 }
 
 // MedianMoney is the median of amounts in one currency; of an even count,
-// the mean of the middle two rounded by mode.
+// the mean of the middle two rounded by mode. The mode is checked whatever
+// the count, as AverageMoney checks it.
 func MedianMoney(amounts []Money, mode Rounding) (Money, error) {
 	currency, err := oneCurrency(amounts)
 	if err != nil {
+		return Money{}, err
+	}
+	if err := checkMode(mode); err != nil {
 		return Money{}, err
 	}
 	sorted := slices.Clone(amounts)

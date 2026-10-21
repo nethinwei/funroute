@@ -248,3 +248,9 @@ func ExpireStale(b *Batch) {
 	b.mu.Unlock()
 	b.expire(epoch - 1)
 }
+
+// EvalMerge is merge's Eval, for handing it two dictionaries no type would.
+var EvalMerge = evalMerge
+
+// PopScopeOfNone closes the innermost using of a frame that has none open.
+func PopScopeOfNone() { (&frame{}).popScope() }

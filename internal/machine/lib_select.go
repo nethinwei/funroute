@@ -396,25 +396,33 @@ func evalGet(_ context.Context, args []Value) (Value, error) {
 func evalMerge(_ context.Context, args []Value) (Value, error) {
 	switch base := args[0].box.(type) {
 	case map[string]bool:
-		return merged(base, args[1].box), nil
+		return merged(base, args[1].box)
 	case map[string]int64:
-		return merged(base, args[1].box), nil
+		return merged(base, args[1].box)
 	case map[string]float64:
-		return merged(base, args[1].box), nil
+		return merged(base, args[1].box)
 	case map[string]string:
-		return merged(base, args[1].box), nil
+		return merged(base, args[1].box)
 	case map[string]money.Money:
-		return merged(base, args[1].box), nil
+		return merged(base, args[1].box)
 	case *nestedDict:
-		over, _ := args[1].box.(*nestedDict)
-		return Value{kind: DictKind, box: &nestedDict{elem: base.elem, entries: overlaid(base.entries, over.entries)}}, nil
+		if over, ok := args[1].box.(*nestedDict); ok {
+			return Value{kind: DictKind, box: &nestedDict{elem: base.elem, entries: overlaid(base.entries, over.entries)}}, nil
+		}
 	}
-	return Value{}, errors.New("merge needs two dictionaries")
+	return Value{}, errMergeBackings
 }
 
-func merged[T any](base map[string]T, over any) Value {
-	top, _ := over.(map[string]T)
-	return Value{kind: DictKind, box: overlaid(base, top)}
+// errMergeBackings is a merge of two dictionaries that are not of one
+// backing, which one type always is: refused, never one of them dropped.
+var errMergeBackings = errors.New("merge needs two dictionaries of one type")
+
+func merged[T any](base map[string]T, over any) (Value, error) {
+	top, ok := over.(map[string]T)
+	if !ok {
+		return Value{}, errMergeBackings
+	}
+	return Value{kind: DictKind, box: overlaid(base, top)}, nil
 }
 
 // overlaid is base with top's entries over it, in a map of its own.

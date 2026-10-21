@@ -82,6 +82,21 @@ func TestMediansTakeTheMiddle(t *testing.T) {
 	}
 }
 
+// A rounding that is no mode is refused by the median whatever the count,
+// as by the average: an odd count, which rounds nothing, included.
+func TestMediansRefuseWhatIsNoMode(t *testing.T) {
+	t.Parallel()
+	for _, minors := range [][]int64{{5}, {5, 5}, {1, 2, 3}} {
+		amounts := make([]Money, len(minors))
+		for i, minor := range minors {
+			amounts[i] = usd(minor)
+		}
+		if got, err := MedianMoney(amounts, Rounding(0)); !errors.Is(err, ErrArithmetic) {
+			t.Errorf("MedianMoney(%v, Rounding(0)) = %v, %v, want ErrArithmetic", minors, got, err)
+		}
+	}
+}
+
 // Nothing has no average; two currencies have none either, while the
 // currency-less zero goes with any.
 func TestAveragesNeedAmountsInOneCurrency(t *testing.T) {

@@ -141,6 +141,24 @@ func (v *recordsView) loadInto(index int, fields, regs []int32, b *banks) {
 	}
 }
 
+// equalTo reports two views of one plan whose items are equal field by
+// field, as their records would be, read where they are: no record made.
+func (v *recordsView) equalTo(other *recordsView) bool {
+	fields := v.plan.elem.fields
+	for i := range v.length {
+		a, b := v.item(i), other.item(i)
+		for j := range fields {
+			var x, y Value
+			loadViewField(&fields[j], unsafe.Add(a, fields[j].offset), &x)
+			loadViewField(&fields[j], unsafe.Add(b, fields[j].offset), &y)
+			if !x.Equal(y) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // record is item i as a record of its own.
 func (v *recordsView) record(i int) Value {
 	plan := v.plan.elem

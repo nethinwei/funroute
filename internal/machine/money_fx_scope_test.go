@@ -455,3 +455,10 @@ func marketOf(table *money.Currencies, size int) []money.FxRate {
 	}
 	return rates
 }
+
+// Closing a using where none is open closes nothing: the verifier refuses
+// such bytecode, and the frame does not lean on it.
+func TestClosingNoUsingClosesNothing(t *testing.T) {
+	t.Parallel()
+	machine.PopScopeOfNone()
+}

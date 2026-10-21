@@ -1,6 +1,9 @@
 package machine
 
-import "slices"
+import (
+	"fmt"
+	"slices"
+)
 
 // The arrays a run builds in memory the frame keeps (lower_escape.go says
 // which). An arena array, one that never leaves the run, is built in its own
@@ -51,9 +54,12 @@ func finishIn(slot *arenaSlot, builder *arrayBuilder) Value {
 	case FloatKind:
 		slot.floats = builder.floats
 		return Value{kind: ArrayKind, i: int64(len(slot.floats)), box: &slot.floats}
+	case StringKind:
+		slot.strings = builder.strings
+		return Value{kind: ArrayKind, i: int64(len(slot.strings)), box: &slot.strings}
 	}
-	slot.strings = builder.strings
-	return Value{kind: ArrayKind, i: int64(len(slot.strings)), box: &slot.strings}
+	// Only arrays of a native element are given a slot (builtFor).
+	panic(fmt.Sprintf("machine: an array of %s is built in no slot", builder.elem))
 }
 
 // release drops the strings a slot holds, and a slot grown past maxKept.

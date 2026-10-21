@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nethinwei/funroute/internal/compile"
 	"github.com/nethinwei/funroute/internal/machine"
@@ -293,4 +294,49 @@ func TestGoReturnsAResultWithOrWithoutAnError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A Go type defined as a handle is a handle wherever it is a parameter or
+// a result, even of a shape the machine calls straight: the call goes by
+// reflection, which knows the handle, and answers as the signature says.
+func TestAHandleOfACommonShapeIsCalledAsAHandle(t *testing.T) {
+	t.Parallel()
+	for name, doc := range map[string]machine.Doc{"from the registers": {}, "under a timeout": {Timeout: time.Second}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			registry := featureRegistry(t, doc)
+			handle := machine.HandleOf("demo.feature")
+			artifact, err := compile.CompileExpr(`demo.read_v1(demo.next_v1(h))`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "h", Type: handle}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rt, err := machine.Instantiate(artifact, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := rt.RunValues(t.Context(), []machine.Value{machine.NewHandle("demo.feature", int64(41))})
+			if score, _ := got.Float(); err != nil || score != 42 {
+				t.Fatalf("demo.read_v1(demo.next_v1(41)) = %v, %v, want 42", got.Any(), err)
+			}
+		})
+	}
+}
+
+// featureRegistry defines int64 as handle<demo.feature> and registers two
+// functions of the shapes the machine calls straight over it, with doc.
+func featureRegistry(t *testing.T, doc machine.Doc) *machine.Registry {
+	t.Helper()
+	registry := machine.CoreRegistry()
+	if err := machine.DefineHandle[int64](registry, "demo.feature"); err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range []machine.FunctionSpec{
+		{Name: "demo.next_v1", Doc: doc, Go: func(x int64) int64 { return x + 1 }},
+		{Name: "demo.read_v1", Doc: doc, Go: func(x int64) float64 { return float64(x) }},
+	} {
+		if err := registry.Register(spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return registry
 }

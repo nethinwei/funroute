@@ -543,6 +543,12 @@ func equalItems(left, right Value) bool {
 			}
 			return nil
 		}) == nil
+	case ArrayKind:
+		if a, ok := left.box.(*recordsView); ok {
+			if b, ok := right.box.(*recordsView); ok && a.plan == b.plan {
+				return n == m && a.equalTo(b)
+			}
+		}
 	case RecordKind:
 		a, aOK := left.box.(*recordValue)
 		b, bOK := right.box.(*recordValue)
@@ -600,7 +606,7 @@ func typeHoldsHandle(t Type) bool {
 // than a guess.
 func compareEqual(left, right Value) (Value, error) {
 	// A handle's payload may be a map nativeEqual would compare.
-	if holdsHandle(left) || holdsHandle(right) {
+	if left.kind == HandleKind || right.kind == HandleKind {
 		return Value{}, errHandleEquality
 	}
 	if equal, native := nativeEqual(left, right); native {
@@ -615,8 +621,12 @@ func compareEqual(left, right Value) (Value, error) {
 	if !left.sameTypeAs(right) {
 		return Value{}, fmt.Errorf("equality requires one type, got %s and %s", left.Type(), right.Type())
 	}
-	// Two containers that hold money meet first, whatever else differs.
+	// Two containers of one type hold a handle alike, and are refused for
+	// it; ones that hold money meet first, whatever else differs.
 	if right.kind == ArrayKind || right.kind == DictKind || right.kind == RecordKind {
+		if holdsHandle(right) {
+			return Value{}, errHandleEquality
+		}
 		if err := meetPair(left, right); err != nil {
 			return Value{}, err
 		}

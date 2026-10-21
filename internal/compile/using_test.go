@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/machine"
+	"github.com/nethinwei/funroute/internal/syntax"
 )
 
 // fxContract is the arguments the using tests read: dollars, yen, amounts
@@ -59,6 +60,14 @@ func TestAUsingQuotesOnlyExchangeRates(t *testing.T) {
 				t.Fatalf("CompileExpr(%q) error = %v, want ErrCompile containing %q", source, err, want)
 			}
 		})
+	}
+	// A literal that cannot become a rate is refused as any quote is, at the
+	// quote.
+	for _, source := range []string{"using(0, a)", "using(0.5, a)", "using([0], a)"} {
+		_, err := compileMoney(t, source, fxContract, "")
+		if at, ok := errors.AsType[*syntax.PosError](err); !ok || at.Offset() != len("using(") || !strings.Contains(err.Error(), "using quotes exchange rates") {
+			t.Errorf("CompileExpr(%q) error = %v, want one at the quote saying using quotes exchange rates", source, err)
+		}
 	}
 }
 

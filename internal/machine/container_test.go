@@ -37,8 +37,8 @@ var nativeSamples = map[Kind]any{
 
 // natives is the one list of backings, and every switch that reads one
 // answers for each entry: the builders build it, the operations read it,
-// fromGo takes it as it is and the unsafe codecs hand it over without a
-// copy. A backing added to the list and missed by any of them fails here.
+// fromGo takes it as it is, its element type is told, and the unsafe codecs
+// hand it over without a copy, each at its constant's place in the list. A backing added to the list and missed by any of them fails here.
 func TestEveryBackingIsHandledEverywhere(t *testing.T) {
 	t.Parallel()
 	if nativeBoolMap != native(len(natives)) {
@@ -71,6 +71,9 @@ func checkBacking(t *testing.T, registry *Registry, container reflect.Value, typ
 	value, err := fromGo(container.Interface())
 	if err != nil || reflect.TypeOf(nativeAny(value)) != container.Type() || value.length() != 1 {
 		t.Fatalf("fromGo(%s) = %T, %v, want the %s itself", container.Type(), nativeAny(value), err, container.Type())
+	}
+	if elem := item.Type(); !value.elemType().Equal(elem) || !value.elemIs(&elem) {
+		t.Fatalf("the elements of %s are %s, want %s", container.Type(), value.elemType(), elem)
 	}
 	one, ok := value.at(0), true
 	if typ.kind == DictKind {

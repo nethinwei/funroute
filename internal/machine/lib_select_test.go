@@ -93,3 +93,17 @@ func assertRankedAsSorted(t *testing.T, keys []any, k int) {
 		}
 	}
 }
+
+// merge of two dictionaries of different backings — which no type checked
+// program hands it — is refused, never answered without the second.
+func TestMergeRefusesDictionariesOfTwoBackings(t *testing.T) {
+	t.Parallel()
+	ints, _ := machine.ToValue(map[string]int64{"a": 1})
+	texts, _ := machine.ToValue(map[string]string{"a": "x"})
+	nested, _ := machine.ToValue(map[string][]int64{"a": {1}})
+	for _, pair := range [][2]machine.Value{{ints, texts}, {nested, ints}} {
+		if got, err := machine.EvalMerge(t.Context(), pair[:]); err == nil {
+			t.Errorf("merge(%v, %v) = %v, want an error", pair[0].Any(), pair[1].Any(), got.Any())
+		}
+	}
+}

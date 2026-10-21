@@ -47,6 +47,9 @@ func TestARatioIsCanonical(t *testing.T) {
 			t.Errorf("ratioOf(%d, %d) = %+v, %v, want %+v", pair[0], pair[1], got, err, want)
 		}
 	}
+	if got, err := ratioFrom(false, 1, 0); !errors.Is(err, ErrArithmetic) || got != (Ratio{}) {
+		t.Errorf("ratioFrom(1, 0) = %+v, %v, want ErrArithmetic: no ratio is held over zero", got, err)
+	}
 	if _, err := ratioOf(1, math.MinInt64); !errors.Is(err, ErrArithmetic) {
 		t.Errorf("ratioOf(1, MinInt64) error = %v, want ErrArithmetic: 2^63 does not fit a denominator", err)
 	}

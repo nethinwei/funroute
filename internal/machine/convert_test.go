@@ -133,3 +133,15 @@ func TestCoerceIntRefusesFloatsPastExactIntegers(t *testing.T) {
 		}
 	}
 }
+
+// A value that is not of the type asked for gives the zero value with the
+// error, a currency as every other type: not what the value would have been.
+func TestAFailedConversionGivesTheZeroValue(t *testing.T) {
+	t.Parallel()
+	if got, err := FromValue[money.Currency](String("USD")); err == nil || got != (money.Currency{}) {
+		t.Errorf("FromValue[Currency](\"USD\") = %v, %v, want the zero currency and an error", got, err)
+	}
+	if got, err := FromValue[money.Money](String("USD 1")); err == nil || got != (money.Money{}) {
+		t.Errorf("FromValue[Money](\"USD 1\") = %v, %v, want the zero amount and an error", got, err)
+	}
+}
