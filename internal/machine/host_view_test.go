@@ -3,6 +3,7 @@ package machine_test
 import (
 	"errors"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -381,9 +382,37 @@ func TestAViewOfPricedRecordsIsAnsweredAsItsRecords(t *testing.T) {
 		t.Fatalf("answered %d items, %v; want %d", len(sorted), err, len(in.Channels))
 	}
 	for i := range sorted {
-		if i > 0 && sorted[i-1].Fee.Minor() > sorted[i].Fee.Minor() || sorted[i].Cur.Code() == "" || sorted[i].Fee.Currency() != "USD" {
-			t.Fatalf("item %d: %+v, want the channels in order of fee, amounts and currencies kept", i, sorted[i])
+		if i > 0 && sorted[i-1].Fee.Minor() > sorted[i].Fee.Minor() || !slices.Contains(in.Channels, sorted[i]) {
+			t.Fatalf("item %d: %+v, want the channels in order of fee, each one as it was", i, sorted[i])
 		}
+	}
+}
+
+// A view of priced records is written into the host's slice field by field,
+// the amounts and currencies too: no record made of an item, so what it
+// allocates does not grow with the array.
+func TestAnsweringAViewOfPricedRecordsAllocatesByTheArray(t *testing.T) {
+	binding, err := compile.Bind[pricedIn, []pricedChannel](pricedRegistry(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := binding.Compile(`sort_by(channels, [c.risk for c in channels])`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocs := func(n int) float64 {
+		in := &pricedIn{}
+		for i := range n {
+			in.Channels = append(in.Channels, pricedChannel{Name: "c", Fee: machine.NewMoney("USD", int64(i)), Cur: machine.NewCurrency("EUR"), Risk: float64(i%7) / 7})
+		}
+		return testing.AllocsPerRun(100, func() {
+			if _, err := program.Run(t.Context(), in); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if short, long := allocs(10), allocs(1000); short != long {
+		t.Fatalf("answering a sorted view allocates %v times over 10 channels and %v over 1000; want the same", short, long)
 	}
 }
 

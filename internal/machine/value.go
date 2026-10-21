@@ -593,12 +593,18 @@ func holdsHandle(v Value) bool {
 }
 
 // typeHoldsHandle is TypeContains(t, HandleKind) without the closure the
-// walk takes, which would allocate on every comparison.
+// walk takes, which would allocate on every comparison; a record answers
+// from its shape.
 func typeHoldsHandle(t Type) bool {
-	if t.kind == HandleKind || t.elem != nil && typeHoldsHandle(*t.elem) {
+	switch t.kind {
+	case HandleKind:
 		return true
+	case RecordKind:
+		return t.shape != nil && t.shape.handle
+	case ArrayKind, DictKind:
+		return t.elem != nil && typeHoldsHandle(*t.elem)
 	}
-	return slices.ContainsFunc(t.fields, func(field Field) bool { return typeHoldsHandle(field.typ) })
+	return false
 }
 
 // compareEqual is the VM's equality: eq and switch both use it. Handles are

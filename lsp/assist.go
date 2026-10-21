@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -145,6 +146,9 @@ func (s *Server) completion(doc *document, offset int) (any, error) {
 	}
 	// Where only a field can be named — of the record being updated, or of
 	// the items a selector reads — only fields are offered.
+	// Only fields are offered where only a field can be named: of the record
+	// being updated, after a with, or of the items a selector reads, after
+	// its dot. Elsewhere neither is looked for: each parses the text twice.
 	if fields, ok := s.updateFields(doc, offset); ok {
 		return fields, nil
 	}
@@ -158,7 +162,20 @@ func (s *Server) completion(doc *document, offset int) (any, error) {
 	for _, name := range localsAt(doc.text, offset) {
 		items = append(items, completionItem{Label: name, Kind: kindVariable, SortText: "0" + name, Detail: "局部名"})
 	}
-	return append(items, s.callables()...), nil
+	return withCallables(items, s.callables())
+}
+
+// withCallables is items followed by the callables, as the one JSON array
+// they make: the callables, the same on every completion, were encoded once.
+func withCallables(items []completionItem, callables json.RawMessage) (json.RawMessage, error) {
+	if len(items) == 0 {
+		return callables, nil
+	}
+	head, err := json.Marshal(items)
+	if err != nil || string(callables) == "[]" {
+		return head, err
+	}
+	return slices.Concat(head[:len(head)-1], []byte(","), callables[1:]), nil
 }
 
 // currencies are the registry's declared currencies, written as their codes.
@@ -241,11 +258,13 @@ func openBrackets(prefix string) string {
 
 // callables is every function, form and currency the registry offers. The
 // registry is fixed for the session, so the list is built once.
-func (s *Server) callables() []completionItem {
-	if s.callableItems == nil {
-		s.callableItems = s.buildCallables()
+func (s *Server) callables() json.RawMessage {
+	if s.callableJSON == nil {
+		// Never null: no callable is an empty list.
+		items := append([]completionItem{}, s.buildCallables()...)
+		s.callableJSON, _ = json.Marshal(items) // strings and ints: it cannot fail
 	}
-	return s.callableItems
+	return s.callableJSON
 }
 
 func (s *Server) buildCallables() []completionItem {

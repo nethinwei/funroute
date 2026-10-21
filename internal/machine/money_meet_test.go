@@ -26,6 +26,7 @@ func TestMeetingAmountsDoesNotAllocate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r, rs := feeRecords(t, amounts[:50])
 	for _, test := range []struct {
 		source, contract string
 		args             []machine.Value
@@ -34,6 +35,9 @@ func TestMeetingAmountsDoesNotAllocate(t *testing.T) {
 		{"xs == ys", "xs: array<money>; ys: array<money>", []machine.Value{xs, xs}},
 		{"x in ys", "x: money; ys: array<money>", []machine.Value{amounts[499], xs}},
 		{"d == e", "d: dict<money>; e: dict<money>", []machine.Value{d, d}},
+		{"r == s", "r: record{n: int, fee: money}; s: record{n: int, fee: money}", []machine.Value{r, r}},
+		{"rs == ss", "rs: array<record{n: int, fee: money}>; ss: array<record{n: int, fee: money}>", []machine.Value{rs, rs}},
+		{"r in rs", "r: record{n: int, fee: money}; rs: array<record{n: int, fee: money}>", []machine.Value{r, rs}},
 	} {
 		artifact, err := compileMoney(t, registry, test.source, test.contract, "")
 		if err != nil {
@@ -53,6 +57,26 @@ func TestMeetingAmountsDoesNotAllocate(t *testing.T) {
 			t.Errorf("%s allocated %v times, want 0", test.source, allocs)
 		}
 	}
+}
+
+// feeRecords is a record of an int and an amount, the last of fees, and
+// an array of such records, one for each fee.
+func feeRecords(t *testing.T, fees []machine.Value) (machine.Value, machine.Value) {
+	t.Helper()
+	typ := machine.RecordOf(machine.FieldOf("n", machine.IntType), machine.FieldOf("fee", machine.MoneyType))
+	items := make([]machine.Value, len(fees))
+	for i, fee := range fees {
+		record, err := machine.Record(typ, []machine.Value{machine.Int(int64(i)), fee})
+		if err != nil {
+			t.Fatal(err)
+		}
+		items[i] = record
+	}
+	array, err := machine.Array(typ, items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return items[len(items)-1], array
 }
 
 // A dictionary whose amounts do not meet says which two in key order, the

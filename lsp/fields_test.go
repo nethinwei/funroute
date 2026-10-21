@@ -81,3 +81,22 @@ func TestCompletionOffersTheFieldsASelectorCanRead(t *testing.T) {
 		})
 	}
 }
+
+// A selector's name is typed right after its dot: only there are the fields
+// of the list looked for.
+func TestTypingSelectorIsAfterTheDot(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]bool{
+		"sort_by(xs, .":      true,
+		"sort_by(xs, .fe":    true,
+		"sort_by(xs, .a.b_2": true,
+		"sort_by(xs, ":       false,
+		"sort_by(xs, fe":     false,
+		"x.":                 true,
+		"":                   false,
+	} {
+		if got := typingSelector(text, len(text)); got != want {
+			t.Errorf("typingSelector(%q) = %v, want %v", text, got, want)
+		}
+	}
+}

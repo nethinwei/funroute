@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -100,26 +101,72 @@ func itemsPlan(kind, elem Kind) *unitPlan {
 	return nil
 }
 
+// recordShape is what a record type holds, worked out once where the type
+// is made: its plan, and an array's and a dictionary's of it, when it holds
+// money, and whether it holds a handle.
+type recordShape struct {
+	plan, array, dict unitPlan
+	places            int
+	handle            bool
+}
+
+// shapeOf is the shape of the record t, nil when it holds nothing a shape
+// says: its fields' types are made, their shapes with them.
+func shapeOf(t Type) *recordShape {
+	handle := slices.ContainsFunc(t.fields, func(field Field) bool { return typeHoldsHandle(field.typ) })
+	places := slices.ContainsFunc(t.fields, func(field Field) bool { return holdsPlaces(field.typ) })
+	if !handle && !places {
+		return nil
+	}
+	shape := &recordShape{handle: handle}
+	if places {
+		shape.plan, shape.places = planUnits(t, 0)
+		shape.array = unitPlan{kind: ArrayKind, elem: &shape.plan}
+		shape.dict = unitPlan{kind: DictKind, elem: &shape.plan}
+	}
+	return shape
+}
+
 // plansOf is typ's plan and how many places it has: one made once for the
-// common types, a new one for any other.
+// common types — a record's where it was made — a new one for any other.
 func plansOf(typ Type) (*unitPlan, int) {
 	switch {
 	case typ.kind == MoneyKind:
 		return &amountPlan, 1
 	case typ.kind == FxRateKind:
 		return &ratePlan, 1
+	case typ.kind == RecordKind && typ.shape != nil && typ.shape.places > 0:
+		return &typ.shape.plan, typ.shape.places
 	case typ.elem != nil:
 		if plan := itemsPlan(typ.kind, typ.elem.kind); plan != nil {
 			return plan, 1
+		}
+		if plan, places := shapedItems(typ.kind, *typ.elem); plan != nil {
+			return plan, places
 		}
 	}
 	plan, places := planUnits(typ, 0)
 	return &plan, places
 }
 
+// shapedItems is the plan of an array or a dictionary, kind, of records of
+// elem that hold money, made with elem's type; nil for any other.
+func shapedItems(kind Kind, elem Type) (*unitPlan, int) {
+	shape := elem.shape
+	switch {
+	case shape == nil || shape.places == 0:
+		return nil, 0
+	case kind == ArrayKind:
+		return &shape.array, shape.places
+	case kind == DictKind:
+		return &shape.dict, shape.places
+	}
+	return nil, 0
+}
+
 // planOfValue is plansOf of v's type, and false when it holds no money. An
 // array's or a dictionary's type is built only when its items hold money
-// and are not amounts or rates.
+// and are neither amounts, rates nor records.
 func planOfValue(v Value) (*unitPlan, int, bool) {
 	if v.kind == ArrayKind || v.kind == DictKind {
 		elem := v.elemType()
@@ -128,6 +175,9 @@ func planOfValue(v Value) (*unitPlan, int, bool) {
 		}
 		if plan := itemsPlan(v.kind, elem.kind); plan != nil {
 			return plan, 1, true
+		}
+		if plan, places := shapedItems(v.kind, elem); plan != nil {
+			return plan, places, true
 		}
 	}
 	typ := v.Type()
@@ -280,5 +330,13 @@ func (m *unitsMeet) see(place int, unit string, pair bool) error {
 // meeting holds to one unit. A currency is a unit, not a place: two records
 // of currencies alone have nothing to meet.
 func holdsPlaces(typ Type) bool {
-	return typeHas(typ, func(kind Kind) bool { return kind == MoneyKind || kind == FxRateKind })
+	switch typ.kind {
+	case MoneyKind, FxRateKind:
+		return true
+	case RecordKind:
+		return typ.shape != nil && typ.shape.places > 0
+	case ArrayKind, DictKind:
+		return typ.elem != nil && holdsPlaces(*typ.elem)
+	}
+	return false
 }

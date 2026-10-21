@@ -3,8 +3,10 @@ package lsp
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -19,6 +21,9 @@ import (
 // program with the update replaced by its base, which is the one thing it
 // does not need to see finished.
 func (s *Server) updateFields(doc *document, offset int) ([]completionItem, bool) {
+	if !strings.Contains(doc.text[:offset], "with") {
+		return nil, false
+	}
 	return s.fieldsAt(doc, offset, placeholder+": 0", func(tree syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool) {
 		base, around, written, ok = syntax.UpdatedRecordAt(tree, offset, placeholder)
 		return base, around, recordOf, written, ok
@@ -30,10 +35,23 @@ func (s *Server) updateFields(doc *document, offset int) ([]completionItem, bool
 // fields it names before reach, read off the program with the call replaced
 // by that list.
 func (s *Server) selectorFields(doc *document, offset int) ([]completionItem, bool) {
+	if !typingSelector(doc.text, offset) {
+		return nil, false
+	}
 	return s.fieldsAt(doc, offset, placeholder, func(tree syntax.Expr) (base, around syntax.Span, record reach, written []string, ok bool) {
 		base, around, path, ok := syntax.SelectedListAt(tree, offset, placeholder)
 		return base, around, itemRecord(path), nil, ok
 	})
+}
+
+// typingSelector reports a cursor in a selector's name, right after its dot
+// or in what is typed of the name: .| or .fe|. A selector is nowhere else.
+func typingSelector(text string, offset int) bool {
+	at := offset
+	for at > 0 && kit.IsNameChar(text[at-1]) {
+		at--
+	}
+	return at > 0 && text[at-1] == '.'
 }
 
 // itemRecord reaches, from a list's type, the record path leads to from its

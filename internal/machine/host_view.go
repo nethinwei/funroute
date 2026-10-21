@@ -3,6 +3,8 @@ package machine
 import (
 	"reflect"
 	"unsafe"
+
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // An array of plain records — every field a bool, an int, a float or a
@@ -214,16 +216,17 @@ func (v *recordsView) arranged(n int, at func(int) int) *recordsView {
 
 // storeView writes the view into the slice at p of plan, a slice of records
 // of the same type: field by field from the host's memory, when every field
-// is a plain one of the same Go kind in both, which is what a slice of the
-// same struct of plain fields is. It reports false for a slice it does not
-// answer so, an amount's or a currency's among them.
+// is of the same Go type in both — a plain one of one kind, or an amount or
+// a currency, which the boundary checked as the view came in and which reads
+// back as itself — which is what a slice of the same struct is. It reports
+// false for a slice it does not answer so.
 func storeView(plan *codec, p unsafe.Pointer, v *recordsView) bool {
 	from, to := v.plan.elem.fields, plan.elem.fields
 	if !viewable(plan) || len(from) != len(to) {
 		return false
 	}
 	for i := range from {
-		if from[i].plain != to[i].plain || from[i].plain == reflect.Invalid {
+		if !copiedAlike(&from[i], &to[i]) {
 			return false
 		}
 	}
@@ -232,11 +235,33 @@ func storeView(plan *codec, p unsafe.Pointer, v *recordsView) bool {
 	for i := range v.length {
 		source, target := v.item(i), unsafe.Add(data, uintptr(i)*plan.stride)
 		for j := range from {
-			copyPlain(from[j].plain, unsafe.Add(target, to[j].offset), unsafe.Add(source, from[j].offset))
+			copyField(&from[j], unsafe.Add(target, to[j].offset), unsafe.Add(source, from[j].offset))
 		}
 	}
 	reflect.NewAt(plan.goType, noescape(p)).Elem().Set(items)
 	return true
+}
+
+// copiedAlike reports two fields of views a field is copied between as it
+// is: plain of one kind, or both the same unit's Go type.
+func copiedAlike(from, to *fieldCodec) bool {
+	if from.plain != reflect.Invalid || to.plain != reflect.Invalid {
+		return from.plain == to.plain
+	}
+	return viewUnit(from.codec) && from.codec.goType == to.codec.goType
+}
+
+// copyField copies a field from source to target, a plain one by its kind
+// and an amount or a currency whole.
+func copyField(field *fieldCodec, target, source unsafe.Pointer) {
+	switch {
+	case field.plain != reflect.Invalid:
+		copyPlain(field.plain, target, source)
+	case field.codec.goType == moneyGoType:
+		*(*money.Money)(target) = *(*money.Money)(source)
+	default:
+		*(*money.Currency)(target) = *(*money.Currency)(source)
+	}
 }
 
 // copyPlain copies a plain field of kind from source to target.
