@@ -137,8 +137,9 @@ func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(sy
 		// The closed text has lost what follows the cursor, where a
 		// comprehension binds the names its yield reads, [order with {|}
 		// for order in xs]: it would read the argument for the local. It
-		// is asked only when no name the base reads is bound there.
-		if i > 0 && bindsAfter(doc, offset, candidate[base.Start:base.End]) {
+		// is asked only when no comprehension around the base binds a name
+		// the base reads there.
+		if i > 0 && bindsAfter(doc, offset, base.Start, candidate[base.Start:base.End]) {
 			continue
 		}
 		typ, ok := s.baseType(doc, candidate, syntax.ScopeAt(tree, base.Start), base, around, record)
@@ -150,32 +151,66 @@ func (s *Server) fieldsAt(doc *document, offset int, filler string, find func(sy
 	return nil, false
 }
 
-// bindsAfter reports a name expr reads bound after offset in the document by
-// a for or a reduce — one of the names written between it and its in, for
-// order, i in or reduce(order in — and an expr that does not parse. A name
-// merely read or written as a field label there binds nothing.
-func bindsAfter(doc *document, offset int, expr string) bool {
+// bindsAfter reports a name expr, the base at baseStart, reads bound after
+// offset in the document by a comprehension around it — one of the names
+// written between a for and its in, for order, i in, where the innermost [
+// left open before the for opens before the base — and an expr that does not
+// parse. A for whose [ opens after the base binds nothing the base reads, nor
+// does a reduce: it binds its names in its own arguments, all after offset.
+// A name merely read or written as a field label binds nothing.
+func bindsAfter(doc *document, offset, baseStart int, expr string) bool {
 	tree, err := syntax.Parse(expr)
 	if err != nil {
 		return true
 	}
-	names, binding := syntax.FreeVariables(tree), false
-	for _, lexeme := range lexemesOf(doc) {
-		if lexeme.Start < offset || lexeme.Class == syntax.ClassComment {
+	names, lexemes := syntax.FreeVariables(tree), lexemesOf(doc)
+	for i, lexeme := range lexemes {
+		if lexeme.Start < offset || lexeme.Class != syntax.ClassIdentifier || doc.text[lexeme.Start:lexeme.End] != "for" {
+			continue
+		}
+		if opensBefore(doc, lexemes[:i], baseStart) && bindsAny(doc, lexemes[i+1:], names) {
+			return true
+		}
+	}
+	return false
+}
+
+// opensBefore reports that the innermost [ lexemes leave open starts before
+// at.
+func opensBefore(doc *document, lexemes []syntax.Lexeme, at int) bool {
+	depth := 0
+	for _, lexeme := range slices.Backward(lexemes) {
+		if lexeme.Class != syntax.ClassPunctuation {
+			continue
+		}
+		switch doc.text[lexeme.Start:lexeme.End] {
+		case "]":
+			depth++
+		case "[":
+			if depth == 0 {
+				return lexeme.Start < at
+			}
+			depth--
+		}
+	}
+	return false
+}
+
+// bindsAny reports one of names among the binders lexemes start with, the
+// names up to the in.
+func bindsAny(doc *document, lexemes []syntax.Lexeme, names []string) bool {
+	for _, lexeme := range lexemes {
+		if lexeme.Class == syntax.ClassComment {
 			continue
 		}
 		text := doc.text[lexeme.Start:lexeme.End]
-		identifier := lexeme.Class == syntax.ClassIdentifier
 		switch {
-		case identifier && (text == "for" || text == "reduce"):
-			binding = true
-		case !binding:
-		case identifier && text != "in":
+		case lexeme.Class == syntax.ClassIdentifier && text != "in":
 			if slices.Contains(names, text) {
 				return true
 			}
-		case text != "," && text != "(":
-			binding = false // the in, or anything no binder is written in
+		case text != ",":
+			return false // the in, or anything no binder is written in
 		}
 	}
 	return false

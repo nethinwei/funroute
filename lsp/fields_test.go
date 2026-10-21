@@ -152,55 +152,75 @@ func TestCompletionOffersNoArgumentsFieldsForALocal(t *testing.T) {
 	}
 }
 
-// A name the base reads written after the cursor but bound by no for or
-// reduce there — read again, or a field label — does not stop the fields
-// being offered where the text as typed lacks the comma before the next one.
+// A name the base reads written after the cursor but bound by no
+// comprehension around the base there — read again, a field label, or bound
+// by a for or a reduce beside the base — does not stop the fields being
+// offered where the text as typed lacks the comma before the next one.
 func TestCompletionOffersTheFieldsWhereTheBaseIsOnlyReadAfter(t *testing.T) {
 	t.Parallel()
-	for _, text := range []string{
-		"order with {\n  fee: 0,\n  |\n  currency: order.fee\n}",
-		"order with {\n  fee: 0,\n  |\n  meta: {order: 0}\n}",
+	for text, want := range map[string]string{
+		"order with {\n  fee: 0,\n  |\n  currency: order.fee\n}":                                        "amount currency",
+		"order with {\n  fee: 0,\n  |\n  meta: {order: 0}\n}":                                           "amount currency",
+		"order with {\n  |\n  meta: [x for order in xs]\n}":                                             "amount fee currency",
+		"[order with {\n  |\n  currency: \"USD\"\n}, [x for order in xs]]":                              "amount fee currency",
+		"[order with {\n  |\n  currency: \"USD\"\n}, reduce(order in xs, total = 0, total)]":            "amount fee currency",
+		"order with {\n  fee: 0,\n  |\n  meta: [x for order in xs]\n}":                                  "amount currency",
+		"[order with {\n  fee: 0,\n  |\n  currency: \"USD\"\n}, [x for order in xs]]":                   "amount currency",
+		"[order with {\n  fee: 0,\n  |\n  currency: \"USD\"\n}, reduce(order in xs, total = 0, total)]": "amount currency",
 	} {
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
 			s := newSession(t, standard(t), `{}`)
 			s.notify("funroute/setContract", map[string]any{"contract": map[string]any{"args": []map[string]string{
 				{"name": "order", "type": "record{amount: int, fee: int, currency: string}"},
+				{"name": "xs", "type": "array<record{amount: int}>"},
 			}}})
 			cursor := strings.Index(text, "|")
 			s.open("file:///a.fr", strings.Replace(text, "|", "", 1))
 			got := labels(t, s.request("textDocument/completion", position("file:///a.fr", cursor)))
-			if !slices.Contains(got, "amount") || !slices.Contains(got, "currency") {
-				t.Errorf("%q: completion is %v, want the fields amount and currency", text, got)
+			missing := slices.DeleteFunc(strings.Fields(want), func(field string) bool { return slices.Contains(got, field) })
+			if len(missing) > 0 {
+				t.Errorf("%q: completion is %v, want the fields %s", text, got, want)
 			}
 		})
 	}
 }
 
-// Only a for or a reduce after the cursor binds a name the base reads: the
-// names written between it and its in, not one in a string, a comment, a
-// read or a field label.
-func TestBindsAfterIsABinderAfterTheCursor(t *testing.T) {
+// Only a for after the cursor whose [ opens before the base, ^, binds a name
+// the base reads: the names written between it and its in, not one in a
+// string, a comment, a read, a field label, a reduce or a comprehension
+// beside the base.
+func TestBindsAfterIsABinderAroundTheBase(t *testing.T) {
 	t.Parallel()
 	for text, want := range map[string]bool{
-		"| for order in xs]":                                    true,
-		"| for i, order in xs]":                                 true,
-		"| + reduce(order in xs, total = 0, total)":             true,
-		"| + [x for x in xs]":                                   false,
-		"| + reduce(price in prices, total = 0, total + price)": false,
-		"| + \"for order in xs\"":                               false,
-		"| // for order in xs\n":                                false,
-		"|, currency: order.fee}":                               false,
-		"|, meta: {order: 0}}":                                  false,
-		"for order in xs, |":                                    false,
+		"[^order with {| } for order in xs]":                        true,
+		"[^order with {| } for i, order in xs]":                     true,
+		"[[^order with {| } for o in ys] for order in xs]":          true,
+		"[[^order with {| }, [y for order in ys]] for order in xs]": true,
+		"[^order with {| }.fee + [1, 2][0] for order in xs]":        true,
+		"[^order with {| } for x in xs]":                            false,
+		"[^order with {| } for o in xs]":                            false,
+		"[^order with {| }, [x for order in xs]]":                   false,
+		"^order with {|, meta: [x for order in xs]}":                false,
+		"[^order with {| }] + [x for order in xs]":                  false,
+		"[0][0] + ^order with {| } + [x for order in xs]":           false,
+		"[^order with {| }, reduce(order in xs, total = 0, total)]": false,
+		"^order with {| } + reduce(order in xs, total = 0, total)":  false,
+		"[^order with {| } + \"for order in xs\"]":                  false,
+		"[^order with {| } // for order in xs\n]":                   false,
+		"[^order with {|, currency: order.fee}]":                    false,
+		"[^order with {|, meta: {order: 0}}]":                       false,
+		"[x for order in xs, ^order with {|":                        false,
 	} {
-		cursor := strings.Index(text, "|")
-		doc := &document{text: strings.Replace(text, "|", "", 1)}
-		if got := bindsAfter(doc, cursor, "order"); got != want {
+		base := strings.Index(text, "^")
+		source := strings.Replace(text, "^", "", 1)
+		cursor := strings.Index(source, "|")
+		doc := &document{text: strings.Replace(source, "|", "", 1)}
+		if got := bindsAfter(doc, cursor, base, "order"); got != want {
 			t.Errorf("bindsAfter(%q, order) = %v, want %v", text, got, want)
 		}
 	}
-	if !bindsAfter(&document{}, 0, "order with {") {
+	if !bindsAfter(&document{}, 0, 0, "order with {") {
 		t.Errorf("bindsAfter of a base that does not parse is false, want true")
 	}
 }
