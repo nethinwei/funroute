@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -187,4 +189,68 @@ func TestCatalogJSONShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectSnapshot(t, "catalog.json", encoded)
+}
+
+// Theorem B of docs/termination.md bounds a rule's steps by what each of its
+// functions costs, so the cost table names every function the official
+// registry has, and names no other: a function added without its cost, or one
+// renamed or removed, fails here.
+func TestTheCostTableNamesEveryFunction(t *testing.T) {
+	t.Parallel()
+	named := namesInTable(t, "../../docs/termination.md", "| 代价 | 函数 |")
+	functions := officialFunctions(t)
+	for _, name := range slices.Sorted(maps.Keys(functions)) {
+		if !named[name] {
+			t.Errorf("docs/termination.md's cost table does not name %s", name)
+		}
+	}
+	for name := range named {
+		if !functions[name] && name != "->" && name != "in" {
+			t.Errorf("docs/termination.md's cost table names %s, which is no function", name)
+		}
+	}
+}
+
+// docs/language.md's table of the libraries shows the main functions, not
+// all of them, but every one it shows is one: a name renamed or removed
+// fails here.
+func TestTheLibraryTableNamesOnlyFunctions(t *testing.T) {
+	t.Parallel()
+	functions := officialFunctions(t)
+	for name := range namesInTable(t, "../../docs/language.md", "| 类别 | 内核库 | 标准库 |") {
+		if !functions[name] {
+			t.Errorf("docs/language.md's library table names %s, which is no function", name)
+		}
+	}
+}
+
+// officialFunctions is the name of every function the official registry has,
+// once however many overloads it has.
+func officialFunctions(t *testing.T) map[string]bool {
+	t.Helper()
+	names := map[string]bool{}
+	for _, function := range officialRegistry(t).Catalog().Functions() {
+		names[function.Name()] = true
+	}
+	return names
+}
+
+// namesInTable is every name written in backquotes in the table of the
+// document at path that starts with header.
+func namesInTable(t *testing.T, path, header string) map[string]bool {
+	t.Helper()
+	doc, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(doc), header)
+	if start < 0 {
+		t.Fatalf("%s has no table headed %s", path, header)
+	}
+	table, _, _ := strings.Cut(string(doc)[start:], "\n\n")
+	named := map[string]bool{}
+	for _, match := range regexp.MustCompile("`([^`]+)`").FindAllStringSubmatch(table, -1) {
+		named[match[1]] = true
+	}
+	return named
 }

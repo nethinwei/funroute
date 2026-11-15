@@ -178,7 +178,7 @@ n 是参数的总规模（数组与字典的项数、字符串的字符数），
 
 | 代价 | 函数 |
 |---|---|
-| O(1) | 运算符（`add` `sub` `mul` `div` `mod`，标量的 `eq` `lt` `le` `gt` `ge`）、`abs` `ceil` `floor` `round` `round_to` `sign` `pow`（整数指数至多 63 步）、`int` `float` `bool` `string`（标量）、`money` `minor` `currency` `prorate` `implied`、`time` 与日历函数、数组与字典的 `at`、`get`、`len`（数组与字典）、`first` `last` |
+| O(1) | `if` `fallback`（本身常数，代价是所走分支的）、运算符（`add` `sub` `mul` `div` `mod`，标量的 `eq` `lt` `le` `gt` `ge`）、`abs` `ceil` `floor` `round` `round_to` `sign` `pow`（整数指数至多 63 步）、`int` `float` `bool` `string`（标量）、`money` `minor` `currency` `prorate` `implied`、`time` 与日历函数 `hour` `weekday` `day` `month` `start_of_day` `add_days`、数组与字典的 `at`、`get`、`len`（数组与字典）、`first` `last` |
 | O(报价数) | `convert`（`->`）、`fx` |
 | O(n) | `sum` `min` `max` `any` `all` `avg` `stddev`、`arg_min` `arg_max` `min_by` `max_by`、`member`（`in`）、`index_of` `last_index_of`、容器的 `eq`、`concat` `reverse` `slice` `take` `flatten` `indices` `merge`、字符串函数（`len` `at` `contains` `starts_with` `ends_with` `upper` `lower` `trim` `trim_prefix` `trim_suffix` `replace` `split` `join` `currency_of` `ratio`）、`matches`（文本至多 10000 字节）、`range`（至多 10000 项）、std 的 `cumsum` `deltas` `take_while` `drop_while` `windows` `chunk` `group_by` `pad_left` `pad_right` `repeat`（结果至多 10000 个字符） |
 | O(n)，元素能按键时 | `unique` `intersect` `except`：标量、金额，以及字段都是标量或金额的 record 按键查集合 |
