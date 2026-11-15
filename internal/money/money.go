@@ -119,22 +119,35 @@ func (m *Money) UnmarshalJSON(data []byte) error {
 	if shape.Currency == nil || shape.Minor == nil {
 		return errors.New("money needs a \"currency\" and a \"minor\"")
 	}
-	parsed := newMoney(*shape.Currency, *shape.Minor)
-	if shape.Digits != nil {
-		if err := checkDigits(*shape.Currency, *shape.Digits); err != nil {
-			return err
-		}
-		parsed.places = placesOf(*shape.Digits)
-	}
-	if err := parsed.wellFormed(); err != nil {
+	parsed, err := fromJSON(*shape.Currency, *shape.Minor, shape.Digits)
+	if err != nil {
 		return err
 	}
 	*m = parsed
 	return nil
 }
 
+// fromJSON is an amount from what its JSON says — a code, minor units and,
+// when written, the places — held to what an amount is held to: a code, or
+// none for a zero, and places a table could declare. Money's JSON and
+// ExactMoney's read through it.
+func fromJSON(code string, minor int64, digits *int) (Money, error) {
+	m := newMoney(code, minor)
+	if digits != nil {
+		places, err := PlacesOf(code, int64(*digits))
+		if err != nil {
+			return Money{}, err
+		}
+		m.places = places
+	}
+	if err := m.wellFormed(); err != nil {
+		return Money{}, err
+	}
+	return m, nil
+}
+
 // checkDigits refuses places no table could declare.
-func checkDigits(code string, digits int) error {
+func checkDigits(code string, digits int64) error {
 	if digits < 0 || digits > maxCurrencyDigits {
 		return fmt.Errorf("money: %s has %d decimal places, want 0 to %d", code, digits, maxCurrencyDigits)
 	}

@@ -151,9 +151,10 @@ func withDigits(amount Value, digits any, table *money.Currencies) (Value, error
 	if err != nil {
 		return Value{}, fmt.Errorf("money \"digits\": %w", err)
 	}
-	if d.i < 0 || d.i > 18 {
-		return Value{}, fmt.Errorf("money \"digits\": %d, want 0 to 18", d.i)
+	places, err := money.PlacesOf(amount.s, d.i)
+	if err != nil {
+		return Value{}, fmt.Errorf("money \"digits\": %w", err)
 	}
-	amount.p = uint8(d.i + 1)
+	amount.p = places
 	return amount, nil
 }

@@ -17,6 +17,16 @@ func MoneyParts(m Money) (currency string, minor int64, places uint8) {
 	return m.currency, m.minor, m.places
 }
 
+// PlacesOf is digits decimal places as MoneyParts gives them, for an amount
+// the machine reads from a map: places no table could declare are refused,
+// as Money's JSON refuses them.
+func PlacesOf(code string, digits int64) (uint8, error) {
+	if err := checkDigits(code, digits); err != nil {
+		return 0, err
+	}
+	return placesOf(int(digits)), nil
+}
+
 // PlacesIn is a currency's places in c as MoneyParts gives them: 0 when c is
 // nil or does not declare code.
 func PlacesIn(c *Currencies, code string) uint8 {

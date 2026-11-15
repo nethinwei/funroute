@@ -396,3 +396,132 @@ func plainEntries[T any](entries map[string]T) map[string]any {
 	}
 	return out
 }
+
+// Every door an amount goes through keeps its places: into a run and out of
+// it, built into a container by the run, read from a map, made by the
+// kernel, written as a literal. Compared with ==, which sees the places;
+// Equal does not, so a door that dropped them would pass a test that used it.
+// The want is always the amount the table made, never one read back through
+// a door under test.
+
+// A host's amounts keep their places through ToValue and FromValue, alone
+// and in the native backings.
+func TestAmountsKeepTheirPlacesThroughTheHostDoors(t *testing.T) {
+	t.Parallel()
+	for _, m := range placedAmounts(t) {
+		expectSameAmount(t, "ToValue then FromValue", roundTrip[money.Money](t, m), m)
+		expectSameAmounts(t, "an array", roundTrip[[]money.Money](t, []money.Money{m, m}), m)
+		dict := roundTrip[map[string]money.Money](t, map[string]money.Money{"k": m})
+		expectSameAmount(t, "a dictionary", dict["k"], m)
+	}
+}
+
+// A run keeps an amount's places, and gives the registry's places to the
+// amounts it makes or meets with one that has none.
+func TestAmountsKeepTheirPlacesThroughARun(t *testing.T) {
+	t.Parallel()
+	kwd := placedAmounts(t)[0]
+	unknown := machine.NewMoney("KWD", 1234) // places not said: the run's amounts give them
+	for source, arg := range map[string]money.Money{
+		"a": kwd, "[a, a][1]": kwd, `{"k": a}["k"]`: kwd, "{x: a}.x": kwd,
+		"round(a * 100%, @half_even)": kwd, "allocate(a, 1)[0]": kwd,
+		"money(minor(a), currency(a))": unknown, "a + KWD 0": unknown, "a - KWD 0": unknown,
+		"using(3 USD / KWD, convert(a, KWD, @half_even))": unknown,
+		"KWD 1.234 + a": machine.NewMoney("", 0),
+	} {
+		value, err := runMoney(t, source, "a: money", valueOf(t, arg))
+		if err != nil {
+			t.Fatalf("%s: %v", source, err)
+		}
+		got, _ := value.Money()
+		expectSameAmount(t, source, got, kwd)
+	}
+	for _, out := range []string{"[a, a]", `{"k": a}`} {
+		value, err := runMoney(t, out, "a: money", valueOf(t, kwd))
+		if err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+		switch items := value.Any().(type) {
+		case []money.Money:
+			expectSameAmounts(t, out, items, kwd)
+		case map[string]money.Money:
+			expectSameAmount(t, out, items["k"], kwd)
+		default:
+			t.Fatalf("%s = %T, want amounts in their native backing", out, items)
+		}
+	}
+}
+
+// An amount read from a map or from text takes the registry's places, or
+// the ones its "digits" says.
+func TestAmountsReadFromJSONTakeTheirPlaces(t *testing.T) {
+	t.Parallel()
+	kwd := placedAmounts(t)[0]
+	for name, arg := range map[string]any{
+		"a map without digits": map[string]any{"currency": "KWD", "minor": 1234},
+		"a map with digits":    map[string]any{"currency": "KWD", "minor": 1234, "digits": 3},
+		"text":                 "KWD 1.234",
+	} {
+		value, err := evalMoney(t, "a", "a: money", map[string]any{"a": arg})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got, _ := value.Money()
+		expectSameAmount(t, name, got, kwd)
+	}
+}
+
+// placedAmounts is KWD 1.234 and JPY 1600 as the registry's table makes them.
+func placedAmounts(t *testing.T) []money.Money {
+	t.Helper()
+	table, _ := moneyRegistry(t).Currencies()
+	texts := []string{"KWD 1.234", "JPY 1600"}
+	out := make([]money.Money, 0, len(texts))
+	for _, text := range texts {
+		m, err := table.Parse(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func roundTrip[T any](t *testing.T, in T) T {
+	t.Helper()
+	value, err := machine.ToValue(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := machine.FromValue[T](value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func valueOf(t *testing.T, m money.Money) machine.Value {
+	t.Helper()
+	value, err := machine.ToValue(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+// expectSameAmount requires got to be want with its places, by ==.
+func expectSameAmount(t *testing.T, door string, got, want money.Money) {
+	t.Helper()
+	if got != want {
+		gotDigits, _ := got.Digits()
+		wantDigits, _ := want.Digits()
+		t.Errorf("%s: %v in %d places, want %v in %d places", door, got, gotDigits, want, wantDigits)
+	}
+}
+
+func expectSameAmounts(t *testing.T, door string, got []money.Money, want money.Money) {
+	t.Helper()
+	for i, item := range got {
+		expectSameAmount(t, fmt.Sprintf("%s, item %d", door, i), item, want)
+	}
+}

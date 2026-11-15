@@ -80,19 +80,11 @@ func (e *ExactMoney) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	// Held to what an amount is held to: a code, or none for a zero, and
-	// places a table could declare.
-	unit := newMoney(*shape.Currency, int64(minor.Sign()))
-	if shape.Digits != nil {
-		if err := checkDigits(*shape.Currency, *shape.Digits); err != nil {
-			return err
-		}
-		unit.places = placesOf(*shape.Digits)
-	}
-	if err := unit.wellFormed(); err != nil {
+	unit, err := fromJSON(*shape.Currency, int64(minor.Sign()), shape.Digits)
+	if err != nil {
 		return err
 	}
-	*e = ExactMoney{currency: *shape.Currency, minor: minor, places: unit.places}
+	*e = unit.Exact().of(minor)
 	return nil
 }
 

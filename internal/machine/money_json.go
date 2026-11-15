@@ -42,8 +42,9 @@ func readableLeaf(t *money.Currencies) func(Value) any {
 		}
 		text, err := t.Format(value.money())
 		if err != nil {
-			// No places to write it in: the machine form keeps it exact.
-			return map[string]any{"currency": value.s, "minor": value.i}
+			// No places to write it in: the machine form keeps it exact,
+			// as the amount's own JSON writes it.
+			return value.money()
 		}
 		return text
 	}
