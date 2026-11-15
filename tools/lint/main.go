@@ -133,6 +133,7 @@ func checkGoFunctions(root, module, path string, source []byte) ([]violation, er
 	}
 	line := func(node ast.Node) int { return fileSet.Position(node.Pos()).Line }
 	violations = append(violations, checkInternalImports(root, module, path, file, line)...)
+	violations = append(violations, checkLayers(root, module, path, file, line)...)
 	if test {
 		violations = append(violations, checkTestPairing(path)...)
 	}

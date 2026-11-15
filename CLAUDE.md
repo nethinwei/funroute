@@ -19,9 +19,9 @@ lsp/                 语言服务（LSP + stdio）
 extensions/std/      标准库，只用公开 API
 internal/kit/        多个包共用的同一段逻辑：错误分类、名字与数字字符、切片投影与查重、JSON 数字 ← 只依赖标准库
 internal/money/      金额、比例、汇率、币种表、舍入与分摊的 Go 运算   ← 只依赖 kit
-internal/machine/    值、类型、字节码、VM、注册表、目录、清单、内核库  ← 只依赖 money
-internal/syntax/     词法、语法、AST、ExprJSON、格式化、语法树       ← 只依赖 machine
-internal/compile/    推导、编译、常量折叠、契约、Analyze             ← 依赖 syntax + machine
+internal/machine/    值、类型、字节码、VM、注册表、目录、清单、内核库  ← 依赖 money
+internal/syntax/     词法、语法、AST、ExprJSON、格式化、语法树       ← 依赖 machine、money
+internal/compile/    推导、编译、常量折叠、契约、Analyze             ← 依赖 syntax、machine、money
 internal/demo/       演示控制台：宿主组装注册表的范例，工作台用它（宿主侧）
 examples/            可运行的 Go 宿主程序，只用公开包；只放宿主程序，不放规则示例
 tests/api/           公开面的测试与 Example*，按主题组织（宿主侧）
@@ -34,7 +34,7 @@ web/src/ web/wasm/   工作台前端（TS）与浏览器里的语言服务（js/
 cmd/funroute cmd/playground CLI 与工作台静态服务
 ```
 
-- 依赖严格单向（`go list -deps` 验证）；kit 在最底层，所有实现包与 `lsp/` 都可以用它，表里不再逐一写。
+- 依赖严格单向，按 kit → money → machine → syntax → compile 分层，`make lint` 强制（`tools/lint/imports.go` 的 `layers`：每个包只导入排在它前面的，internal 下新建的包要先登记）；kit 在最底层，所有实现包与 `lsp/` 都可以用它，表里不再逐一写。
 - **同一段逻辑只写一处**：两个包以上都要的放进 `internal/kit`，只有一个包要的留在那个包（奥卡姆剃刀：kit 不收"将来可能用到"的东西）。kit 不懂语言，不放任何带 FunRoute 语义的代码。
 - **导入规则由 `tools/lint/imports.go` 强制**：实现包只有 `funroute.go` 与 `lsp/` 可以导入；`tests/`、`examples/` 与宿主侧包 `internal/demo` 只能用公开包，谁都可以导入 `internal/demo`。Go 的 internal 规则挡不住本模块自己的 `extensions/`、`examples/`、`tests/`、`cmd/`、`web/wasm`，所以需要这条检查。
 - machine 的文件按领域加前缀：`money_*.go` 是金额，`host_*.go` 是宿主绑定，`lib_*.go` 是内核库（常用的聚合、数组、选择、字典、字符串、数值函数；低频的与金额重载在 std）。
