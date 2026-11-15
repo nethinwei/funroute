@@ -130,7 +130,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 新增原生 backing | `machine/container.go` 的 `natives` 一行（装入取出只经 `arrayOf`/`nativeItems`）与 `host_plan.go` 的 `native` 常量；`TestEveryBackingIsHandledEverywhere` 指出每个还要补的 switch |
 | `reflectType`/`fromGo` 新增非容器的 Go 类型 | `machine/host_plan.go` 的 `newCodecFor` 与 `host_access.go` |
 | 新增公开 API | `funroute.go` 对应的一节；新类型进 `tests/api/value_test.go` 的断言块，并在 `tests/api` 以宿主视角用一次。能不加就不加 |
-| 有意改变了某个答案或失败 | `make golden` 重写 `tests/golden/testdata/outcomes.jsonl`，逐条读 diff；只改执行方式时金库必须一字不差 |
+| 有意改变了某个答案或失败 | `make golden` 重写 `tests/golden/testdata/` 的 `outcomes.json`（每个结果一行）与 `phrases.json`（每种报错的措辞一行，结果里只记句式编号与取值），逐条读 diff；只改措辞时只有 `phrases.json` 变；只改执行方式时金库必须一字不差 |
 | 改了 docs/limits.md 表格里的行为 | `make limits` 重新生成，读一遍 diff；新增边界就在 `tests/limits` 的用例表加一行，说明写在用例里 |
 | 有意改变了目录、签名清单或 Artifact 的 JSON 形状（含函数的 Doc） | `make snapshots` 重写 `internal/machine/testdata/` 的三份快照（缩进的 JSON，逐字节守着编码结果），读 diff；不是有意的改动，快照必须一字不差 |
 | 新增例子 | 只改 `web/funroute-examples.json`（源码 + 契约 + 入参 + 期望值）；示例合起来要覆盖演示注册表的全部函数、形式、运算符与节点，覆盖由源码与推导结果算出（`lsp/funroute_test.go` 的 `coverOverloads`、`coverSpelling`），不手写 |

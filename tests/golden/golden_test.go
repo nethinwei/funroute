@@ -1,24 +1,19 @@
 package golden
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"os"
-	"strings"
+	"slices"
 	"testing"
 
 	"github.com/nethinwei/funroute"
 	"github.com/nethinwei/funroute/extensions/std"
 )
 
-var update = flag.Bool("update", false, "write the outcomes anew into testdata/outcomes.jsonl")
-
-const recordPath = "testdata/outcomes.jsonl"
+var update = flag.Bool("update", false, "write the record anew into testdata/outcomes.json and testdata/phrases.json")
 
 // programsPerType is how many programs are written for each result type.
 const programsPerType = 150
@@ -34,55 +29,80 @@ type entry struct {
 // Every program answers as the record says it does, on every input, both
 // ways it runs.
 func TestTheLanguageAnswersAsItsRecord(t *testing.T) {
-	entries := run(t)
+	got := recorded(run(t))
 	if *update {
-		write(t, entries)
+		write(t, got)
 		return
 	}
-	recorded := read(t)
-	if len(recorded) != len(entries) {
-		t.Fatalf("the record has %d programs, a run writes %d; go test -update writes it anew", len(recorded), len(entries))
+	want := read(t)
+	if len(want.entries) != len(got.entries) {
+		t.Fatalf("the record has %d programs, a run writes %d; go test -update writes it anew", len(want.entries), len(got.entries))
+	}
+	if i := firstOther(want.phrases, got.phrases); i >= 0 {
+		t.Errorf("phrase P%d is %q in the record, %q in a run", i+1, at(want.phrases, i), at(got.phrases, i))
 	}
 	differ := 0
-	for i, got := range entries {
-		if want := recorded[i]; !sameEntry(got, want) {
-			differ++
-			if differ <= 20 {
-				t.Errorf("%s program %d: %s\n  record: %v\n  run:    %v", got.Type, i, got.Source, want.Outcomes, got.Outcomes)
-			}
+	for i, e := range got.entries {
+		j := firstOther(want.entries[i].Outcomes, e.Outcomes)
+		if e.Type == want.entries[i].Type && e.Source == want.entries[i].Source && j < 0 {
+			continue
+		}
+		if differ++; differ <= 20 {
+			t.Errorf("%s program %d: %s\n  outcome %d in the record: %s\n  in a run:               %s",
+				e.Type, i, e.Source, j, at(want.entries[i].Outcomes, j), at(e.Outcomes, j))
 		}
 	}
 	if differ > 0 {
-		t.Fatalf("%d of %d programs answer other than the record says", differ, len(entries))
+		t.Fatalf("%d of %d programs answer other than the record says", differ, len(got.entries))
 	}
 }
 
-func sameEntry(a, b entry) bool {
-	if a.Type != b.Type || a.Source != b.Source || len(a.Outcomes) != len(b.Outcomes) {
-		return false
-	}
-	for i := range a.Outcomes {
-		if a.Outcomes[i] != b.Outcomes[i] {
-			return false
+// firstOther is the first index two lists differ at, -1 when they are one.
+func firstOther(a, b []string) int {
+	for i := range max(len(a), len(b)) {
+		if at(a, i) != at(b, i) || i >= len(a) || i >= len(b) {
+			return i
 		}
 	}
-	return true
+	return -1
+}
+
+// at is list[i], or "(none)" past its end.
+func at(list []string, i int) string {
+	if i < 0 || i >= len(list) {
+		return "(none)"
+	}
+	return list[i]
 }
 
 // run writes every program and runs it, each result type through a binding
-// of its own Go type.
+// of its own Go type, in a registry of its own: the types run side by side,
+// and each writes its programs from its own seeds, so the order is the same
+// however they interleave.
 func run(t *testing.T) []entry {
 	t.Helper()
-	registry := goldenRegistry(t)
 	types := roots()
-	entries := make([]entry, 0, len(types)*programsPerType)
-	for _, root := range types {
-		outcomes := root.bind(t, registry)
-		for seed := range uint64(programsPerType) {
-			seed = seed*uint64(len(types)) + uint64(root.index)
-			source, results := compiling(t, seed, root.typ, outcomes)
-			entries = append(entries, entry{Type: root.typ, Source: source, Outcomes: results})
+	perRoot := make([][]entry, len(types))
+	t.Run("types", func(t *testing.T) {
+		for _, root := range types {
+			t.Run(root.typ, func(t *testing.T) {
+				t.Parallel()
+				perRoot[root.index] = runRoot(t, root, len(types))
+			})
 		}
+	})
+	return slices.Concat(perRoot...)
+}
+
+// runRoot writes and runs root's programs, each from a seed of its own.
+func runRoot(t *testing.T, root root, types int) []entry {
+	t.Helper()
+	outcomes := root.bind(t, goldenRegistry(t))
+	entries := make([]entry, 0, programsPerType)
+	for seed := range uint64(programsPerType) {
+		seed = seed*uint64(types) + uint64(root.index)
+		source, results := compiling(t, seed, root.typ, outcomes)
+		entries = append(entries, entry{Type: root.typ, Source: source, Outcomes: results})
 	}
 	return entries
 }
@@ -234,45 +254,4 @@ func goldenRegistry(t *testing.T) *funroute.Registry {
 		}
 	}
 	return registry
-}
-
-func write(t *testing.T, entries []entry) {
-	t.Helper()
-	var out bytes.Buffer
-	for _, e := range entries {
-		line, err := json.Marshal(e)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out.Write(line)
-		out.WriteByte('\n')
-	}
-	if err := os.MkdirAll("testdata", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(recordPath, out.Bytes(), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func read(t *testing.T) []entry {
-	t.Helper()
-	data, err := os.ReadFile(recordPath)
-	if err != nil {
-		t.Fatalf("%v; go test -update writes the record", err)
-	}
-	var entries []entry
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(nil, 1<<24)
-	for scanner.Scan() {
-		var e entry
-		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
-			t.Fatal(err)
-		}
-		entries = append(entries, e)
-	}
-	if strings.TrimSpace(string(data)) != "" && len(entries) == 0 {
-		t.Fatal("the record holds no programs")
-	}
-	return entries
 }
