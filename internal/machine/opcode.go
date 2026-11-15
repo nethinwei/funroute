@@ -19,6 +19,11 @@ type opcodeSpec struct {
 	// validate rejects a malformed instruction. Nil means the opcode has no
 	// operands worth checking.
 	validate func(Instruction, *Artifact, failFunc) error
+	// jumps says A is the index of an instruction the run may go to: where
+	// paths join (joinsOf). What each analysis makes of a jump is its own —
+	// a block's end, a guarded range, a successor — and
+	// TestEveryJumpIsPlacedInEachAnalysis keeps each in step with this.
+	jumps bool
 }
 
 var opcodes = [...]opcodeSpec{
@@ -73,6 +78,7 @@ var opcodes = [...]opcodeSpec{
 	OpLoopInit: {
 		name:     "loop_init",
 		validate: validateLoopInstruction,
+		jumps:    true,
 	},
 	// A = 1 when the comprehension builds a dictionary, and the instruction
 	// then takes the key as well as the value.
@@ -80,16 +86,17 @@ var opcodes = [...]opcodeSpec{
 		name:     "loop_collect",
 		validate: validateLoopInstruction,
 	},
-	OpLoopNext: {name: "loop_next", validate: validateLoopInstruction},
+	OpLoopNext: {name: "loop_next", validate: validateLoopInstruction, jumps: true},
 	// A nested comprehension yields one array per outer item; spread collects
 	// their elements rather than the arrays, which is what makes
 	// [f(x, y) for x in xs for y in ys] one flat array.
 	OpLoopSpread:  {name: "loop_spread", validate: validateLoopInstruction},
-	OpJumpIfFalse: {name: "jump_if_false", validate: validateJumpTarget},
-	OpJump:        {name: "jump", validate: validateJumpTarget},
+	OpJumpIfFalse: {name: "jump_if_false", validate: validateJumpTarget, jumps: true},
+	OpJump:        {name: "jump", validate: validateJumpTarget, jumps: true},
 	OpBeginFallback: {
 		name:     "begin_fallback",
 		validate: validateJumpTarget,
+		jumps:    true,
 	},
 	OpEndFallback: {name: "end_fallback"},
 	// Pops a record and one value per name in Keys, and pushes the record with
@@ -109,7 +116,7 @@ var opcodes = [...]opcodeSpec{
 	// Pops the answer of the innermost loop, a fold's, and ends the loop
 	// with it: a fold that stops — any at the first true — goes to A, past
 	// its loop_next, as the loop's last iteration would.
-	OpLoopBreak: {name: "loop_break", validate: validateLoopInstruction},
+	OpLoopBreak: {name: "loop_break", validate: validateLoopInstruction, jumps: true},
 	// Pops an item of the innermost loop, a fold's, and folds it into the
 	// answer with the kernel function Calls[A]: answer = f(answer, item). It
 	// costs what loop_collect does, as collecting the item for a function
