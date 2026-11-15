@@ -117,7 +117,7 @@ go run ./cmd/funroute fmt -expr 'let(a=1,a+2)'
 | [语法与取值范围](docs/grammar.md) | 完整文法与每种类型的范围 |
 | [能力边界](docs/limits.md) · [终止性](docs/termination.md) · [性能](docs/perf.md) | 实测的边界、为什么每条规则都会停、与原生 Go 和 expr 的对照 |
 | [路线图与设计决策](docs/roadmap.md) · [更新记录](CHANGELOG.md) | 接下来做什么、每个取舍为什么、每个版本改了什么 |
-| [开发](docs/development.md) | 构建、检查、代码结构 |
+| [开发](docs/development.md) | 构建与检查（代码结构见 CLAUDE.md） |
 
 ## 现状
 

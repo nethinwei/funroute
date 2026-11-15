@@ -124,58 +124,27 @@ func ConstantOf(value Value, typ Type) (Constant, bool) {
 	if data, ok := scalarJSON(value); ok {
 		return Constant{Type: typ, Value: data}, true
 	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return Constant{}, false
-	}
-	data, err = withoutDigits(data, typ)
+	data, err := json.Marshal(withoutPlaces(value, typ))
 	return Constant{Type: typ, Value: data}, err == nil
 }
 
-// withoutDigits is a constant's JSON with the places left out of its
-// amounts. The artifact declares its currencies with their places once, in
-// its money stamp, and a constant's amounts are in those places: writing
+// withoutPlaces is a constant's value as it is stored: its amounts without
+// their places. The artifact declares its currencies with their places once,
+// in its money stamp, and a constant's amounts are in those places: writing
 // them again in every amount would only change what is stored, and so the
 // digest, of every artifact with money in it. They are read back in the
-// table's places (valueIn). The walk follows typ, not the keys, so a record
-// field that happens to be called digits is left as it is.
-func withoutDigits(data []byte, typ Type) ([]byte, error) {
+// table's places (valueIn). The walk is the one EncodeJSON takes down to the
+// money, so a record keeps its field order.
+func withoutPlaces(value Value, typ Type) any {
 	if !TypeContains(typ, MoneyKind) {
-		return data, nil
+		return value
 	}
-	decoder := kit.NumberDecoder(data)
-	var tree any
-	if err := decoder.Decode(&tree); err != nil {
-		return nil, err
-	}
-	stripDigits(tree, typ)
-	return json.Marshal(tree)
-}
-
-// stripDigits deletes "digits" from every amount in tree, a value of typ as
-// its JSON decodes.
-func stripDigits(tree any, typ Type) {
-	switch node := tree.(type) {
-	case map[string]any:
-		switch typ.kind {
-		case MoneyKind:
-			delete(node, "digits")
-		case DictKind:
-			for _, item := range node {
-				stripDigits(item, *typ.elem)
-			}
-		case RecordKind:
-			for _, field := range typ.fields {
-				stripDigits(node[field.name], field.typ)
-			}
+	return jsonTree(value, opensForMoney, func(leaf Value) any {
+		if leaf.kind == MoneyKind {
+			leaf.p = 0
 		}
-	case []any:
-		if typ.kind == ArrayKind {
-			for _, item := range node {
-				stripDigits(item, *typ.elem)
-			}
-		}
-	}
+		return leaf
+	})
 }
 
 // scalarJSON is the JSON of an int, a bool or a string, written as

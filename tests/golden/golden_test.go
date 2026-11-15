@@ -30,6 +30,11 @@ type entry struct {
 // ways it runs.
 func TestTheLanguageAnswersAsItsRecord(t *testing.T) {
 	got := recorded(run(t))
+	if t.Failed() {
+		// A type whose run failed wrote none of its programs: the record
+		// would lose them, so it is neither written nor compared.
+		t.FailNow()
+	}
 	if *update {
 		write(t, got)
 		return

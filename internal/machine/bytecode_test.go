@@ -271,3 +271,40 @@ func TestAScalarConstantIsItsValuesJSON(t *testing.T) {
 		}
 	}
 }
+
+// A constant's amounts are written without their places, and nothing else
+// about it changes: a record keeps its type's field order, a field that is
+// called digits keeps its value. The digest covers every constant, so the
+// same rule compiles to the same artifact as before amounts carried places.
+// The wants are written out, not read back through ConstantOf.
+func TestAConstantsAmountsAreWrittenWithoutTheirPlaces(t *testing.T) {
+	t.Parallel()
+	usd, err := machine.ToValue(money.MakeIn("USD", 170, 3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	priced := machine.RecordOf(machine.FieldOf("zeta", machine.MoneyType), machine.FieldOf("alpha", machine.IntType))
+	labelled := machine.RecordOf(machine.FieldOf("m", machine.MoneyType), machine.FieldOf("digits", machine.IntType))
+	built := func(value machine.Value, err error) machine.Value {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	record := built(machine.Record(priced, []machine.Value{usd, machine.Int(1)}))
+	for want, value := range map[string]machine.Value{
+		`{"currency":"USD","minor":170}`:                          usd,
+		`{"zeta":{"currency":"USD","minor":170},"alpha":1}`:       record,
+		`[{"zeta":{"currency":"USD","minor":170},"alpha":1}]`:     built(machine.Array(priced, []machine.Value{record})),
+		`[{"currency":"USD","minor":170}]`:                        built(machine.Array(machine.MoneyType, []machine.Value{usd})),
+		`{"k":{"currency":"USD","minor":170}}`:                    built(machine.Dict(machine.MoneyType, map[string]machine.Value{"k": usd})),
+		`{"m":{"currency":"USD","minor":170},"digits":2}`:         built(machine.Record(labelled, []machine.Value{usd, machine.Int(2)})),
+		`{"k":{"zeta":{"currency":"USD","minor":170},"alpha":1}}`: built(machine.Dict(priced, map[string]machine.Value{"k": record})),
+	} {
+		constant, ok := machine.ConstantOf(value, value.Type())
+		if !ok || string(constant.Value) != want {
+			t.Errorf("ConstantOf(%s) = %s, %v; want %s", value.Type(), constant.Value, ok, want)
+		}
+	}
+}

@@ -456,6 +456,9 @@ func TestAViewOfPricedRecordsIsCheckedAsItsRecords(t *testing.T) {
 		"an undeclared amount":   func(in *pricedIn) { in.Channels[5].Fee = machine.NewMoney("GBP", 1) },
 		"an amount of none":      func(in *pricedIn) { in.Channels[6].Fee = machine.NewMoney("", 3) },
 		"an undeclared currency": func(in *pricedIn) { in.Channels[7].Cur = machine.NewCurrency("GBP") },
+		// After a run of USD whose places are not said, USD in places the
+		// table does not give is still looked at.
+		"an amount in other places": func(in *pricedIn) { in.Channels[8].Fee = money.MakeIn("USD", 1, 4) },
 	} {
 		in := pricedInput()
 		spoil(in)
