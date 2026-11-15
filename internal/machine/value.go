@@ -148,14 +148,15 @@ func Record(typ Type, fields []Value) (Value, error) {
 	return Value{kind: RecordKind, box: record}, nil
 }
 
-// Field is the value at a record's i-th field. The compiler resolved the name
-// to that index, so this is a slice read.
-func (v Value) Field(i int) Value {
+// Field is the value at a record's i-th field, in the order of its type,
+// and false for what is no record or has no such field — as At and Lookup
+// answer for an array and a dictionary.
+func (v Value) Field(i int) (Value, bool) {
 	record, ok := v.box.(*recordValue)
 	if !ok || i < 0 || i >= len(record.fields) {
-		return Value{}
+		return Value{}, false
 	}
-	return record.fields[i]
+	return record.fields[i], true
 }
 
 // Dict is Array's counterpart for dictionaries.

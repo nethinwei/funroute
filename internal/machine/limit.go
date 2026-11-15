@@ -28,6 +28,60 @@ const checkEvery = 1 << 15
 // left for run time, not folded. It never reaches a host.
 var ErrFoldBudget = errors.New("compile-time evaluation budget exhausted")
 
+// carried is what a turn of the loop hands the next beyond the turn itself:
+// what a fold's answer holds. Only an evaluation at compile time asks: its
+// budget is for what it makes as well as how long it turns, and a fold whose
+// answer grows makes it anew every turn.
+func (f *frame) carried(loop *regLoop) int {
+	site := loop.site
+	if f.budget <= 0 || site.acc < 0 || bankOf(site.typ.kind) != valueBank {
+		return 0
+	}
+	return holds(f.regs[site.acc])
+}
+
+// spend takes what an item a loop collects holds off an evaluation's
+// budget. The turn after finds it spent: the last of it is left for that.
+func (f *frame) spend(item Value) {
+	if f.budget > 0 {
+		f.budget = max(f.budget-holds(item), 1)
+	}
+}
+
+// holds is how much there is in v: a string's bytes, a container's items
+// and what each of them holds.
+func holds(v Value) int {
+	switch v.kind {
+	case StringKind:
+		return len(v.s)
+	case RecordKind:
+		n := 0
+		if record, ok := v.box.(*recordValue); ok {
+			for _, field := range record.fields {
+				n += holds(field)
+			}
+		}
+		return n
+	case ArrayKind, DictKind:
+		n := v.length()
+		if elem := v.elemType().kind; elem != StringKind && elem != RecordKind && elem != ArrayKind && elem != DictKind {
+			return n
+		}
+		if v.kind == ArrayKind {
+			for i := range n {
+				n += holds(v.at(i))
+			}
+			return n
+		}
+		_ = v.eachEntry(func(_ string, entry Value) error {
+			n += holds(entry)
+			return nil
+		})
+		return n
+	}
+	return 0
+}
+
 // watch readies the frame to run under ctx.
 func (f *frame) watch(r *Runtime, ctx context.Context) {
 	if ctx == nil {

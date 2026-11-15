@@ -67,6 +67,15 @@ func TestRunReportsWhatCouldNotRun(t *testing.T) {
 	if large["error"] != nil || fmt.Sprintf("%.0f", large["value"]) != "9007199254740994" {
 		t.Errorf("args given as text lost digits: %v, want value 9007199254740994", large)
 	}
+	// The answer is shown as it is written here: 2^53 + 1 is no float64,
+	// and the client that parses the value shows 2^53.
+	s.open("file:///c.fr", `{id: n, tags: ["a"]}`)
+	shown := as[map[string]any](t, s.request("workspace/executeCommand", map[string]any{"command": runCommand, "arguments": []map[string]any{
+		{"uri": "file:///c.fr", "args": `{"n": 9007199254740993}`},
+	}}))
+	if want := "{\n  \"id\": 9007199254740993,\n  \"tags\": [\n    \"a\"\n  ]\n}"; shown["text"] != want {
+		t.Errorf("the run shows %q, want %q", shown["text"], want)
+	}
 }
 
 func TestRenderAndCatalog(t *testing.T) {

@@ -66,7 +66,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 **终止性与运行时长**
 - 只有调用了宿主函数（含纯函数，`regProgram.foreign`）的运行才设 `recover`：内核与内核库的代码不许 panic，`FuzzProgramsNeverPanic` 守着。新增内核函数时，所有失败都要走 error 返回。
 - 语言不图灵完备：没有递归、没有无界循环，每次 `Run` 只有一个帧。任何能重入程序的构造都会推翻 `docs/termination.md` 的定理 A 与 B。
-- 没有 fuel：运行多久由宿主的 `ctx` 决定，宿主调用前与循环每 `checkEvery` 轮（`machine/limit.go`，约 1 ms）查一次。新增会循环的执行路径（新的循环指令、向量的新走法）必须经 `turn` 计数，否则长循环停不下来。编译期折叠只按轮数（`foldTurns`）限制，不看时钟：同一份源码在哪台机器上都编出同一个 artifact。
+- 没有 fuel：运行多久由宿主的 `ctx` 决定，宿主调用前与循环每 `checkEvery` 轮（`machine/limit.go`，约 1 ms）查一次。新增会循环的执行路径（新的循环指令、向量的新走法）必须经 `turn` 计数，否则长循环停不下来。编译期折叠只按数目（`foldTurns`：轮数加上每轮带着的累加器、收下的项有多大）限制，不看时钟：同一份源码在哪台机器上都编出同一个 artifact。
 - 凭空造容器的函数标 `Doc.BoundedArgs`，整数实参必须由输入规模界定；扩展函数的计算量只能随输入**规模**增长，不能随参数**数值**增长（设上限或换算法，如 `range`/`pad`/`allocate` 的 10000、`pow` 的平方求幂）。
 - 常量折叠只碰 `Doc.Constexpr` 授权的函数：内核与 std 有，模型、时钟、远程调用**不标**。闭合表达式的失败是编译错误。
 

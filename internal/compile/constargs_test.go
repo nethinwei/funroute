@@ -40,7 +40,7 @@ func TestAConstantArgumentPastTheFoldingBudgetIsRefused(t *testing.T) {
 	if err := registry.EnableForm(machine.ForForm); err != nil {
 		t.Fatal(err)
 	}
-	source := `matches(s, first([x for x in ["("] for y in range(100) for z in range(200)]))`
+	source := `matches(s, first([x for x in ["("] for y in range(100) for z in range(200) if y + z > 297]))`
 	_, err := CompileExpr(source, registry, CompileOptions{Args: []ArgSpec{{Name: "s", Type: machine.StringType}}})
 	if err == nil || !strings.Contains(err.Error(), "fixed when the rule is compiled") {
 		t.Errorf("CompileExpr(%s) error = %v, want the argument not fixed when the rule is compiled", source, err)

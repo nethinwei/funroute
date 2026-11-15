@@ -20,9 +20,13 @@ import (
 // a branch that would fail is simply not folded.
 
 // foldTurns bounds compile-time evaluation: how many turns its loops may take
-// in all. A closed loop over a large literal array is legal but not worth
-// stalling a compile for, and a count, unlike a clock, stops at the same place
-// on every machine — so the same source always compiles to the same artifact.
+// in all, and how much they may make — a turn counts for one, and for what
+// it carries to the next: the items and the characters in a fold's answer,
+// and in the item a comprehension collects (the machine's frame.carried).
+// A closed loop over a large literal array is legal but not worth stalling a
+// compile for, nor is one that makes a million items in twenty turns; and a
+// count, unlike a clock, stops at the same place on every machine — so the
+// same source always compiles to the same artifact.
 const foldTurns = 10_000
 
 // tryFold evaluates expr at compile time and emits its value as a constant.

@@ -75,7 +75,23 @@ func (f *frame) failed(pc int, ok bool, err error) (int, error) {
 	if !ok {
 		err = f.fault(pc - 1)
 	}
+	if f.foldStep(pc - 1) {
+		// The array the fold stands for is built before any of it is
+		// folded: the items after this one are still computed, and one
+		// that fails is the failure. This one waits for the loop's end.
+		if loop := &f.loops[len(f.loops)-1]; loop.failed == nil {
+			loop.failed = err
+		}
+		return pc, nil
+	}
 	return f.caught(err)
+}
+
+// foldStep reports whether the operation at pc folds an item into its
+// loop's answer.
+func (f *frame) foldStep(pc int) bool {
+	origin := f.runtime.reg.origins[pc]
+	return len(f.loops) > 0 && f.runtime.artifact.parts.Instructions[origin].Op == OpLoopFold
 }
 
 // branchUnless is where a branch goes: on when cond holds, to target when

@@ -145,7 +145,7 @@ func declaredConstants(constants []Value, registry *Registry) error {
 // It skips what Instantiate checks — the digest, and the JSON snapshot — because
 // this artifact was built moments ago in this process and never left it. Its
 // bytecode is still validated. budget bounds how many turns its loops take in
-// all: past it the evaluation ends with ErrFoldBudget, and the compiler
+// all, and how much they carry from one to the next (frame.carried): past it the evaluation ends with ErrFoldBudget, and the compiler
 // leaves the expression for run time, whatever machine it compiles on.
 func EvaluateClosed(parts ArtifactParts, registry *Registry, budget int) (Value, error) {
 	if registry == nil {

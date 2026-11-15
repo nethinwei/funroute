@@ -141,6 +141,11 @@ func compileBoth(t *testing.T, source string, registry *machine.Registry, option
 	return fused, plain
 }
 
+// assertFusedAnswersAsPlain holds the fused program to the one as written:
+// the answer, and when it fails the class it fails with — which is what a
+// fallback around it takes or does not. A fold that stops may answer where
+// the array built fails, on an item past the one that decides it; when it
+// fails, it fails as the array built does.
 func assertFusedAnswersAsPlain(t *testing.T, source string, fused, plain *machine.Runtime, args map[string]any) {
 	t.Helper()
 	got, gotErr := fused.Run(t.Context(), args)
@@ -151,8 +156,103 @@ func assertFusedAnswersAsPlain(t *testing.T, source string, fused, plain *machin
 		t.Errorf("%s with %v: fused %v, %v; as written %v", source, args, got.Any(), gotErr, want.Any())
 	case wantErr != nil && gotErr == nil && !stops:
 		t.Errorf("%s with %v: fused %v; as written it fails: %v", source, args, got.Any(), wantErr)
-	case wantErr != nil && gotErr != nil && !errors.Is(gotErr, machine.ErrArithmetic) && !errors.Is(gotErr, machine.ErrDomain):
+	case wantErr != nil && gotErr != nil && machine.ClassName(gotErr) != machine.ClassName(wantErr):
 		t.Errorf("%s with %v: fused fails with %v; as written %v", source, args, gotErr, wantErr)
+	}
+}
+
+// A fold's step that fails does not hide what the items after it do: the
+// array built computes every item before it folds any, so an item that
+// fails past the step that overflows is the failure — and what a fallback
+// around the fold takes. However long the loop: the vector hands the item
+// it cannot fold to the body.
+func TestAFoldFailsAsTheArrayBuiltDoes(t *testing.T) {
+	t.Parallel()
+	registry := aggregateRegistry(t)
+	missing := func(int64) (int64, error) { return 0, errors.New("no such engine") }
+	if err := registry.Register(machine.FunctionSpec{Name: "t.missing_v1", Go: missing}); err != nil {
+		t.Fatal(err)
+	}
+	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}}
+	const big = "4611686018427387904"
+	long := make([]any, 40)
+	for i := range long {
+		long[i] = 1
+	}
+	zeroLate, zeroLast := slices.Clone(long), slices.Clone(long)
+	zeroLate[20], zeroLast[39] = 0, 0
+	for _, test := range []struct {
+		source string
+		xs     []any
+		want   any
+		fails  string
+	}{
+		{`t.sum_v1([` + big + ` / x for x in xs])`, []any{1, 1, 1, 0}, nil, "division by zero"},
+		{`t.sum_v1([` + big + ` / x for x in xs])`, zeroLate, nil, "division by zero"},
+		{`t.sum_v1([` + big + ` / x for x in xs])`, zeroLast, nil, "division by zero"},
+		{`t.sum_v1([` + big + ` / x for x in xs])`, long, nil, "integer overflow"},
+		{`sum([` + big + ` / x for x in xs if 8 / x > 0])`, zeroLate, nil, "division by zero"},
+		{`fallback(t.sum_v1([if(x < 3, 9223372036854775807, t.missing_v1(x)) for x in xs]), 0)`, []any{1, 2, 3}, int64(0), ""},
+		{`fallback(t.sum_v1([if(x < 3, 9223372036854775807, t.missing_v1(x)) for x in xs]), 0)`, []any{1, 2}, nil, "integer overflow"},
+		{`t.sum_v1([fallback(t.missing_v1(x), 9223372036854775807) for x in xs])`, []any{1, 2, 3}, nil, "integer overflow"},
+		{`[t.sum_v1([` + big + ` / (x + y) for x in xs]) for y in [1, 0]]`, []any{1, 1, 0}, nil, "integer overflow"},
+		{`t.sum_v1([t.sum_v1([` + big + ` / (x * y) for x in xs]) for y in xs])`, []any{1, 1, 0}, nil, "division by zero"},
+	} {
+		fused, plain := compileHoisted(t, test.source, registry, options)
+		args := map[string]any{"xs": test.xs}
+		got, err := fused.Run(t.Context(), args)
+		if test.fails == "" && (err != nil || got.Any() != test.want) || test.fails != "" && (err == nil || !strings.Contains(err.Error(), test.fails)) {
+			t.Errorf("%s with %d items = %v, %v; want %v, failing with %q", test.source, len(test.xs), got.Any(), err, test.want, test.fails)
+		}
+		assertFusedAnswersAsPlain(t, test.source, fused, plain, args)
+	}
+}
+
+// any, all and first stop where the answer is known whatever the items are
+// and however many clauses make them (docs/semantics.md S4): an item past
+// the answer is not computed, so does not fail.
+func TestAShortCircuitFormStopsWhateverItsItems(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}}
+	for _, test := range []struct {
+		source string
+		xs     []any
+		want   string
+		fails  string
+	}{
+		{`first([[10 / x] for x in xs])`, []any{1, 0}, `[10]`, ""},
+		{`first([{v: [10 / x]} for x in xs])`, []any{1, 0}, `{"v":[10]}`, ""},
+		{`first([[[string(10 / x)]] for x in xs if x > 0])`, []any{0, 5, 0}, `[["2"]]`, ""},
+		{`first([[10 / x] for x in xs])`, []any{0, 1}, "", "division by zero"},
+		{`first([[10 / x] for x in xs])`, []any{}, "", "empty"},
+		{`first([10 / y for x in xs for y in xs])`, []any{1, 0}, `10`, ""},
+		{`first([[x, y] for x in xs if x > 1 for y in xs if 10 / y > 4])`, []any{1, 2, 0}, `[2,1]`, ""},
+		{`first([x * y for x in xs for y in xs if y > 5])`, []any{1, 2}, "", "empty"},
+		{`first([x + y + z for x in xs for y in xs for z in xs if 10 / z > 0])`, []any{3, 0}, `9`, ""},
+		{`any([10 / x > 2 for x in xs for y in [1]])`, []any{1, 0}, `true`, ""},
+		{`any([10 / y > 20 for x in xs for y in xs])`, []any{1, 0}, "", "division by zero"},
+		{`any([x > y for x in xs for y in xs])`, []any{1, 1}, `false`, ""},
+		{`any([x > 5 for x in xs for y in xs])`, []any{}, `false`, ""},
+		{`all([10 / y < 2 for x in xs for y in xs])`, []any{1, 0}, `false`, ""},
+		{`all([x >= y for x in xs for y in xs])`, []any{2, 2}, `true`, ""},
+		{`all([10 / z < 0 for x in xs for y in xs for z in xs if x > y])`, []any{1, 0}, `false`, ""},
+		{`all([10 / z > 0 for x in xs for y in xs for z in xs if x > y])`, []any{1, 0}, "", "division by zero"},
+	} {
+		fused, plain := compileHoisted(t, test.source, registry, options)
+		args := map[string]any{"xs": test.xs}
+		got, err := fused.Run(t.Context(), args)
+		encoded, _ := json.Marshal(got.Any())
+		if test.fails == "" && (err != nil || string(encoded) != test.want) || test.fails != "" && (err == nil || !strings.Contains(err.Error(), test.fails)) {
+			t.Errorf("%s with %v = %s, %v; want %s, failing with %q", test.source, test.xs, encoded, err, test.want, test.fails)
+		}
+		// Where the array built answers, it answers the same.
+		if want, wantErr := plain.Run(t.Context(), args); wantErr == nil && (err != nil || !got.Equal(want)) {
+			t.Errorf("%s with %v: %v, %v; as written %v", test.source, test.xs, got.Any(), err, want.Any())
+		}
 	}
 }
 
@@ -314,6 +414,62 @@ func TestAFirstOfRecordsBuildsOnlyItsAnswer(t *testing.T) {
 		want, wantErr := plain.Run(t.Context(), args)
 		if (gotErr == nil) != (wantErr == nil) || gotErr == nil && !got.Equal(want) || gotErr != nil && gotErr.Error() != wantErr.Error() {
 			t.Errorf("%s with %v: fused %v, %v; as written %v, %v", source, xs, got.Any(), gotErr, want.Any(), wantErr)
+		}
+	}
+}
+
+// A first whose answer has no seed — a handle cannot be a constant — keeps
+// the item it finds, and stops there as any other first: the engine is not
+// asked for the items after it. With no item it fails as the call on an
+// array of none does, its sources read again, whether or not the inner one
+// was computed once.
+func TestAFirstOfHandlesStopsAtItsItem(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	if err := machine.DefineHandle[*tensor](registry, "onnx.tensor"); err != nil {
+		t.Fatal(err)
+	}
+	var asked atomic.Int64
+	load := func(x int64) (*tensor, error) {
+		asked.Add(1)
+		if x == 0 {
+			return nil, errors.New("no tensor of 0")
+		}
+		return &tensor{norm: float64(x)}, nil
+	}
+	for _, spec := range []machine.FunctionSpec{{Name: "t.load_v1", Go: load}, {Name: "t.norm_v1", Go: func(v *tensor) float64 { return v.norm }}} {
+		if err := registry.Register(spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	options := CompileOptions{Args: []ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}}
+	for _, test := range []struct {
+		source string
+		xs     []any
+		want   float64
+		asked  int64
+		fails  string
+	}{
+		{`t.norm_v1(first([t.load_v1(x) for x in xs]))`, []any{2, 0, 0}, 2, 1, ""},
+		{`t.norm_v1(first([t.load_v1(x) for x in xs if x > 2]))`, []any{2, 3, 0}, 3, 1, ""},
+		{`t.norm_v1(first([t.load_v1(x) for x in xs]))`, []any{0, 2}, 0, 1, "no tensor of 0"},
+		{`t.norm_v1(first([t.load_v1(x) for x in xs]))`, []any{}, 0, 0, "empty"},
+		{`t.norm_v1(first([t.load_v1(x * y) for x in xs for y in [len(xs), 0] if y > 0]))`, []any{2, 0}, 4, 1, ""},
+		{`t.norm_v1(first([t.load_v1(x * y) for x in xs for y in [len(xs), 0] if y > 5]))`, []any{2, 0}, 0, 0, "empty"},
+	} {
+		fused, plain := compileHoisted(t, test.source, registry, options)
+		args := map[string]any{"xs": test.xs}
+		asked.Store(0)
+		got, err := fused.Run(t.Context(), args)
+		if test.fails == "" && (err != nil || got.Any() != test.want) || test.fails != "" && (err == nil || !strings.Contains(err.Error(), test.fails)) || asked.Load() != test.asked {
+			t.Errorf("%s with %v = %v, %v, the engine asked %d times; want %v, failing with %q, asked %d times",
+				test.source, test.xs, got.Any(), err, asked.Load(), test.want, test.fails, test.asked)
+		}
+		if _, wantErr := plain.Run(t.Context(), args); test.fails != "" && (wantErr == nil || wantErr.Error() != err.Error()) {
+			t.Errorf("%s with %v fails with %v; as written %v", test.source, test.xs, err, wantErr)
 		}
 	}
 }

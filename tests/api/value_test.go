@@ -77,7 +77,8 @@ func TestHostNamesTheValueTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if amount, _ := order.Field(0).Int(); amount != 1200 || !order.Type().Equal(orderType) {
+	field, ok := order.Field(0)
+	if amount, _ := field.Int(); !ok || amount != 1200 || !order.Type().Equal(orderType) {
 		t.Fatalf("record = %v of type %s, want amount 1200 of type %s", order.Any(), order.Type(), orderType)
 	}
 	if kind.String() != "bool" || !flag.Type().Equal(boolType) {
@@ -91,6 +92,26 @@ func TestHostNamesTheValueTypes(t *testing.T) {
 	}
 	if !weights.Type().Equal(dictType) {
 		t.Fatalf("dict type = %s, want %s", weights.Type(), dictType)
+	}
+}
+
+// A field a record has none of is said, as At and Lookup say it of an array
+// and a dictionary: no zero value is handed back for it.
+func TestAFieldARecordLacksIsSaid(t *testing.T) {
+	t.Parallel()
+	orderType := funroute.RecordOf(funroute.FieldOf("amount", funroute.IntType), funroute.FieldOf("currency", funroute.StringType))
+	order, err := funroute.Record(orderType, []funroute.Value{funroute.Int(1200), funroute.String("SGD")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, missing := range map[string]func() (funroute.Value, bool){
+		"past the last":    func() (funroute.Value, bool) { return order.Field(2) },
+		"before the first": func() (funroute.Value, bool) { return order.Field(-1) },
+		"of no record":     func() (funroute.Value, bool) { return funroute.Int(1).Field(0) },
+	} {
+		if got, ok := missing(); ok {
+			t.Errorf("Field %s = %v, true; want false", name, got.Any())
+		}
 	}
 }
 

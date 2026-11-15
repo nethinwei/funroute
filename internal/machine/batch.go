@@ -46,9 +46,16 @@ type Batch struct {
 
 // BatchOptions bounds a batch: it is flushed when MaxSize requests are waiting
 // or MaxWait after the first one arrived, whichever comes first.
+//
+// Key keeps requests apart: those flushed together share an engine call only
+// with the ones whose context gives the same key, a comparable value. A
+// function that reads its context — a tenant, a credential — is called under
+// the first request's of those that share the call, so a host whose requests
+// differ in what the function reads says so here; nil shares every call.
 type BatchOptions struct {
 	MaxSize int
 	MaxWait time.Duration
+	Key     func(context.Context) any
 }
 
 type batchSite struct {
@@ -281,12 +288,43 @@ func (b *Batch) Close() {
 	b.flush()
 }
 
-// execute is one batch from the queue: the requests it can still take.
+// execute is the requests the queue flushed together: one batch, or one a
+// key when the batch keeps its keys apart.
+func (b *Batch) execute(requests []*batchRequest) {
+	if b.options.Key == nil {
+		b.executeTogether(requests)
+		return
+	}
+	// Each key's requests are a batch of their own, run side by side.
+	apart := b.apart(requests)
+	for _, group := range apart[1:] {
+		go b.executeTogether(group)
+	}
+	b.executeTogether(apart[0])
+}
+
+// apart is the requests by their key, in the order each key first came.
+func (b *Batch) apart(requests []*batchRequest) [][]*batchRequest {
+	var groups [][]*batchRequest
+	at := map[any]int{}
+	for _, request := range requests {
+		key := b.options.Key(request.ctx)
+		i, seen := at[key]
+		if !seen {
+			i, at[key] = len(groups), len(groups)
+			groups = append(groups, nil)
+		}
+		groups[i] = append(groups[i], request)
+	}
+	return groups
+}
+
+// executeTogether is one batch: the requests of it that it can still take.
 // They carry contexts of their own, so the engine calls run under one made
 // for the batch: the first request's values, the latest deadline among the
 // requests — none when one has none — and a cancellation once every request
 // has stopped waiting (batchRun), so that none fails for another's sake.
-func (b *Batch) execute(requests []*batchRequest) {
+func (b *Batch) executeTogether(requests []*batchRequest) {
 	run := &batchRun{}
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requests[0].ctx))
 	run.cancel = cancel

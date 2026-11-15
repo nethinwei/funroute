@@ -17,8 +17,11 @@ export type Tree = { node: string; range: Range; operator?: string; form?: boole
 
 export type Diagnostic = { range: Range; severity: number; message: string };
 
+// text is the value as the service wrote it, to show: value's numbers are
+// this page's, and an int past 2^53 is not one of them.
 export type RunResult = {
   value?: unknown;
+  text?: string;
   error?: { kind: string; message: string };
   unavailable: string[];
 };

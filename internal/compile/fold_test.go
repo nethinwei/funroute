@@ -430,3 +430,30 @@ func TestEveryNodeIsPlaced(t *testing.T) {
 		}
 	}
 }
+
+// The folding budget is for what an evaluation makes as well as how long it
+// turns: a fold whose answer grows is charged what it carries from one turn
+// to the next, and a comprehension what each item holds. Past it the
+// expression is left for the run, as one that turns too long is — a few
+// turns can otherwise make more than a compile should hold.
+func TestAFoldIsBoundedByWhatItMakes(t *testing.T) {
+	t.Parallel()
+	registry := foldRegistry(t)
+	for source, folded := range map[string]bool{
+		`len(reduce(x in range(12), a = [1], concat(a, a)))`:                          true,
+		`len(reduce(x in range(100), a = [1], concat(a, [x])))`:                       true,
+		`len([[x, x] for x in range(3000)])`:                                          true,
+		`len(reduce(x in range(24), a = [1], concat(a, a)))`:                          false,
+		`len(reduce(x in range(24), s = "ab", s + s))`:                                false,
+		`len(reduce(x in range(100), a = {v: [1]}, {v: concat(a.v, range(1000))}).v)`: false,
+		`len([range(10000) for x in range(100)])`:                                     false,
+		`len([{v: range(10000)} for x in range(100)])`:                                false,
+		`len({string(x): [range(10000)] for x in range(100)})`:                        false,
+		`len([y for x in range(100) for y in [range(10000) for z in range(2)]])`:      false,
+	} {
+		instructions := machine.PartsOf(compileFolded(t, registry, source)).Instructions
+		if got := len(instructions) == 1 && instructions[0].Op == machine.OpConstant; got != folded {
+			t.Errorf("%s compiled to %d instructions, folded %v; want folded %v", source, len(instructions), got, folded)
+		}
+	}
+}

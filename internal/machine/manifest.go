@@ -162,13 +162,27 @@ func (m *ManifestFold) fold(result Type) (*Fold, error) {
 // Apply adds what the manifest describes and r lacks: its forms, its handle
 // types, and each function r has no implementation of, as its signature
 // alone. A function r does have must cost what the manifest says, or an
-// artifact compiled against one would not bind to the other. Apply is not
-// atomic: what it added before an error stays, so a registry it failed on
-// is one to discard, not to retry on.
+// artifact compiled against one would not bind to the other. Apply adds all
+// of it or none: a manifest r refuses leaves r as it was.
 func (m Manifest) Apply(r *Registry) error {
 	if m.parts.Version != ManifestVersion {
 		return fmt.Errorf("unsupported manifest version %d", m.parts.Version)
 	}
+	// Added to a copy, which r becomes once the last of it is in: every
+	// check a registration makes is made, and none is written twice.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	trial := r.copyLocked()
+	if err := m.addTo(trial); err != nil {
+		return err
+	}
+	r.byName, r.byKey, r.forms, r.handles, r.byHandle, r.money = trial.byName, trial.byKey, trial.forms, trial.handles, trial.byHandle, trial.money
+	return nil
+}
+
+// addTo adds the manifest to r, which is left with what was added before a
+// failure.
+func (m Manifest) addTo(r *Registry) error {
 	if err := r.EnableForm(m.parts.Forms...); err != nil {
 		return err
 	}
