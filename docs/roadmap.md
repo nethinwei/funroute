@@ -135,7 +135,7 @@
 | Artifact 冻结签名与成本，digest 覆盖 ExprJSON；签名或成本变了，旧 Artifact 拒绝装载 | 运行环境里的函数变了不会悄悄改变规则的含义 | 装载时重新解析、重新推导 |
 | 用到金额的 Artifact 带金额戳：字节码里写死的币种及其小数位 | 小数位变了必须拒绝装载；新增币种不该让已部署的 Artifact 失效 | 整张币种表的哈希 |
 | 金额运算只写一份：在 `internal/money` 里，是 `Money`/`Ratio`/`FxRate`/`ExactMoney` 的 Go 方法；内核只调用它们 | 宿主在规则旁边算出的数与规则逐分相同 | 语言与 Go 各一份实现 |
-| 注册只有 `Registry.Register(FunctionSpec)` 一个入口；`Go`/`GoBatch` 字段按 Go 签名读出参数与结果（返回 `R` 或 `(R, error)`）：常见签名（标量与 int/float 向量进、标量出，可带 `error`，向量也可带 `context.Context`）直接调用，约 25 ns、0 次分配，与反射调用逐项对照（`TestDirectCallsAnswerAsReflection`）；其余签名走 `reflect.Call`，约 300 ns。要零开销也可手写 `Params`/`Result`/`Eval`，两者二选一 | 任意元数与嵌套，签名从 Go 类型读出；一个入口，不必在三个函数间选 | 按元数展开的 `Fn1/Fn2/…` 泛型；`Logic`/`Model` 两个以 registry 为首参、`fn, batch any` 的包级函数 |
+| 注册只有 `Registry.Register(FunctionSpec)` 一个入口；`Go`/`GoBatch` 字段按 Go 签名读出参数与结果（返回 `R` 或 `(R, error)`）：常见签名（标量与 int/float 向量进、标量出，可带 `error`，向量也可带 `context.Context`）直接调用、0 次分配，与反射调用逐项对照（`TestDirectCallsAnswerAsReflection`）；其余签名走 `reflect.Call`，慢一个数量级（耗时见 perf.md）。要零开销也可手写 `Params`/`Result`/`Eval`，两者二选一 | 任意元数与嵌套，签名从 Go 类型读出；一个入口，不必在三个函数间选 | 按元数展开的 `Fn1/Fn2/…` 泛型；`Logic`/`Model` 两个以 registry 为首参、`fn, batch any` 的包级函数 |
 | 一个错误 = 类别 + 原因：分类层自己就是 `ErrExtension`/`ErrDeadline`/`ErrContract`，`Unwrap` 通向原因（`money.Classify`）；已带任何类别的错误原样传递 | `errors.Is` 答类别，宿主仍认得出自己的错误与 `context.DeadlineExceeded`，文案不变 | `%w: %v`（原因只剩文字，身份丢失）；`%w: %w`（一个错误并列两个错误） |
 | 超时默认信任 `ctx`；无法取消的引擎注册时标 `Detached`，VM 在独立 goroutine 里等，到点放弃 | 大多数引擎能响应取消；`Detached` 每次约 1 µs，只给不能取消的用 | 所有调用都起 goroutine |
 | `fallback` 只接扩展函数失败、超时与 `ErrNoFxRate`；不接类型错误、`ErrArithmetic`、`ErrDomain`、`ErrCurrency` | 规则不能吞掉自身或数据的错误 | 什么都接 |
@@ -239,7 +239,7 @@
 | 中间数组 `len([y * 2 for y in [x + 1 for x in xs]])` | — | 4 次分配 | 0 次 | — |
 | `Program` 的 record 进出 | 4 次分配 | 2 次 | 0 次 | — |
 
-- 与 expr v1.17.8 同机对照（2026-09-28，`make perf` 末节；耗时比是 FunRoute 的耗时除以对方的，大于 1 表示 FunRoute 更慢，perf.md 全文同一口径）：执行 100 行，覆盖两边都有的全部能力，两边从同一个宿主 struct 读参数，expr 用复用的 `vm.VM`；FunRoute 更快 92 行、持平 3 行，更慢的 5 行在 1.1–1.3×；遍历、聚合与数组函数多数是 expr 耗时的 0.02–0.25×。编译另列（1.0–2.0×，见「后续阶段 · 现状与定位」）。并行时（10 核同时跑同一条规则）FunRoute 每次运行约 3.7 ns，expr 能并发的三种用法 21–46 ns。对照程序在 `tests/perf/expr`：单独的 module，只有它依赖 expr，根 go.mod 保持为空。
+- 与 expr 同机对照（`make perf` 末节，对照程序在 `tests/perf/expr`：单独的 module，只有它依赖 expr，根 go.mod 保持为空）：执行的绝大多数行 FunRoute 更快，遍历、聚合与数组函数多数快一个数量级以上；编译稍慢（见「后续阶段 · 现状与定位」）。逐行的耗时比、更慢的几行与并行时的数字都在 [perf.md](perf.md)，只记在那里。
 - 剩下的差距见「后续阶段」第 6 项。
 
 ### 金额
@@ -252,7 +252,7 @@
 
 ### 现状与定位
 
-- **执行已不是主线**：与 expr 同机对照的执行 100 行里，FunRoute 更快 92 行、持平 3 行、更慢 5 行，更慢的耗时都在 expr 的 1.1–1.3×（`host.label_v1(country)`、`range(len(ys))`、`host.total_v1(fs)`、`split(csv, ",")`、`len(s)`，见 `docs/perf.md`；这几行在 1.0 上下，随运行波动）。原先"比 expr 慢一倍以上"的清单（struct 切片交给函数、`first` 的首块、读切片与字典的小规则、宿主调用的固定开销）都已追平或反超，不再列出。
+- **执行已不是主线**：与 expr 同机对照，执行的绝大多数行 FunRoute 更快，更慢的几行耗时只差一点、随运行波动（逐行见 [perf.md](perf.md)）。原先"比 expr 慢一倍以上"的清单（struct 切片交给函数、`first` 的首块、读切片与字典的小规则、宿主调用的固定开销）都已追平或反超，不再列出。
 - **编译慢于 expr 是强类型的代价，不追平**：FunRoute 编译要做 expr 没有的事——带重载的类型推导与契约统一、`constexpr` 折叠（在真 VM 上运行子表达式）、装载时的字节码验证、digest。`a + b` 已持平，带推导式与 `switch` 的耗时是 expr 的 1.3–2.0×。编译不在热路径上，目标改为两条：**随程序规模线性增长**，以及**语言服务的交互延迟**（一条规则的每个请求在 0.3 ms 以内，见 `docs/limits.md`）。与 expr 的编译对照只作参考，不作为缺口。
 
 ### 0. 还上 `ecfe05f` 的负效应（已完成，2026-09-28）
