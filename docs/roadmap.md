@@ -34,7 +34,7 @@
 - 类型化绑定 `funroute.Bind[In, Out]`：契约就是两个 Go 类型，`Program.Run` 从 struct 直接读参数。
 - 注册：只有 `Registry.Register(FunctionSpec)`；`Go`/`GoBatch` 按 Go 签名反射注册单条与批量实现，或手写 `Params`/`Result`/`Eval`。
 - 预算：`ctx` 贯通（宿主调用前与循环里都查截止时间）、函数级 `Doc.Timeout`、无法取消的引擎用 `Doc.Detached`。
-- 类型化错误：`ErrCompile`、`ErrContract`、`ErrDeadline`、`ErrExtension`、`ErrCurrency`、`ErrArithmetic`、`ErrDomain`、`ErrNoFxRate`，一律 `errors.Is`。
+- 类型化错误：一律 `errors.Is`，`funroute.ClassName` 给出最具体的类别名；全部类别与 `fallback` 接不接见 [docs/go.md 的错误表](go.md)。
 - 批处理第一级：字节码证明可以提前算的模型调用按批合并，惰性 `if` 不受影响。
 - 标准库 `extensions/std`：聚合、序列、选择与分组、字典、字符串、数值，全部可在编译期折叠；每个函数带可运行的案例。
 

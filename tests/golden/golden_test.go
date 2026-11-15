@@ -193,25 +193,14 @@ func encoded(value any) string {
 	return string(text)
 }
 
-// classes are the failure classes a host tells apart, the most specific
-// first.
-var classes = []struct {
-	name string
-	err  error
-}{
-	{"unavailable", funroute.ErrUnavailable}, {"compile", funroute.ErrCompile}, {"contract", funroute.ErrContract},
-	{"deadline", funroute.ErrDeadline}, {"currency", funroute.ErrCurrency}, {"fx", funroute.ErrNoFxRate},
-	{"arithmetic", funroute.ErrArithmetic}, {"domain", funroute.ErrDomain}, {"extension", funroute.ErrExtension},
-}
-
-// failure is an error's class and its words.
+// failure is an error's class, as funroute.ClassName names it, and its
+// words.
 func failure(err error) string {
-	for _, class := range classes {
-		if errors.Is(err, class.err) {
-			return fmt.Sprintf("error[%s] %s", class.name, err)
-		}
+	class := funroute.ClassName(err)
+	if class == "" {
+		class = "none"
 	}
-	return "error[none] " + err.Error()
+	return fmt.Sprintf("error[%s] %s", class, err)
 }
 
 // goldenRegistry is the kernel, every form, std and two host functions: one

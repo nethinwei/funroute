@@ -1,7 +1,6 @@
 package limits
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -93,21 +92,24 @@ func firstDifference(have, want string) string {
 	return "the texts differ in length"
 }
 
-// errorName is the name of err's most specific class, as a host tells them
-// apart with errors.Is.
+// errorName is err's most specific class as docs/limits.md names it, the
+// sentinel a host tells it apart by: funroute.ClassName decides the class,
+// and sentinels names it. A class sentinels lacks is said in the table, so
+// the generated document shows it and the comparison fails.
 func errorName(err error) string {
-	for _, class := range []struct {
-		name string
-		err  error
-	}{
-		{"ErrUnavailable", funroute.ErrUnavailable}, {"ErrNoFxRate", funroute.ErrNoFxRate}, {"ErrCurrency", funroute.ErrCurrency},
-		{"ErrArithmetic", funroute.ErrArithmetic}, {"ErrDomain", funroute.ErrDomain}, {"ErrContract", funroute.ErrContract},
-		{"ErrCompile", funroute.ErrCompile}, {"ErrDeadline", funroute.ErrDeadline},
-		{"ErrExtension", funroute.ErrExtension},
-	} {
-		if errors.Is(err, class.err) {
-			return class.name
-		}
+	class := funroute.ClassName(err)
+	if class == "" {
+		return "无类别"
 	}
-	return "无类别"
+	if name, ok := sentinels[class]; ok {
+		return name
+	}
+	return "未登记的类别 " + class
+}
+
+// sentinels is each class's sentinel by its ClassName.
+var sentinels = map[string]string{
+	"unavailable": "ErrUnavailable", "nofxrate": "ErrNoFxRate", "currency": "ErrCurrency",
+	"arithmetic": "ErrArithmetic", "domain": "ErrDomain", "contract": "ErrContract",
+	"compile": "ErrCompile", "deadline": "ErrDeadline", "extension": "ErrExtension",
 }

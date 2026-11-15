@@ -13,6 +13,7 @@
   - Artifact 不变：常量里的金额不写小数位（Artifact 的币种表已经写了一遍），装载时按表补上，已经存下的 Artifact 与摘要照旧可用。
 - **`Money.String()` 与 `slog.LogValuer`**：按金额自带的小数位写成 `"SAR 2.12"`、`"JPY 1600"`；不知道小数位的写成 `"SAR 212 minor"`，不猜；无币种的零是 `"0"`。只看金额本身，不读任何全局状态。日志（JSON、文本）与 `%v` 不再是 `{"currency":"SAR","minor":212}`。
 - **`FxRate` 实现 `slog.LogValuer`**：日志里写成 `"150.25 JPY / USD"`。
+- **`funroute.ClassName(err)`**：错误最具体的类别名（`"compile"`、`"currency"`、`"nofxrate"`…，与语言服务报的一致），按 docs/go.md 错误表的顺序判定；宿主记日志、按类别计数不必自己写一串 `errors.Is`。
 - **记录字面量的字段按对方记录排序**：`switch(case c => {rate: 1, cost_plus: true}, else => {cost_plus: false, rate: 2})` 原来是类型错误，现在第二个分支按第一个的顺序排。字面量遇到字段相同、顺序不同的记录（分支、数组元素、契约的结果）时取对方的顺序；先相遇的几个字面量连成同一个类型，后来定下的顺序对它们都生效。记录类型的字段顺序仍然是类型的一部分：两个已定类型（契约参数、变量）顺序不同照旧不能相遇。字面量的字段按类型的顺序计算（`docs/semantics.md` S4）。
 
 ### 改进
