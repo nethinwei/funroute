@@ -1,6 +1,9 @@
 package machine
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+)
 
 // Every register operation has a name of its own: ropNames is keyed by the
 // operation, so one added without a name would print as "" in every trace
@@ -15,5 +18,15 @@ func TestEveryRegisterOperationIsNamed(t *testing.T) {
 			continue
 		}
 		seen[name] = op
+	}
+}
+
+// A register instruction is an operation and three operands, 16 bytes: the
+// register form's code is a slice of them, read in order, and a wider one
+// would fit fewer to a cache line.
+func TestARegisterInstructionIsSixteenBytes(t *testing.T) {
+	t.Parallel()
+	if got := unsafe.Sizeof(rinstr{}); got != 16 {
+		t.Fatalf("a register instruction is %d bytes, want 16", got)
 	}
 }

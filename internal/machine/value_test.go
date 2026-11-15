@@ -6,6 +6,7 @@ import (
 	"math"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -182,5 +183,24 @@ func kindSamples(t *testing.T) map[Kind]Value {
 		RatioKind: RatioValue(money.RatioFromParts(29, 1000)), FxRateKind: FxRateValue(rate),
 		CurrencyKind: CurrencyValue("EUR"), TimeKind: of(time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)),
 		DurationKind: Duration(90 * time.Second),
+	}
+}
+
+// A Value is passed and kept by value wherever the machine runs, so its size
+// is part of how fast it runs. Money's places sit in the padding after kind
+// and b: a Value is the size it would be without them, on every platform. A
+// field that does not fit the padding fails here.
+func TestMoneysPlacesCostAValueNothing(t *testing.T) {
+	t.Parallel()
+	type withoutPlaces struct { // Value's fields, p left out
+		_ Kind
+		_ bool
+		_ int64
+		_ float64
+		_ string
+		_ any
+	}
+	if got, want := unsafe.Sizeof(Value{}), unsafe.Sizeof(withoutPlaces{}); got != want {
+		t.Fatalf("a Value is %d bytes, %d without money's places", got, want)
 	}
 }

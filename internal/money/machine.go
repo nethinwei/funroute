@@ -31,6 +31,10 @@ func PlacesOf(code string, digits int64) (uint8, error) {
 	return placesOf(int(digits)), nil
 }
 
+// DigitsOf is the decimal places that places, as MoneyParts gives them,
+// stands for; -1 for an amount that does not carry them.
+func DigitsOf(places uint8) int { return int(places) - 1 }
+
 // PlacesIn is a currency's places in c as MoneyParts gives them: 0 when c is
 // nil or does not declare code.
 func PlacesIn(c *Currencies, code string) uint8 {

@@ -142,7 +142,7 @@ func declaredPlaces(table *money.Currencies, value Value) error {
 		return nil
 	}
 	return fmt.Errorf("%w: %s in %d decimal places, but this registry declares %d",
-		ErrCurrency, value.s, value.p-1, money.PlacesIn(table, value.s)-1)
+		ErrCurrency, value.s, money.DigitsOf(value.p), money.DigitsOf(money.PlacesIn(table, value.s)))
 }
 
 func declaredCode(table *money.Currencies, currency string) error {
