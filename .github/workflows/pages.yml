@@ -1,10 +1,14 @@
 # The workbench is static: the language server runs in the page as
 # WebAssembly, so publishing it is building that module and copying files.
-# The front end is built here too, so the job sets up Node beside Go.
+# The front end is built here too, so the job sets up Node beside Go. It
+# publishes a commit of main only once ci has passed on it: a push that fails
+# the gate is not published.
 name: pages
 
 on:
-  push:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -19,15 +23,19 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The commit ci passed on, not whatever main is when this runs.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci

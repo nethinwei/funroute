@@ -1,10 +1,11 @@
 GO ?= go
 NODE ?= node
 
-.PHONY: ci ci-linux build test test-example test-js test-wasm check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden snapshots perf
+.PHONY: ci ci-linux build test test-example test-js test-wasm check-js check-web web site lint vet vet-wasm vet-perf wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden snapshots perf
 
-# ci must pass before any commit.
-ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize golangci deadcode lint build wasm test test-wasm test-js
+# ci must pass before any commit. site is in it so that what Pages publishes
+# is built on every commit, not first on main.
+ci: check-fmt check-imports check-js check-web vet vet-wasm vet-perf staticcheck modernize golangci deadcode lint build wasm test test-wasm test-js site
 
 # The linters are tools, not dependencies: go.mod stays empty. Each is
 # installed once, at the pinned version, into .tools/<version>/ — built for
@@ -96,6 +97,11 @@ vet-wasm:
 test-wasm:
 	GOOS=js GOARCH=wasm $(GO) test -exec="$$($(GO) env GOROOT)/lib/wasm/go_js_wasm_exec" ./web/wasm
 
+# The comparison with expr is a module of its own, which ./... does not reach:
+# vetting it here keeps it building between the times make perf runs it.
+vet-perf:
+	cd tests/perf/expr && $(GO) vet ./...
+
 build:
 	$(GO) build ./...
 
@@ -165,16 +171,19 @@ site: web wasm
 	cp $(addprefix web/,$(SITE_FILES)) site/
 	cp web/dist/*.js web/dist/funroute.wasm web/dist/funroute.wasm.size site/dist/
 
-# ci-linux runs make ci as GitHub Actions does — Linux on amd64, Go 1.26,
-# Node 22 (tools/ci/Dockerfile) — in Docker, before a push. The checkout is
-# mounted as it is; the pinned linters, web/node_modules and Go's caches live
-# in volumes of their own, because the ones on this machine are built for it.
-# An emulated amd64 has no FMA or AVX, so a path the standard library picks by
-# CPU feature may still differ from the runner's.
+# ci-linux runs make ci as GitHub Actions does — Linux on amd64, Go at
+# go.mod's version, Node at web/.nvmrc's (tools/ci/Dockerfile) — in Docker,
+# before a push. The checkout is mounted as it is; the pinned linters,
+# web/node_modules and Go's caches live in volumes of their own, because the
+# ones on this machine are built for it. An emulated amd64 has no FMA or AVX,
+# so a path the standard library picks by CPU feature may still differ from
+# the runner's.
 CI_PLATFORM ?= linux/amd64
 CI_IMAGE    := funroute-ci
+GO_VERSION   = $(shell sed -n 's/^go \([0-9]*\.[0-9]*\).*/\1/p' go.mod)
+NODE_VERSION = $(shell cat web/.nvmrc)
 ci-linux:
-	docker build --platform $(CI_PLATFORM) -t $(CI_IMAGE) tools/ci
+	docker build --platform $(CI_PLATFORM) --build-arg GO=$(GO_VERSION) --build-arg NODE=$(NODE_VERSION) -t $(CI_IMAGE) tools/ci
 	docker run --rm --platform $(CI_PLATFORM) -v $(CURDIR):/src \
 		-v funroute-ci-tools:/src/.tools -v funroute-ci-node:/src/web/node_modules \
 		-v funroute-ci-gomod:/go/pkg/mod -v funroute-ci-gocache:/root/.cache \
