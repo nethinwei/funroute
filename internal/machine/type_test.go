@@ -2,6 +2,9 @@ package machine_test
 
 import (
 	"encoding/json"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/machine"
@@ -77,6 +80,29 @@ func TestEveryKindHasANameThatReadsBack(t *testing.T) {
 		}
 		if typ, err := machine.ParseType(name); err != nil || typ.Kind() != kind {
 			t.Errorf("ParseType(%q) = %v, %v, want the %s kind", name, typ, err, name)
+		}
+	}
+}
+
+// docs/language.md's table of types has a row for every kind a program's
+// value can have: a new kind fails here until it is written down.
+func TestTheTypeTableHasEveryKind(t *testing.T) {
+	t.Parallel()
+	doc, err := os.ReadFile("../../docs/language.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(doc), "| 类型 | 字面量 | 说明 |")
+	if start < 0 {
+		t.Fatal("docs/language.md has no table of types")
+	}
+	table, _, _ := strings.Cut(string(doc)[start:], "\n\n")
+	for _, kind := range machine.Kinds() {
+		if kind == machine.InvalidKind || kind == machine.VarKind {
+			continue // no type a program writes
+		}
+		if !regexp.MustCompile("(?m)^\\| `" + kind.String() + "[`<{]").MatchString(table) {
+			t.Errorf("docs/language.md's table of types has no row for %s", kind)
 		}
 	}
 }
