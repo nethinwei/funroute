@@ -10,9 +10,9 @@ ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck moderniz
 # installed once, at the pinned version, into .tools/<version>/ — built for
 # this machine, so it can then analyse the js/wasm entry with GOOS set — and a
 # new version pin installs afresh rather than reusing an old binary.
-STATICCHECK_VERSION := v0.8.1
-X_TOOLS_VERSION     := v0.50.0
-GOLANGCI_VERSION    := v2.11.4
+STATICCHECK_VERSION := v0.8.2
+X_TOOLS_VERSION     := v0.52.0
+GOLANGCI_VERSION    := v2.15.0
 TOOLS       := $(CURDIR)/.tools
 STATICCHECK := $(TOOLS)/staticcheck-$(STATICCHECK_VERSION)/staticcheck
 MODERNIZE   := $(TOOLS)/x-tools-$(X_TOOLS_VERSION)/modernize
