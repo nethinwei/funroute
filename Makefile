@@ -1,7 +1,7 @@
 GO ?= go
 NODE ?= node
 
-.PHONY: ci ci-linux build test test-example test-js test-wasm check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden perf
+.PHONY: ci ci-linux build test test-example test-js test-wasm check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden snapshots perf
 
 # ci must pass before any commit.
 ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize golangci deadcode lint build wasm test test-wasm test-js
@@ -124,6 +124,12 @@ limits:
 # change one, whose diff is then read line by line.
 golden:
 	$(GO) test ./tests/golden -update
+
+# snapshots writes the JSON snapshots of the catalog, the manifest and an
+# artifact anew into internal/machine/testdata: for a change meant to change
+# their shape, whose diff is then read.
+snapshots:
+	$(GO) test ./internal/machine -run JSONShape -update
 
 perf: wasm
 	$(GO) run ./tests/perf > docs/perf.md.new || { rm -f docs/perf.md.new; exit 1; }

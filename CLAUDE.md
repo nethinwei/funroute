@@ -132,6 +132,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 新增公开 API | `funroute.go` 对应的一节；新类型进 `tests/api/value_test.go` 的断言块，并在 `tests/api` 以宿主视角用一次。能不加就不加 |
 | 有意改变了某个答案或失败 | `make golden` 重写 `tests/golden/testdata/outcomes.jsonl`，逐条读 diff；只改执行方式时金库必须一字不差 |
 | 改了 docs/limits.md 表格里的行为 | `make limits` 重新生成，读一遍 diff；新增边界就在 `tests/limits` 的用例表加一行，说明写在用例里 |
+| 有意改变了目录、签名清单或 Artifact 的 JSON 形状（含函数的 Doc） | `make snapshots` 重写 `internal/machine/testdata/` 的三份快照（缩进的 JSON，逐字节守着编码结果），读 diff；不是有意的改动，快照必须一字不差 |
 | 新增例子 | 只改 `web/funroute-examples.json`（源码 + 契约 + 入参 + 期望值）；示例合起来要覆盖演示注册表的全部函数、形式、运算符与节点，覆盖由源码与推导结果算出（`lsp/funroute_test.go` 的 `coverOverloads`、`coverSpelling`），不手写 |
 | 新增语言服务能力 | `lsp/`：标准方法优先，专有的用 `funroute/*` 或 `workspace/executeCommand`；`web/wasm` 只是传输 |
 | 新增颜色 | 只在 `web/tokens.css`，用 `light-dark(浅, 深)`；组件只消费 token |
@@ -150,6 +151,7 @@ make wasm      # web/dist/funroute.wasm
 make web       # web/dist/*.js（先在 web/ 里 npm install；产物不提交）
 make run       # 构建并在 http://127.0.0.1:8080 服务工作台
 make limits    # 重新生成 docs/limits.md 的表格（go test ./tests/limits -update）
+make snapshots # 重写目录、签名清单与 Artifact 的 JSON 快照（go test ./internal/machine -run JSONShape -update）
 make golden    # 重写行为金库（go test ./tests/golden -update），只在有意改变答案时
 make perf      # 性能报告写进 docs/perf.md，需要时再提交
 go run ./examples/routing                                          # 宿主程序示例：routing、money、batch

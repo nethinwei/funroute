@@ -2,7 +2,6 @@ package machine_test
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -179,16 +178,13 @@ func TestTheCatalogCarriesMoney(t *testing.T) {
 	}
 }
 
-// The catalog reaches a front end only as JSON, so its shape is fixed, by
-// digest.
+// The catalog reaches a front end only as JSON, so its shape is fixed byte
+// for byte (testdata/catalog.json).
 func TestCatalogJSONShape(t *testing.T) {
 	t.Parallel()
 	encoded, err := json.Marshal(snapshotRegistry(t).Catalog())
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "60407e128850d00ac7df066b879dc0fe45594b072db727eae16aa621044561a0"
-	if got := fmt.Sprintf("%x", sha256.Sum256(encoded)); got != want {
-		t.Fatalf("sha256(json.Marshal(catalog)) = %s, want %s", got, want)
-	}
+	expectSnapshot(t, "catalog.json", encoded)
 }

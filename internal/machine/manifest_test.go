@@ -1,9 +1,7 @@
 package machine_test
 
 import (
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -12,17 +10,15 @@ import (
 )
 
 // A manifest crosses from a host to a language service as JSON, so its
-// shape is fixed, by digest, and it reads back to itself.
+// shape is fixed byte for byte (testdata/manifest.json), and it reads back to
+// itself.
 func TestManifestJSONShape(t *testing.T) {
 	t.Parallel()
 	encoded, err := json.Marshal(snapshotRegistry(t).Manifest())
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "d5c54c07c3d9259f6af4a9a81d145288080eed7d868ffd5dc14559e9d2f70e62"
-	if got := fmt.Sprintf("%x", sha256.Sum256(encoded)); got != want {
-		t.Fatalf("sha256(json.Marshal(manifest)) = %s, want %s", got, want)
-	}
+	expectSnapshot(t, "manifest.json", encoded)
 	var back machine.Manifest
 	if err := json.Unmarshal(encoded, &back); err != nil {
 		t.Fatal(err)

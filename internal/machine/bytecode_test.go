@@ -1,8 +1,14 @@
 package machine_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
@@ -27,10 +33,50 @@ func snapshotRegistry(t *testing.T) *machine.Registry {
 // artifactSnapshot is an artifact with constants, calls, a conversion at
 // the quotes of an argument, a record, a local and a money stamp, as JSON:
 // the digest covers all of it.
-const artifactSnapshot = `{"version":3,"digest":"sha256:b833c8a1b710e24e367afb3eb554705f5aadce5ab45ccde68c4ef5025f9bbe0f","expr_json":{"version":1,"expr":{"node":"let","bindings":[{"name":"x","value":{"node":"record","fields":[{"name":"fee","value":{"node":"call","name":"round","args":[{"node":"call","name":"mul","args":[{"node":"var","name":"amount"},{"node":"ratio","value":"2.9","unit":"%"}]},{"node":"enum","member":"half_even"}]}},{"name":"yen","value":{"node":"using","quotes":[{"node":"var","name":"rates"}],"body":{"node":"call","name":"round","args":[{"node":"call","name":"convert","args":[{"node":"var","name":"amount"},{"node":"currency","code":"JPY"}]},{"node":"enum","member":"half_even"}]}}}]}}],"body":{"node":"array","items":[{"node":"field","value":{"node":"var","name":"x"},"field":"fee"},{"node":"money","currency":"USD","amount":"1"}]}}},"args":[{"name":"amount","type":{"kind":"money"},"doc":"金额"},{"name":"rates","type":{"kind":"array","elem":{"kind":"fxrate"}},"doc":"报价"}],"result":{"kind":"array","elem":{"kind":"money"}},"constants":[{"type":{"kind":"ratio"},"value":"0.029"},{"type":{"kind":"enum","name":"rounding","values":["ceiling","down","floor","half_down","half_even","half_up","up"]},"value":"half_even"},{"type":{"kind":"currency"},"value":"JPY"},{"type":{"kind":"enum","name":"rounding","values":["ceiling","down","floor","half_down","half_even","half_up","up"]},"value":"half_even"},{"type":{"kind":"money"},"value":{"currency":"USD","minor":100}}],"calls":[{"name":"mul","signature":"mul(money,ratio)-\u003emoney"},{"name":"round","signature":"round(money,enum\u003crounding\u003e{ceiling,down,floor,half_down,half_even,half_up,up})-\u003emoney"},{"name":"convert","signature":"convert(money,currency)-\u003emoney"}],"locals":1,"instructions":[{"op":"load_arg"},{"op":"const"},{"op":"call","b":2,"type":{"kind":"money"}},{"op":"const","a":1},{"op":"call","a":1,"b":2,"type":{"kind":"money"}},{"op":"load_arg","a":1},{"op":"fx_push","b":1},{"op":"load_arg"},{"op":"const","a":2},{"op":"call","a":2,"b":2,"type":{"kind":"money"}},{"op":"const","a":3},{"op":"call","a":1,"b":2,"type":{"kind":"money"}},{"op":"fx_pop"},{"op":"make_record","a":2,"type":{"kind":"record","fields":[{"name":"fee","type":{"kind":"money"}},{"name":"yen","type":{"kind":"money"}}]}},{"op":"store_local"},{"op":"load_local"},{"op":"field","type":{"kind":"money"}},{"op":"const","a":4},{"op":"make_array","a":2,"type":{"kind":"array","elem":{"kind":"money"}}}],"money":{"currencies":[{"code":"JPY","digits":0},{"code":"USD","digits":2}]}}`
+var update = flag.Bool("update", false, "write the JSON snapshots anew into testdata/")
+
+// expectSnapshot holds encoded, a value's JSON, to the snapshot in
+// testdata/name: the JSON indented, so a change reads as a diff of lines, and
+// whatever the encoder writes — every byte of it — is in it. A difference is
+// shown where it starts; make snapshots (go test -update) writes the files
+// anew, and the diff is then read like any other.
+func expectSnapshot(t *testing.T, name string, encoded []byte) {
+	t.Helper()
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, encoded, "", "  "); err != nil {
+		t.Fatal(err)
+	}
+	indented.WriteByte('\n')
+	path := filepath.Join("testdata", name)
+	if *update {
+		if err := os.WriteFile(path, indented.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v: make snapshots writes it", err)
+	}
+	if !bytes.Equal(stored, indented.Bytes()) {
+		t.Fatalf("%s is not what this build writes (make snapshots writes it anew; read the diff):\n%s",
+			path, firstDifference(string(stored), indented.String()))
+	}
+}
+
+// firstDifference is the first line two texts differ at, both ways.
+func firstDifference(stored, written string) string {
+	storedLines, writtenLines := strings.Split(stored, "\n"), strings.Split(written, "\n")
+	for i := range min(len(storedLines), len(writtenLines)) {
+		if storedLines[i] != writtenLines[i] {
+			return fmt.Sprintf("line %d\n  the snapshot: %s\n  this build:   %s", i+1, storedLines[i], writtenLines[i])
+		}
+	}
+	return fmt.Sprintf("the snapshot has %d lines, this build %d", len(storedLines), len(writtenLines))
+}
 
 // An artifact's JSON is what is stored and what its digest covers, so it is
-// fixed byte for byte, and it reads back to itself.
+// fixed byte for byte (testdata/artifact.json), and it reads back to itself.
 func TestArtifactJSONShape(t *testing.T) {
 	t.Parallel()
 	registry := snapshotRegistry(t)
@@ -42,14 +88,15 @@ func TestArtifactJSONShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, err := json.Marshal(artifact)
-	if err != nil || string(encoded) != artifactSnapshot {
-		t.Fatalf("json.Marshal(artifact) = %s, %v\nwant %s", encoded, err, artifactSnapshot)
+	if err != nil {
+		t.Fatal(err)
 	}
+	expectSnapshot(t, "artifact.json", encoded)
 	var back machine.Artifact
 	if err := json.Unmarshal(encoded, &back); err != nil {
 		t.Fatal(err)
 	}
-	if again, _ := json.Marshal(&back); string(again) != artifactSnapshot {
+	if again, _ := json.Marshal(&back); string(again) != string(encoded) {
 		t.Fatalf("an artifact read back writes %s", again)
 	}
 	if _, err := machine.Instantiate(&back, registry); err != nil {
