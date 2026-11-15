@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -12,6 +13,9 @@ import (
 // money, so the asking allocates nothing: not for an amount, an array or a
 // dictionary of them, nor a record that holds one.
 func TestMeetingAmountsDoesNotAllocate(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := moneyRegistry(t)
 	amounts := make([]machine.Value, 500)
 	for i := range amounts {
@@ -113,6 +117,9 @@ func TestADictionaryThatDoesNotMeetSaysSoInKeyOrder(t *testing.T) {
 // building the array's type: an array of ints costs them nothing for it —
 // what is left is the answer, and the positions intersect and except keep.
 func TestTheSetFunctionsBuildNoTypeToMeet(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := machine.CoreRegistry()
 	xs, err := machine.ToValue([]int64{1, 2, 2, 3, 5})
 	if err != nil {
@@ -147,6 +154,9 @@ func TestTheSetFunctionsBuildNoTypeToMeet(t *testing.T) {
 // A record of currencies alone has no place to meet: comparing two asks for
 // no plan, and allocates nothing for it.
 func TestCurrenciesAloneMeetForNothing(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := moneyRegistry(t)
 	artifact, err := compileMoney(t, registry, "x == y", "x: record{c: currency, n: int}; y: record{c: currency, n: int}", "")
 	if err != nil {

@@ -79,9 +79,9 @@ func overloadHint(name string, actual []string) string {
 	}
 	switch {
 	case strings.HasPrefix(actual[0], "array<"):
-		return "两个数组相接用标准包的 concat(a, b)"
+		return "two arrays are joined with concat(a, b)"
 	case strings.HasPrefix(actual[0], "dict<"):
-		return "两个字典相叠用标准包的 merge(a, b)"
+		return "two dictionaries are merged with merge(a, b)"
 	}
 	return ""
 }
@@ -97,15 +97,15 @@ func moneyHint(name string, actual []string) string {
 	left, right := actual[0], actual[1]
 	switch {
 	case money(left) && money(right) && name == "mul":
-		return "两笔金额不能相乘：金额乘比例（2.9%）或整数；要两笔金额之比就用除法 a / b"
+		return "two amounts do not multiply: an amount times a ratio (2.9%) or an integer; for the ratio of two amounts divide them, a / b"
 	case (money(left) || money(right)) && (left == "float" || right == "float"):
-		return "浮点数不能参与金额运算：比例写成 2.9% 这样的字面量，或用 ratio(\"0.029\") 从文本精确读入"
+		return "a float takes no part in money arithmetic: write a ratio as a literal such as 2.9%, or read one exactly from text with ratio(\"0.029\")"
 	case (left == "ratio" && (right == "int" || right == "float")) || ((left == "int" || left == "float") && right == "ratio"):
-		return "比例只与金额或比例运算：1 - fee 写成 100% - fee，n * fee 先把 n 用在金额上"
+		return "a ratio combines only with money or another ratio: write 1 - fee as 100% - fee, and in n * fee apply n to the amount first"
 	case money(left) && right == "int" && name == "div":
-		return "金额除以整数会丢分，用 allocate(m, n) 平均分成 n 份"
+		return "dividing an amount by an integer would drop minor units: allocate(m, n) splits it into n shares"
 	case (money(left) && right == "int" || left == "int" && money(right)) && (name == "add" || name == "sub"):
-		return "金额只能与金额相加减：写成带币种的金额，或用 money(n, 币种)、money(n, currency(同币种金额))"
+		return "an amount adds to and subtracts from another amount only: write the number as an amount with its currency, or use money(n, USD) or money(n, currency(m)) for the currency of an amount m"
 	}
 	return ""
 }

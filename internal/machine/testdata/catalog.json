@@ -125,7 +125,8 @@
             "result": "\"1h30m30s\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "add",
@@ -188,7 +189,8 @@
             "result": "\"1h30m30s\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "add",
@@ -251,7 +253,8 @@
             "result": "\"1h30m30s\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "add",
@@ -314,7 +317,8 @@
             "result": "\"1h30m30s\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "add",
@@ -377,7 +381,8 @@
             "result": "\"1h30m30s\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "add",
@@ -440,7 +445,8 @@
             "result": "\"1h30m30s\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "add",
@@ -503,7 +509,8 @@
             "result": "\"1h30m30s\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "add",
@@ -566,7 +573,8 @@
             "result": "\"1h30m30s\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "add",
@@ -629,7 +637,8 @@
             "result": "\"1h30m30s\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "add_days",
@@ -1242,7 +1251,8 @@
             "result": "\"a\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "at",
@@ -1290,7 +1300,8 @@
             "result": "\"a\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "at",
@@ -1338,7 +1349,8 @@
             "result": "\"a\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "at",
@@ -1381,7 +1393,8 @@
             "result": "\"a\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "avg",
@@ -1569,7 +1582,8 @@
             "result": "[\"c\",\"a\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "bottom_k",
@@ -1627,7 +1641,8 @@
             "result": "[\"c\",\"a\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "bottom_k",
@@ -1685,7 +1700,8 @@
             "result": "[\"c\",\"a\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "bottom_k",
@@ -1743,7 +1759,8 @@
             "result": "[\"c\",\"a\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "ceil",
@@ -1817,7 +1834,8 @@
             "result": "[1,2,3]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "contains",
@@ -2848,7 +2866,8 @@
             "result": "[1,3]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "fallback",
@@ -2926,7 +2945,8 @@
           }
         ]
       },
-      "short_circuit": true
+      "short_circuit": true,
+      "additive": true
     },
     {
       "name": "flatten",
@@ -2964,7 +2984,8 @@
             "result": "[1,2,3]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "float",
@@ -3854,7 +3875,8 @@
             "result": "1"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "gt",
@@ -4743,7 +4765,8 @@
             "result": "[0,1,2]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "int",
@@ -4891,7 +4914,8 @@
             "result": "[2,3]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "join",
@@ -4957,7 +4981,8 @@
             "result": "4"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "last_index_of",
@@ -5798,7 +5823,8 @@
             "result": "\"sgd\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "lt",
@@ -6557,7 +6583,8 @@
             "result": "\"stripe\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "max",
@@ -6607,7 +6634,8 @@
             "result": "\"stripe\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "max",
@@ -6657,7 +6685,8 @@
             "result": "\"stripe\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "max",
@@ -6708,7 +6737,8 @@
             "result": "\"stripe\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "max",
@@ -6759,7 +6789,8 @@
             "result": "\"stripe\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "max",
@@ -6810,7 +6841,8 @@
             "result": "\"stripe\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "max_by",
@@ -6857,7 +6889,8 @@
             "result": "\"b\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "max_by",
@@ -6904,7 +6937,8 @@
             "result": "\"b\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "max_by",
@@ -6951,7 +6985,8 @@
             "result": "\"b\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "median",
@@ -7247,7 +7282,8 @@
             "result": "{\"a\":1,\"b\":3}"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "min",
@@ -7297,7 +7333,8 @@
             "result": "\"adyen\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "min",
@@ -7347,7 +7384,8 @@
             "result": "\"adyen\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "min",
@@ -7397,7 +7435,8 @@
             "result": "\"adyen\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "min",
@@ -7448,7 +7487,8 @@
             "result": "\"adyen\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "min",
@@ -7499,7 +7539,8 @@
             "result": "\"adyen\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "min",
@@ -7550,7 +7591,8 @@
             "result": "\"adyen\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "min_by",
@@ -7597,7 +7639,8 @@
             "result": "\"c\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "min_by",
@@ -7644,7 +7687,8 @@
             "result": "\"c\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "min_by",
@@ -7691,7 +7735,8 @@
             "result": "\"c\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "minor",
@@ -9800,7 +9845,8 @@
             "result": "[3,2,1]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "round",
@@ -10031,7 +10077,8 @@
             "result": "\"ad\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "slice",
@@ -10070,7 +10117,8 @@
             "result": "\"ad\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort",
@@ -10111,7 +10159,8 @@
             "result": "[\"a\",\"b\",\"c\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort",
@@ -10152,7 +10201,8 @@
             "result": "[\"a\",\"b\",\"c\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort",
@@ -10193,7 +10243,8 @@
             "result": "[\"a\",\"b\",\"c\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort_by",
@@ -10247,7 +10298,8 @@
             "result": "[\"c\",\"a\",\"b\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort_by",
@@ -10301,7 +10353,8 @@
             "result": "[\"c\",\"a\",\"b\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort_by",
@@ -10355,7 +10408,8 @@
             "result": "[\"c\",\"a\",\"b\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort_by",
@@ -10409,7 +10463,8 @@
             "result": "[\"c\",\"a\",\"b\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort_by_desc",
@@ -10463,7 +10518,8 @@
             "result": "[\"b\",\"a\",\"c\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort_by_desc",
@@ -10517,7 +10573,8 @@
             "result": "[\"b\",\"a\",\"c\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort_by_desc",
@@ -10571,7 +10628,8 @@
             "result": "[\"b\",\"a\",\"c\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort_by_desc",
@@ -10625,7 +10683,8 @@
             "result": "[\"b\",\"a\",\"c\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort_desc",
@@ -10666,7 +10725,8 @@
             "result": "[\"c\",\"b\",\"a\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort_desc",
@@ -10707,7 +10767,8 @@
             "result": "[\"c\",\"b\",\"a\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sort_desc",
@@ -10748,7 +10809,8 @@
             "result": "[\"c\",\"b\",\"a\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "split",
@@ -10782,7 +10844,8 @@
             "result": "[\"a\",\"b\",\"c\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "start_of_day",
@@ -10959,7 +11022,8 @@
             "result": "\"half_up\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "string",
@@ -11006,7 +11070,8 @@
             "result": "\"half_up\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "string",
@@ -11053,7 +11118,8 @@
             "result": "\"half_up\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "string",
@@ -11100,7 +11166,8 @@
             "result": "\"half_up\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "string",
@@ -11147,7 +11214,8 @@
             "result": "\"half_up\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "string",
@@ -11194,7 +11262,8 @@
             "result": "\"half_up\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "sub",
@@ -11880,7 +11949,8 @@
             "result": "[1]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "time",
@@ -11965,7 +12035,8 @@
             "result": "[\"b\",\"a\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "top_k",
@@ -12023,7 +12094,8 @@
             "result": "[\"b\",\"a\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "top_k",
@@ -12081,7 +12153,8 @@
             "result": "[\"b\",\"a\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "top_k",
@@ -12139,7 +12212,8 @@
             "result": "[\"b\",\"a\"]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "trim",
@@ -12166,7 +12240,8 @@
             "result": "\"adyen\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "trim_prefix",
@@ -12201,7 +12276,8 @@
             "result": "\"adyen\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "trim_suffix",
@@ -12232,7 +12308,8 @@
             "result": "\"adyen\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "unique",
@@ -12267,7 +12344,8 @@
             "result": "[1,2,3]"
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "upper",
@@ -12294,7 +12372,8 @@
             "result": "\"ADYEN\""
           }
         ]
-      }
+      },
+      "additive": true
     },
     {
       "name": "weekday",

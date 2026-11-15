@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -39,7 +40,10 @@ func TestTheWorkbenchsShapesAreTheServers(t *testing.T) {
 		"ArgSpec": structKeys(reflect.TypeFor[compile.TextArg]()), "ResultSpec": structKeys(reflect.TypeFor[compile.TextResult]()),
 		"TextContract": structKeys(reflect.TypeFor[compile.TextContract]()), "Argument": argumentKeys(t),
 	}
-	declared := tsTypes(t, readWeb(t, "src/protocol.ts"))
+	declared, err := tsTypes(readWeb(t, "src/protocol.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, fields := range declared {
 		keys, placed := written[name]
 		if !placed {
@@ -119,13 +123,21 @@ func readWebSources(t *testing.T) string {
 }
 
 // tsTypes is every object type protocol.ts declares, by name, with the
-// fields at its top level; an intersection, A & { … }, has A's as well.
-func tsTypes(t *testing.T, source string) map[string][]string {
-	t.Helper()
+// fields at its top level; an intersection, A & { … }, has A's as well. It
+// reads `type A = { … }` and nothing else: an interface, or a body whose
+// brackets it cannot pair, is an error rather than a type held to nothing.
+func tsTypes(source string) (map[string][]string, error) {
+	if declared := regexp.MustCompile(`(?m)^(?:export )?interface (\w+)`).FindStringSubmatch(source); declared != nil {
+		return nil, fmt.Errorf("protocol.ts declares the interface %s, which is not read here: write it as a type", declared[1])
+	}
 	types, bases := map[string][]string{}, map[string]string{}
 	for _, match := range regexp.MustCompile(`(?m)^(?:export )?type (\w+) = ([^{;]*)\{`).FindAllStringSubmatchIndex(source, -1) {
 		name := source[match[2]:match[3]]
-		types[name] = topLevelFields(braced(source[match[1]-1:]))
+		fields, err := topLevelFields(braced(source[match[1]-1:]))
+		if err != nil {
+			return nil, fmt.Errorf("protocol.ts's %s: %w", name, err)
+		}
+		types[name] = fields
 		if base := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(source[match[4]:match[5]]), "&")); base != "" {
 			bases[name] = base
 		}
@@ -133,7 +145,7 @@ func tsTypes(t *testing.T, source string) map[string][]string {
 	for name, base := range bases {
 		types[name] = append(types[name], types[base]...)
 	}
-	return types
+	return types, nil
 }
 
 // braced is the text between the brace s starts with and the one that closes
@@ -154,28 +166,61 @@ func braced(s string) string {
 }
 
 // topLevelFields is the field names of an object type's body, not those of
-// the objects nested in it.
-func topLevelFields(body string) []string {
+// the objects nested in it. The > of a function type's => closes nothing.
+func topLevelFields(body string) ([]string, error) {
 	var top strings.Builder
-	depth := 0
+	depth, last := 0, rune(0)
 	for _, r := range body {
-		switch r {
-		case '{', '[', '(', '<':
+		switch {
+		case strings.ContainsRune("{[(<", r):
 			depth++
-		case '}', ']', ')', '>':
+		case r == '>' && last == '=':
+		case strings.ContainsRune("}])>", r):
 			depth--
-		default:
-			if depth == 0 {
-				top.WriteRune(r)
-			}
+		case depth == 0:
+			top.WriteRune(r)
 		}
+		if last = r; depth < 0 {
+			return nil, fmt.Errorf("a bracket closes what none opened in %q", body)
+		}
+	}
+	if depth != 0 {
+		return nil, fmt.Errorf("a bracket is left open in %q", body)
 	}
 	matches := regexp.MustCompile(`(\w+)\??:`).FindAllStringSubmatch(top.String(), -1)
 	fields := make([]string, 0, len(matches))
 	for _, match := range matches {
 		fields = append(fields, match[1])
 	}
-	return fields
+	return fields, nil
+}
+
+// The reading of protocol.ts takes the shapes TypeScript is written in: a
+// field after a function type, and the fields of an intersection's base, are
+// read; a nested object's are not; and what it does not read — an interface,
+// brackets that do not pair — is refused rather than passed over, so that
+// no field of the workbench's goes unheld to the server's.
+func TestTheWorkbenchsShapesAreReadAsWritten(t *testing.T) {
+	t.Parallel()
+	types, err := tsTypes(`
+export type A = { run: (x: number) => void; after: string; nested: { inner: number }; list: Array<{ deep: string }>; opt?: boolean };
+type B = A & { more: string };
+export type Alias = string;
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"run", "after", "nested", "list", "opt"}; !slices.Equal(types["A"], want) {
+		t.Errorf("A's fields are %v, want %v", types["A"], want)
+	}
+	if want := []string{"more", "run", "after", "nested", "list", "opt"}; !slices.Equal(types["B"], want) {
+		t.Errorf("B's fields are %v, want %v", types["B"], want)
+	}
+	for _, source := range []string{"export interface C { name: string }\n", "type D = { a: Array<string>> };\n"} {
+		if _, err := tsTypes(source); err == nil {
+			t.Errorf("%q is read without an error", source)
+		}
+	}
 }
 
 // structKeys is the JSON keys a Go struct writes, its embedded structs' too.

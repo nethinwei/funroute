@@ -109,31 +109,6 @@ func assertSessionAsProgram(t *testing.T, program *funroute.Program[RouteIn, Rou
 	}
 }
 
-type SumIn struct {
-	A int64 `funroute:"a"`
-	B int64 `funroute:"b"`
-}
-
-// A session's run of a rule of scalars allocates nothing, RunInto's neither.
-func TestASessionRunAllocatesNothing(t *testing.T) {
-	binding, err := funroute.Bind[SumIn, int64](funroute.CoreRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	program, err := binding.Compile("a * b - a % b + 1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, in, out, ctx := program.Session(), &SumIn{A: 7, B: 3}, int64(0), t.Context()
-	if allocs := testing.AllocsPerRun(100, func() {
-		if err := session.RunInto(ctx, in, &out); err != nil {
-			t.Fatal(err)
-		}
-	}); allocs != 0 || out != 21 {
-		t.Errorf("a run answered %d and allocated %v times, want 21 and 0", out, allocs)
-	}
-}
-
 // A binding compiles against its whole contract: a program with another
 // result does not compile.
 func TestBindingCompilesOnlyItsContract(t *testing.T) {

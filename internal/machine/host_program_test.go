@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -140,6 +141,9 @@ type ratioIn struct {
 
 // A ratio and a currency are scalars at the typed boundary: nothing to box.
 func TestProgramRatiosAndCurrenciesDoNotAllocate(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	binding, err := compile.Bind[ratioIn, money.Ratio](moneyRegistry(t))
 	if err != nil {
 		t.Fatal(err)

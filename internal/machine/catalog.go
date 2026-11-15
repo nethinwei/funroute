@@ -49,6 +49,11 @@ func (d FunctionDescriptor) Doc() Doc { return cloneDoc(d.f.Doc) }
 // neither computed nor failing, which a reader of a rule should see.
 func (d FunctionDescriptor) ShortCircuit() bool { return d.f.ShortCircuit }
 
+// Additive reports a function that hands back no more than it is given
+// (Doc.Additive): the ones a reduce's accumulator may go through, which a
+// writer of a rule the compiler refused for it wants to see.
+func (d FunctionDescriptor) Additive() bool { return d.f.Additive }
+
 type functionJSON struct {
 	Name      string `json:"name"`
 	Signature string `json:"signature"`
@@ -58,8 +63,9 @@ type functionJSON struct {
 	Wrap      string `json:"wrap,omitempty"`
 	Variadic  bool   `json:"variadic,omitempty"`
 	Doc       Doc    `json:"doc"`
-	// ShortCircuit is ShortCircuit's answer.
+	// ShortCircuit is ShortCircuit's answer, and Additive Additive's.
 	ShortCircuit bool `json:"short_circuit,omitempty"`
+	Additive     bool `json:"additive,omitempty"`
 }
 
 func (d FunctionDescriptor) MarshalJSON() ([]byte, error) {
@@ -226,6 +232,7 @@ func describeFunction(function *RegisteredFunction) FunctionDescriptor {
 		Variadic:     variadic,
 		Doc:          cloneDoc(function.Doc),
 		ShortCircuit: function.Fold != nil && (function.Fold.Stops || function.Fold.First),
+		Additive:     function.Doc.Additive,
 	}}
 }
 

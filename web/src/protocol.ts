@@ -29,7 +29,10 @@ export type RunResult = {
 // Doc is what the host wrote about a function or a form.
 export type Doc = { label: string; description?: string; category: string };
 
-type FunctionDescriptor = { name: string; signature: string; special?: string; wrap?: string; doc: Doc };
+// short_circuit says a call of it on a comprehension stops at the item that
+// decides it; additive that it hands back no more than it is given, so a
+// reduce's accumulator may go through it.
+type FunctionDescriptor = { name: string; signature: string; special?: string; wrap?: string; doc: Doc; short_circuit?: boolean; additive?: boolean };
 // A form is written, not called: it has its syntax where a function has a
 // signature.
 type FormDescriptor = { name: string; syntax: string; wrap?: string; doc: Doc };

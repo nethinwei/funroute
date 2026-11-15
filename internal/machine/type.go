@@ -319,7 +319,7 @@ func (t Type) Summary() string {
 	if t.kind != EnumKind || t.name == "" || len(t.values) <= enumSummaryLimit {
 		return t.String()
 	}
-	return fmt.Sprintf("enum<%s>{%s… 共 %d 个}", t.name, strings.Join(t.values[:enumSummaryLimit], ","), len(t.values))
+	return fmt.Sprintf("enum<%s>{%s… %d in all}", t.name, strings.Join(t.values[:enumSummaryLimit], ","), len(t.values))
 }
 
 // WalkTypes visits t and every type inside it: a container's element and a

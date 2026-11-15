@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -140,6 +141,9 @@ func viewedRecords(t *testing.T, channels []viewedChannel) machine.Value {
 
 // Walking and measuring the host's slice of records costs no allocation.
 func TestAViewedArrayAllocatesNothing(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	binding, err := compile.Bind[viewedIn, int64](viewedRegistry(t))
 	if err != nil {
 		t.Fatal(err)
@@ -231,6 +235,9 @@ func answerOf[Out any](t *testing.T, source string, in *viewedIn) Out {
 // Sorting a view costs the same allocations for ten records as for a
 // thousand: the keys, the order, the answer — no record per item.
 func TestSortingAViewAllocatesByTheArray(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	binding, err := compile.Bind[viewedIn, []viewedChannel](viewedRegistry(t))
 	if err != nil {
 		t.Fatal(err)
@@ -392,6 +399,9 @@ func TestAViewOfPricedRecordsIsAnsweredAsItsRecords(t *testing.T) {
 // the amounts and currencies too: no record made of an item, so what it
 // allocates does not grow with the array.
 func TestAnsweringAViewOfPricedRecordsAllocatesByTheArray(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	binding, err := compile.Bind[pricedIn, []pricedChannel](pricedRegistry(t))
 	if err != nil {
 		t.Fatal(err)
@@ -482,6 +492,9 @@ func TestAViewOfPricedRecordsIsCheckedAsItsRecords(t *testing.T) {
 // Walking a viewed array of priced records, and checking its currencies,
 // costs no allocation.
 func TestAViewOfPricedRecordsAllocatesNothing(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	binding, err := compile.Bind[pricedIn, float64](pricedRegistry(t))
 	if err != nil {
 		t.Fatal(err)
@@ -504,6 +517,9 @@ func TestAViewOfPricedRecordsAllocatesNothing(t *testing.T) {
 // Two views compared, and the amounts of a view met before they are, are
 // read where they are: what == costs does not grow with the arrays.
 func TestComparingViewsAllocatesByNothing(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	binding, err := compile.Bind[pricedIn, bool](pricedRegistry(t))
 	if err != nil {
 		t.Fatal(err)

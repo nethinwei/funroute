@@ -8,6 +8,8 @@ import (
 	"math/rand/v2"
 	"strings"
 	"testing"
+
+	"github.com/nethinwei/funroute/internal/kit"
 )
 
 // ratio is num/den, which the test knows fits.
@@ -270,6 +272,9 @@ func TestTimesRoundsOnce(t *testing.T) {
 // Arithmetic on ratios allocates nothing. The count is global, so this test
 // does not run in parallel.
 func TestRatiosDoNotAllocate(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	a, b := ratio(29, 1000), ratio(1, 3)
 	allocs := testing.AllocsPerRun(100, func() {
 		sum, _ := a.Add(b)

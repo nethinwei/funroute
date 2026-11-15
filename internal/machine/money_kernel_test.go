@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -309,6 +310,9 @@ func TestComparisonsRefuseTwoCurrencies(t *testing.T) {
 // Ratio arithmetic works on the stack: no operation between two ratios
 // allocates.
 func TestRatioArithmeticDoesNotAllocate(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := moneyRegistry(t)
 	for _, source := range []string{"r * s", "r + s", "r - s", "r / s", "r < s", "100% - r"} {
 		artifact, err := compileMoney(t, registry, source, "r: ratio; s: ratio", "")

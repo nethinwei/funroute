@@ -39,5 +39,7 @@
   "ceil: arithmetic failed: ceil({}) is outside the range of an int",
   "ceil: arithmetic failed: ceil(NaN) is outside the range of an int",
   "ceil: arithmetic failed: ceil(+Inf) is outside the range of an int",
-  "round: arithmetic failed: round({}) is outside the range of an int"
+  "round: arithmetic failed: round({}) is outside the range of an int",
+  "abs: arithmetic failed: the smallest int has no absolute value",
+  "sub: arithmetic failed: integer overflow in sub"
 ]

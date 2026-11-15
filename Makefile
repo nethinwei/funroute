@@ -1,11 +1,11 @@
 GO ?= go
 NODE ?= node
 
-.PHONY: ci ci-linux build test test-example test-js test-wasm check-js check-web web site lint vet vet-wasm vet-perf wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden snapshots perf
+.PHONY: ci ci-linux build test test-race test-example test-js test-wasm check-js check-web web site lint vet vet-wasm vet-perf wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden snapshots perf
 
 # ci must pass before any commit. site is in it so that what Pages publishes
 # is built on every commit, not first on main.
-ci: check-fmt check-imports check-js check-web vet vet-wasm vet-perf staticcheck modernize golangci deadcode lint build wasm test test-wasm test-js site
+ci: check-fmt check-imports check-js check-web vet vet-wasm vet-perf staticcheck modernize golangci deadcode lint build wasm test test-race test-wasm test-js site
 
 # The linters are tools, not dependencies: go.mod stays empty. Each is
 # installed once, at the pinned version, into .tools/<version>/ — built for
@@ -107,6 +107,13 @@ build:
 
 test:
 	$(GO) test ./...
+
+# test-race runs the tests under the race detector: a batch shares its
+# requests between goroutines, and the frames, the sessions and the arenas
+# are pooled. The tests that count allocations skip under it (kit.Race) —
+# the detector allocates on its own.
+test-race:
+	$(GO) test -race ./...
 
 # test-example runs every test that reads web/funroute-examples.json: each
 # example through the public pipeline and through a language server session,

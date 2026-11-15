@@ -4,12 +4,16 @@ import (
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
 // An array that never leaves the run is built in the frame's memory: once
 // the frame has run the program, running it again allocates nothing.
 func TestArraysThatStayInTheRunDoNotAllocate(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := randomRegistry(t)
 	contract := compile.CompileOptions{Args: []compile.ArgSpec{{Name: "xs", Type: machine.ArrayOf(machine.IntType)}}}
 	items := make([]int64, 500)

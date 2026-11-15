@@ -180,3 +180,4 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .reference dt code, .reference .currencies code { color: var(--blue-ink); font: 11px var(--mono); }
 .reference dd, .reference .money-note { margin: 0 0 6px; color: var(--ink-3); font-size: 11px; line-height: 1.5; }
 .reference .currencies { margin: 0; line-height: 1.8; }
+.reference .trait { margin-left: 4px; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: 10px; white-space: nowrap; }

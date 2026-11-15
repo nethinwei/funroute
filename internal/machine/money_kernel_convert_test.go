@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -284,6 +285,9 @@ func TestFxReadsTheRateTheUsingConvertsAt(t *testing.T) {
 // using's scope as it came, and the rate a value. The count is global, so
 // this test does not run in parallel.
 func TestAConversionAllocatesNothing(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := moneyRegistry(t)
 	runtime := instantiated(t, registry, "using(rates, round(using(fx(USD, JPY), a -> JPY) -> USD, @half_even))", "a: money; rates: array<fxrate>")
 	args := []machine.Value{machine.MoneyValue(100, "USD"), quotesOf(t, registry, [3]string{"EUR", "USD", "1.08"}, [3]string{"USD", "JPY", "150"})}

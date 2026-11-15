@@ -15,8 +15,14 @@ import (
 
 var update = flag.Bool("update", false, "write the record anew into testdata/outcomes.json and testdata/phrases.json")
 
-// programsPerType is how many programs are written for each result type.
-const programsPerType = 150
+// programsPerType is how many programs are written for each result type out
+// of the rules, and shapesPerType how many more out of its shapes: after
+// the rules' own, from seeds of their own, so that a shape added leaves
+// every program before it as it was.
+const (
+	programsPerType = 150
+	shapesPerType   = 60
+)
 
 // entry is one program and what it gave: for each input, a Program's run and
 // a RunValues run, "same" when the two agree.
@@ -87,29 +93,39 @@ func at(list []string, i int) string {
 func run(t *testing.T) []entry {
 	t.Helper()
 	types := roots()
-	perRoot := make([][]entry, len(types))
+	// The rules' programs of every type, then the shapes': a shape added
+	// leaves the record before it as it was, phrases and their numbers too.
+	written, shaped := make([][]entry, len(types)), make([][]entry, len(types))
 	t.Run("types", func(t *testing.T) {
 		for _, root := range types {
 			t.Run(root.typ, func(t *testing.T) {
 				t.Parallel()
-				perRoot[root.index] = runRoot(t, root, len(types))
+				written[root.index], shaped[root.index] = runRoot(t, root, len(types))
 			})
 		}
 	})
-	return slices.Concat(perRoot...)
+	return slices.Concat(slices.Concat(written...), slices.Concat(shaped...))
 }
 
-// runRoot writes and runs root's programs, each from a seed of its own.
-func runRoot(t *testing.T, root root, types int) []entry {
+// runRoot writes and runs root's programs, each from a seed of its own: the
+// ones out of the rules, and the ones out of its shapes.
+func runRoot(t *testing.T, root root, types int) (rules, shaped []entry) {
 	t.Helper()
 	outcomes := root.bind(t, goldenRegistry(t))
-	entries := make([]entry, 0, programsPerType)
+	written := func(g *generator, _ uint64) string { return g.of(root.typ, 4) }
 	for seed := range uint64(programsPerType) {
 		seed = seed*uint64(types) + uint64(root.index)
-		source, results := compiling(t, seed, root.typ, outcomes)
-		entries = append(entries, entry{Type: root.typ, Source: source, Outcomes: results})
+		source, results := compiling(t, seed, written, outcomes)
+		rules = append(rules, entry{Type: root.typ, Source: source, Outcomes: results})
 	}
-	return entries
+	// Each shape in turn, so that every one is written.
+	its := shapes[root.typ]
+	for i := range uint64(min(shapesPerType, shapesPerType*len(its))) {
+		seed := (programsPerType+i)*uint64(types) + uint64(root.index)
+		source, results := compiling(t, seed, func(g *generator, _ uint64) string { return its[i%uint64(len(its))](g, 2) }, outcomes)
+		shaped = append(shaped, entry{Type: root.typ, Source: source, Outcomes: results})
+	}
+	return rules, shaped
 }
 
 // maxAttempts is how many programs are written for a seed before the
@@ -119,11 +135,11 @@ const maxAttempts = 20
 // compiling is the first program for seed that compiles, and its outcomes.
 // A program can be refused for what it says — a closed part that fails,
 // int(1.5), is a compile error — and is then written anew.
-func compiling(t *testing.T, seed uint64, typ string, outcomes func(context.Context, string) ([]string, error)) (string, []string) {
+func compiling(t *testing.T, seed uint64, write func(*generator, uint64) string, outcomes func(context.Context, string) ([]string, error)) (string, []string) {
 	t.Helper()
 	var last error
 	for attempt := range uint64(maxAttempts) {
-		source := newGenerator(seed, attempt).of(typ, 4)
+		source := write(newGenerator(seed, attempt), attempt)
 		results, err := outcomes(t.Context(), source)
 		if err == nil {
 			return source, results

@@ -6,6 +6,7 @@
 make ci        # 提交前必须全过，GitHub Actions 在每次推送与 PR 上跑它；查些什么以 Makefile 的 ci 目标为准
 make ci-linux  # 推送前在 Docker 里按 GitHub Actions 的环境跑一遍 make ci（linux/amd64，Go 取 go.mod 的版本，Node 取 web/.nvmrc 的）
 make test      # Go 测试
+make test-race # 同一批测试开着竞态检测再跑一遍（数分配次数的测试在它下面跳过）
 make wasm      # 浏览器用的语言服务：web/dist/funroute.wasm
 make web       # 前端产物：web/dist/*.js（需要先在 web/ 里 npm install；不提交）
 make test-js   # 前端纯逻辑与 wasm 会话测试（node --test）

@@ -8,6 +8,7 @@ import (
 
 	"github.com/nethinwei/funroute/extensions/std"
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -372,6 +373,9 @@ func BenchmarkUsing(b *testing.B) {
 // of constant quotes allocates nothing at all. The count is global, so this
 // test does not run in parallel.
 func TestAUsingAllocatesNothing(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := fxRegistry(t)
 	artifact, err := compileMoney(t, registry, "using(150 JPY / USD, 0.92 EUR / USD, round(a -> JPY, @half_even))", "a: money", "")
 	if err != nil {

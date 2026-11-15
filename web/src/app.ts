@@ -252,9 +252,14 @@ function showCatalog(catalog: Catalog) {
     blocks.set(item.name, block);
   }
   structure.blocks = blocks;
+  // What a rule's reader and its writer want to know of a function beyond
+  // what it computes: that it stops early, and that reduce's accumulator may
+  // go through it.
+  const traits = (item: Catalog["functions"][number]) => html`${item.short_circuit ? html` <span class="trait" title="直接套推导式时，在定下答案的那一项停下，后面的项不再计算">短路</span>` : nothing}${
+    item.additive ? html` <span class="trait" title="交回的不比拿到的多：reduce 的累加器可以经过它">可接累加器</span>` : nothing}`;
   const groups = Object.groupBy(catalog.functions, (item) => item.doc.category);
   render(html`${moneySection(catalog.money)}${Object.keys(groups).sort().map((category) => html`<h4>${category}</h4><dl>${groups[category]!.map((item) => html`
-    <dt><code>${item.signature}</code></dt><dd>${item.doc.label}${item.doc.description ? `：${item.doc.description}` : ""}</dd>`)}</dl>`)}`,
+    <dt><code>${item.signature}</code></dt><dd>${item.doc.label}${item.doc.description ? `：${item.doc.description}` : ""}${traits(item)}</dd>`)}</dl>`)}`,
   $("#reference"));
 }
 

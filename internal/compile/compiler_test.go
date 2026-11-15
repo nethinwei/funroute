@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/syntax"
 )
@@ -246,6 +247,9 @@ func TestArgumentChecksDoNotAllocate(t *testing.T) {
 
 func assertCallDoesNotAllocate(t *testing.T, registry *machine.Registry, source string, arg ArgSpec, value machine.Value) {
 	t.Helper()
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	artifact, err := CompileExpr(source, registry, CompileOptions{Args: []ArgSpec{arg}})
 	if err != nil {
 		t.Fatal(err)

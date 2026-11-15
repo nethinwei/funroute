@@ -130,7 +130,7 @@ func TestALiteralTakesTheOrderOfTheRecordItMeets(t *testing.T) {
 		})
 	}
 	if _, err := compileMoney(t, "if(f, ab, ba)", orderContract, ""); err == nil ||
-		!strings.Contains(err.Error(), "字段相同但顺序不同") {
+		!strings.Contains(err.Error(), "the fields are the same in another order") {
 		t.Fatalf("two declared records in two orders: error = %v, want refused, saying the order differs", err)
 	}
 }
@@ -141,13 +141,13 @@ func TestABranchOfAnotherRecordSaysHowItDiffers(t *testing.T) {
 	t.Parallel()
 	for source, want := range map[string][]string{
 		"switch(case x > 1 => {rate: 1, cost_plus: true}, else => {rate: 2})": {
-			"switch default must match", "else returns record{rate: int}", "缺少字段 cost_plus"},
+			"switch default must match", "else returns record{rate: int}", "it lacks cost_plus"},
 		"switch(case x > 1 => {rate: 1}, case x > 0 => {rate: 2, n: 1}, else => {rate: 3})": {
-			"branch 2 returns", "多出字段 n"},
+			"branch 2 returns", "it has n besides"},
 		"switch(case x > 1 => {rate: 1}, else => {rate: true})": {
-			"字段 rate 的类型不同：int 与 bool"},
+			"field rate is int in one and bool in the other"},
 		"if(f, {rate: 1, cost_plus: true}, {rate: 2})": {
-			"no overload if", "else 分支与 then 分支相比：缺少字段 cost_plus"},
+			"no overload if", "the else branch against the then branch: it lacks cost_plus"},
 		"switch(case x > 1 => 1, else => true)": {
 			"else returns bool, the branches before it int"},
 	} {

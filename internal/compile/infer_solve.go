@@ -446,11 +446,11 @@ func noOverloadError(node *syntax.CallExpr, s *inferState, args []typeTerm) erro
 	actual := kit.Map(args, s.describe)
 	message := fmt.Sprintf("type error: no overload %s(%s)", node.Name, strings.Join(actual, ", "))
 	if hint := overloadHint(node.Name, actual); hint != "" {
-		message += "；" + hint
+		message += "; " + hint
 	}
 	if node.Name == "if" && len(args) == 3 {
 		if hint := s.recordDifference(args[1], args[2]); hint != "" {
-			message += "；else 分支与 then 分支相比：" + hint
+			message += "; the else branch against the then branch: " + hint
 		}
 	}
 	return syntax.Around(node, "%s", message)

@@ -148,7 +148,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 ```bash
 make ci        # 提交前必须全过；查些什么以 Makefile 的 ci 目标为准，这里不再抄一份
 make ci-linux  # 推送前：在 Docker 里按 GitHub Actions 的机器（linux/amd64）跑 make ci，看出架构带来的差别（如 arm64 的 FMA 融合）
-make test | make lint | make vet | make fmt
+make test | make test-race | make lint | make vet | make fmt
 make test-example  # 只跑读 web/funroute-examples.json 的测试：一致性流水线、LSP 运行与覆盖（每个重载、运算符、节点）、格式化往返
 make wasm      # web/dist/funroute.wasm
 make web       # web/dist/*.js（先在 web/ 里 npm install；产物不提交）
@@ -181,6 +181,7 @@ go run ./cmd/funroute run -expr 'let(bps = 250, amount * bps / 10000)' -types 'a
 - 不睡：依赖定时器的测试跑在 `testing/synctest` 上。
 - 基准写 `for b.Loop()`。
 - 测试辅助函数第一句 `t.Helper()`。
+- **数分配次数的测试在竞态检测下跳过**：`testing.AllocsPerRun` 会把检测器自己的分配算进去。`internal/` 里的在测试开头写 `if kit.Race { t.Skip(…) }`；`tests/api` 只用公开包，放进带 `//go:build !race` 的 `allocations_test.go`。`make ci` 里的 `test-race` 跑全量。
 - **`foo_test.go` 对应同目录的 `foo.go`**。例外：`example_test.go`、`export_test.go`，以及只有 `doc.go` 的测试套件目录（`tests/` 下的 `api`、`conformance`、`limits`、`golden`）。没有 `helpers_test.go`。测 machine 行为又要先编译的测试写成 `package machine_test`，内部件经 `export_test.go` 暴露。
 
 其余靠评审：表驱动测试每个用例一个 `t.Run`；独立的测试第一句 `t.Parallel()`（`testing.AllocsPerRun`、synctest、共享状态、计时敏感的除外）；失败信息写出输入、实际与期望。另外四条，为的是改一处不牵动一片：

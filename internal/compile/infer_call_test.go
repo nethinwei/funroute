@@ -140,9 +140,9 @@ func registerCollectionTestExtensions(t *testing.T, registry *machine.Registry) 
 func TestMoneyMistakesAreExplained(t *testing.T) {
 	t.Parallel()
 	for source, want := range map[string]string{
-		"amount + 5":    "money(n, 币种)",
+		"amount + 5":    "money(n, USD)",
 		"amount / 3":    "allocate",
-		"amount * risk": "2.9% 这样的字面量",
+		"amount * risk": "a literal such as 2.9%",
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
@@ -166,7 +166,7 @@ func hintOf(t *testing.T, source string) string {
 	if err == nil {
 		t.Fatalf("CompileExpr(%q) compiled, want a type error", source)
 	}
-	_, hint, _ := strings.Cut(err.Error(), "；")
+	_, hint, _ := strings.Cut(err.Error(), "; ")
 	return hint
 }
 
@@ -174,25 +174,25 @@ func hintOf(t *testing.T, source string) string {
 func TestMoneyHintsCoverEveryBranch(t *testing.T) {
 	t.Parallel()
 	for source, want := range map[string]string{
-		"amount * euros": "两笔金额不能相乘",
+		"amount * euros": "two amounts do not multiply",
 		"1 - fee":        "100% - fee",
 		"fee * 2":        "100% - fee",
-		"k * fee":        "n * fee 先把 n 用在金额上",
+		"k * fee":        "in n * fee apply n to the amount first",
 		"fee / k":        "100% - fee",
 		"risk + fee":     "100% - fee",
 		"fee < 1":        "100% - fee",
-		"risk * amount":  "2.9% 这样的字面量",
-		"amount + risk":  "2.9% 这样的字面量",
-		"amount < risk":  "2.9% 这样的字面量",
-		"risk / u":       "2.9% 这样的字面量",
+		"risk * amount":  "a literal such as 2.9%",
+		"amount + risk":  "a literal such as 2.9%",
+		"amount < risk":  "a literal such as 2.9%",
+		"risk / u":       "a literal such as 2.9%",
 		"amount / k":     "allocate(m, n)",
 		"u / 3":          "allocate(m, n)",
-		"5 + amount":     "money(n, currency(同币种金额))",
-		"amount - 5":     "money(n, 币种)",
-		"5 - amount":     "money(n, 币种)",
-		"u + k":          "money(n, 币种)",
+		"5 + amount":     "money(n, currency(m))",
+		"amount - 5":     "money(n, USD)",
+		"5 - amount":     "money(n, USD)",
+		"u + k":          "money(n, USD)",
 		// Two arguments, one money and one float, whatever the function.
-		"fallback(amount, risk)": "2.9% 这样的字面量",
+		"fallback(amount, risk)": "a literal such as 2.9%",
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
@@ -213,7 +213,7 @@ func TestMoneyHintsStaySilentElsewhere(t *testing.T) {
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
-			if got := hintOf(t, source); got != "" && !strings.HasPrefix(got, "else 分支与 then 分支相比：") {
+			if got := hintOf(t, source); got != "" && !strings.HasPrefix(got, "the else branch against the then branch: ") {
 				t.Fatalf("CompileExpr(%q) hint = %q, want none", source, got)
 			}
 		})

@@ -76,7 +76,7 @@ func (s *inferState) branchMismatch(branch string, at syntax.Expr, want typeTerm
 	got := s.typeAt(at.NodeID())
 	message := fmt.Sprintf(": %s returns %s, the branches before it %s", branch, s.describe(got), s.describe(want))
 	if hint := s.recordDifference(want, got); hint != "" {
-		message += "；" + hint
+		message += "; " + hint
 	}
 	return message
 }
@@ -111,22 +111,22 @@ func (s *inferState) recordDifference(want, got typeTerm) string {
 	}
 	var parts []string
 	if len(missing) > 0 {
-		parts = append(parts, "缺少字段 "+strings.Join(missing, ", "))
+		parts = append(parts, "it lacks "+strings.Join(missing, ", "))
 	}
 	if len(extra) > 0 {
-		parts = append(parts, "多出字段 "+strings.Join(extra, ", "))
+		parts = append(parts, "it has "+strings.Join(extra, ", ")+" besides")
 	}
 	if len(parts) > 0 {
-		return strings.Join(parts, "；")
+		return strings.Join(parts, ", and ")
 	}
 	for _, field := range want.fields {
 		other := got.fields[fieldIndex(got, field.name)]
 		if a, b := s.describe(field.term), s.describe(other.term); a != b {
-			return fmt.Sprintf("字段 %s 的类型不同：%s 与 %s", field.name, a, b)
+			return fmt.Sprintf("field %s is %s in one and %s in the other", field.name, a, b)
 		}
 	}
 	if !sameFieldOrder(want, got) {
-		return "字段相同但顺序不同：两个已定的 record 类型，字段顺序是类型的一部分"
+		return "the fields are the same in another order: both record types are fixed, and the order of its fields is part of a type"
 	}
 	return ""
 }
