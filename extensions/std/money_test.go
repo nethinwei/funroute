@@ -50,7 +50,7 @@ func runMoneyOn(t *testing.T, registry *funroute.Registry, source string, args m
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprint(value.Any()), nil
+	return fmt.Sprint(plain(value.Any())), nil
 }
 
 // The argument shapes the money tests share: fees and an amount in a
@@ -653,4 +653,39 @@ func TestEveryOverloadNamesItsParameters(t *testing.T) {
 			t.Errorf("%s names its parameters %q, want names of their own", function.Signature(), params)
 		}
 	}
+}
+
+// minorUnits is an amount as its parts, so a want reads "{EUR 121}" whatever
+// places the process's tables give EUR: Money.String writes amounts for
+// people, in places other tests declare.
+type minorUnits struct {
+	currency string
+	minor    int64
+}
+
+// plain is value with every Money in it as minorUnits.
+func plain(value any) any {
+	switch v := value.(type) {
+	case funroute.Money:
+		return minorUnits{v.Currency(), v.Minor()}
+	case []funroute.Money:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = plain(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = plain(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, item := range v {
+			out[k] = plain(item)
+		}
+		return out
+	}
+	return value
 }

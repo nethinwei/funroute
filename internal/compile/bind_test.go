@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -13,6 +14,9 @@ import (
 // A host struct on the caller's stack stays there: scalars cross with no
 // allocation, which also proves Run does not make *In escape.
 func TestProgramScalarsDoNotAllocate(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	program := bindProgram[scalarIn, int64](t, machine.CoreRegistry(), `if(country == "SG", amount * 2, amount)`)
 	ctx := t.Context()
 	allocs := testing.AllocsPerRun(1000, func() {
@@ -33,6 +37,9 @@ type moneyIn struct {
 
 // A Money field is read and the result written in place, like a scalar.
 func TestProgramMoneyDoesNotAllocate(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := moneyRegistry(t)
 	program := bindProgram[moneyIn, money.Money](t, registry, `round(amount * 0.029, @half_even)`)
 	table, _ := registry.Currencies()
@@ -297,6 +304,9 @@ func forRegistry(t *testing.T) *machine.Registry {
 // without an allocation; so does an array answered into the slice the host
 // lent it, once the slice has room.
 func TestProgramRecordsAndLentArraysDoNotAllocate(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	program := bindProgram[orderIn, decisionOut](t, forRegistry(t),
 		`{channel: if(order.risk < 0.5, "adyen", "manual"), net: order.amount - 30, fees: [fee * 2 for fee in fees if fee > 1]}`)
 	ctx := t.Context()

@@ -13,6 +13,13 @@ import (
 	"github.com/nethinwei/funroute"
 )
 
+// additive is the pack's functions that are Doc.Additive: what each hands
+// back holds no more than what it was given, give or take a fixed amount —
+// a padded or repeated text is at most maxPadWidth characters longer, and a
+// group_by's groups are no more than its keys. chunk and windows are not:
+// they make an array of every few items they are given.
+var additive = []string{"cumsum", "deltas", "drop_while", "group_by", "pad_left", "pad_right", "rank", "repeat", "take_while"}
+
 // Register adds the pack to a registry. The order is the pack's: the order a
 // name's overloads are registered in is the order the compiler tries them,
 // and the money overloads, registered only when the registry declares money,
@@ -31,6 +38,7 @@ func Register(registry *funroute.Registry) error {
 		// overload of it.
 		spec.Doc.Constexpr = true
 		spec.Doc.Examples = examples[spec.Name]
+		spec.Doc.Additive = slices.Contains(additive, spec.Name)
 		if err := registry.Register(spec); err != nil {
 			return err
 		}

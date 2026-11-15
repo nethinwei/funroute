@@ -5,7 +5,7 @@
   "description": "The FunRoute workbench: a CodeMirror editor and a structure view on the language server.",
   "scripts": {
     "build": "rm -f dist/chunk-*.js && esbuild src/app.ts src/lsp.ts src/editor.ts src/contract.ts src/runner.ts src/canvas.ts --bundle --splitting --format=esm --target=es2022 --outdir=dist --entry-names=[name] --chunk-names=chunk-[hash] --legal-comments=none --minify",
-    "check": "tsc --noEmit -p ."
+    "check": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
     "@codemirror/autocomplete": "6.20.3",
@@ -20,6 +20,7 @@
     "lit": "3.3.3"
   },
   "devDependencies": {
+    "@types/node": "22.20.5",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   }

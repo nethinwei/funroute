@@ -8,6 +8,7 @@ import (
 
 	"github.com/nethinwei/funroute/extensions/std"
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -58,7 +59,7 @@ func runUsing(t *testing.T, source, contract string, outer [][3]string, args ...
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprint(value.Any()), nil
+	return fmt.Sprint(plain(value.Any())), nil
 }
 
 // usingCase is a rule over fxContract, the outer table's quotes, and its result as
@@ -372,6 +373,9 @@ func BenchmarkUsing(b *testing.B) {
 // of constant quotes allocates nothing at all. The count is global, so this
 // test does not run in parallel.
 func TestAUsingAllocatesNothing(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := fxRegistry(t)
 	artifact, err := compileMoney(t, registry, "using(150 JPY / USD, 0.92 EUR / USD, round(a -> JPY, @half_even))", "a: money", "")
 	if err != nil {
@@ -382,7 +386,7 @@ func TestAUsingAllocatesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := []machine.Value{machine.MoneyValue(100, "USD")}
-	if value, err := runtime.RunValues(t.Context(), args); err != nil || fmt.Sprint(value.Any()) != "{JPY 150}" {
+	if value, err := runtime.RunValues(t.Context(), args); err != nil || fmt.Sprint(plain(value.Any())) != "{JPY 150}" {
 		t.Fatalf("using(150 JPY / USD, …) = %v, %v, want JPY 150", value.Any(), err)
 	}
 	allocs := testing.AllocsPerRun(100, func() {

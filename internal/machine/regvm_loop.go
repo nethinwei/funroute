@@ -30,6 +30,9 @@ type regLoop struct {
 	out    *arrayBuilder
 	output arrayBuilder
 	dict   dictBuilder
+	// failed is the first failure of a fold's step, kept until the items
+	// after it are computed (frame.failed).
+	failed error
 }
 
 // regLoopInit starts a loop. An empty source goes straight to the exit with
@@ -230,11 +233,14 @@ func (f *frame) loadItem(loop *regLoop, index int) {
 func (f *frame) collect(value, key int32, kind Kind) {
 	loop := &f.loops[len(f.loops)-1]
 	if key >= 0 {
-		loop.dict.add(f.regs[key].s, f.valueAt(value, kind))
+		entry := f.valueAt(value, kind)
+		f.spend(entry)
+		loop.dict.add(f.regs[key].s, entry)
 		return
 	}
 	// An int, a bool or a float is collected out of its file (collectInt,
 	// collectFloat): what reaches here is in the values.
+	f.spend(f.regs[value])
 	loop.out.add(f.regs[value])
 }
 
@@ -284,7 +290,13 @@ func (f *frame) regLoopNext(pc int, body int32) (int, error) {
 	loop.index++
 	if loop.index < loop.length {
 		if f.watching() {
-			if err := f.turn(1); err != nil {
+			// Only an evaluation at compile time asks what the turn carries:
+			// a run under a deadline pays for the turn alone.
+			turns := 1
+			if f.budget > 0 {
+				turns += f.carried(loop)
+			}
+			if err := f.turn(turns); err != nil {
 				return pc, err
 			}
 		}
@@ -301,6 +313,14 @@ func (f *frame) regLoopNext(pc int, body int32) (int, error) {
 // at pc.
 func (f *frame) endLoop(pc int) (int, error) {
 	last := len(f.loops) - 1
+	if err := f.loops[last].failed; err != nil {
+		// No item failed after the step that did: the fold fails as the
+		// call on the array built would. The loop is over, so that this
+		// failure is not taken for a step's of the loop outside.
+		f.loops[last] = regLoop{}
+		f.loops = f.loops[:last]
+		return pc, err
+	}
 	if site := f.loops[last].site; site.acc >= 0 {
 		f.copyReg(site.dst, site.acc, site.typ.kind)
 	} else {
@@ -390,7 +410,7 @@ func (d *dictBuilder) add(key string, value Value) {
 	case d.texts != nil:
 		fresh = added(d.texts, key, value.s)
 	case d.monies != nil:
-		fresh = added(d.monies, key, money.Make(value.s, value.i))
+		fresh = added(d.monies, key, value.money())
 	default:
 		fresh = added(d.values, key, value)
 	}

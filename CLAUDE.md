@@ -19,9 +19,9 @@ lsp/                 语言服务（LSP + stdio）
 extensions/std/      标准库，只用公开 API
 internal/kit/        多个包共用的同一段逻辑：错误分类、名字与数字字符、切片投影与查重、JSON 数字 ← 只依赖标准库
 internal/money/      金额、比例、汇率、币种表、舍入与分摊的 Go 运算   ← 只依赖 kit
-internal/machine/    值、类型、字节码、VM、注册表、目录、清单、内核库  ← 只依赖 money
-internal/syntax/     词法、语法、AST、ExprJSON、格式化、语法树       ← 只依赖 machine
-internal/compile/    推导、编译、常量折叠、契约、Analyze             ← 依赖 syntax + machine
+internal/machine/    值、类型、字节码、VM、注册表、目录、清单、内核库  ← 依赖 money
+internal/syntax/     词法、语法、AST、ExprJSON、格式化、语法树       ← 依赖 machine、money
+internal/compile/    推导、编译、常量折叠、契约、Analyze             ← 依赖 syntax、machine、money
 internal/demo/       演示控制台：宿主组装注册表的范例，工作台用它（宿主侧）
 examples/            可运行的 Go 宿主程序，只用公开包；只放宿主程序，不放规则示例
 tests/api/           公开面的测试与 Example*，按主题组织（宿主侧）
@@ -34,7 +34,7 @@ web/src/ web/wasm/   工作台前端（TS）与浏览器里的语言服务（js/
 cmd/funroute cmd/playground CLI 与工作台静态服务
 ```
 
-- 依赖严格单向（`go list -deps` 验证）；kit 在最底层，所有实现包与 `lsp/` 都可以用它，表里不再逐一写。
+- 依赖严格单向，按 kit → money → machine → syntax → compile 分层，`make lint` 强制（`tools/lint/imports.go` 的 `layers`：每个包只导入排在它前面的，internal 下新建的包要先登记）；kit 在最底层，所有实现包与 `lsp/` 都可以用它，表里不再逐一写。
 - **同一段逻辑只写一处**：两个包以上都要的放进 `internal/kit`，只有一个包要的留在那个包（奥卡姆剃刀：kit 不收"将来可能用到"的东西）。kit 不懂语言，不放任何带 FunRoute 语义的代码。
 - **导入规则由 `tools/lint/imports.go` 强制**：实现包只有 `funroute.go` 与 `lsp/` 可以导入；`tests/`、`examples/` 与宿主侧包 `internal/demo` 只能用公开包，谁都可以导入 `internal/demo`。Go 的 internal 规则挡不住本模块自己的 `extensions/`、`examples/`、`tests/`、`cmd/`、`web/wasm`，所以需要这条检查。
 - machine 的文件按领域加前缀：`money_*.go` 是金额，`host_*.go` 是宿主绑定，`lib_*.go` 是内核库（常用的聚合、数组、选择、字典、字符串、数值函数；低频的与金额重载在 std）。
@@ -66,7 +66,8 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 **终止性与运行时长**
 - 只有调用了宿主函数（含纯函数，`regProgram.foreign`）的运行才设 `recover`：内核与内核库的代码不许 panic，`FuzzProgramsNeverPanic` 守着。新增内核函数时，所有失败都要走 error 返回。
 - 语言不图灵完备：没有递归、没有无界循环，每次 `Run` 只有一个帧。任何能重入程序的构造都会推翻 `docs/termination.md` 的定理 A 与 B。
-- 没有 fuel：运行多久由宿主的 `ctx` 决定，宿主调用前与循环每 `checkEvery` 轮（`machine/limit.go`，约 1 ms）查一次。新增会循环的执行路径（新的循环指令、向量的新走法）必须经 `turn` 计数，否则长循环停不下来。编译期折叠只按轮数（`foldTurns`）限制，不看时钟：同一份源码在哪台机器上都编出同一个 artifact。
+- 没有 fuel：运行多久由宿主的 `ctx` 决定，宿主调用前与循环每 `checkEvery` 轮（`machine/limit.go`，约 1 ms）查一次。新增会循环的执行路径（新的循环指令、向量的新走法）必须经 `turn` 计数，否则长循环停不下来。编译期折叠只按数目（`foldTurns`：轮数加上每轮带着的累加器、收下的项有多大）限制，不看时钟：同一份源码在哪台机器上都编出同一个 artifact。
+- `reduce` 的累加器每轮只能多出这一轮带来的东西（`compile/bounded.go` 的 `requireBoundedFold`）：定理 B 靠它成立。新增能把值带进下一轮的形式、或放宽这条检查，要先补上 termination.md 里的归纳。
 - 凭空造容器的函数标 `Doc.BoundedArgs`，整数实参必须由输入规模界定；扩展函数的计算量只能随输入**规模**增长，不能随参数**数值**增长（设上限或换算法，如 `range`/`pad`/`allocate` 的 10000、`pow` 的平方求幂）。
 - 常量折叠只碰 `Doc.Constexpr` 授权的函数：内核与 std 有，模型、时钟、远程调用**不标**。闭合表达式的失败是编译错误。
 
@@ -110,46 +111,50 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 
 | 改了什么 | 还要动哪里 |
 |---|---|
-| 新增 opcode | `machine/opcode.go` 表一行 + `verify.go` 的类型规则 + `lower_instr.go` 的翻译规则（`TestEveryOpcodeIsExecutableAndNamed` 兜底）；要新的寄存器操作就在 `regvm_ops.go` 加一行、在 `exec` 或 `cold` 里执行；会跳转的在 `leadersOf` 里另起一块 |
+| 新增 opcode | `machine/opcode.go` 表一行 + `verify.go` 的类型规则 + `lower_instr.go` 的翻译规则（`TestEveryOpcodeIsExecutableAndNamed` 兜底）；要新的寄存器操作就在 `regvm_ops.go` 加一行与 `ropNames` 的名字（`TestEveryRegisterOperationIsNamed`）、在 `exec` 或 `cold` 里执行；A 是指令下标的置 `opcodeSpec.jumps`，并在 `opcode_test.go` 的 `jumpAnalyses` 写明它在 `leadersOf`、`guardedInstructions` 里的判定（`TestEveryJumpIsPlacedInEachAnalysis` 用真实函数对照） |
 | 新增会产生、读或放出数组的栈指令 | `lower_escape.go` 的规则：它让数组留在运行里还是逃出（`TestValueFlowFindsWhereEachArrayGoes` 加一行） |
 | 向量要跑新的运算 | `lower_vector.go` 的 `elementwise`、`regvm_vector_run.go` 的 `resultKind`、`regvm_vector_ops.go` 的列运算；失败条件与内核指令一字不差 |
 | 内核函数要专用指令 | `lower_kernel.go` 的 `kernelOps` 一行（结果按种类分组的在 `lower_instr.go` 的 `kernel` 里选变体）+ `regvm_ops.go` 的操作（排在最后，`kernelRop` 认得它：插在 `rCall` 之前会把 `exec` 热段之后的码整体推高，实测标量 `Program` 慢 1.4 ns）+ `regvm_kernel.go` 的快路径 + `regvm_cold.go` 的 `coldKernels` 一行（`TestKernelOpsAnswerAsTheirFunctions` 在边界值上对照函数） |
-| 新增形式 | `machine/catalog.go` 的 `languageForms` 一行（可开关的写 `optional`，能包进表达式的写 `wrap` 模板）；节点的 kind tag 写 `,form`（可开关的再写 `,optional`，`TestTheOptionalFormsAreTheMachines` 对照）；termination.md |
-| 新增 ExprJSON 节点 | `syntax/ast.go`（嵌入 `Node` 并写 `kind` tag，字段带 tag，加进 `nodeTypes`）；语义在 `compile/infer_expr.go`、`compiler.go`；打印在 `syntax/print.go`、`format.go`；按节点分派的还有 `compile/enum.go`、`fold.go`；示例要用到它（`lsp/funroute_test.go` 检查） |
-| 改语法 | `docs/grammar.md` 的文法；跑 `go test ./internal/syntax -run XXX -fuzz FuzzFormatRoundTrip -fuzztime 60s` |
+| 新增形式 | `machine/catalog.go` 的 `languageForms` 一行（可开关的写 `optional`，能包进表达式的写 `wrap` 模板）；节点的 kind tag 写 `,form`（可开关的再写 `,optional`，`TestTheOptionalFormsAreTheMachines` 对照）；`formExamples` 的案例（没有对应形式的键由 `TestEveryExampleNamesAFunctionOrForm` 报出）；写成调用的形式名进 `reservedNames`（`TestTheParsersWordsAreReserved`）；termination.md |
+| 新增 ExprJSON 节点 | `syntax/ast.go`（嵌入 `Node` 并写 `kind` tag，字段带 tag，加进 `nodeTypes`）；语义在 `compile/infer_expr.go`、`compiler.go`；打印在 `syntax/print.go`、`format.go`；`compile/fold_test.go` 的 `nodeSemantics` 写明它在以「其余节点」收尾的 switch（`branches`、`foldable`、`ownConstexpr`）里是什么，不是就给那些 switch 加 case（`TestEveryNodeIsPlaced` 用真实函数对照）；示例要用到它（`lsp/funroute_test.go` 检查） |
+| 改语法 | `docs/grammar.md` 的文法；运算符只在 `syntax/operators.go` 的 `sourceOperators` 一行，再改 `docs/language.md` 的运算符表（`TestTheOperatorTableIsTheOperators`）；跑 `go test ./internal/syntax -run XXX -fuzz FuzzFormatRoundTrip -fuzztime 60s` |
 | 新增函数 | 只经 `Registry.Register` 注册 `FunctionSpec`（手写 `Params`/`Result`/`Eval`，或填 `Go`/`GoBatch` 按 Go 签名反射），目录与 LSP 自动生效；`Doc` 是唯一的函数元数据结构；ABI 版本写进名字（`route.score_v1`） |
-| 新增官方函数或重载 | 常用的进内核库（`lib_*.go`，经 `librarySpecs` 注册，直接操作 backing），其余进 std；补案例（内核 `machine/examples.go`，std `extensions/std/examples.go`），同名的内核重载与 std 金额重载各挂各的案例，测试要求合起来选中每个重载；一个名字服务多种元素类型用 `libEach`/std 的 `eachType`，std 的在 `TestNamesCoverEveryElementTypeTheyClaim` 加一行 |
+| 新增官方函数或重载 | 常用的进内核库（`lib_*.go`，经 `librarySpecs` 注册，直接操作 backing），其余进 std；补案例（内核 `machine/examples.go`，std `extensions/std/examples.go`），同名的内核重载与 std 金额重载各挂各的案例，测试要求合起来选中每个重载；在 `docs/termination.md` 的代价表写出它（`TestTheCostTableNamesEveryFunction`）；一个名字服务多种元素类型用 `libEach`/std 的 `eachType`，std 的在 `TestNamesCoverEveryElementTypeTheyClaim` 加一行 |
 | 新增纯函数 | 标 `Doc.Constexpr` |
 | 新增聚合函数 | 能用一个内核函数一步步折叠、或遇到某个 bool 就停的，声明 `FunctionSpec.Fold`；融合后的答案与失败与按原样编译的一致（`internal/compile/aggregate_test.go` 对照） |
 | 按 Go 签名注册的新常见形状 | `host_direct.go` 一个 case，在 `TestDirectCallsAnswerAsReflection`（std 用的形状在 `TestTheStandardShapesAreCalledDirectly`）加一个该形状的函数；标量形状再在 `host_pure.go` 的 `pureOf` 加一个直接读写各组的，`TestPureCallsAnswerAsTheirEval` 加一个 |
 | 新增凭空造容器的函数 | 标 `Doc.BoundedArgs`，理由写进 termination.md 定理 B 之后 |
+| 新增吃进容器或字符串、又交回容器或字符串的函数 | 结果的规模（各层项数加字符数）不超过实参之和加定值的，把名字加进 `kernelAdditive`（内核，`machine/builtins.go`）或 `additive`（std）：`reduce` 的累加器只能经过这样的函数（`compile/bounded.go`）。`TestAnAdditiveFunctionHandsBackNoMoreThanItIsGiven` 拿各种大小的实参实测每个声明；不确定就不加，没声明的按"可能放大"处理 |
 | 新增读运行状态的内核函数 | `FunctionSpec.readsRun`（不折叠，要求写在 `using` 里） |
 | 新增金额函数 | 先在 `internal/money` 的 Go 方法上实现；会舍入的内核运算用 `registerRounded`；非内核函数自己检查容器里币种一致（std 的 `amountsOf`）；宿主先 `DeclareMoney` 再注册 std |
 | 改 `Doc` 里影响编译的字段 | `machine/manifest.go` 的 `ManifestFunction` |
-| `Kind` 加值 | `kindNames`；有运行时表示的还有 `Value.Type()`/`Any()`/`Equal`、JSON（`jsonLeaf`、`coerceWith`）、`compile/infer_solve.go` 的 `implicitScores`、`namedTypes`（`ParseType`）、`lsp/sample.go`；Go 形式不是按形状读的（`time.Time` 是 struct），进 `ownGoKind` 与 `loadOwn`/`storeOwn`、`fromGo`/`FromValue` |
+| `Kind` 加值 | 加在 `kindCount` 之前，`machine.Kinds()` 就把它交给每个穷举测试，逐个指出要补的地方：`kindNames`（`TestEveryKindHasANameThatReadsBack`）、值的往返（`machine/value_test.go` 的 `kindSamples`，走过 `value.go`、`convert.go`、`bytecode.go` 按 Kind 的 switch）、`compile/infer_solve.go` 的 `implicitScores`（`TestEveryKindIsScored`）、`lsp/sample.go`（`TestTheSampleCasesCoverEveryKind`）、`docs/language.md` 的类型表（`TestTheTypeTableHasEveryKind`）；`namedTypes`（`ParseType`）；Go 形式不是按形状读的（`time.Time` 是 struct），进 `ownGoKind` 与 `loadOwn`/`storeOwn`、`fromGo`/`FromValue` |
+| Money 或 Value 的内部表示加字段 | Money 的字段只在 `internal/money` 里读写，规则引擎经 `MakeIn`/`MoneyParts` 在 `money_value.go` 互转；Value 的新字段要放进对齐空隙（`TestMoneysPlacesCostAValueNothing`）；对照测试（`machine/money_kernel_test.go` 的 `TestAmountsKeepTheirPlaces*`）用 `==` 比较、期望值只用币种表造出的原值，转换处漏了字段它们就失败 |
 | 新增原生 backing | `machine/container.go` 的 `natives` 一行（装入取出只经 `arrayOf`/`nativeItems`）与 `host_plan.go` 的 `native` 常量；`TestEveryBackingIsHandledEverywhere` 指出每个还要补的 switch |
 | `reflectType`/`fromGo` 新增非容器的 Go 类型 | `machine/host_plan.go` 的 `newCodecFor` 与 `host_access.go` |
 | 新增公开 API | `funroute.go` 对应的一节；新类型进 `tests/api/value_test.go` 的断言块，并在 `tests/api` 以宿主视角用一次。能不加就不加 |
-| 有意改变了某个答案或失败 | `make golden` 重写 `tests/golden/testdata/outcomes.jsonl`，逐条读 diff；只改执行方式时金库必须一字不差 |
+| 有意改变了某个答案或失败 | `make golden` 重写 `tests/golden/testdata/` 的 `outcomes.json`（每个结果一行）与 `phrases.json`（每种报错的措辞一行，结果里只记句式编号与取值），逐条读 diff；只改措辞时只有 `phrases.json` 变；只改执行方式时金库必须一字不差 |
 | 改了 docs/limits.md 表格里的行为 | `make limits` 重新生成，读一遍 diff；新增边界就在 `tests/limits` 的用例表加一行，说明写在用例里 |
-| 新增例子 | 只改 `web/funroute-examples.json`（源码 + 契约 + 入参 + 期望值）；示例合起来要覆盖演示注册表的全部函数、形式、运算符与节点 |
-| 新增语言服务能力 | `lsp/`：标准方法优先，专有的用 `funroute/*` 或 `workspace/executeCommand`；`web/wasm` 只是传输 |
+| 有意改变了目录、签名清单或 Artifact 的 JSON 形状（含函数的 Doc） | `make snapshots` 重写 `internal/machine/testdata/` 的三份快照（缩进的 JSON，逐字节守着编码结果），读 diff；不是有意的改动，快照必须一字不差 |
+| 新增例子 | 只改 `web/funroute-examples.json`（源码 + 契约 + 入参 + 期望值）；示例合起来要覆盖演示注册表的全部函数、形式、运算符与节点，覆盖由源码与推导结果算出（`lsp/funroute_test.go` 的 `coverOverloads`、`coverSpelling`），不手写 |
+| 新增语言服务能力 | `lsp/`：标准方法优先，专有的用 `funroute/*` 或 `workspace/executeCommand`；`web/wasm` 只是传输；工作台读的字段写进 `web/src/protocol.ts`（`lsp/protocol_test.go` 对照它的字段、发的方法与命令、语义标记的样式） |
 | 新增颜色 | 只在 `web/tokens.css`，用 `light-dark(浅, 深)`；组件只消费 token |
 | 新增前端代码 | `web/src/*.ts`；组件经 `ui.ts` 的 `define` 注册并加进 `package.json` 入口；位置一律按 UTF-16 数（`projection.ts` 的 `offsetAt`）；运行时依赖只加实际导入的包 |
-| 新增错误类别 | `machine/errors.go` 的 `errorClasses` 一行（最具体的在前，写明 `fallback` 接不接）与 `docs/go.md` 的错误表（`TestTheErrorTableIsTheErrorClasses` 对照） |
+| 新增错误类别 | `machine/errors.go` 的 `errorClasses` 一行（最具体的在前，写明 `fallback` 接不接）与 `docs/go.md` 的错误表（`TestTheErrorTableIsTheErrorClasses` 对照）；`funroute.ClassName` 与金库都由它而来；`tests/limits` 的 `sentinels` 加一行（没登记的类别会写进生成的表格，对照即失败） |
 | 新的设计决策 | `docs/roadmap.md` 的「关键设计决策」 |
 
 ## 命令
 
 ```bash
-make ci        # 提交前必须全过：格式、import、前端检查与构建、vet、staticcheck、modernize、golangci-lint（均含 js/wasm）、deadcode、lint、build、wasm、Go 与 JS 测试
+make ci        # 提交前必须全过；查些什么以 Makefile 的 ci 目标为准，这里不再抄一份
 make ci-linux  # 推送前：在 Docker 里按 GitHub Actions 的机器（linux/amd64）跑 make ci，看出架构带来的差别（如 arm64 的 FMA 融合）
-make test | make lint | make vet | make fmt
+make test | make test-race | make lint | make vet | make fmt
 make test-example  # 只跑读 web/funroute-examples.json 的测试：一致性流水线、LSP 运行与覆盖（每个重载、运算符、节点）、格式化往返
 make wasm      # web/dist/funroute.wasm
 make web       # web/dist/*.js（先在 web/ 里 npm install；产物不提交）
 make run       # 构建并在 http://127.0.0.1:8080 服务工作台
 make limits    # 重新生成 docs/limits.md 的表格（go test ./tests/limits -update）
+make snapshots # 重写目录、签名清单与 Artifact 的 JSON 快照（go test ./internal/machine -run JSONShape -update）
 make golden    # 重写行为金库（go test ./tests/golden -update），只在有意改变答案时
 make perf      # 性能报告写进 docs/perf.md，需要时再提交
 go run ./examples/routing                                          # 宿主程序示例：routing、money、batch
@@ -176,6 +181,12 @@ go run ./cmd/funroute run -expr 'let(bps = 250, amount * bps / 10000)' -types 'a
 - 不睡：依赖定时器的测试跑在 `testing/synctest` 上。
 - 基准写 `for b.Loop()`。
 - 测试辅助函数第一句 `t.Helper()`。
+- **数分配次数的测试在竞态检测下跳过**：`testing.AllocsPerRun` 会把检测器自己的分配算进去。`internal/` 里的在测试开头写 `if kit.Race { t.Skip(…) }`；`tests/api` 只用公开包，放进带 `//go:build !race` 的 `allocations_test.go`。`make ci` 里的 `test-race` 跑全量。
 - **`foo_test.go` 对应同目录的 `foo.go`**。例外：`example_test.go`、`export_test.go`，以及只有 `doc.go` 的测试套件目录（`tests/` 下的 `api`、`conformance`、`limits`、`golden`）。没有 `helpers_test.go`。测 machine 行为又要先编译的测试写成 `package machine_test`，内部件经 `export_test.go` 暴露。
 
-其余靠评审：表驱动测试每个用例一个 `t.Run`；独立的测试第一句 `t.Parallel()`（`testing.AllocsPerRun`、synctest、共享状态、计时敏感的除外）；失败信息写出输入、实际与期望。
+其余靠评审：表驱动测试每个用例一个 `t.Run`；独立的测试第一句 `t.Parallel()`（`testing.AllocsPerRun`、synctest、共享状态、计时敏感的除外）；失败信息写出输入、实际与期望。另外四条，为的是改一处不牵动一片：
+
+- **按值比较，不拿打印出来的文字当基准**：比较 Money 用 `Equal`、结构体用 `reflect.DeepEqual` 或逐字段；`fmt.Sprint` 的结果随 `String` 方法变，不是要守的东西。
+- **构造函数的签名不改**：新能力加新的入口（`money.Make` 之外另有 `MakeIn`），测试里成百的调用不用跟着改。
+- **要在多处同步的知识，由测试对照**：表或 switch 分在几处时，写一个穷举测试（遍历 `Kinds()`、`NodeKinds()`、opcode 表）在漏改时失败，并指出补哪里；文档里的表同样（代价表、类型表、运算符表）。
+- **对照测试的期望值不经过被测的代码**：期望是从源头造出的原值；拿被测的转换函数读回来再比，两边一起错时测试照样通过。新写的对照测试用变异验证一次：故意改坏一处，看它失败。

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/money"
 )
 
@@ -221,6 +222,9 @@ func TestEncodeJSONWritesWhatHoldsNoMoneyWhole(t *testing.T) {
 // An array with no money in it is written whole: its allocations do not
 // grow with its length.
 func TestEncodeJSONDoesNotBoxEachFloat(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := declared(t, money.CurrencySpec{Code: "USD", Digits: 2})
 	allocs := func(n int) float64 {
 		value := arrayOf(make([]float64, n))

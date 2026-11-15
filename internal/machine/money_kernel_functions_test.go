@@ -278,7 +278,7 @@ func TestAllocateTakesAStrategy(t *testing.T) {
 		"allocate(a, 3)":                             "[{USD 3} {USD 3} {USD 2}]",
 	} {
 		value, err := evalMoney(t, source, "a: money", map[string]any{"a": "USD 0.08"})
-		if got := fmt.Sprint(value.Any()); err != nil || got != want {
+		if got := fmt.Sprint(plain(value.Any())); err != nil || got != want {
 			t.Errorf("%s = %s, %v, want %s", source, got, err, want)
 		}
 	}
@@ -300,7 +300,7 @@ func TestProrateAndRoundToInARule(t *testing.T) {
 		"round_to(cash, money(5, currency(cash)), @down)": "{USD 100}",
 	} {
 		value, err := evalMoney(t, source, contract, args)
-		if got := fmt.Sprint(value.Any()); err != nil || got != want {
+		if got := fmt.Sprint(plain(value.Any())); err != nil || got != want {
 			t.Errorf("%s = %s, %v, want %s", source, got, err, want)
 		}
 	}
@@ -330,7 +330,7 @@ func TestAProportionOfTheSmallestAmountIsReducedFirst(t *testing.T) {
 		"round(prorate(USD 0.02, USD 0.01, m), @floor)":     "{USD -1}",
 	} {
 		value, err := evalMoney(t, source, "m: money", args)
-		if got := fmt.Sprint(value.Any()); err != nil || got != want {
+		if got := fmt.Sprint(plain(value.Any())); err != nil || got != want {
 			t.Errorf("%s = %s, %v, want %s", source, got, err, want)
 		}
 	}

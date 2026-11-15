@@ -76,3 +76,40 @@ func TestEveryOpcodeHasAFlowRule(t *testing.T) {
 		}
 	}
 }
+
+// jumpAnalyses is what the analyses that ask their own question of a jump
+// make of each one: whether it ends a block (leadersOf; a fallback's begin
+// is counted there instead) and whether it opens a range up to its target
+// (guardedInstructions; a loop's next goes back, and a break leaves).
+var jumpAnalyses = map[OpCode]struct{ endsBlock, opensRange bool }{
+	OpJump: {true, true}, OpJumpIfFalse: {true, true}, OpLoopInit: {true, true},
+	OpLoopNext: {true, false}, OpLoopBreak: {true, false}, OpBeginFallback: {false, true},
+}
+
+// Every opcode whose A is an instruction is placed in each analysis that
+// asks its own question of a jump, and what is written of it is what the
+// analysis does; an opcode that does not jump is no jump to any of them. A
+// new jump fails here until it is read into each.
+func TestEveryJumpIsPlacedInEachAnalysis(t *testing.T) {
+	t.Parallel()
+	for op := OpCode(1); int(op) < len(opcodes); op++ {
+		placed, listed := jumpAnalyses[op]
+		if listed != opcodes[op].jumps {
+			t.Errorf("%s: jumps %v, placed in jumpAnalyses %v", opcodes[op].name, opcodes[op].jumps, listed)
+			continue
+		}
+		if op == OpCall || op == OpEndFallback {
+			continue // leadersOf reads these for the fallback they are in
+		}
+		code := []Instruction{{Op: op, A: 2}, {Op: OpConstant}, {Op: OpConstant}}
+		if ends := leadersOf(code, nil)[1]; ends != placed.endsBlock {
+			t.Errorf("%s: leadersOf ends a block after it %v, want %v", opcodes[op].name, ends, placed.endsBlock)
+		}
+		if opens := guardedInstructions(code)[1]; opens != placed.opensRange {
+			t.Errorf("%s: guardedInstructions opens a range %v, want %v", opcodes[op].name, opens, placed.opensRange)
+		}
+		if joins := joinsOf(code)[2]; joins != listed {
+			t.Errorf("%s: joinsOf marks its A as a join %v, want %v", opcodes[op].name, joins, listed)
+		}
+	}
+}

@@ -73,7 +73,7 @@ func TestMoneyDiagnosticsCoverWhatTheyAreAbout(t *testing.T) {
 		{"too many places", "let(a = 1, a +\n  USD 1.234)", "at most 2 fit", nil, [4]float64{1, 2, 1, 11}},
 		{"undeclared currency", "x + EUR 1", `"EUR" is not declared`, []string{"x:int"}, [4]float64{0, 4, 0, 9}},
 		{"overflow", "USD 99999999999999999.99", "overflows int64", nil, [4]float64{0, 0, 0, 24}},
-		{"an int for money", "amount + 5", "money(n, currency(同币种金额))", []string{"amount:money"}, [4]float64{0, 0, 0, 10}},
+		{"an int for money", "amount + 5", "money(n, currency(m))", []string{"amount:money"}, [4]float64{0, 0, 0, 10}},
 		{"a float for a rate", "amount * risk", "ratio(\"0.029\")", []string{"amount:money", "risk:float"}, [4]float64{0, 0, 0, 13}},
 		{"money divided", "amount / 3", "allocate(m, n)", []string{"amount:money"}, [4]float64{0, 0, 0, 10}},
 		{"nothing rounds", "round(USD 1 + USD 2, @half_up)", "nothing inside round", nil, [4]float64{0, 0, 0, 30}},

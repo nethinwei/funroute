@@ -233,3 +233,109 @@ func (g *generator) comprehension(source, body string, d int) string {
 		return fmt.Sprintf("[%s for %s in %s%s]", g.of(body, d), item, from, filter)
 	})
 }
+
+// shapes are the programs the rules do not write, by type: a fold that
+// stops over more than one clause or over items that are arrays, a sum
+// whose items can fail under a fallback, and a reduce whose accumulator is
+// a container, a text or a record. Each binds its own names, so a hole in it
+// reads the loop's item and never the accumulator: an accumulator read
+// anywhere a hole falls is one the compiler may refuse.
+var shapes = map[string][]func(*generator, int) string{
+	"int": {
+		func(g *generator, d int) string { return "first(" + g.clauses("int", d) + ")" },
+		func(g *generator, d int) string {
+			return g.loop(g.of("ints", d), func(x string) string {
+				// The largest int twice over overflows the sum; an item the
+				// host refuses after that is what the fallback takes.
+				return fmt.Sprintf("fallback(sum([if(%s < %s, 9223372036854775807, host.flaky_v1(%s)) for %s in %%s]), %s)", x, g.leaf("int"), x, x, g.of("int", d))
+			})
+		},
+		func(g *generator, d int) string { return "sum(" + g.comprehension("ints", "int", d) + ")" },
+		func(g *generator, d int) string { return "len(" + g.folded("ints", d) + ")" },
+		func(g *generator, d int) string { return "len(" + g.folded("string", d) + ")" },
+	},
+	"bool": {
+		func(g *generator, d int) string { return "any(" + g.clauses("bool", d) + ")" },
+		func(g *generator, d int) string { return "all(" + g.clauses("bool", d) + ")" },
+	},
+	"ints": {
+		func(g *generator, d int) string { return "first(" + g.pairs("int", d) + ")" },
+		func(g *generator, d int) string { return g.folded("ints", d) },
+		// An item past the first divides by zero where the array has one.
+		func(g *generator, _ int) string {
+			return g.loop(g.leaf("ints"), func(x string) string {
+				return fmt.Sprintf("first([[%s / %s, %s] for %s in %%s if %s != %s])", g.leaf("int"), x, x, x, x, g.leaf("int"))
+			})
+		},
+	},
+	"floats":  {func(g *generator, d int) string { return "first(" + g.pairs("float", d) + ")" }},
+	"strings": {func(g *generator, d int) string { return "first(" + g.pairs("string", d) + ")" }},
+	"string":  {func(g *generator, d int) string { return g.folded("string", d) }},
+	"dict":    {func(g *generator, d int) string { return g.folded("dict", d) }},
+	"order":   {func(g *generator, d int) string { return g.folded("order", d) }},
+	"chans": {
+		func(g *generator, d int) string {
+			return fmt.Sprintf("reduce(c in %s, kept = %s, if(c.fee > %s, concat(kept, [c]), kept))", g.of("chans", d), g.of("chans", d), g.of("int", d))
+		},
+	},
+}
+
+// loop writes body, which has one %s for the loop's source, around an int
+// item, and puts source there: the source is written outside the loop,
+// where the item is not in scope.
+func (g *generator) loop(source string, body func(item string) string) string {
+	g.loops++
+	defer func() { g.loops-- }()
+	return fmt.Sprintf(g.within("int", body), source)
+}
+
+// clauses is a comprehension of two clauses, the second filtered, whose
+// items are of typ and read both names. Two clauses multiply their sources'
+// lengths: over names, and with items that walk nothing, so that no program
+// grows past the square of an input.
+func (g *generator) clauses(typ string, _ int) string {
+	outer, inner := g.leaf("ints"), g.leaf("ints")
+	g.loops++
+	defer func() { g.loops-- }()
+	return g.within("int", func(x string) string {
+		return g.within("int", func(y string) string {
+			return fmt.Sprintf("[%s for %s in %s for %s in %s if %s]", g.flat(typ), x, outer, y, inner, g.flat("bool"))
+		})
+	})
+}
+
+// flat is an expression of typ that walks no array: a leaf, or two leaves
+// an operator joins.
+func (g *generator) flat(typ string) string {
+	joined := map[string][]string{
+		"int":  {"(%s + %s)", "(%s * %s)", "(%s / %s)", "(%s %% %s)"},
+		"bool": {"(%s < %s)", "(%s == %s)", "(%s / %s > 1)", "(%s %% %s == 0)"},
+	}[typ]
+	return fmt.Sprintf(g.pick(joined...), g.leaf("int"), g.leaf("int"))
+}
+
+// pairs is a comprehension whose items are arrays of two of typ: an item
+// with no zero to stand for it until it is found.
+func (g *generator) pairs(typ string, d int) string {
+	return g.loop(g.of("ints", d), func(x string) string {
+		return fmt.Sprintf("[[%s, %s] for %s in %%s if %s]", g.of(typ, d), g.of(typ, d), x, g.of("bool", d))
+	})
+}
+
+// folded is a reduce whose accumulator is of typ and grows by what a turn
+// brings: an item added, or not, as the turn's condition says. It walks a
+// name: every turn copies what the accumulator holds, so the turns are an
+// input's and not a product of two.
+func (g *generator) folded(typ string, d int) string {
+	seed := g.of(typ, d)
+	return g.loop(g.leaf("ints"), func(x string) string {
+		more := map[string][]string{
+			"ints":   {"concat(acc, [%s])", "sort(concat(acc, [%s]))", "concat([y for y in acc if y != %s], [" + x + "])"},
+			"string": {"acc + string(%s)", `acc + "," + string(%s)`},
+			"dict":   {`merge(acc, {"k": %s})`, "merge(acc, {string(z): z for z in [%s]})"},
+			"order":  {"acc with {fee: %s}", `acc with {tag: acc.tag + "+", amount: %s}`},
+		}[typ]
+		grown := fmt.Sprintf(g.pick(more...), g.of("int", d))
+		return fmt.Sprintf("reduce(%s in %%s, acc = %s, if(%s, %s, acc))", x, seed, g.of("bool", d), grown)
+	})
+}

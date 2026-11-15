@@ -134,14 +134,19 @@ func inferSwitch(node *syntax.SwitchExpr, state *inferState, context inferContex
 		}
 	}
 	result := state.fresh()
-	for _, item := range node.Cases {
+	for i, item := range node.Cases {
 		if at, err := inferSwitchCase(item, subject, result, state, context); err != nil {
-			return typeTerm{}, typeErrorAt(at, err, "switch branches must match the subject and return one type"+memberWrittenAsString(item, context.enums))
+			message := "switch branches must match the subject and return one type"
+			if at == item.Result {
+				message += state.branchMismatch(fmt.Sprintf("branch %d", i+1), at, result)
+			}
+			return typeTerm{}, typeErrorAt(at, err, message+memberWrittenAsString(item, context.enums))
 		}
 	}
 	if node.Default != nil {
 		if err := inferAs(node.Default, result, state, context); err != nil {
-			return typeTerm{}, typeErrorAt(node, err, "switch default must match the branch result type")
+			return typeTerm{}, typeErrorAt(node.Default, err, "switch default must match the branch result type"+
+				state.branchMismatch("else", node.Default, result))
 		}
 	}
 	state.checks = append(state.checks, func() error { return validateEnumSwitch(node, state, subject) })

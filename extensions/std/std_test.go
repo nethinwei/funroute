@@ -416,3 +416,23 @@ func TestQuantifiersStopAtTheItemThatDecides(t *testing.T) {
 		t.Errorf("any with nothing true before the 0 = %v, want its division by zero", err)
 	}
 }
+
+// Every name std gives examples to is one std registers an overload of: one
+// left behind by a rename or a removal fails here instead of sitting in the
+// table unseen.
+func TestEveryExampleNamesAStdFunction(t *testing.T) {
+	t.Parallel()
+	registered := std.RegisteredNames()
+	for _, name := range std.NamesWithExamples() {
+		if !registered[name] {
+			t.Errorf("std has examples for %q, which std registers no overload of", name)
+		}
+	}
+	// The same of the names it declares additive; that each is, a test of
+	// every official function holds (internal/machine).
+	for _, name := range std.Additive() {
+		if !registered[name] {
+			t.Errorf("std declares %q additive, which std registers no overload of", name)
+		}
+	}
+}

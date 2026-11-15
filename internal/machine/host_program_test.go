@@ -2,10 +2,11 @@ package machine_test
 
 import (
 	"errors"
-	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -116,11 +117,11 @@ func TestProgramCarriesEveryMoneyType(t *testing.T) {
 	}
 	out, err := program.Run(t.Context(), &in)
 	want := feeOut{
-		Fee: machine.NewMoney("EUR", 250), Settled: machine.NewMoney("JPY", 16_000),
+		Fee: machine.NewMoney("EUR", 250), Settled: money.MakeIn("JPY", 16_000, 1), // converted: in the table's places for JPY
 		Shares: []money.Money{machine.NewMoney("EUR", 3334), machine.NewMoney("EUR", 3333), machine.NewMoney("EUR", 3333)},
 		Settle: "JPY",
 	}
-	if err != nil || fmt.Sprint(out) != fmt.Sprint(want) {
+	if err != nil || !reflect.DeepEqual(out, want) {
 		t.Fatalf("Run(%+v) = %+v, %v, want %+v", in, out, err, want)
 	}
 	in.History[1] = machine.NewMoney("USD", in.History[1].Minor())
@@ -140,6 +141,9 @@ type ratioIn struct {
 
 // A ratio and a currency are scalars at the typed boundary: nothing to box.
 func TestProgramRatiosAndCurrenciesDoNotAllocate(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	binding, err := compile.Bind[ratioIn, money.Ratio](moneyRegistry(t))
 	if err != nil {
 		t.Fatal(err)

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -106,6 +107,9 @@ func assertStraightRun[Out any](t *testing.T, source string, program *machine.Pr
 // A float that is not finite runs straight as it runs the ordinary way — a
 // NaN in is a NaN out — and the rule runs straight with no allocation.
 func TestAStraightProgramIsHeldAsTheOrdinaryRun(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	binding, err := compile.Bind[straightIn, float64](machine.CoreRegistry())
 	if err != nil {
 		t.Fatal(err)

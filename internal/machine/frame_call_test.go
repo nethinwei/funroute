@@ -11,6 +11,7 @@ import (
 
 	"github.com/nethinwei/funroute/internal/compile"
 	"github.com/nethinwei/funroute/internal/machine"
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // The request's budget reaches the extension; a function's own Timeout caps a
@@ -251,7 +252,8 @@ func TestPrefetchedCallStillHonorsRequestCancellation(t *testing.T) {
 
 // lyingRegistry is the money registry with host functions whose results
 // hold pounds, a currency the registry does not declare: an amount, one in
-// an array, one in a record — and one that echoes its argument honestly.
+// an array, one in a record; one whose dollars are in three places where
+// the registry gives them two — and one that echoes its argument honestly.
 func lyingRegistry(t *testing.T) *machine.Registry {
 	t.Helper()
 	registry := moneyRegistry(t)
@@ -264,7 +266,12 @@ func lyingRegistry(t *testing.T) *machine.Registry {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dollars, err := machine.ToValue(money.MakeIn("USD", 500, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, spec := range []machine.FunctionSpec{
+		{Name: "lies.places_v1", Params: []machine.Type{machine.MoneyType}, Result: machine.MoneyType, Eval: constantEval(dollars)},
 		{Name: "lies.same_v1", Params: []machine.Type{machine.MoneyType}, Result: machine.MoneyType, Eval: constantEval(pounds)},
 		{Name: "lies.echo_v1", Params: []machine.Type{machine.MoneyType}, Result: machine.MoneyType, Eval: func(_ context.Context, args []machine.Value) (machine.Value, error) { return args[0], nil }},
 		{Name: "lies.list_v1", Params: []machine.Type{machine.IntType}, Result: machine.ArrayOf(machine.MoneyType), Eval: constantEval(list)},
@@ -282,13 +289,15 @@ func constantEval(value machine.Value) machine.EvalFunc {
 }
 
 // A host function's result may hold only currencies the registry declares,
-// inside containers and records too: pounds are an ErrCurrency, the rule's
-// error, which fallback leaves.
+// inside containers and records too, in the places it declares them in:
+// pounds, and dollars in three places, are an ErrCurrency, the rule's error,
+// which fallback leaves.
 func TestAHostResultIsHeldToItsCurrenciesAllTheWayIn(t *testing.T) {
 	t.Parallel()
 	registry := lyingRegistry(t)
 	for _, test := range []struct{ source, contract, result string }{
 		{"lies.same_v1(a)", "a: money", "money"},
+		{"lies.places_v1(a)", "a: money", "money"},
 		{"lies.list_v1(n)", "n: int", "array<money>"},
 		{"lies.record_v1(n)", "n: int", "record{fee: money}"},
 		{"lies.record_v1(n).fee", "n: int", ""},

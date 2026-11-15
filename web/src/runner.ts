@@ -88,7 +88,7 @@ export class RunPanel extends LitElement {
     return html`<section class="outcome ${state}" aria-live="polite">
       <header><span class="time">${this.elapsed.toFixed(1)} ms</span>
         ${title ? html`<span class="badge">${title}</span>` : nothing}</header>
-      ${failed ? html`<pre class="value">${result.error!.message}</pre>` : html`<pre class="value">${JSON.stringify(result.value, null, 2)}</pre>`}
+      ${failed ? html`<pre class="value">${result.error!.message}</pre>` : html`<pre class="value">${result.text}</pre>`}
       ${partial ? html`<p class="note">浏览器里没有这些函数的实现，调用处按 fallback 兜底，结果不等于宿主上的结果：
         ${result.unavailable.map((name) => html`<code>${name}</code>`)}</p>` : nothing}</section>`;
   }

@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -76,9 +77,13 @@ type runRequest struct {
 
 // runResult says what a run returned, or why it did not, and which functions
 // it called that exist here only as signatures: a result that went through
-// fallback past one of them is not the one the host would compute.
+// fallback past one of them is not the one the host would compute. Text is
+// the value as it is shown, written here: a client that parses Value into
+// its own numbers — a browser's are float64 — shows an int past 2^53 as
+// another int.
 type runResult struct {
 	Value       json.RawMessage `json:"value,omitempty"`
+	Text        string          `json:"text,omitempty"`
 	Type        *machine.Type   `json:"type,omitempty"`
 	Error       *runError       `json:"error,omitempty"`
 	Unavailable []string        `json:"unavailable"`
@@ -207,7 +212,15 @@ func (s *Server) execute(artifact *machine.Artifact, args map[string]any, result
 	}
 	// Money comes back as "USD 1.70": the registry knows the places.
 	result.Value, err = s.registry.EncodeJSON(value)
-	return err
+	if err != nil {
+		return err
+	}
+	var shown bytes.Buffer
+	if err := json.Indent(&shown, result.Value, "", "  "); err != nil {
+		return err
+	}
+	result.Text = shown.String()
+	return nil
 }
 
 // runTimeout bounds one run the service executes: a wall-clock second.

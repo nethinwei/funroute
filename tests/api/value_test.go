@@ -77,7 +77,8 @@ func TestHostNamesTheValueTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if amount, _ := order.Field(0).Int(); amount != 1200 || !order.Type().Equal(orderType) {
+	field, ok := order.Field(0)
+	if amount, _ := field.Int(); !ok || amount != 1200 || !order.Type().Equal(orderType) {
 		t.Fatalf("record = %v of type %s, want amount 1200 of type %s", order.Any(), order.Type(), orderType)
 	}
 	if kind.String() != "bool" || !flag.Type().Equal(boolType) {
@@ -91,6 +92,26 @@ func TestHostNamesTheValueTypes(t *testing.T) {
 	}
 	if !weights.Type().Equal(dictType) {
 		t.Fatalf("dict type = %s, want %s", weights.Type(), dictType)
+	}
+}
+
+// A field a record has none of is said, as At and Lookup say it of an array
+// and a dictionary: no zero value is handed back for it.
+func TestAFieldARecordLacksIsSaid(t *testing.T) {
+	t.Parallel()
+	orderType := funroute.RecordOf(funroute.FieldOf("amount", funroute.IntType), funroute.FieldOf("currency", funroute.StringType))
+	order, err := funroute.Record(orderType, []funroute.Value{funroute.Int(1200), funroute.String("SGD")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, missing := range map[string]func() (funroute.Value, bool){
+		"past the last":    func() (funroute.Value, bool) { return order.Field(2) },
+		"before the first": func() (funroute.Value, bool) { return order.Field(-1) },
+		"of no record":     func() (funroute.Value, bool) { return funroute.Int(1).Field(0) },
+	} {
+		if got, ok := missing(); ok {
+			t.Errorf("Field %s = %v, true; want false", name, got.Any())
+		}
 	}
 }
 
@@ -527,22 +548,7 @@ func TestTwoFieldsCannotShareATag(t *testing.T) {
 		A int64 `funroute:"a"`
 		B int64 `funroute:"a"`
 	}
-	const want = `fields A and B of api.twice are both tagged "a"`
-	if _, err := funroute.ToValue(twice{}); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("ToValue(twice{}) error = %v, want %q", err, want)
-	}
-	if err := funroute.CoreRegistry().Register(funroute.FunctionSpec{
-		Name: "f.g_v1",
-		Go:   func(twice) (int64, error) { return 0, nil },
-	}); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("Register(func(twice)) error = %v, want %q", err, want)
-	}
-	type in struct {
-		R twice `funroute:"r"`
-	}
-	if _, err := funroute.Bind[in, int64](funroute.CoreRegistry()); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("Bind[in, int64] error = %v, want %q", err, want)
-	}
+	expectRefusedOnEveryPath[twice](t, `fields A and B of api.twice are both tagged "a"`)
 }
 
 // A ratio prints and crosses JSON as its exact text — a decimal, or a
@@ -630,7 +636,7 @@ func TestRunValuesChecksTheCurrencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if encoded, err := json.Marshal(value); err != nil || string(encoded) != `{"fee":{"currency":"USD","minor":29},"made":{"currency":"EUR","minor":100}}` {
+	if encoded, err := json.Marshal(value); err != nil || string(encoded) != `{"fee":{"currency":"USD","minor":29,"digits":2},"made":{"currency":"EUR","minor":100,"digits":2}}` {
 		t.Errorf("RunValues = %s, %v, want the fee and EUR 1.00", encoded, err)
 	}
 	for name, edit := range map[string]func([]funroute.Value){
@@ -673,15 +679,15 @@ func TestEncodeJSONWritesAmountsAsText(t *testing.T) {
 	if encoded, err := registry.EncodeJSON(value); err != nil || string(encoded) != want {
 		t.Errorf("EncodeJSON = %s, %v\nwant %s", encoded, err, want)
 	}
-	raw := `{"z":{"currency":"USD","minor":-170},"a":[{"currency":"JPY","minor":5},{"currency":"JPY","minor":0}],"d":{"k":{"currency":"EUR","minor":5}},"r":"0.0025","c":"EUR","n":1,"fx":{"base":"USD","quote":"JPY","rate":"150"}}`
+	raw := `{"z":{"currency":"USD","minor":-170,"digits":2},"a":[{"currency":"JPY","minor":5,"digits":0},{"currency":"JPY","minor":0,"digits":0}],"d":{"k":{"currency":"EUR","minor":5,"digits":2}},"r":"0.0025","c":"EUR","n":1,"fx":{"base":"USD","quote":"JPY","rate":"150"}}`
 	if encoded, err := json.Marshal(value); err != nil || string(encoded) != raw {
 		t.Errorf("json.Marshal = %s, %v\nwant %s", encoded, err, raw)
 	}
 	if encoded, err := registry.EncodeJSON(valueOf(funroute.Money{})); err != nil || string(encoded) != "0" {
 		t.Errorf("EncodeJSON(currency-less zero) = %s, %v, want 0", encoded, err)
 	}
-	if encoded, err := funroute.CoreRegistry().EncodeJSON(valueOf(amount("USD", 170))); err != nil || string(encoded) != `{"currency":"USD","minor":170}` {
-		t.Errorf("EncodeJSON without money declared = %s, %v, want the minor units", encoded, err)
+	if encoded, err := funroute.CoreRegistry().EncodeJSON(valueOf(amount("USD", 170))); err != nil || string(encoded) != `{"currency":"USD","minor":170,"digits":2}` {
+		t.Errorf("EncodeJSON without money declared = %s, %v, want the minor units and their places", encoded, err)
 	}
 }
 

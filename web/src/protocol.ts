@@ -17,8 +17,11 @@ export type Tree = { node: string; range: Range; operator?: string; form?: boole
 
 export type Diagnostic = { range: Range; severity: number; message: string };
 
+// text is the value as the service wrote it, to show: value's numbers are
+// this page's, and an int past 2^53 is not one of them.
 export type RunResult = {
   value?: unknown;
+  text?: string;
   error?: { kind: string; message: string };
   unavailable: string[];
 };
@@ -26,11 +29,22 @@ export type RunResult = {
 // Doc is what the host wrote about a function or a form.
 export type Doc = { label: string; description?: string; category: string };
 
-type Descriptor = { name: string; signature: string; special?: string; wrap?: string; doc: Doc };
+// short_circuit says a call of it on a comprehension stops at the item that
+// decides it; additive that it hands back no more than it is given, so a
+// reduce's accumulator may go through it.
+type FunctionDescriptor = { name: string; signature: string; special?: string; wrap?: string; doc: Doc; short_circuit?: boolean; additive?: boolean };
+// A form is written, not called: it has its syntax where a function has a
+// signature.
+type FormDescriptor = { name: string; syntax: string; wrap?: string; doc: Doc };
 
 // money is the registry's declared money feature, absent when it has none.
 export type MoneySpec = { currencies: { code: string; digits: number }[] };
-export type Catalog = { artifact_version: number; functions: Descriptor[]; special_forms: Descriptor[]; money?: MoneySpec };
+export type Catalog = {
+  artifact_version: number;
+  functions: FunctionDescriptor[];
+  special_forms: FormDescriptor[];
+  money?: MoneySpec;
+};
 
 // A contract as the server reads it (compile.TextContract): every type is text.
 export type ArgSpec = { name: string; type: string; doc?: string };

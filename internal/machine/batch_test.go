@@ -555,3 +555,61 @@ func (e *heldEngine) serve(contexts []context.Context, cancel context.CancelFunc
 	wg.Wait()
 	return answers
 }
+
+type tenantKey struct{}
+
+// A batch with a Key shares an engine call only among the requests of one
+// key: a function that reads its context for a tenant is called under that
+// tenant's context for that tenant's rows alone. Without a Key the one call
+// serves them all, under the first request's values.
+func TestABatchKeepsItsKeysApart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		key := func(ctx context.Context) any { return ctx.Value(tenantKey{}) }
+		if served := rowsByTenant(t, key); len(served) != 3 || served["a"] != 2 || served["b"] != 2 || served["c"] != 2 {
+			t.Errorf("rows served by tenant, keyed: %v; want two under each of a, b and c", served)
+		}
+		if served := rowsByTenant(t, nil); len(served) != 1 {
+			t.Errorf("rows served by tenant, no key: %v; want all six under one", served)
+		}
+	})
+}
+
+// rowsByTenant runs six requests, two a tenant, through a batch of six with
+// key, and is how many rows the engine was handed under each tenant's
+// context.
+func rowsByTenant(t *testing.T, key func(context.Context) any) map[string]int {
+	t.Helper()
+	var mu sync.Mutex
+	served := map[string]int{}
+	registry := machine.CoreRegistry()
+	price := func(ctx context.Context, x float64) (float64, error) { return x, nil }
+	priceBatch := func(ctx context.Context, xs []float64) ([]float64, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		served[fmt.Sprint(ctx.Value(tenantKey{}))] += len(xs)
+		return xs, nil
+	}
+	if err := registry.Register(machine.FunctionSpec{Name: "tenant.price_v1", Go: price, GoBatch: priceBatch}); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := compile.CompileExpr(`tenant.price_v1(x)`, registry, compile.CompileOptions{Args: []compile.ArgSpec{{Name: "x", Type: machine.FloatType}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := machine.Instantiate(artifact, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := machine.NewBatch(runtime, machine.BatchOptions{MaxSize: 6, MaxWait: time.Second, Key: key})
+	var wg sync.WaitGroup
+	for i := range 6 {
+		wg.Go(func() {
+			ctx := context.WithValue(t.Context(), tenantKey{}, []string{"a", "b", "c"}[i%3])
+			if got, err := batch.Run(ctx, []machine.Value{machine.Float(float64(i))}); err != nil || got.Any() != float64(i) {
+				t.Errorf("request %d = %v, %v", i, got.Any(), err)
+			}
+		})
+	}
+	wg.Wait()
+	return served
+}

@@ -1,27 +1,28 @@
 package golden
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"os"
-	"strings"
+	"slices"
 	"testing"
 
 	"github.com/nethinwei/funroute"
 	"github.com/nethinwei/funroute/extensions/std"
 )
 
-var update = flag.Bool("update", false, "write the outcomes anew into testdata/outcomes.jsonl")
+var update = flag.Bool("update", false, "write the record anew into testdata/outcomes.json and testdata/phrases.json")
 
-const recordPath = "testdata/outcomes.jsonl"
-
-// programsPerType is how many programs are written for each result type.
-const programsPerType = 150
+// programsPerType is how many programs are written for each result type out
+// of the rules, and shapesPerType how many more out of its shapes: after
+// the rules' own, from seeds of their own, so that a shape added leaves
+// every program before it as it was.
+const (
+	programsPerType = 150
+	shapesPerType   = 60
+)
 
 // entry is one program and what it gave: for each input, a Program's run and
 // a RunValues run, "same" when the two agree.
@@ -34,57 +35,97 @@ type entry struct {
 // Every program answers as the record says it does, on every input, both
 // ways it runs.
 func TestTheLanguageAnswersAsItsRecord(t *testing.T) {
-	entries := run(t)
+	got := recorded(run(t))
+	if t.Failed() {
+		// A type whose run failed wrote none of its programs: the record
+		// would lose them, so it is neither written nor compared.
+		t.FailNow()
+	}
 	if *update {
-		write(t, entries)
+		write(t, got)
 		return
 	}
-	recorded := read(t)
-	if len(recorded) != len(entries) {
-		t.Fatalf("the record has %d programs, a run writes %d; go test -update writes it anew", len(recorded), len(entries))
+	want := read(t)
+	if len(want.entries) != len(got.entries) {
+		t.Fatalf("the record has %d programs, a run writes %d; go test -update writes it anew", len(want.entries), len(got.entries))
+	}
+	if i := firstOther(want.phrases, got.phrases); i >= 0 {
+		t.Errorf("phrase P%d is %q in the record, %q in a run", i+1, at(want.phrases, i), at(got.phrases, i))
 	}
 	differ := 0
-	for i, got := range entries {
-		if want := recorded[i]; !sameEntry(got, want) {
-			differ++
-			if differ <= 20 {
-				t.Errorf("%s program %d: %s\n  record: %v\n  run:    %v", got.Type, i, got.Source, want.Outcomes, got.Outcomes)
-			}
+	for i, e := range got.entries {
+		j := firstOther(want.entries[i].Outcomes, e.Outcomes)
+		if e.Type == want.entries[i].Type && e.Source == want.entries[i].Source && j < 0 {
+			continue
+		}
+		if differ++; differ <= 20 {
+			t.Errorf("%s program %d: %s\n  outcome %d in the record: %s\n  in a run:               %s",
+				e.Type, i, e.Source, j, at(want.entries[i].Outcomes, j), at(e.Outcomes, j))
 		}
 	}
 	if differ > 0 {
-		t.Fatalf("%d of %d programs answer other than the record says", differ, len(entries))
+		t.Fatalf("%d of %d programs answer other than the record says", differ, len(got.entries))
 	}
 }
 
-func sameEntry(a, b entry) bool {
-	if a.Type != b.Type || a.Source != b.Source || len(a.Outcomes) != len(b.Outcomes) {
-		return false
-	}
-	for i := range a.Outcomes {
-		if a.Outcomes[i] != b.Outcomes[i] {
-			return false
+// firstOther is the first index two lists differ at, -1 when they are one.
+func firstOther(a, b []string) int {
+	for i := range max(len(a), len(b)) {
+		if at(a, i) != at(b, i) || i >= len(a) || i >= len(b) {
+			return i
 		}
 	}
-	return true
+	return -1
+}
+
+// at is list[i], or "(none)" past its end.
+func at(list []string, i int) string {
+	if i < 0 || i >= len(list) {
+		return "(none)"
+	}
+	return list[i]
 }
 
 // run writes every program and runs it, each result type through a binding
-// of its own Go type.
+// of its own Go type, in a registry of its own: the types run side by side,
+// and each writes its programs from its own seeds, so the order is the same
+// however they interleave.
 func run(t *testing.T) []entry {
 	t.Helper()
-	registry := goldenRegistry(t)
 	types := roots()
-	entries := make([]entry, 0, len(types)*programsPerType)
-	for _, root := range types {
-		outcomes := root.bind(t, registry)
-		for seed := range uint64(programsPerType) {
-			seed = seed*uint64(len(types)) + uint64(root.index)
-			source, results := compiling(t, seed, root.typ, outcomes)
-			entries = append(entries, entry{Type: root.typ, Source: source, Outcomes: results})
+	// The rules' programs of every type, then the shapes': a shape added
+	// leaves the record before it as it was, phrases and their numbers too.
+	written, shaped := make([][]entry, len(types)), make([][]entry, len(types))
+	t.Run("types", func(t *testing.T) {
+		for _, root := range types {
+			t.Run(root.typ, func(t *testing.T) {
+				t.Parallel()
+				written[root.index], shaped[root.index] = runRoot(t, root, len(types))
+			})
 		}
+	})
+	return slices.Concat(slices.Concat(written...), slices.Concat(shaped...))
+}
+
+// runRoot writes and runs root's programs, each from a seed of its own: the
+// ones out of the rules, and the ones out of its shapes.
+func runRoot(t *testing.T, root root, types int) (rules, shaped []entry) {
+	t.Helper()
+	outcomes := root.bind(t, goldenRegistry(t))
+	written := func(g *generator, _ uint64) string { return g.of(root.typ, 4) }
+	for seed := range uint64(programsPerType) {
+		seed = seed*uint64(types) + uint64(root.index)
+		source, results := compiling(t, seed, written, outcomes)
+		rules = append(rules, entry{Type: root.typ, Source: source, Outcomes: results})
 	}
-	return entries
+	// Each shape in turn, so that every one is written.
+	its := shapes[root.typ]
+	for i := range uint64(min(shapesPerType, shapesPerType*len(its))) {
+		seed := (programsPerType+i)*uint64(types) + uint64(root.index)
+		source, results := compiling(t, seed, func(g *generator, _ uint64) string { return its[i%uint64(len(its))](g, 2) }, outcomes)
+		shaped = append(shaped, entry{Type: root.typ, Source: source, Outcomes: results})
+	}
+	return rules, shaped
 }
 
 // maxAttempts is how many programs are written for a seed before the
@@ -94,11 +135,11 @@ const maxAttempts = 20
 // compiling is the first program for seed that compiles, and its outcomes.
 // A program can be refused for what it says — a closed part that fails,
 // int(1.5), is a compile error — and is then written anew.
-func compiling(t *testing.T, seed uint64, typ string, outcomes func(context.Context, string) ([]string, error)) (string, []string) {
+func compiling(t *testing.T, seed uint64, write func(*generator, uint64) string, outcomes func(context.Context, string) ([]string, error)) (string, []string) {
 	t.Helper()
 	var last error
 	for attempt := range uint64(maxAttempts) {
-		source := newGenerator(seed, attempt).of(typ, 4)
+		source := write(newGenerator(seed, attempt), attempt)
 		results, err := outcomes(t.Context(), source)
 		if err == nil {
 			return source, results
@@ -193,25 +234,14 @@ func encoded(value any) string {
 	return string(text)
 }
 
-// classes are the failure classes a host tells apart, the most specific
-// first.
-var classes = []struct {
-	name string
-	err  error
-}{
-	{"unavailable", funroute.ErrUnavailable}, {"compile", funroute.ErrCompile}, {"contract", funroute.ErrContract},
-	{"deadline", funroute.ErrDeadline}, {"currency", funroute.ErrCurrency}, {"fx", funroute.ErrNoFxRate},
-	{"arithmetic", funroute.ErrArithmetic}, {"domain", funroute.ErrDomain}, {"extension", funroute.ErrExtension},
-}
-
-// failure is an error's class and its words.
+// failure is an error's class, as funroute.ClassName names it, and its
+// words.
 func failure(err error) string {
-	for _, class := range classes {
-		if errors.Is(err, class.err) {
-			return fmt.Sprintf("error[%s] %s", class.name, err)
-		}
+	class := funroute.ClassName(err)
+	if class == "" {
+		class = "none"
 	}
-	return "error[none] " + err.Error()
+	return fmt.Sprintf("error[%s] %s", class, err)
 }
 
 // goldenRegistry is the kernel, every form, std and two host functions: one
@@ -245,45 +275,4 @@ func goldenRegistry(t *testing.T) *funroute.Registry {
 		}
 	}
 	return registry
-}
-
-func write(t *testing.T, entries []entry) {
-	t.Helper()
-	var out bytes.Buffer
-	for _, e := range entries {
-		line, err := json.Marshal(e)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out.Write(line)
-		out.WriteByte('\n')
-	}
-	if err := os.MkdirAll("testdata", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(recordPath, out.Bytes(), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func read(t *testing.T) []entry {
-	t.Helper()
-	data, err := os.ReadFile(recordPath)
-	if err != nil {
-		t.Fatalf("%v; go test -update writes the record", err)
-	}
-	var entries []entry
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(nil, 1<<24)
-	for scanner.Scan() {
-		var e entry
-		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
-			t.Fatal(err)
-		}
-		entries = append(entries, e)
-	}
-	if strings.TrimSpace(string(data)) != "" && len(entries) == 0 {
-		t.Fatal("the record holds no programs")
-	}
-	return entries
 }

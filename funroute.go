@@ -434,3 +434,11 @@ var (
 	// only by its signature, from a Manifest.
 	ErrUnavailable = machine.ErrUnavailable
 )
+
+// ClassName names err's most specific class — "compile", "currency",
+// "nofxrate", the names the language service reports — and is "" for an
+// error that has none. The most specific is the first in docs/go.md's error
+// table that errors.Is finds, so ErrUnavailable is "unavailable", not
+// "extension". A host that logs or counts failures by class uses it rather
+// than a chain of errors.Is of its own.
+var ClassName = machine.ClassName

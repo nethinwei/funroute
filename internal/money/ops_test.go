@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func usd(minor int64) Money { return Money{currency: "USD", minor: minor} }
+func usd(minor int64) Money { return newMoney("USD", minor) }
 
 func TestMoneyAddsInOneCurrency(t *testing.T) {
 	t.Parallel()
@@ -19,10 +19,10 @@ func TestMoneyAddsInOneCurrency(t *testing.T) {
 	if sum, err := (Money{}).Add(usd(5)); err != nil || sum != usd(5) {
 		t.Fatalf("zero + USD 0.05 = %v, %v, want the zero to take the currency", sum, err)
 	}
-	if _, err := usd(1).Sub(Money{currency: "EUR", minor: 1}); !errors.Is(err, ErrCurrency) {
+	if _, err := usd(1).Sub(newMoney("EUR", 1)); !errors.Is(err, ErrCurrency) {
 		t.Fatalf("dollars minus euros: error = %v, want ErrCurrency", err)
 	}
-	if _, err := usd(1).Cmp(Money{currency: "EUR", minor: 1}); !errors.Is(err, ErrCurrency) {
+	if _, err := usd(1).Cmp(newMoney("EUR", 1)); !errors.Is(err, ErrCurrency) {
 		t.Fatalf("comparing dollars with euros: error = %v, want ErrCurrency", err)
 	}
 	if _, err := usd(math.MinInt64).Neg(); err == nil {
@@ -73,7 +73,7 @@ func TestSubtractingTheSmallestAmount(t *testing.T) {
 	}
 }
 
-func eur(minor int64) Money { return Money{currency: "EUR", minor: minor} }
+func eur(minor int64) Money { return newMoney("EUR", minor) }
 
 // The currency-less zero meets every currency, two currencies meet only
 // themselves, and the answer names the one they met in.
@@ -92,7 +92,7 @@ func TestMoneyMeetsInOneCurrency(t *testing.T) {
 		"dollars and dollars":        {usd(7), usd(7), usd(14), usd(0), 0, false},
 		"dollars and euros":          {usd(1), eur(1), Money{}, Money{}, 0, true},
 		"a dollar zero and euros":    {usd(0), eur(1), Money{}, Money{}, 0, true},
-		"lower-case is another code": {usd(1), Money{currency: "usd", minor: 1}, Money{}, Money{}, 0, true},
+		"lower-case is another code": {usd(1), newMoney("usd", 1), Money{}, Money{}, 0, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -397,12 +397,12 @@ func TestMethodsCheckWhatTheyAreHanded(t *testing.T) {
 		call func() error
 		want error
 	}{
-		"money split too finely":   {func() error { _, err := (Money{currency: "USD", minor: 5}).Split(10_001); return err }, ErrArithmetic},
-		"money split into nothing": {func() error { _, err := (Money{currency: "USD", minor: 5}).Split(0); return err }, ErrArithmetic},
-		"a negative weight":        {func() error { _, err := (Money{currency: "USD", minor: 5}).Allocate(1, -1); return err }, ErrArithmetic},
-		"no weight":                {func() error { _, err := (Money{currency: "USD", minor: 5}).Allocate(0); return err }, ErrArithmetic},
+		"money split too finely":   {func() error { _, err := (newMoney("USD", 5)).Split(10_001); return err }, ErrArithmetic},
+		"money split into nothing": {func() error { _, err := (newMoney("USD", 5)).Split(0); return err }, ErrArithmetic},
+		"a negative weight":        {func() error { _, err := (newMoney("USD", 5)).Allocate(1, -1); return err }, ErrArithmetic},
+		"no weight":                {func() error { _, err := (newMoney("USD", 5)).Allocate(0); return err }, ErrArithmetic},
 		"an unknown rounding": {func() error {
-			_, err := (Money{currency: "USD", minor: 5}).MulRatio(ratio(1, 3), Rounding(99))
+			_, err := (newMoney("USD", 5)).MulRatio(ratio(1, 3), Rounding(99))
 			return err
 		}, ErrArithmetic},
 		"an unknown rounding's name": {func() error { _, err := ParseRounding("nearest"); return err }, ErrArithmetic},
@@ -444,7 +444,7 @@ func TestProrateRoundsOnce(t *testing.T) {
 	if _, err := usd(1).Prorate(1, 0, RoundHalfUp); !errors.Is(err, ErrArithmetic) {
 		t.Fatalf("prorate over zero: error = %v, want ErrArithmetic", err)
 	}
-	if _, err := usd(1).ProrateBy(usd(1), Money{currency: "EUR", minor: 2}, RoundHalfUp); !errors.Is(err, ErrCurrency) {
+	if _, err := usd(1).ProrateBy(usd(1), newMoney("EUR", 2), RoundHalfUp); !errors.Is(err, ErrCurrency) {
 		t.Fatalf("a proportion of two currencies: error = %v, want ErrCurrency", err)
 	}
 }
@@ -453,7 +453,7 @@ func TestProrateRoundsOnce(t *testing.T) {
 // rounding. A step of zero or less, or in another currency, is refused.
 func TestRoundToTakesWholeSteps(t *testing.T) {
 	t.Parallel()
-	chf := func(minor int64) Money { return Money{currency: "CHF", minor: minor} }
+	chf := func(minor int64) Money { return newMoney("CHF", minor) }
 	for _, test := range []struct {
 		m, step Money
 		mode    Rounding

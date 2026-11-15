@@ -33,7 +33,7 @@ func formatted(t *testing.T, table *Currencies, money Money) string {
 func TestCurrenciesReadAndWriteAmounts(t *testing.T) {
 	t.Parallel()
 	table := testCurrencies(t)
-	for text, want := range map[string]Money{"USD 1.70": {"USD", 170}, "JPY 1500": {"JPY", 1500}, "KWD -0.005": {"KWD", -5}} {
+	for text, want := range map[string]Money{"USD 1.70": amount("USD", 170), "JPY 1500": amount("JPY", 1500), "KWD -0.005": amount("KWD", -5)} {
 		got, err := table.Parse(text)
 		if err != nil || got != want || formatted(t, table, got) != text {
 			t.Fatalf("Parse(%q) = %v, %v; Format = %q", text, got, err, formatted(t, table, got))
@@ -116,7 +116,7 @@ func TestCurrenciesSpecIsSortedAndACopy(t *testing.T) {
 func TestCurrenciesFormatOnlyWhatReadsBack(t *testing.T) {
 	t.Parallel()
 	table := testCurrencies(t)
-	for _, money := range []Money{{"GBP", 170}, {"usd", 1}, {"", 5}, {"", -1}} {
+	for _, money := range []Money{amount("GBP", 170), newMoney("usd", 1), newMoney("", 5), newMoney("", -1)} {
 		if text, err := table.Format(money); !errors.Is(err, ErrCurrency) {
 			t.Errorf("Format(%v) = %q, %v, want ErrCurrency", money, text, err)
 		}
@@ -145,10 +145,10 @@ func TestCurrenciesParseTheWaysAmountsAreWritten(t *testing.T) {
 	t.Parallel()
 	table := testCurrencies(t)
 	for text, want := range map[string]Money{
-		" USD 1.70 ": {"USD", 170}, "USD  1.70": {"USD", 170}, "USD +1.70": {"USD", 170}, "USD -1.70": {"USD", -170},
-		"USD 001.70": {"USD", 170}, "USD 1": {"USD", 100}, "USD 1.7": {"USD", 170}, "USD .5": {"USD", 50},
-		"USD 1.": {"USD", 100}, "JPY 0": {"JPY", 0}, "USD -0": {"USD", 0}, "KWD 1.234": {"KWD", 1234},
-		"USD 92233720368547758.07": {"USD", math.MaxInt64}, "\tUSD 1.70\n": {"USD", 170},
+		" USD 1.70 ": amount("USD", 170), "USD  1.70": amount("USD", 170), "USD +1.70": amount("USD", 170), "USD -1.70": amount("USD", -170),
+		"USD 001.70": amount("USD", 170), "USD 1": amount("USD", 100), "USD 1.7": amount("USD", 170), "USD .5": amount("USD", 50),
+		"USD 1.": amount("USD", 100), "JPY 0": amount("JPY", 0), "USD -0": amount("USD", 0), "KWD 1.234": amount("KWD", 1234),
+		"USD 92233720368547758.07": amount("USD", math.MaxInt64), "\tUSD 1.70\n": amount("USD", 170),
 	} {
 		if got, err := table.Parse(text); err != nil || got != want {
 			t.Fatalf("Parse(%q) = %v, %v, want %v", text, got, err, want)
@@ -174,7 +174,7 @@ func TestCurrenciesRefuseWhatIsNotAnAmount(t *testing.T) {
 			t.Fatalf("Of(%q, %q) = %v, want an error", test[0], test[1], got)
 		}
 	}
-	if got, err := table.Of("KWD", "-0.001"); err != nil || got != (Money{"KWD", -1}) {
+	if got, err := table.Of("KWD", "-0.001"); err != nil || got != (amount("KWD", -1)) {
 		t.Fatalf(`Of("KWD", "-0.001") = %v, %v, want KWD -1 minor`, got, err)
 	}
 }
@@ -183,9 +183,9 @@ func TestCurrenciesFormatEveryAmount(t *testing.T) {
 	t.Parallel()
 	table := wideCurrencies(t)
 	for money, want := range map[Money]string{
-		{}: "0", {"D0X", -1500}: "D0X -1500", {"D2X", -5}: "D2X -0.05", {"D8X", 1}: "D8X 0.00000001",
-		{"D2X", 0}: "D2X 0.00", {"D3X", 1000}: "D3X 1.000", {"D2X", math.MaxInt64}: "D2X 92233720368547758.07",
-		{"D2X", math.MinInt64}: "D2X -92233720368547758.08", {"D8X", -123456789}: "D8X -1.23456789",
+		{}: "0", newMoney("D0X", -1500): "D0X -1500", newMoney("D2X", -5): "D2X -0.05", newMoney("D8X", 1): "D8X 0.00000001",
+		newMoney("D2X", 0): "D2X 0.00", newMoney("D3X", 1000): "D3X 1.000", newMoney("D2X", math.MaxInt64): "D2X 92233720368547758.07",
+		newMoney("D2X", math.MinInt64): "D2X -92233720368547758.08", newMoney("D8X", -123456789): "D8X -1.23456789",
 	} {
 		if got := formatted(t, table, money); got != want {
 			t.Fatalf("Format(%v) = %q, want %q", money, got, want)
@@ -206,7 +206,7 @@ func TestCurrenciesRoundTripAtEveryNumberOfPlaces(t *testing.T) {
 			minors = append(minors, random.Int64()>>random.IntN(63)-math.MaxInt64/2)
 		}
 		for _, minor := range minors {
-			money := Money{currency: code, minor: minor}
+			money := table.unitOf(code).of(minor)
 			text := formatted(t, table, money)
 			if back, err := table.Parse(text); err != nil || back != money {
 				t.Fatalf("Parse(Format(%v)) = %v, %v, via %q", money, back, err, text)
@@ -218,8 +218,29 @@ func TestCurrenciesRoundTripAtEveryNumberOfPlaces(t *testing.T) {
 func TestCurrenciesRoundTripTheSmallestAmount(t *testing.T) {
 	t.Parallel()
 	table := testCurrencies(t)
-	money := Money{currency: "USD", minor: math.MinInt64}
+	money := table.unitOf("USD").of(math.MinInt64)
 	if back, err := table.Parse(formatted(t, table, money)); err != nil || back != money {
 		t.Fatalf("Parse(Format(%v)) = %v, %v", money, back, err)
+	}
+}
+
+// A table adopts an amount without places and refuses one in other places:
+// read in the table's places it would be another amount.
+func TestATableHoldsAmountsToItsPlaces(t *testing.T) {
+	t.Parallel()
+	table, err := NewCurrencies(MoneySpec{Currencies: []CurrencySpec{{Code: "HUF", Digits: 0}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adopted, err := table.Adopt(newMoney("HUF", 1600))
+	if err != nil || adopted.String() != "HUF 1600" {
+		t.Fatalf("Adopt = %v, %v", adopted, err)
+	}
+	inTwo := Money{currency: "HUF", minor: 1600, places: placesOf(2)}
+	if _, err := table.Adopt(inTwo); err == nil {
+		t.Error("Adopt took HUF in two places into a table of none")
+	}
+	if _, err := table.Format(inTwo); err == nil {
+		t.Error("Format wrote HUF in two places in a table of none")
 	}
 }

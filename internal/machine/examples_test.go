@@ -135,3 +135,35 @@ func chosenBy(t *testing.T, registry *machine.Registry, source string) []string 
 	}
 	return chosen
 }
+
+// Every name the example tables give examples to is a kernel function or a
+// form: one left behind by a rename or a removal fails here instead of
+// sitting in the table unseen.
+func TestEveryExampleNamesAFunctionOrForm(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.OptionalForms()...); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.DeclareMoney(money.MoneySpec{Currencies: []money.CurrencySpec{{Code: "USD", Digits: 2}}}); err != nil {
+		t.Fatal(err)
+	}
+	functions, forms := map[string]bool{}, map[string]bool{}
+	for _, function := range registry.Catalog().Functions() {
+		functions[function.Name()] = true
+	}
+	for _, form := range registry.Catalog().SpecialForms() {
+		forms[form.Name()] = true
+	}
+	kernel, formNames := machine.NamesWithExamples()
+	for _, name := range kernel {
+		if !functions[name] {
+			t.Errorf("kernelExamples has examples for %q, which is no kernel function", name)
+		}
+	}
+	for _, name := range formNames {
+		if !forms[name] {
+			t.Errorf("formExamples has examples for %q, which is no form", name)
+		}
+	}
+}

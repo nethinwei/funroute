@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -13,6 +14,9 @@ import (
 // one map built and a second packed from it. Ten entries of a native kind
 // cost what an int's do; a record's, its ten records besides.
 func TestADictionaryIsBuiltInOneMap(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := machine.CoreRegistry()
 	if err := registry.EnableForm(machine.ForForm); err != nil {
 		t.Fatal(err)

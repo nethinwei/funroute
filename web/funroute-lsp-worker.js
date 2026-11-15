@@ -1,4 +1,4 @@
-// The language server, in a worker: the Go build of lang/lsp loaded from
+// The language server, in a worker: the Go build of lsp/ loaded from
 // dist/, speaking the protocol one message at a time through postMessage.
 // Messages that arrive while the module is still loading wait their turn.
 //

@@ -137,7 +137,7 @@ func (v Value) at(i int) Value {
 		return String(itemsAt(box, v.i)[i])
 	case *money.Money:
 		amount := itemsAt(box, v.i)[i]
-		return MoneyValue(amount.Minor(), amount.Currency())
+		return moneyValueOf(amount)
 	case *money.FxRate:
 		return FxRateValue(itemsAt(box, v.i)[i])
 	case *nestedArray:
@@ -166,7 +166,7 @@ func (v Value) lookup(key string) (Value, bool) {
 		return String(value), ok
 	case map[string]money.Money:
 		value, ok := box[key]
-		return MoneyValue(value.Minor(), value.Currency()), ok
+		return moneyValueOf(value), ok
 	case *nestedDict:
 		value, ok := box.entries[key]
 		return value, ok
@@ -371,7 +371,7 @@ func (b *arrayBuilder) add(value Value) {
 	case StringKind:
 		b.strings = append(b.strings, value.s)
 	case MoneyKind:
-		b.monies = append(b.monies, money.Make(value.s, value.i))
+		b.monies = append(b.monies, value.money())
 	case FxRateKind:
 		fx, _ := value.FxRate()
 		b.fxRates = append(b.fxRates, fx)
@@ -424,7 +424,7 @@ func packDict(elem Type, entries map[string]Value) Value {
 	case StringKind:
 		return Value{kind: DictKind, box: mapEntries(entries, func(v Value) string { return v.s })}
 	case MoneyKind:
-		return Value{kind: DictKind, box: mapEntries(entries, func(v Value) money.Money { return money.Make(v.s, v.i) })}
+		return Value{kind: DictKind, box: mapEntries(entries, Value.money)}
 	default:
 		copied := make(map[string]Value, len(entries))
 		maps.Copy(copied, entries)

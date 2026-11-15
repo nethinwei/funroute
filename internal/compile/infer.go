@@ -29,6 +29,10 @@ type typeTerm struct {
 	// fields is a record's, in order: a record unifies field by field, so a
 	// literal in a record literal's field settles the way any literal does.
 	fields []fieldTerm
+	// loose marks a record literal's fields, whose order is only how they
+	// were written: the order of a record type's fields is the type, but a
+	// literal takes the order of the record it unifies with (unifyRecords).
+	loose bool
 }
 
 type fieldTerm struct {
@@ -336,35 +340,48 @@ func (s *inferState) deref(term typeTerm) typeTerm {
 }
 
 func (s *inferState) unify(left, right typeTerm) error {
-	left, right = s.deref(left), s.deref(right)
+	left, leftVar := s.resolve(left)
+	right, rightVar := s.resolve(right)
 	switch {
 	case left.kind == machine.VarKind:
-		return s.bindVar(left, right)
+		return s.bindTo(left, right, rightVar)
 	case right.kind == machine.VarKind:
-		return s.bindVar(right, left)
+		return s.bindTo(right, left, leftVar)
 	case left.kind != right.kind || left.name != right.name || !slices.Equal(left.values, right.values):
 		return s.cannotUnify(left, right)
 	case left.kind == machine.RecordKind:
-		return s.unifyFields(left, right)
+		return s.unifyRecords(left, right, leftVar, rightVar)
 	case left.elem != nil && right.elem != nil:
 		return s.unify(*left.elem, *right.elem)
 	}
 	return nil
 }
 
-// unifyFields unifies two records: the same names in the same order, and
-// each field's type.
-func (s *inferState) unifyFields(left, right typeTerm) error {
-	if len(left.fields) != len(right.fields) {
-		return s.cannotUnify(left, right)
+// resolve is deref that also says the last variable on the way, 0 when
+// term is no bound variable: a record literal's term is reached through its
+// own variable, which is where a new order for it is bound.
+func (s *inferState) resolve(term typeTerm) (typeTerm, int) {
+	via := 0
+	for term.kind == machine.VarKind {
+		slot := &s.vars[term.id]
+		if !slot.bound {
+			return term, via
+		}
+		via = term.id
+		term = slot.term
 	}
-	for i, field := range left.fields {
-		if field.name != right.fields[i].name {
-			return s.cannotUnify(left, right)
-		}
-		if err := s.unify(field.term, right.fields[i].term); err != nil {
-			return err
-		}
+	return term, via
+}
+
+// bindTo binds an open variable to term. A record literal it is bound to by
+// way of the literal's variable, via, so the variable follows the literal
+// to whatever order unification settles for it.
+func (s *inferState) bindTo(variable, term typeTerm, via int) error {
+	if err := s.bindVar(variable, term); err != nil {
+		return err
+	}
+	if term.loose && via != 0 && via != variable.id {
+		s.bind(variable.id, varTerm(via))
 	}
 	return nil
 }

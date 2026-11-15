@@ -51,6 +51,7 @@ test("the browser build answers a whole session", async () => {
   assert.deepEqual(published.params.diagnostics, []);
   const run = await server.request("workspace/executeCommand", { command: "funroute.run", arguments: [{ uri, args: { health: "UP" } }] });
   assert.equal(run.result.value, "adyen");
+  assert.equal(run.result.text, '"adyen"');
   assert.deepEqual(run.result.unavailable, []);
   const hover = await server.request("textDocument/hover", { textDocument: { uri }, position: { line: 0, character: 4 } });
   assert.match(hover.result.contents.value, /route\.is_healthy_v1/);

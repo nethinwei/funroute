@@ -30,9 +30,13 @@ import (
 type Value struct {
 	kind Kind
 	b    bool
-	i    int64
-	f    float64
-	s    string // a string's text, or a handle's type name
+	// p is money's decimal places + 1, 0 where the amount does not carry
+	// them (money.MoneyParts); it sits in the padding after kind and b, so a
+	// Value is no larger for it.
+	p uint8
+	i int64
+	f float64
+	s string // a string's text, or a handle's type name
 	// box is the container backing: for a native array, a *bool, *int64,
 	// *float64, *string, *money.Money or *money.FxRate at the first item, i
 	// being the count (container.go); a *nestedArray, *recordsView, the
@@ -144,14 +148,15 @@ func Record(typ Type, fields []Value) (Value, error) {
 	return Value{kind: RecordKind, box: record}, nil
 }
 
-// Field is the value at a record's i-th field. The compiler resolved the name
-// to that index, so this is a slice read.
-func (v Value) Field(i int) Value {
+// Field is the value at a record's i-th field, in the order of its type,
+// and false for what is no record or has no such field — as At and Lookup
+// answer for an array and a dictionary.
+func (v Value) Field(i int) (Value, bool) {
 	record, ok := v.box.(*recordValue)
 	if !ok || i < 0 || i >= len(record.fields) {
-		return Value{}
+		return Value{}, false
 	}
-	return record.fields[i]
+	return record.fields[i], true
 }
 
 // Dict is Array's counterpart for dictionaries.

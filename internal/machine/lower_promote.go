@@ -123,6 +123,9 @@ func (l *lowerer) field(index int) {
 // given whole.
 func (f *frame) promote(args []Value) {
 	for _, p := range f.runtime.reg.promotions {
-		f.setValue(p.reg, args[p.arg].Field(int(p.field)))
+		// Lowering promoted the field of an argument the contract says is
+		// a record with it, and the boundary held the argument to that.
+		field, _ := args[p.arg].Field(int(p.field))
+		f.setValue(p.reg, field)
 	}
 }

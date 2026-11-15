@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 	"github.com/nethinwei/funroute/internal/money"
 )
@@ -88,7 +89,7 @@ func TestAConversionInARule(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			value, err := runConverting(t, test)
-			if got := fmt.Sprint(value.Any()); err != nil || got != test.want {
+			if got := fmt.Sprint(plain(value.Any())); err != nil || got != test.want {
 				t.Fatalf("%s on %v = %s, %v, want %s", test.source, test.args, got, err, test.want)
 			}
 		})
@@ -131,7 +132,7 @@ func TestChainedHopsRoundOnceInARound(t *testing.T) {
 		quotes + "convert(convert(USD 0.01, JPY, @half_even), EUR, @half_even))": "{EUR 100}",
 	} {
 		value, err := evalMoney(t, source, "", nil)
-		if got := fmt.Sprint(value.Any()); err != nil || got != want {
+		if got := fmt.Sprint(plain(value.Any())); err != nil || got != want {
 			t.Errorf("%s = %s, %v, want %s", source, got, err, want)
 		}
 	}
@@ -154,7 +155,7 @@ func TestAConversionWithoutAQuoteIsErrNoFxRate(t *testing.T) {
 				t.Fatalf("EUR 1.00 -> JPY = %v, %v, want ErrNoFxRate", value.Any(), err)
 			}
 			value, err = instantiated(t, registry, "fallback(using(rates, round(a -> JPY, @half_even)), JPY 7)", "a: money; rates: array<fxrate>").RunValues(t.Context(), args)
-			if got := fmt.Sprint(value.Any()); err != nil || got != "{JPY 7}" {
+			if got := fmt.Sprint(plain(value.Any())); err != nil || got != "{JPY 7}" {
 				t.Fatalf("fallback(EUR 1.00 -> JPY, JPY 7) = %s, %v, want {JPY 7}", got, err)
 			}
 		})
@@ -171,7 +172,7 @@ func TestAConversionIntoItsOwnCurrencyNeedsNoRate(t *testing.T) {
 			t.Parallel()
 			args := []machine.Value{machine.MoneyValue(100, "EUR"), quotesOf(t, registry)}
 			value, err := instantiated(t, registry, source, "a: money; rates: array<fxrate>").RunValues(t.Context(), args)
-			if got := fmt.Sprint(value.Any()); err != nil || got != want {
+			if got := fmt.Sprint(plain(value.Any())); err != nil || got != want {
 				t.Fatalf("%s with no quotes = %s, %v, want %s", source, got, err, want)
 			}
 		})
@@ -199,7 +200,7 @@ func TestALaterQuoteWins(t *testing.T) {
 			args := []machine.Value{machine.MoneyValue(100, "USD"), machine.MoneyValue(900, "EUR"), quotesOf(t, registry, test.quotes...)}
 			runtime := instantiated(t, registry, test.source, "a: money; e: money; rates: array<fxrate>")
 			value, err := runtime.RunValues(t.Context(), args)
-			if got := fmt.Sprint(value.Any()); err != nil || got != test.want {
+			if got := fmt.Sprint(plain(value.Any())); err != nil || got != test.want {
 				t.Fatalf("%s with %v = %s, %v, want %s", test.source, test.quotes, got, err, test.want)
 			}
 		})
@@ -245,7 +246,7 @@ func TestAConversionIsNotFolded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value, err := runtime.RunValues(t.Context(), nil); err != nil || fmt.Sprint(value.Any()) != "{JPY 150}" {
+	if value, err := runtime.RunValues(t.Context(), nil); err != nil || fmt.Sprint(plain(value.Any())) != "{JPY 150}" {
 		t.Fatalf("USD 1 -> JPY = %v, %v, want JPY 150", value.Any(), err)
 	}
 }
@@ -284,10 +285,13 @@ func TestFxReadsTheRateTheUsingConvertsAt(t *testing.T) {
 // using's scope as it came, and the rate a value. The count is global, so
 // this test does not run in parallel.
 func TestAConversionAllocatesNothing(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := moneyRegistry(t)
 	runtime := instantiated(t, registry, "using(rates, round(using(fx(USD, JPY), a -> JPY) -> USD, @half_even))", "a: money; rates: array<fxrate>")
 	args := []machine.Value{machine.MoneyValue(100, "USD"), quotesOf(t, registry, [3]string{"EUR", "USD", "1.08"}, [3]string{"USD", "JPY", "150"})}
-	if value, err := runtime.RunValues(t.Context(), args); err != nil || fmt.Sprint(value.Any()) != "{USD 100}" {
+	if value, err := runtime.RunValues(t.Context(), args); err != nil || fmt.Sprint(plain(value.Any())) != "{USD 100}" {
 		t.Fatalf("USD 1.00 there and back = %v, %v, want USD 1.00", value.Any(), err)
 	}
 	allocs := testing.AllocsPerRun(100, func() {

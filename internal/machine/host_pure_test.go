@@ -33,6 +33,13 @@ func TestPureCallsAnswerAsTheirEval(t *testing.T) {
 		func(n int64, x float64) float64 { return float64(n) + x },
 		func(s string, x float64) float64 { return float64(len(s)) * x },
 		func(s string, n int64) int64 { return int64(len(s)) + n },
+		// The mixed shapes that can fail (pureMixed).
+		func(s string, x float64) (float64, error) { return float64(len(s)) * x, failIf(s == "", errNegative) },
+		func(x float64, n int64) (float64, error) { return x * float64(n), failIf(n < 0, errNegative) },
+		func(n int64, x float64) (float64, error) { return float64(n) - x, failIf(n < 0, errNegative) },
+		func(a, b string) (bool, error) { return a == b, failIf(a == "", errNegative) },
+		func(a, b, c string) (string, error) { return a + b + c, failIf(c == "", errNegative) },
+		func(s string, n int64, sep string) (string, error) { return s + sep, failIf(n < 0, errNegative) },
 	} {
 		assertPureAsReflected(t, fn)
 	}

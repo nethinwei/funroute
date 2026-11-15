@@ -177,11 +177,8 @@ func joinsOf(instructions []Instruction) []bool {
 	joins := make([]bool, len(instructions)+1)
 	joins[0] = true
 	for _, in := range instructions {
-		switch in.Op {
-		case OpJump, OpJumpIfFalse, OpLoopInit, OpLoopNext, OpBeginFallback, OpLoopBreak:
-			if in.A >= 0 && in.A <= len(instructions) {
-				joins[in.A] = true
-			}
+		if opcodes[in.Op].jumps && in.A >= 0 && in.A <= len(instructions) {
+			joins[in.A] = true
 		}
 	}
 	return joins

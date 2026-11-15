@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -134,6 +135,9 @@ type updateIn struct {
 // into the update — so a Program reads it where it is, and an update the
 // program answers is built in the frame's own record: none is made.
 func TestAnUpdatedRecordIsReadInPlace(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	binding, err := compile.Bind[updateIn, promotedOrder](randomRegistry(t))
 	if err != nil {
 		t.Fatal(err)

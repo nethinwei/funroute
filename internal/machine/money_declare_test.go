@@ -217,8 +217,9 @@ func expectParsed(t *testing.T, registry *Registry, code, amount string, want in
 		}
 		return
 	}
-	if got, _ := value.Money(); err != nil || got != money.Make(code, want) {
-		t.Fatalf("ParseMoneyAmount(%s, %s) = %v, %v, want %s %d", code, amount, got, err, code, want)
+	places, _ := registry.currencies().Places(code)
+	if got, _ := value.Money(); err != nil || got != money.MakeIn(code, want, uint8(places+1)) {
+		t.Fatalf("ParseMoneyAmount(%s, %s) = %v, %v, want %s %d in %d places", code, amount, got, err, code, want, places)
 	}
 }
 

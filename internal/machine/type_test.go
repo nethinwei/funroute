@@ -2,6 +2,9 @@ package machine_test
 
 import (
 	"encoding/json"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/machine"
@@ -51,5 +54,55 @@ func TestATypeFromJSONMustBeWellFormed(t *testing.T) {
 	var typ machine.Type
 	if err := json.Unmarshal([]byte(`{"kind":"array","elem":{"kind":"money"}}`), &typ); err != nil || !typ.IsConcrete() {
 		t.Errorf("array<money> from JSON = %s, %v, want a concrete type", typ, err)
+	}
+}
+
+// Every kind has a name of its own, and a kind written as a bare name reads
+// back as itself. A kind added before kindCount without a name fails here.
+func TestEveryKindHasANameThatReadsBack(t *testing.T) {
+	t.Parallel()
+	// The kinds no type is written as by name alone: they have parts or a
+	// name of their own, or are no type a program writes.
+	notBare := map[machine.Kind]bool{
+		machine.InvalidKind: true, machine.VarKind: true, machine.ArrayKind: true, machine.DictKind: true,
+		machine.HandleKind: true, machine.EnumKind: true, machine.RecordKind: true,
+	}
+	seen := map[string]machine.Kind{}
+	for _, kind := range machine.Kinds() {
+		name := kind.String()
+		if other, taken := seen[name]; name == "" || taken {
+			t.Errorf("kind %d is named %q, which is empty or %s's too", kind, name, other)
+			continue
+		}
+		seen[name] = kind
+		if notBare[kind] {
+			continue
+		}
+		if typ, err := machine.ParseType(name); err != nil || typ.Kind() != kind {
+			t.Errorf("ParseType(%q) = %v, %v, want the %s kind", name, typ, err, name)
+		}
+	}
+}
+
+// docs/language.md's table of types has a row for every kind a program's
+// value can have: a new kind fails here until it is written down.
+func TestTheTypeTableHasEveryKind(t *testing.T) {
+	t.Parallel()
+	doc, err := os.ReadFile("../../docs/language.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(doc), "| 类型 | 字面量 | 说明 |")
+	if start < 0 {
+		t.Fatal("docs/language.md has no table of types")
+	}
+	table, _, _ := strings.Cut(string(doc)[start:], "\n\n")
+	for _, kind := range machine.Kinds() {
+		if kind == machine.InvalidKind || kind == machine.VarKind {
+			continue // no type a program writes
+		}
+		if !regexp.MustCompile("(?m)^\\| `" + kind.String() + "[`<{]").MatchString(table) {
+			t.Errorf("docs/language.md's table of types has no row for %s", kind)
+		}
 	}
 }

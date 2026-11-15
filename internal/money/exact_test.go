@@ -12,7 +12,7 @@ import (
 func TestExactMoneyRoundsOnce(t *testing.T) {
 	t.Parallel()
 	half := ratio(1, 2)
-	exact, err := Money{currency: "USD", minor: 5}.Exact().MulRatio(half)
+	exact, err := newMoney("USD", 5).Exact().MulRatio(half)
 	if err == nil {
 		exact, err = exact.MulRatio(half)
 	}
@@ -20,10 +20,10 @@ func TestExactMoneyRoundsOnce(t *testing.T) {
 		t.Fatalf("USD 0.05 × 50%% × 50%% = %s, %v, want 5/4 minor units", exact, err)
 	}
 	once, err := exact.Round(RoundHalfUp)
-	if err != nil || once != (Money{currency: "USD", minor: 1}) {
+	if err != nil || once != (newMoney("USD", 1)) {
 		t.Fatalf("Round(half_up) = %v, %v, want USD 0.01", once, err)
 	}
-	step, _ := Money{currency: "USD", minor: 5}.MulRatio(half, RoundHalfUp)
+	step, _ := newMoney("USD", 5).MulRatio(half, RoundHalfUp)
 	twice, _ := step.MulRatio(half, RoundHalfUp)
 	if twice.minor != 2 {
 		t.Fatalf("rounding each step = %v, want USD 0.02: the case would show nothing", twice)
@@ -34,13 +34,13 @@ func TestExactMoneyRoundsOnce(t *testing.T) {
 // in one currency; the currency-less zero goes with any.
 func TestExactMoneyComputesAsMoneyDoes(t *testing.T) {
 	t.Parallel()
-	third, _ := Money{currency: "USD", minor: 1}.Exact().DivRatio(ratio(3, 1))
+	third, _ := newMoney("USD", 1).Exact().DivRatio(ratio(3, 1))
 	for name, test := range map[string]struct {
 		run  func() (ExactMoney, error)
 		want string
 	}{
 		"a sum":            {func() (ExactMoney, error) { return third.Add(third) }, "USD 2/3 minor units"},
-		"a difference":     {func() (ExactMoney, error) { return third.Sub(Money{currency: "USD", minor: 1}.Exact()) }, "USD -2/3 minor units"},
+		"a difference":     {func() (ExactMoney, error) { return third.Sub(newMoney("USD", 1).Exact()) }, "USD -2/3 minor units"},
 		"a negation":       {third.Neg, "USD -1/3 minor units"},
 		"a count":          {func() (ExactMoney, error) { return third.MulInt(3) }, "USD 1 minor units"},
 		"with no currency": {func() (ExactMoney, error) { return ExactMoney{}.Add(third) }, "USD 1/3 minor units"},
@@ -51,17 +51,17 @@ func TestExactMoneyComputesAsMoneyDoes(t *testing.T) {
 	}
 	// Exact money is as wide as money: the smallest amount taken from five
 	// cents overflows as it does for Money, and taken from itself is zero.
-	smallest := Money{currency: "USD", minor: math.MinInt64}.Exact()
-	if got, err := (Money{currency: "USD", minor: 5}).Exact().Sub(smallest); !errors.Is(err, ErrArithmetic) {
+	smallest := newMoney("USD", math.MinInt64).Exact()
+	if got, err := (newMoney("USD", 5)).Exact().Sub(smallest); !errors.Is(err, ErrArithmetic) {
 		t.Fatalf("USD 0.05 - the smallest amount = %s, %v, want ErrArithmetic", got, err)
 	}
 	if got, err := smallest.Sub(smallest); err != nil || got.Sign() != 0 {
 		t.Fatalf("the smallest amount less itself = %s, %v, want zero", got, err)
 	}
-	if _, err := third.Add(Money{currency: "EUR", minor: 1}.Exact()); !errors.Is(err, ErrCurrency) {
+	if _, err := third.Add(newMoney("EUR", 1).Exact()); !errors.Is(err, ErrCurrency) {
 		t.Fatalf("dollars plus euros: error = %v, want ErrCurrency", err)
 	}
-	if order, err := third.Cmp(Money{currency: "USD", minor: 1}.Exact()); err != nil || order != -1 {
+	if order, err := third.Cmp(newMoney("USD", 1).Exact()); err != nil || order != -1 {
 		t.Fatalf("a third of a cent against a cent = %d, %v, want -1", order, err)
 	}
 	encoded, err := json.Marshal(third)
@@ -76,15 +76,15 @@ func TestConvertExactLeavesTheRounding(t *testing.T) {
 	t.Parallel()
 	table := rateCurrencies(t)
 	fx := fxRate(t, "USD", "JPY", "150.5")
-	yen, err := table.ConvertExact(Money{currency: "USD", minor: 100}.Exact(), fx)
+	yen, err := table.ConvertExact(newMoney("USD", 100).Exact(), fx)
 	if err != nil || yen.String() != "JPY 150.5 minor units" {
 		t.Fatalf("ConvertExact(USD 1.00) = %s, %v, want 150.5 yen", yen, err)
 	}
-	if _, err := table.ConvertExact(Money{currency: "EUR", minor: 100}.Exact(), fx); !errors.Is(err, ErrCurrency) {
+	if _, err := table.ConvertExact(newMoney("EUR", 100).Exact(), fx); !errors.Is(err, ErrCurrency) {
 		t.Fatalf("ConvertExact of euros at a dollar rate: error = %v, want ErrCurrency", err)
 	}
 	// The rate in minor units, 10^-20, fits no ratio; the amount cancels it.
-	tiny, err := table.ConvertExact(Money{currency: "USD", minor: 100}.Exact(), fxRate(t, "USD", "JPY", "0.000000000000000001"))
+	tiny, err := table.ConvertExact(newMoney("USD", 100).Exact(), fxRate(t, "USD", "JPY", "0.000000000000000001"))
 	if err != nil || tiny.Minor() != ratio(1, 1_000_000_000_000_000_000) {
 		t.Fatalf("ConvertExact(USD 1.00) at 10^-18 = %s, %v, want 10^-18 yen", tiny, err)
 	}
@@ -122,7 +122,7 @@ func TestExactMoneyProratesByAmounts(t *testing.T) {
 	if want := ratio(-1, 1<<62); err != nil || got.Minor() != want {
 		t.Errorf("(USD 0.02).ProrateBy(USD 0.01, the smallest) = %s, %v, want %s minor units", got, err, want)
 	}
-	if _, err := usd(2).Exact().ProrateBy(usd(1), Money{currency: "EUR", minor: 3}); !errors.Is(err, ErrCurrency) {
+	if _, err := usd(2).Exact().ProrateBy(usd(1), newMoney("EUR", 3)); !errors.Is(err, ErrCurrency) {
 		t.Errorf("ProrateBy(USD, EUR) error = %v, want ErrCurrency", err)
 	}
 	if _, err := usd(2).Exact().ProrateBy(usd(1), usd(0)); !errors.Is(err, ErrArithmetic) {
@@ -134,7 +134,7 @@ func TestExactMoneyProratesByAmounts(t *testing.T) {
 // part of one they are.
 func TestExactMoneySign(t *testing.T) {
 	t.Parallel()
-	third, _ := Money{currency: "USD", minor: 1}.Exact().DivRatio(ratio(3, 1))
+	third, _ := newMoney("USD", 1).Exact().DivRatio(ratio(3, 1))
 	minusThird, _ := third.Neg()
 	for _, test := range []struct {
 		name string
@@ -144,7 +144,7 @@ func TestExactMoneySign(t *testing.T) {
 		{"a third of a cent", third, 1},
 		{"minus a third of a cent", minusThird, -1},
 		{"the currency-less zero", ExactMoney{}, 0},
-		{"a dollar's zero", Money{currency: "USD"}.Exact(), 0},
+		{"a dollar's zero", newMoney("USD", 0).Exact(), 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -160,7 +160,7 @@ func TestExactMoneySign(t *testing.T) {
 // units that are no ratio, a part left out.
 func TestExactMoneyReadsBackItsJSON(t *testing.T) {
 	t.Parallel()
-	for _, e := range []ExactMoney{{}, usd(5).Exact(), ExactFrom("USD", ratio(17, 2)), ExactFrom("JPY", ratio(-1, 3))} {
+	for _, e := range []ExactMoney{{}, usd(5).Exact(), ExactIn("USD", ratio(17, 2), placesOf(2)), ExactFrom("JPY", ratio(-1, 3))} {
 		encoded, err := json.Marshal(e)
 		if err != nil {
 			t.Fatal(err)

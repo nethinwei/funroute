@@ -15,8 +15,13 @@ import (
 // memory.
 func TestEveryOwnGoTypeIsReadAndWrittenAsItself(t *testing.T) {
 	t.Parallel()
+	table, _ := moneyRegistry(t).Currencies()
+	usd, err := table.Of("USD", "1.70") // with its places, which Equal would not see dropped
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, own := range []any{
-		machine.NewMoney("USD", 170), machine.NewRatio(1, 3), machine.NewCurrency("EUR"),
+		usd, machine.NewRatio(1, 3), machine.NewCurrency("EUR"),
 		money.FxRateFrom(&money.Pair{Base: "USD", Quote: "JPY"}, machine.NewRatio(150, 1)),
 		time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC), 90 * time.Second,
 	} {
@@ -27,6 +32,11 @@ func TestEveryOwnGoTypeIsReadAndWrittenAsItself(t *testing.T) {
 		back, err := machine.OwnRoundTrip(reflect.TypeOf(own), value)
 		if err != nil || !back.Equal(value) {
 			t.Errorf("%T %v reads back as %v, %v", own, own, back.Any(), err)
+		}
+		if m, ok := own.(money.Money); ok {
+			if read, _ := back.Money(); read != m {
+				t.Errorf("%v reads back as %v: its places are lost", m, read)
+			}
 		}
 	}
 	var other struct{ code string }

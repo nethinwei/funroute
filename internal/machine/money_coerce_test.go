@@ -256,11 +256,11 @@ func TestMoneyContainersKeepTheNativeBacking(t *testing.T) {
 	}
 	table := declared(t, money.CurrencySpec{Code: "USD", Digits: 2}).currencies()
 	list, err := coerceWith([]any{"USD 1.00", map[string]any{"currency": "USD", "minor": 2}, 0}, ArrayOf(MoneyType), table)
-	if packed, ok := nativeAny(list).([]money.Money); err != nil || !ok || !slices.Equal(packed, []money.Money{money.Make("USD", 100), money.Make("USD", 2), {}}) {
+	if packed, ok := nativeAny(list).([]money.Money); err != nil || !ok || !slices.Equal(packed, []money.Money{money.MakeIn("USD", 100, 3), money.MakeIn("USD", 2, 3), {}}) {
 		t.Fatalf("coerce(a JSON list of money) = %#v, %v, want a []money.Money backing", nativeAny(list), err)
 	}
 	dict, err := coerceWith(map[string]any{"a": "USD 0.01"}, DictOf(MoneyType), table)
-	if packed, ok := dict.box.(map[string]money.Money); err != nil || !ok || packed["a"] != (money.Make("USD", 1)) {
+	if packed, ok := dict.box.(map[string]money.Money); err != nil || !ok || packed["a"] != (money.MakeIn("USD", 1, 3)) {
 		t.Fatalf("coerce(a JSON object of money) = %#v, %v, want a map[string]money.Money backing", dict.box, err)
 	}
 }

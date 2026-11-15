@@ -109,31 +109,6 @@ func assertSessionAsProgram(t *testing.T, program *funroute.Program[RouteIn, Rou
 	}
 }
 
-type SumIn struct {
-	A int64 `funroute:"a"`
-	B int64 `funroute:"b"`
-}
-
-// A session's run of a rule of scalars allocates nothing, RunInto's neither.
-func TestASessionRunAllocatesNothing(t *testing.T) {
-	binding, err := funroute.Bind[SumIn, int64](funroute.CoreRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	program, err := binding.Compile("a * b - a % b + 1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, in, out, ctx := program.Session(), &SumIn{A: 7, B: 3}, int64(0), t.Context()
-	if allocs := testing.AllocsPerRun(100, func() {
-		if err := session.RunInto(ctx, in, &out); err != nil {
-			t.Fatal(err)
-		}
-	}); allocs != 0 || out != 21 {
-		t.Errorf("a run answered %d and allocated %v times, want 21 and 0", out, allocs)
-	}
-}
-
 // A binding compiles against its whole contract: a program with another
 // result does not compile.
 func TestBindingCompilesOnlyItsContract(t *testing.T) {
@@ -550,20 +525,31 @@ type treeNode struct {
 
 func TestARecursiveGoTypeIsRefused(t *testing.T) {
 	t.Parallel()
-	const want = "it contains itself"
-	if _, err := funroute.ToValue(treeNode{}); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("ToValue(treeNode{}) error = %v, want %q", err, want)
+	expectRefusedOnEveryPath[treeNode](t, "it contains itself")
+}
+
+// boundIn is a binding's input holding a T.
+type boundIn[T any] struct {
+	F T `funroute:"f"`
+}
+
+// expectRefusedOnEveryPath requires a struct of type T to be refused, the
+// error holding want, by every path a struct takes into the language: as a
+// value, as a parameter of a function registered by its Go signature, and in
+// a binding's input.
+func expectRefusedOnEveryPath[T any](t *testing.T, want string) {
+	t.Helper()
+	var zero T
+	if _, err := funroute.ToValue(zero); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("ToValue(%T) error = %v, want %q", zero, err, want)
 	}
 	if err := funroute.CoreRegistry().Register(funroute.FunctionSpec{
-		Name: "f.tree_v1",
-		Go:   func(treeNode) (int64, error) { return 0, nil },
+		Name: "f.g_v1",
+		Go:   func(T) (int64, error) { return 0, nil },
 	}); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("Register(func(treeNode)) error = %v, want %q", err, want)
+		t.Errorf("Register(func(%T)) error = %v, want %q", zero, err, want)
 	}
-	type in struct {
-		Tree treeNode `funroute:"tree"`
-	}
-	if _, err := funroute.Bind[in, int64](funroute.CoreRegistry()); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("Bind[in, int64] error = %v, want %q", err, want)
+	if _, err := funroute.Bind[boundIn[T], int64](funroute.CoreRegistry()); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Bind[boundIn[%T], int64] error = %v, want %q", zero, err, want)
 	}
 }

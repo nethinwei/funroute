@@ -4,7 +4,9 @@
 // ones, the extremes, long ones, floats that are not finite — through both
 // ways a host runs a program, Program.Run and Runtime.RunValues; each
 // answer's JSON, or each failure's class and words, is kept in
-// testdata/outcomes.jsonl. go test fails when a run and the record disagree,
-// and go test -update writes the record anew, for a change meant to change
-// an answer: its diff is the change, read line by line.
+// testdata/outcomes.json, one outcome a line, with each failure's wording
+// once in testdata/phrases.json (record_test.go). go test fails when a run
+// and the record disagree, and go test -update writes the record anew, for a
+// change meant to change an answer: its diff is the change, read line by
+// line.
 package golden

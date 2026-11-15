@@ -93,7 +93,7 @@ func fxRateTimesRate(fx, rate int) EvalFunc {
 func moneyOf(value Value) money.Money { amount, _ := value.Money(); return amount }
 
 func moneyResult(amount money.Money, err error) (Value, error) {
-	return MoneyValue(amount.Minor(), amount.Currency()), err
+	return moneyValueOf(amount), err
 }
 
 func moneyTimesRatio(amount, ratio int) rounded {

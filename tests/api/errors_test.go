@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -151,5 +152,21 @@ func TestHostFindsItsOwnErrorBehindTheClass(t *testing.T) {
 				t.Fatalf("pricing.quote_v1 returning %v: error = %v, want ErrExtension with the host's error behind it, reading %q", test.returned, err, test.want)
 			}
 		})
+	}
+}
+
+// A host names a failure's class without a chain of errors.Is of its own:
+// the most specific class, as the language service reports it.
+func TestHostNamesTheClass(t *testing.T) {
+	t.Parallel()
+	for err, want := range map[error]string{
+		fmt.Errorf("pricing: %w", funroute.ErrNoFxRate):  "nofxrate",
+		fmt.Errorf("quote: %w", funroute.ErrUnavailable): "unavailable", // an ErrExtension, and more specific
+		fmt.Errorf("fee: %w", funroute.ErrArithmetic):    "arithmetic",
+		errors.New("the host's own"):                     "",
+	} {
+		if got := funroute.ClassName(err); got != want {
+			t.Errorf("ClassName(%v) = %q, want %q", err, got, want)
+		}
 	}
 }

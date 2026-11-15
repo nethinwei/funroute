@@ -366,9 +366,94 @@ func TestAFoldedBindingIsHiddenByAnInnerOne(t *testing.T) {
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			value, _ := compileAndRun(t, test.source, registry, test.args)
-			if got := fmt.Sprint(value.Any()); got != test.want {
+			if got := fmt.Sprint(plain(value.Any())); got != test.want {
 				t.Fatalf("%s = %s, want %s", test.source, got, test.want)
 			}
 		})
+	}
+}
+
+// nodeTraits is what the compiler's switches that end in "every other node"
+// take a kind of node to be: whether it may leave a part unevaluated
+// (branches, fold.go), whether it reads the run, so nothing under it folds
+// (ownConstexpr, closed.go), and whether it is a leaf, which folding has
+// nothing to gain from (foldable, fold.go). byFunction marks a call, whose
+// answers are its function's. Two more switches take every other node the
+// safe way and need no entry: boundedExpr calls it unbounded, and exact.of
+// learns a node's bindings from its binds tags.
+type nodeTraits struct{ lazy, readsRun, leaf, byFunction bool }
+
+// nodeSemantics places every kind of node. A new kind fails
+// TestEveryNodeIsPlaced until it is written here — which is reading those
+// switches and adding a case where the node is not "every other node".
+var nodeSemantics = map[string]struct {
+	node   syntax.Expr
+	traits nodeTraits
+}{
+	"int": {&syntax.LiteralExpr{}, nodeTraits{leaf: true}}, "float": {&syntax.LiteralExpr{}, nodeTraits{leaf: true}},
+	"string": {&syntax.LiteralExpr{}, nodeTraits{leaf: true}}, "bool": {&syntax.LiteralExpr{}, nodeTraits{leaf: true}},
+	"duration": {&syntax.LiteralExpr{}, nodeTraits{leaf: true}},
+	"var":      {&syntax.VariableExpr{}, nodeTraits{leaf: true}}, "enum": {&syntax.EnumExpr{}, nodeTraits{leaf: true}},
+	"money": {&syntax.MoneyExpr{}, nodeTraits{leaf: true}}, "ratio": {&syntax.RatioExpr{}, nodeTraits{leaf: true}},
+	"fxrate": {&syntax.FxRateExpr{}, nodeTraits{leaf: true}}, "currency": {&syntax.CurrencyExpr{}, nodeTraits{leaf: true}},
+	"array": {&syntax.ArrayExpr{}, nodeTraits{}}, "dict": {&syntax.DictExpr{}, nodeTraits{}},
+	"record": {&syntax.RecordExpr{}, nodeTraits{}}, "field": {&syntax.FieldExpr{}, nodeTraits{}},
+	"record_update": {&syntax.RecordUpdateExpr{}, nodeTraits{}}, "selector": {&syntax.SelectorExpr{}, nodeTraits{}},
+	"for": {&syntax.ForExpr{}, nodeTraits{}}, "reduce": {&syntax.ReduceExpr{}, nodeTraits{}},
+	"let": {&syntax.LetExpr{}, nodeTraits{}}, "call": {&syntax.CallExpr{}, nodeTraits{byFunction: true}},
+	"switch": {&syntax.SwitchExpr{Cases: []syntax.SwitchCaseExpr{{Result: &syntax.LiteralExpr{}}}}, nodeTraits{lazy: true}},
+	"using":  {&syntax.UsingExpr{}, nodeTraits{readsRun: true}},
+}
+
+// Every kind of node is placed, and what is written of it is what the
+// switches answer for it.
+func TestEveryNodeIsPlaced(t *testing.T) {
+	t.Parallel()
+	for _, kind := range syntax.NodeKinds() {
+		placed, ok := nodeSemantics[kind]
+		if !ok {
+			t.Errorf("node %q is not placed in nodeSemantics: read branches, foldable and ownConstexpr for it", kind)
+			continue
+		}
+		if placed.traits.byFunction {
+			continue
+		}
+		c := &bytecodeCompiler{}
+		if lazy := c.branches(placed.node) != nil; lazy != placed.traits.lazy {
+			t.Errorf("%s: branches says lazy %v, nodeSemantics %v", kind, lazy, placed.traits.lazy)
+		}
+		if reads := !ownConstexpr(placed.node, nil, nil); reads != placed.traits.readsRun {
+			t.Errorf("%s: ownConstexpr says it reads the run %v, nodeSemantics %v", kind, reads, placed.traits.readsRun)
+		}
+		if placed.traits.leaf && c.foldable(placed.node) {
+			t.Errorf("%s: placed as a leaf, but foldable folds it", kind)
+		}
+	}
+}
+
+// The folding budget is for what an evaluation makes as well as how long it
+// turns: a fold whose answer grows is charged what it carries from one turn
+// to the next, and a comprehension what each item holds. Past it the
+// expression is left for the run, as one that turns too long is — a few
+// turns can otherwise make more than a compile should hold.
+func TestAFoldIsBoundedByWhatItMakes(t *testing.T) {
+	t.Parallel()
+	registry := foldRegistry(t)
+	for source, folded := range map[string]bool{
+		`len(reduce(x in range(10), a = [1], concat(a, range(100))))`:                 true,
+		`len(reduce(x in range(100), a = [1], concat(a, [x])))`:                       true,
+		`len([[x, x] for x in range(3000)])`:                                          true,
+		`len(reduce(x in range(60), a = [1], concat(a, range(100))))`:                 false,
+		`len(reduce(x in range(300), s = "ab", s + "0123456789"))`:                    false,
+		`len(reduce(x in range(100), a = {v: [1]}, {v: concat(a.v, range(1000))}).v)`: false,
+		`len([range(10000) for x in range(100)])`:                                     false,
+		`len([{v: range(10000)} for x in range(100)])`:                                false,
+		`len({string(x): [range(10000)] for x in range(100)})`:                        false,
+		`len([y for x in range(100) for y in [range(10000) for z in range(2)]])`:      false,
+	} {
+		instructions := machine.PartsOf(compileFolded(t, registry, source)).Instructions
+		if got := len(instructions) == 1 && instructions[0].Op == machine.OpConstant; got != folded {
+			t.Errorf("%s compiled to %d instructions, folded %v; want folded %v", source, len(instructions), got, folded)
+		}
 	}
 }

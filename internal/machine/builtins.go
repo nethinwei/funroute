@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -295,9 +296,22 @@ func registerConversion(registry *Registry, name string, from, to Type, label, d
 	})
 }
 
+// kernelAdditive is the kernel's functions that are Doc.Additive, by name:
+// every overload of one hands back no more than it was given, so a reduce's
+// accumulator may go through it. The ones that are not are few — join and
+// replace put their argument in many times over — and a function not listed
+// is taken for one. A test calls each listed with arguments of every size
+// and counts (TestAnAdditiveFunctionHandsBackNoMoreThanItIsGiven).
+var kernelAdditive = []string{
+	"add", "at", "bottom_k", "concat", "except", "first", "flatten", "get", "indices", "intersect", "last", "lower",
+	"max", "max_by", "merge", "min", "min_by", "reverse", "slice", "sort", "sort_by", "sort_by_desc", "sort_desc",
+	"split", "string", "take", "top_k", "trim", "trim_prefix", "trim_suffix", "unique", "upper",
+}
+
 func mustRegister(registry *Registry, spec FunctionSpec) {
 	spec.builtin = true
 	spec.Doc.Examples = kernelExamples[spec.Name]
+	spec.Doc.Additive = slices.Contains(kernelAdditive, spec.Name)
 	if err := registry.Register(spec); err != nil {
 		panic(err)
 	}

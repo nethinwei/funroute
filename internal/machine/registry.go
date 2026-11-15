@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -203,6 +204,19 @@ func NewRegistry() *Registry {
 		forms:    map[Form]bool{},
 		handles:  map[reflect.Type]string{},
 		byHandle: map[string]reflect.Type{},
+	}
+}
+
+// copyLocked is a registry of what r has, to add to without r seeing it.
+// The functions are shared: one registered is never changed.
+func (r *Registry) copyLocked() *Registry {
+	byName := make(map[string][]*RegisteredFunction, len(r.byName))
+	for name, overloads := range r.byName {
+		byName[name] = slices.Clone(overloads)
+	}
+	return &Registry{
+		byName: byName, byKey: maps.Clone(r.byKey), forms: maps.Clone(r.forms),
+		handles: maps.Clone(r.handles), byHandle: maps.Clone(r.byHandle), money: r.money,
 	}
 }
 

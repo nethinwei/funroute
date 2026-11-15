@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -229,6 +230,9 @@ func answersBothWays(t *testing.T, program *machine.Program[promotedOrders, stri
 // allocates does not grow with the slice. The count is global, so this test
 // does not run in parallel.
 func TestCollectedItemsAllocateNoRecords(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	registry := machine.CoreRegistry()
 	if err := registry.EnableForm(machine.ForForm); err != nil {
 		t.Fatal(err)

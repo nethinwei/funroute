@@ -27,8 +27,11 @@ import (
 // differs: a host function marked Constexpr is folded where it can run and not
 // where it cannot, so the artifact to deploy is the one the host compiles.
 
-// ManifestVersion identifies the manifest's current shape.
-const ManifestVersion = 1
+// ManifestVersion identifies the manifest's current shape. 2 writes which
+// functions are Doc.Additive: a manifest of 1 says of none that it is, and
+// read as one of 2 would refuse every reduce that passes its accumulator
+// through a function the host accepts it through.
+const ManifestVersion = 2
 
 // Manifest is a registry's signatures as data, for a language service that
 // has the signatures but not the functions. A host gets one from
@@ -57,8 +60,9 @@ type manifestParts struct {
 	Money *money.MoneySpec `json:"money,omitempty"`
 }
 
-// ManifestFunction is one registered signature. BoundedArgs and ConstArgs
-// are written out because they change what compiles, and Apply keeps them. Constexpr records how
+// ManifestFunction is one registered signature. BoundedArgs, Additive and
+// ConstArgs are written out because they change what compiles, and Apply
+// keeps them. Constexpr records how
 // the host folds the function; a signature has nothing to fold with, so Apply
 // leaves it off — which is why an artifact to deploy is compiled by the host.
 type ManifestFunction struct {
@@ -69,6 +73,7 @@ type ManifestFunction struct {
 	Doc         Doc    `json:"doc"`
 	Constexpr   bool   `json:"constexpr,omitempty"`
 	BoundedArgs bool   `json:"bounded_args,omitempty"`
+	Additive    bool   `json:"additive,omitempty"`
 	ConstArgs   []int  `json:"const_args,omitempty"`
 	// Fold is the function's fold, which changes how a call of it on a
 	// comprehension runs — a stop or a first ends it early, the items after
@@ -110,7 +115,7 @@ func manifestFunction(function *RegisteredFunction) ManifestFunction {
 	described := ManifestFunction{
 		Name: function.Name, Params: function.Params, Result: function.Result, Special: function.special.String(),
 		Doc: cloneDoc(function.Doc), Constexpr: function.IsConstexpr(), BoundedArgs: function.Doc.BoundedArgs,
-		ConstArgs: slices.Clone(function.Doc.ConstArgs),
+		Additive: function.Doc.Additive, ConstArgs: slices.Clone(function.Doc.ConstArgs),
 	}
 	if fold := function.Fold; fold != nil {
 		described.Fold = &ManifestFold{Step: fold.Step, Stops: fold.Stops, Stop: fold.Stop, Counts: fold.Counts, First: fold.First}
@@ -129,6 +134,8 @@ func compilesOtherwise(have, want ManifestFunction) string {
 		return "special"
 	case have.BoundedArgs != want.BoundedArgs:
 		return "bounded_args"
+	case have.Additive != want.Additive:
+		return "additive"
 	case !slices.Equal(have.ConstArgs, want.ConstArgs):
 		return "const_args"
 	case !sameFold(have.Fold, want.Fold):
@@ -162,13 +169,27 @@ func (m *ManifestFold) fold(result Type) (*Fold, error) {
 // Apply adds what the manifest describes and r lacks: its forms, its handle
 // types, and each function r has no implementation of, as its signature
 // alone. A function r does have must cost what the manifest says, or an
-// artifact compiled against one would not bind to the other. Apply is not
-// atomic: what it added before an error stays, so a registry it failed on
-// is one to discard, not to retry on.
+// artifact compiled against one would not bind to the other. Apply adds all
+// of it or none: a manifest r refuses leaves r as it was.
 func (m Manifest) Apply(r *Registry) error {
 	if m.parts.Version != ManifestVersion {
 		return fmt.Errorf("unsupported manifest version %d", m.parts.Version)
 	}
+	// Added to a copy, which r becomes once the last of it is in: every
+	// check a registration makes is made, and none is written twice.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	trial := r.copyLocked()
+	if err := m.addTo(trial); err != nil {
+		return err
+	}
+	r.byName, r.byKey, r.forms, r.handles, r.byHandle, r.money = trial.byName, trial.byKey, trial.forms, trial.handles, trial.byHandle, trial.money
+	return nil
+}
+
+// addTo adds the manifest to r, which is left with what was added before a
+// failure.
+func (m Manifest) addTo(r *Registry) error {
 	if err := r.EnableForm(m.parts.Forms...); err != nil {
 		return err
 	}
@@ -210,7 +231,7 @@ func (r *Registry) applyMoney(spec *money.MoneySpec) error {
 
 func (r *Registry) applyFunction(function ManifestFunction) error {
 	spec := FunctionSpec{Name: function.Name, Params: function.Params, Result: function.Result, Doc: function.Doc}
-	spec.Doc.BoundedArgs, spec.Doc.ConstArgs = function.BoundedArgs, function.ConstArgs
+	spec.Doc.BoundedArgs, spec.Doc.Additive, spec.Doc.ConstArgs = function.BoundedArgs, function.Additive, function.ConstArgs
 	if existing, ok := ResolveOf(r, spec.Signature()); ok {
 		if field := compilesOtherwise(manifestFunction(existing), function); field != "" {
 			return fmt.Errorf("%s: the manifest's %s is not this registry's, so a program would compile otherwise against each", spec.Signature(), field)

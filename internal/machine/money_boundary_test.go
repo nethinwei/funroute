@@ -150,6 +150,17 @@ func boundaryCases(t *testing.T) map[string]boundaryCase {
 		"two amounts, one currency": {pair, []Value{usd, usd}, ""},
 		"two amounts, two":          {pair, []Value{usd, eur}, ""},
 		"an empty array":            one("xs", ArrayOf(MoneyType), moneyArray(), ""),
+		// An amount that carries places carries the table's: read in the
+		// table's it would be another amount. One that carries none goes in.
+		// Places are part of what a run of one currency is: USD in two
+		// places does not vouch for USD in none or in three after it.
+		"in the table's places": one("m", MoneyType, moneyValueOf(money.MakeIn("USD", 1, 3)), ""),
+		"in other places":       one("m", MoneyType, moneyValueOf(money.MakeIn("USD", 1, 4)), "USD in 3 decimal places, but this registry declares 2"),
+		"places not said":       one("xs", ArrayOf(MoneyType), moneyArray(money.MakeIn("USD", 1, 3), money.Make("USD", 2), money.MakeIn("JPY", 3, 1)), ""),
+		"an item in other places": one("xs", ArrayOf(MoneyType), moneyArray(money.MakeIn("USD", 1, 3), money.Make("USD", 2), money.MakeIn("USD", 3, 1)),
+			"item 2: currency mismatch: USD in 0 decimal places"),
+		"a field in other places": one("o", order, record(t, order, moneyValueOf(money.MakeIn("JPY", 1, 3)), CurrencyValue("EUR")),
+			`field "amount": currency mismatch: JPY in 2 decimal places, but this registry declares 0`),
 	}
 }
 

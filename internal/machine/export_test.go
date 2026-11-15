@@ -237,7 +237,7 @@ func LibraryNames() []string {
 // the quick way reads, and the decoder's way.
 func ConstantBothWays(c Constant) (quick Value, ok bool, decoded Value, err error) {
 	quick, ok = c.scalar()
-	decoded, err = c.decoded()
+	decoded, err = c.decoded(nil)
 	return quick, ok, decoded, err
 }
 
@@ -303,3 +303,12 @@ func WidenParams(r *Runtime) {
 		return &wide
 	})
 }
+
+// NamesWithExamples is the names kernelExamples and formExamples give examples
+// to, for examples_test.go: a name no function or form has is an orphan.
+func NamesWithExamples() (kernel, forms []string) {
+	return kit.SortedKeys(kernelExamples), kit.SortedKeys(formExamples)
+}
+
+// KernelAdditive is the names kernelAdditive lists, for builtins_test.go.
+func KernelAdditive() []string { return kernelAdditive }

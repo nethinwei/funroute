@@ -49,6 +49,9 @@ func TestRepeatedFindsTheFirstRepeat(t *testing.T) {
 
 // Fewer than two items cannot repeat, and finding so allocates nothing.
 func TestRepeatedOfFewerThanTwoAllocatesNothing(t *testing.T) {
+	if Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	for _, items := range [][]string{nil, {"a"}} {
 		if allocs := testing.AllocsPerRun(10, func() { Repeated(items, Identity[string]) }); allocs != 0 {
 			t.Errorf("Repeated(%q) allocates %v times, want 0", items, allocs)

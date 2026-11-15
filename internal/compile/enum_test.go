@@ -199,7 +199,7 @@ func TestLargeEnumIsSummarizedInMessagesOnly(t *testing.T) {
 		t.Fatalf("type text must parse back: %v", err)
 	}
 	summary := country.Summary()
-	if want := "enum<country>{c000,c001,c002,c003,c004,c005… 共 212 个}"; summary != want {
+	if want := "enum<country>{c000,c001,c002,c003,c004,c005… 212 in all}"; summary != want {
 		t.Fatalf("summary = %s, want %s", summary, want)
 	}
 	if nested := machine.ArrayOf(country).Summary(); nested != "array<"+summary+">" {
@@ -207,8 +207,8 @@ func TestLargeEnumIsSummarizedInMessagesOnly(t *testing.T) {
 	}
 	registry := machine.CoreRegistry()
 	_, err = CompileExpr(`@zz`, registry, CompileOptions{Args: []ArgSpec{{Name: "c", Type: country}}, Result: &country})
-	if err == nil || strings.Contains(err.Error(), "c100") || !strings.Contains(err.Error(), "共 212 个") {
-		t.Fatalf("unknown member error = %v, want a summary with 共 212 个 and no c100", err)
+	if err == nil || strings.Contains(err.Error(), "c100") || !strings.Contains(err.Error(), "212 in all") {
+		t.Fatalf("unknown member error = %v, want a summary with 212 in all and no c100", err)
 	}
 }
 

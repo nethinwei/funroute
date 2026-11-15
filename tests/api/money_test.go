@@ -624,14 +624,7 @@ func TestManifestCarriesTheMoneyFeature(t *testing.T) {
 	if err := host.Register(funroute.FunctionSpec{Name: "ledger.fee_v1", Go: fee}); err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(host.Manifest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var manifest funroute.Manifest
-	if err := json.Unmarshal(encoded, &manifest); err != nil {
-		t.Fatal(err)
-	}
+	manifest := manifestOf(t, host)
 	declared, declares := manifest.Money()
 	if spec, _ := host.Money(); !declares || !slices.Equal(declared.Currencies, spec.Currencies) {
 		t.Fatalf("manifest money = %+v, %v, want the host's %+v", declared, declares, spec)
@@ -711,10 +704,10 @@ func TestMoneyValuesKeepTheirJSONShape(t *testing.T) {
 	t.Parallel()
 	card, _ := funroute.ParseRatio("0.029")
 	for want, value := range map[string]any{
-		`{"currency":"USD","minor":170}`: amount("USD", 170),
-		`"USD"`:                          currency("USD"),
-		`"0.029"`:                        card,
-		`[{"currency":"","minor":0},{"currency":"JPY","minor":5}]`: []funroute.Money{{}, amount("JPY", 5)},
+		`{"currency":"USD","minor":170,"digits":2}`: amount("USD", 170),
+		`"USD"`:   currency("USD"),
+		`"0.029"`: card,
+		`[{"currency":"","minor":0},{"currency":"JPY","minor":5,"digits":0}]`: []funroute.Money{{}, amount("JPY", 5)},
 	} {
 		encoded, err := json.Marshal(value)
 		if err != nil || string(encoded) != want {

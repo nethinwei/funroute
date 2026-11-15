@@ -57,7 +57,7 @@ func coerceMoney(input any, table *money.Currencies) (Value, error) {
 		if code == "" {
 			return amount, noCurrencyIsZero(amount)
 		}
-		return amount, nil
+		return withDigits(amount, value["digits"], table)
 	default:
 		// Zero is the one amount with no currency: nothing is lost by it.
 		if zero, err := coerceInt(input); err == nil && zero.i == 0 {
@@ -137,4 +137,24 @@ func coerceFxRate(input any) (Value, error) {
 	}
 	fx, err := money.ReadFxRate(base, quote, text)
 	return FxRateValue(fx), err
+}
+
+// withDigits is an amount read from a map in the places its "digits" says,
+// or, where it says none, in the table's: a map is copied into the run, so
+// the amount takes the places every amount the run makes carries. Places
+// other than the table's are another amount, and refused where it enters.
+func withDigits(amount Value, digits any, table *money.Currencies) (Value, error) {
+	if digits == nil {
+		return amount.inPlaces(table), nil
+	}
+	d, err := exactInt(digits)
+	if err != nil {
+		return Value{}, fmt.Errorf("money \"digits\": %w", err)
+	}
+	places, err := money.PlacesOf(amount.s, d.i)
+	if err != nil {
+		return Value{}, fmt.Errorf("money \"digits\": %w", err)
+	}
+	amount.p = places
+	return amount, nil
 }

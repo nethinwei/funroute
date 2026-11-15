@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -13,6 +14,9 @@ import (
 // ten records as for a thousand: the records and their fields are made at
 // once, not one by one.
 func TestLoadingRecordsAllocatesByTheArray(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	binding, err := compile.Bind[viewedIn, int64](viewedRegistry(t))
 	if err != nil {
 		t.Fatal(err)

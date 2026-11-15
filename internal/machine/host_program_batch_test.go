@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nethinwei/funroute/internal/compile"
+	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
 )
 
@@ -418,6 +419,9 @@ func BenchmarkRunBatchManyCalls(b *testing.B) {
 // A batch's arrays of plain records are views of the host's slices, as
 // Run's are: what a batch allocates does not grow with the arrays.
 func TestRunBatchViewsArraysOfRecords(t *testing.T) {
+	if kit.Race {
+		t.Skip("the race detector's own allocations would be counted")
+	}
 	program := bindProgram[viewedIn, int64](t, viewedRegistry(t), `reduce(c in channels if c.ok, t = 0, t + c.fee)`)
 	allocs := func(channels int) float64 {
 		in := &viewedIn{}

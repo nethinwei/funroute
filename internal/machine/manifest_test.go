@@ -1,28 +1,25 @@
 package machine_test
 
 import (
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
 	"github.com/nethinwei/funroute/internal/machine"
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // A manifest crosses from a host to a language service as JSON, so its
-// shape is fixed, by digest, and it reads back to itself.
+// shape is fixed byte for byte (testdata/manifest.json), and it reads back to
+// itself.
 func TestManifestJSONShape(t *testing.T) {
 	t.Parallel()
 	encoded, err := json.Marshal(snapshotRegistry(t).Manifest())
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "d5c54c07c3d9259f6af4a9a81d145288080eed7d868ffd5dc14559e9d2f70e62"
-	if got := fmt.Sprintf("%x", sha256.Sum256(encoded)); got != want {
-		t.Fatalf("sha256(json.Marshal(manifest)) = %s, want %s", got, want)
-	}
+	expectSnapshot(t, "manifest.json", encoded)
 	var back machine.Manifest
 	if err := json.Unmarshal(encoded, &back); err != nil {
 		t.Fatal(err)
@@ -104,5 +101,50 @@ func TestAManifestRefusesAFunctionThatWouldCompileOtherwise(t *testing.T) {
 				t.Fatalf("Apply onto a registry whose pick.first_v1 differs in %q: error = %v", name, err)
 			}
 		})
+	}
+}
+
+// A manifest the registry refuses leaves it as it was: the forms, the money,
+// the handle and the functions the manifest describes ahead of the one
+// refused are not in it, and the same registry takes a manifest it accepts
+// afterwards as a fresh one would.
+func TestAManifestIsAppliedWholeOrNotAtAll(t *testing.T) {
+	t.Parallel()
+	first := func(xs []int64) (int64, error) { return xs[0], nil }
+	host := machine.CoreRegistry()
+	if err := host.EnableForm(machine.ForForm, machine.ReduceForm); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.DeclareMoney(money.MoneySpec{Currencies: []money.CurrencySpec{{Code: "USD", Digits: 2}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := machine.DefineHandle[*strings.Builder](host, "host.session"); err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range []machine.FunctionSpec{
+		{Name: "a.early_v1", Go: func(int64) int64 { return 0 }},
+		{Name: "pick.first_v1", Go: first, Fold: &machine.Fold{First: true}},
+	} {
+		if err := host.Register(spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := machine.CoreRegistry()
+	if err := service.Register(machine.FunctionSpec{Name: "pick.first_v1", Go: first}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := json.Marshal(service.Manifest())
+	if err := host.Manifest().Apply(service); err == nil {
+		t.Fatal("Apply onto a registry whose pick.first_v1 folds otherwise succeeded")
+	}
+	if after, _ := json.Marshal(service.Manifest()); string(after) != string(before) {
+		t.Errorf("a refused manifest left the registry changed:\n%s\nwant\n%s", after, before)
+	}
+	other := machine.CoreRegistry()
+	if err := other.EnableForm(machine.ForForm); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Manifest().Apply(service); err != nil || !service.FormEnabled(machine.ForForm) || service.FormEnabled(machine.ReduceForm) {
+		t.Errorf("Apply after a refused one: %v, for enabled %v, reduce enabled %v; want only for", err, service.FormEnabled(machine.ForForm), service.FormEnabled(machine.ReduceForm))
 	}
 }

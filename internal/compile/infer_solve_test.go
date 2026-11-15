@@ -157,3 +157,21 @@ func TestAFailedLastCandidateLeavesNoVariables(t *testing.T) {
 			len(s.vars), s.mark(), len(s.queue), waiting.queued, vars, trail)
 	}
 }
+
+// Every kind a candidate's type can have is scored, or is here with why it
+// is not: a new kind fails until it is ranked among the others.
+func TestEveryKindIsScored(t *testing.T) {
+	t.Parallel()
+	unscored := map[machine.Kind]string{
+		machine.InvalidKind: "no type",
+		machine.VarKind:     "an open type costs openPenalty",
+		machine.ArrayKind:   "a container costs its element's plus 2",
+		machine.DictKind:    "a container costs its element's plus 2",
+	}
+	for _, kind := range machine.Kinds() {
+		_, scored := implicitScores[kind]
+		if _, listed := unscored[kind]; scored == listed {
+			t.Errorf("%s: scored %v and listed as unscored %v; want exactly one", kind, scored, listed)
+		}
+	}
+}

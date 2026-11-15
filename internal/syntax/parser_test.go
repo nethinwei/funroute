@@ -2,8 +2,14 @@ package syntax
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/nethinwei/funroute/internal/machine"
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // Every node's span lies inside its parent's, and the root covers the
@@ -295,5 +301,53 @@ func TestTheFirstErrorIsReported(t *testing.T) {
 				t.Errorf("%q: the error covers %q, want %q (%v)", source, got, want, err)
 			}
 		})
+	}
+}
+
+// Every word the parser reads as a form or a keyword is reserved, so no
+// function, argument or type takes a name the parser never reads as one.
+// The forms written like a call come from the catalog; the keywords are the
+// words the parser's own source asks p.keyword for, read out of it here, so
+// that one it starts to ask for is held to this too; and the two literals.
+// if is the exception: it is a function's name, which no variable may have
+// (IsValidVariableName).
+func TestTheParsersWordsAreReserved(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.OptionalForms()...); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.DeclareMoney(money.MoneySpec{Currencies: []money.CurrencySpec{{Code: "USD", Digits: 2}}}); err != nil {
+		t.Fatal(err)
+	}
+	words := []string{"true", "false"}
+	sources, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := regexp.MustCompile(`p\.keyword\("(\w+)"\)`)
+	for _, path := range sources {
+		source, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, match := range asked.FindAllSubmatch(source, -1) {
+			if word := string(match[1]); word != "if" && !strings.HasSuffix(path, "_test.go") {
+				words = append(words, word)
+			}
+		}
+	}
+	if len(words) < 7 {
+		t.Fatalf("the parser's source asks for the keywords %v: fewer than it has, so they are no longer read here as they are written", words)
+	}
+	for _, form := range registry.Catalog().SpecialForms() {
+		if callForm(form.Name()) != nil {
+			words = append(words, form.Name())
+		}
+	}
+	for _, word := range words {
+		if !machine.IsReservedName(word) {
+			t.Errorf("the parser reads %q as its own, but it is not reserved", word)
+		}
 	}
 }

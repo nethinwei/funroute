@@ -149,7 +149,7 @@ func TestTheZeroFxRateIsNoRate(t *testing.T) {
 	_, cmpFrom := zero.Cmp(rate)
 	_, cmpTo := rate.Cmp(zero)
 	_, marshal := json.Marshal(zero)
-	_, convert := rateCurrencies(t).Convert(Money{"USD", 100}, zero, RoundHalfEven)
+	_, convert := rateCurrencies(t).Convert(amount("USD", 100), zero, RoundHalfEven)
 	for name, err := range map[string]error{
 		"Decimal": decimal, "Inverse": inverse, "Chain from": chainFrom, "Chain to": chainTo,
 		"Cmp from": cmpFrom, "Cmp to": cmpTo, "MarshalJSON": marshal, "Convert": convert,
@@ -208,7 +208,7 @@ func TestFxRateCmp(t *testing.T) {
 		"lower":            {low, high, -1},
 		"higher":           {high, low, 1},
 		"equal":            {low, fxRate(t, "USD", "JPY", "150.00"), 0},
-		"an implied equal": {low, implied(t, Money{"JPY", 15000}, Money{"USD", 10000}), 0},
+		"an implied equal": {low, implied(t, amount("JPY", 15000), amount("USD", 10000)), 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -307,12 +307,12 @@ func TestImpliedIsTheRateTwoAmountsImply(t *testing.T) {
 		over, under Money
 		want        string
 	}{
-		"yen for dollars":    {Money{"JPY", 15000}, Money{"USD", 10000}, "150 JPY / USD"},
-		"dollars for yen":    {Money{"USD", 100}, Money{"JPY", 150}, "1/150 USD / JPY"},
-		"dinars for dollars": {Money{"KWD", 307}, Money{"USD", 100}, "0.307 KWD / USD"},
-		"satoshis for dong":  {Money{"BTC", 1}, Money{"VND", 1}, "0.00000001 BTC / VND"},
-		"two refunds":        {Money{"JPY", -15025}, Money{"USD", -10000}, "150.25 JPY / USD"},
-		"a rate with no end": {Money{"EUR", 100}, Money{"USD", 300}, "1/3 EUR / USD"},
+		"yen for dollars":    {amount("JPY", 15000), amount("USD", 10000), "150 JPY / USD"},
+		"dollars for yen":    {amount("USD", 100), amount("JPY", 150), "1/150 USD / JPY"},
+		"dinars for dollars": {amount("KWD", 307), amount("USD", 100), "0.307 KWD / USD"},
+		"satoshis for dong":  {amount("BTC", 1), amount("VND", 1), "0.00000001 BTC / VND"},
+		"two refunds":        {amount("JPY", -15025), amount("USD", -10000), "150.25 JPY / USD"},
+		"a rate with no end": {amount("EUR", 100), amount("USD", 300), "1/3 EUR / USD"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -320,11 +320,11 @@ func TestImpliedIsTheRateTwoAmountsImply(t *testing.T) {
 			expectRate(t, fx, err, test.want)
 		})
 	}
-	inverse, err := implied(t, Money{"JPY", 15000}, Money{"USD", 10000}).Inverse()
+	inverse, err := implied(t, amount("JPY", 15000), amount("USD", 10000)).Inverse()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if same, err := implied(t, Money{"USD", 100}, Money{"JPY", 150}).Cmp(inverse); err != nil || same != 0 {
+	if same, err := implied(t, amount("USD", 100), amount("JPY", 150)).Cmp(inverse); err != nil || same != 0 {
 		t.Fatalf("Implied(USD 1.00, JPY 150) is not the inverse of Implied(JPY 15000, USD 100.00): %d, %v", same, err)
 	}
 }
@@ -335,13 +335,13 @@ func TestImpliedRefusesAmountsThatImplyNoRate(t *testing.T) {
 		over, under Money
 		want        error
 	}{
-		"zero over":             {Money{"JPY", 0}, Money{"USD", 100}, ErrArithmetic},
-		"zero under":            {Money{"JPY", 150}, Money{"USD", 0}, ErrArithmetic},
-		"opposite signs":        {Money{"JPY", -150}, Money{"USD", 100}, ErrArithmetic},
-		"one currency, unequal": {Money{"USD", 150}, Money{"USD", 100}, ErrCurrency},
-		"one currency, equal":   {Money{"USD", 100}, Money{"USD", 100}, ErrCurrency},
-		"a currency-less zero":  {Money{"JPY", 150}, Money{}, ErrCurrency},
-		"an undeclared one":     {Money{"CHF", 150}, Money{"USD", 100}, ErrCurrency},
+		"zero over":             {amount("JPY", 0), amount("USD", 100), ErrArithmetic},
+		"zero under":            {amount("JPY", 150), amount("USD", 0), ErrArithmetic},
+		"opposite signs":        {amount("JPY", -150), amount("USD", 100), ErrArithmetic},
+		"one currency, unequal": {amount("USD", 150), amount("USD", 100), ErrCurrency},
+		"one currency, equal":   {amount("USD", 100), amount("USD", 100), ErrCurrency},
+		"a currency-less zero":  {amount("JPY", 150), Money{}, ErrCurrency},
+		"an undeclared one":     {amount("CHF", 150), amount("USD", 100), ErrCurrency},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -359,28 +359,28 @@ func TestCurrenciesConvertAtARate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	third := implied(t, Money{"EUR", 100}, Money{"USD", 300})
+	third := implied(t, amount("EUR", 100), amount("USD", 300))
 	for name, test := range map[string]struct {
 		m    Money
 		fx   FxRate
 		mode Rounding
 		want Money
 	}{
-		"dollars into yen":     {Money{"USD", 100}, fxRate(t, "USD", "JPY", "150.25"), RoundHalfEven, Money{"JPY", 150}},
-		"rounded up":           {Money{"USD", 100}, fxRate(t, "USD", "JPY", "150.25"), RoundUp, Money{"JPY", 151}},
-		"a half to even":       {Money{"USD", 100}, fxRate(t, "USD", "KWD", "0.3075"), RoundHalfEven, Money{"KWD", 308}},
-		"a currency-less zero": {Money{}, fxRate(t, "USD", "JPY", "150.25"), RoundHalfEven, Money{"JPY", 0}},
-		"dong into satoshis":   {Money{"VND", 150}, implied(t, Money{"BTC", 1}, Money{"VND", 1}), RoundHalfEven, Money{"BTC", 150}},
-		"a third, half even":   {Money{"USD", 100}, third, RoundHalfEven, Money{"EUR", 33}},
-		"a third, up":          {Money{"USD", 100}, third, RoundUp, Money{"EUR", 34}},
+		"dollars into yen":     {amount("USD", 100), fxRate(t, "USD", "JPY", "150.25"), RoundHalfEven, amount("JPY", 150)},
+		"rounded up":           {amount("USD", 100), fxRate(t, "USD", "JPY", "150.25"), RoundUp, amount("JPY", 151)},
+		"a half to even":       {amount("USD", 100), fxRate(t, "USD", "KWD", "0.3075"), RoundHalfEven, amount("KWD", 308)},
+		"a currency-less zero": {Money{}, fxRate(t, "USD", "JPY", "150.25"), RoundHalfEven, amount("JPY", 0)},
+		"dong into satoshis":   {amount("VND", 150), implied(t, amount("BTC", 1), amount("VND", 1)), RoundHalfEven, amount("BTC", 150)},
+		"a third, half even":   {amount("USD", 100), third, RoundHalfEven, amount("EUR", 33)},
+		"a third, up":          {amount("USD", 100), third, RoundUp, amount("EUR", 34)},
 		// Rounded once: EUR 0.05 is JPY 8.26375 exactly, where rounding at
 		// the dollar would give USD 0.06, JPY 9.015, JPY 9.
-		"a chain rounded once": {Money{"EUR", 5}, chained, RoundHalfEven, Money{"JPY", 8}},
+		"a chain rounded once": {amount("EUR", 5), chained, RoundHalfEven, amount("JPY", 8)},
 		// The rate rescaled to minor units, 10^-20, fits no ratio; the
 		// amount cancels it: 100 × 10^-20 is 10^-18 yen.
-		"a tiny rate, down": {Money{"USD", 100}, fxRate(t, "USD", "JPY", "0.000000000000000001"), RoundDown, Money{"JPY", 0}},
-		"a tiny rate, up":   {Money{"USD", 100}, fxRate(t, "USD", "JPY", "0.000000000000000001"), RoundUp, Money{"JPY", 1}},
-		"zero, tiny rate":   {Money{"USD", 0}, fxRate(t, "USD", "JPY", "0.000000000000000001"), RoundUp, Money{"JPY", 0}},
+		"a tiny rate, down": {amount("USD", 100), fxRate(t, "USD", "JPY", "0.000000000000000001"), RoundDown, amount("JPY", 0)},
+		"a tiny rate, up":   {amount("USD", 100), fxRate(t, "USD", "JPY", "0.000000000000000001"), RoundUp, amount("JPY", 1)},
+		"zero, tiny rate":   {amount("USD", 0), fxRate(t, "USD", "JPY", "0.000000000000000001"), RoundUp, amount("JPY", 0)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -395,20 +395,20 @@ func TestCurrenciesConvertAtARate(t *testing.T) {
 func TestCurrenciesConvertRefusesTheWrongCurrency(t *testing.T) {
 	t.Parallel()
 	usdJPY := fxRate(t, "USD", "JPY", "150")
-	if got, err := rateCurrencies(t).Convert(Money{"EUR", 100}, usdJPY, RoundHalfEven); !errors.Is(err, ErrCurrency) {
+	if got, err := rateCurrencies(t).Convert(amount("EUR", 100), usdJPY, RoundHalfEven); !errors.Is(err, ErrCurrency) {
 		t.Errorf("Convert(EUR 1.00, %s) = %v, %v, want ErrCurrency", usdJPY, got, err)
 	}
 	// A rate over a currency this table does not declare.
 	eurUSD := fxRate(t, "EUR", "USD", "1.1")
-	if got, err := testCurrencies(t).Convert(Money{"EUR", 100}, eurUSD, RoundHalfEven); !errors.Is(err, ErrCurrency) {
+	if got, err := testCurrencies(t).Convert(amount("EUR", 100), eurUSD, RoundHalfEven); !errors.Is(err, ErrCurrency) {
 		t.Errorf("Convert(EUR 1.00, %s) on a table without EUR = %v, %v, want ErrCurrency", eurUSD, got, err)
 	}
 	// The machine's entries trust a checked rate, yet still refuse one the
 	// table does not know rather than reading no places for it.
-	if got, err := ConvertAt(testCurrencies(t), Money{"EUR", 100}, eurUSD, RoundHalfEven); !errors.Is(err, ErrCurrency) {
+	if got, err := ConvertAt(testCurrencies(t), amount("EUR", 100), eurUSD, RoundHalfEven); !errors.Is(err, ErrCurrency) {
 		t.Errorf("ConvertAt(EUR 1.00, %s) on a table without EUR = %v, %v, want ErrCurrency", eurUSD, got, err)
 	}
-	if got, err := ConvertExactAt(testCurrencies(t), Money{"EUR", 100}.Exact(), eurUSD); !errors.Is(err, ErrCurrency) {
+	if got, err := ConvertExactAt(testCurrencies(t), amount("EUR", 100).Exact(), eurUSD); !errors.Is(err, ErrCurrency) {
 		t.Errorf("ConvertExactAt(EUR 1.00, %s) on a table without EUR = %v, %v, want ErrCurrency", eurUSD, got, err)
 	}
 }
@@ -427,7 +427,7 @@ func TestAConvertedDenominatorPastUint64IsAnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := table.Convert(Money{"BTC", 1}, fx, RoundHalfEven); !errors.Is(err, ErrArithmetic) {
+	if got, err := table.Convert(amount("BTC", 1), fx, RoundHalfEven); !errors.Is(err, ErrArithmetic) {
 		t.Errorf("Convert(BTC 0.00000001, %s) = %v, %v, want ErrArithmetic", fx, got, err)
 	}
 }
@@ -515,7 +515,7 @@ func TestConvertAgreesWithBigRat(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		amount := Money{currency: pair[0], minor: pick() * []int64{1, -1}[random.IntN(2)]}
+		amount := newMoney(pair[0], pick()*[]int64{1, -1}[random.IntN(2)])
 		for _, mode := range []Rounding{RoundDown, RoundUp} {
 			got, err := table.Convert(amount, fx, mode)
 			want, fits := convertedExactly(t, table, amount, fx, mode == RoundUp)
@@ -531,7 +531,7 @@ func TestConvertAgreesWithBigRat(t *testing.T) {
 		t.Fatal(err)
 	}
 	fx := FxRate{pair: &Pair{Base: "AAA", Quote: "BBB"}, rate: ratio(274877906944, 847288609443)}
-	if got, err := wide.Convert(Money{currency: "AAA", minor: 1 << 38}, fx, RoundDown); err != nil || got.minor <= 0 {
+	if got, err := wide.Convert(newMoney("AAA", 1<<38), fx, RoundDown); err != nil || got.minor <= 0 {
 		t.Fatalf("Convert(AAA 2^38) = %v, %v; want about 8.9e18", got, err)
 	}
 }
@@ -560,7 +560,7 @@ func convertedExactly(t *testing.T, table *Currencies, m Money, fx FxRate, away 
 // the rate does — BTC MinInt64 for JPY -1.
 func TestImpliedNeedsNoRatioOfTheAmounts(t *testing.T) {
 	t.Parallel()
-	fx, err := rateCurrencies(t).Implied(Money{currency: "BTC", minor: math.MinInt64}, Money{currency: "JPY", minor: -1})
+	fx, err := rateCurrencies(t).Implied(newMoney("BTC", math.MinInt64), newMoney("JPY", -1))
 	if err != nil || fx.rate != ratio(1<<55, 390625) {
 		t.Fatalf("Implied(BTC MinInt64, JPY -1) = %s, %v; want 2^55/390625", fx, err)
 	}

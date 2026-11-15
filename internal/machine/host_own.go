@@ -20,7 +20,7 @@ func loadOwn(typ reflect.Type, p unsafe.Pointer) (Value, error) {
 	switch typ {
 	case moneyGoType:
 		amount := (*money.Money)(p)
-		return MoneyValue(amount.Minor(), amount.Currency()), nil
+		return moneyValueOf(*amount), nil
 	case ratioGoType:
 		return RatioValue(*(*money.Ratio)(p)), nil
 	case fxRateGoType:

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/nethinwei/funroute/internal/kit"
@@ -52,6 +53,10 @@ func (f FxRate) String() string {
 	}
 	return f.rate.String() + " " + f.pair.Quote + " / " + f.pair.Base
 }
+
+// LogValue makes slog write the rate as String, "150.25 JPY / USD", rather
+// than its JSON object.
+func (f FxRate) LogValue() slog.Value { return slog.StringValue(f.String()) }
 
 // Decimal is the rate rounded half to even to places decimal places, at
 // most 18, for showing it: the rate itself stays exact.
@@ -241,6 +246,11 @@ func (c *Currencies) Implied(over, under Money) (FxRate, error) {
 	if err != nil {
 		return FxRate{}, err
 	}
+	for _, amount := range []Money{over, under} {
+		if err := c.inPlaces(amount); err != nil {
+			return FxRate{}, err
+		}
+	}
 	if over.currency == under.currency {
 		return FxRate{}, fmt.Errorf("%w: %s and %s imply no exchange rate: two amounts in one currency have a ratio, over / under", ErrCurrency, over.currency, under.currency)
 	}
@@ -291,6 +301,9 @@ func (c *Currencies) convertAt(m Money, fx FxRate, mode Rounding) (Money, error)
 	if err := checkMode(mode); err != nil {
 		return Money{}, err
 	}
+	if err := c.inPlaces(m); err != nil {
+		return Money{}, err
+	}
 	up, down, err := c.rescaling(m.currency, fx)
 	if err != nil {
 		return Money{}, err
@@ -298,7 +311,7 @@ func (c *Currencies) convertAt(m Money, fx FxRate, mode Rounding) (Money, error)
 	num, den := fx.rate.parts()
 	nums, dens := [3]uint64{magnitude(m.minor), uint64(num), up}, [3]uint64{1, uint64(den), down}
 	minor, err := roundedFraction(m.minor < 0, nums[:], dens[:], mode)
-	return Money{currency: fx.pair.Quote, minor: minor}, err
+	return c.unitOf(fx.pair.Quote).of(minor), err
 }
 
 // rescaling is the powers of ten fx's rate is multiplied and divided by to

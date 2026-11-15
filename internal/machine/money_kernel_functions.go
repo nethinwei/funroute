@@ -25,7 +25,9 @@ func (k moneyKernel) registerFunctions(registry *Registry) {
 func (k moneyKernel) registerBuilders(registry *Registry) {
 	registerMoneyOp(registry, "money", []Type{IntType, CurrencyType}, MoneyType,
 		moneyDoc("money", "由最小单位的整数与币种造出金额：money(170, USD) 是 USD 1.70。输入里的金额与币种分开时用它。", "最小单位", "币种"),
-		func(_ context.Context, args []Value) (Value, error) { return MoneyValue(args[0].i, args[1].s), nil })
+		func(_ context.Context, args []Value) (Value, error) {
+			return MoneyValue(args[0].i, args[1].s).inPlaces(k.table), nil
+		})
 	registerMoneyOp(registry, "currency_of", []Type{StringType}, CurrencyType,
 		moneyDoc("currency_of", "把币种代码字符串读成币种；不是注册表声明的币种就是错误。", "代码"),
 		func(_ context.Context, args []Value) (Value, error) {

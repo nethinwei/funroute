@@ -29,14 +29,7 @@ func TestManifestStandsInForTheHostsFunctions(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(host.Manifest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var manifest funroute.Manifest
-	if err := json.Unmarshal(encoded, &manifest); err != nil {
-		t.Fatal(err)
-	}
+	manifest := manifestOf(t, host)
 	browser := withStandard(t)
 	if err := manifest.Apply(browser); err != nil {
 		t.Fatal(err)
@@ -132,4 +125,19 @@ func TestManifestNamesItsVersion(t *testing.T) {
 	if got := withStandard(t).Manifest().Version(); got != funroute.ManifestVersion {
 		t.Fatalf("Manifest().Version() = %d, want %d", got, funroute.ManifestVersion)
 	}
+}
+
+// manifestOf is registry's manifest as it crosses to a language service:
+// written as JSON and read back.
+func manifestOf(t *testing.T, registry *funroute.Registry) funroute.Manifest {
+	t.Helper()
+	encoded, err := json.Marshal(registry.Manifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest funroute.Manifest
+	if err := json.Unmarshal(encoded, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	return manifest
 }
