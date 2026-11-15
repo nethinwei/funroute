@@ -34,7 +34,7 @@ var ErrFoldBudget = errors.New("compile-time evaluation budget exhausted")
 // answer grows makes it anew every turn.
 func (f *frame) carried(loop *regLoop) int {
 	site := loop.site
-	if f.budget <= 0 || site.acc < 0 || bankOf(site.typ.kind) != valueBank {
+	if site.acc < 0 || bankOf(site.typ.kind) != valueBank {
 		return 0
 	}
 	return holds(f.regs[site.acc])

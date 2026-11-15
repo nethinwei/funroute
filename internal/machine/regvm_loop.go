@@ -290,7 +290,13 @@ func (f *frame) regLoopNext(pc int, body int32) (int, error) {
 	loop.index++
 	if loop.index < loop.length {
 		if f.watching() {
-			if err := f.turn(1 + f.carried(loop)); err != nil {
+			// Only an evaluation at compile time asks what the turn carries:
+			// a run under a deadline pays for the turn alone.
+			turns := 1
+			if f.budget > 0 {
+				turns += f.carried(loop)
+			}
+			if err := f.turn(turns); err != nil {
 				return pc, err
 			}
 		}
