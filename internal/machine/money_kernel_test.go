@@ -106,7 +106,7 @@ type moneyCase struct {
 func expectValue(t *testing.T, test moneyCase) {
 	t.Helper()
 	value, err := runMoney(t, test.source, test.contract, test.args...)
-	if got := fmt.Sprint(value.Any()); err != nil || got != test.want {
+	if got := fmt.Sprint(plain(value.Any())); err != nil || got != test.want {
 		t.Fatalf("%s on %v = %s, %v, want %s", test.source, test.args, got, err, test.want)
 	}
 }
@@ -137,7 +137,7 @@ func TestAllocateAddsBackUp(t *testing.T) {
 		"allocate(-m, [1, 1, 1])": "[{USD -334} {USD -333} {USD -333}]",
 	} {
 		value, err := evalMoney(t, source, "m: money; n: money", map[string]any{"m": "USD 10.00", "n": "USD 0.05"})
-		if got := fmt.Sprint(value.Any()); err != nil || got != want {
+		if got := fmt.Sprint(plain(value.Any())); err != nil || got != want {
 			t.Fatalf("%s = %s, %v, want %s", source, got, err, want)
 		}
 	}
@@ -153,7 +153,7 @@ func TestRatiosConvertExactlyOrSayWhy(t *testing.T) {
 		`ratio("2") > ratio("1.999")`: "true",
 	} {
 		value, err := evalMoney(t, source, "", nil)
-		if got := fmt.Sprint(value.Any()); err != nil || got != want {
+		if got := fmt.Sprint(plain(value.Any())); err != nil || got != want {
 			t.Fatalf("%s = %s, %v, want %s", source, got, err, want)
 		}
 	}
@@ -353,4 +353,46 @@ func BenchmarkMoneyFee(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// minorUnits is an amount as its parts, so a want reads "{USD 34}" whether
+// or not the amount carries its places: these tests check the amount, and
+// Money.String writes it for people, in the places it carries.
+type minorUnits struct {
+	currency string
+	minor    int64
+}
+
+// plain is value with every Money in it, in slices and maps too, as
+// minorUnits; fmt.Sprint(plain(v)) is then a stable text to compare.
+func plain(value any) any {
+	switch v := value.(type) {
+	case money.Money:
+		return minorUnits{v.Currency(), v.Minor()}
+	case []money.Money:
+		return plainItems(v)
+	case []any:
+		return plainItems(v)
+	case map[string]money.Money:
+		return plainEntries(v)
+	case map[string]any:
+		return plainEntries(v)
+	}
+	return value
+}
+
+func plainItems[T any](items []T) []any {
+	out := make([]any, len(items))
+	for i, item := range items {
+		out[i] = plain(item)
+	}
+	return out
+}
+
+func plainEntries[T any](entries map[string]T) map[string]any {
+	out := make(map[string]any, len(entries))
+	for k, item := range entries {
+		out[k] = plain(item)
+	}
+	return out
 }

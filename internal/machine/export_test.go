@@ -45,7 +45,7 @@ var LoadOwn = loadOwn
 
 // NewMoney is money without a currency table, for the external tests that
 // build values: they test the machine, not the boundary.
-var NewMoney = money.Make
+func NewMoney(currency string, minor int64) money.Money { return money.Make(currency, minor, 0) }
 
 // NewRatio is num/den, which the test knows fits.
 func NewRatio(num, den int64) money.Ratio {
@@ -237,7 +237,7 @@ func LibraryNames() []string {
 // the quick way reads, and the decoder's way.
 func ConstantBothWays(c Constant) (quick Value, ok bool, decoded Value, err error) {
 	quick, ok = c.scalar()
-	decoded, err = c.decoded()
+	decoded, err = c.decoded(nil)
 	return quick, ok, decoded, err
 }
 

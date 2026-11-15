@@ -30,9 +30,13 @@ import (
 type Value struct {
 	kind Kind
 	b    bool
-	i    int64
-	f    float64
-	s    string // a string's text, or a handle's type name
+	// p is money's decimal places + 1, 0 where the amount does not carry
+	// them (money.MoneyParts); it sits in the padding after kind and b, so a
+	// Value is no larger for it.
+	p uint8
+	i int64
+	f float64
+	s string // a string's text, or a handle's type name
 	// box is the container backing: for a native array, a *bool, *int64,
 	// *float64, *string, *money.Money or *money.FxRate at the first item, i
 	// being the count (container.go); a *nestedArray, *recordsView, the

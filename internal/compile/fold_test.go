@@ -366,7 +366,7 @@ func TestAFoldedBindingIsHiddenByAnInnerOne(t *testing.T) {
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			value, _ := compileAndRun(t, test.source, registry, test.args)
-			if got := fmt.Sprint(value.Any()); got != test.want {
+			if got := fmt.Sprint(plain(value.Any())); got != test.want {
 				t.Fatalf("%s = %s, want %s", test.source, got, test.want)
 			}
 		})

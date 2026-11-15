@@ -217,8 +217,9 @@ func expectParsed(t *testing.T, registry *Registry, code, amount string, want in
 		}
 		return
 	}
-	if got, _ := value.Money(); err != nil || got != money.Make(code, want) {
-		t.Fatalf("ParseMoneyAmount(%s, %s) = %v, %v, want %s %d", code, amount, got, err, code, want)
+	places, _ := registry.currencies().Places(code)
+	if got, _ := value.Money(); err != nil || got != money.Make(code, want, uint8(places+1)) {
+		t.Fatalf("ParseMoneyAmount(%s, %s) = %v, %v, want %s %d in %d places", code, amount, got, err, code, want, places)
 	}
 }
 
@@ -314,7 +315,7 @@ func TestARegistryHandsOutItsTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	table, ok := registry.Currencies()
-	if text, err := table.Format(money.Make("USD", 5)); !ok || err != nil || text != "USD 0.05" {
+	if text, err := table.Format(money.Make("USD", 5, 0)); !ok || err != nil || text != "USD 0.05" {
 		t.Fatalf("registry table = %v, %v", table, ok)
 	}
 }

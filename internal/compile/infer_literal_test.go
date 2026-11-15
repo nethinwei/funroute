@@ -265,7 +265,7 @@ func runMoney(t *testing.T, source, contract string, args map[string]any) (strin
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprint(value.Any()), nil
+	return fmt.Sprint(plain(value.Any())), nil
 }
 
 func compileMoney(t *testing.T, source, contract, result string) (*machine.Artifact, error) {
@@ -292,7 +292,7 @@ func runArtifact(t *testing.T, artifact *machine.Artifact, args map[string]any) 
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprint(value.Any()), nil
+	return fmt.Sprint(plain(value.Any())), nil
 }
 
 func resultOrError(t *testing.T, source, contract, result string) string {
@@ -303,4 +303,46 @@ func resultOrError(t *testing.T, source, contract, result string) string {
 		return "error: " + message
 	}
 	return artifact.Result().String()
+}
+
+// minorUnits is an amount as its parts, so a want reads "{USD 34}" whether
+// or not the amount carries its places: these tests check the amount, and
+// Money.String writes it for people, in the places it carries.
+type minorUnits struct {
+	currency string
+	minor    int64
+}
+
+// plain is value with every Money in it, in slices and maps too, as
+// minorUnits; fmt.Sprint(plain(v)) is then a stable text to compare.
+func plain(value any) any {
+	switch v := value.(type) {
+	case money.Money:
+		return minorUnits{v.Currency(), v.Minor()}
+	case []money.Money:
+		return plainItems(v)
+	case []any:
+		return plainItems(v)
+	case map[string]money.Money:
+		return plainEntries(v)
+	case map[string]any:
+		return plainEntries(v)
+	}
+	return value
+}
+
+func plainItems[T any](items []T) []any {
+	out := make([]any, len(items))
+	for i, item := range items {
+		out[i] = plain(item)
+	}
+	return out
+}
+
+func plainEntries[T any](entries map[string]T) map[string]any {
+	out := make(map[string]any, len(entries))
+	for k, item := range entries {
+		out[k] = plain(item)
+	}
+	return out
 }

@@ -116,7 +116,7 @@ func TestProgramCarriesEveryMoneyType(t *testing.T) {
 	}
 	out, err := program.Run(t.Context(), &in)
 	want := feeOut{
-		Fee: machine.NewMoney("EUR", 250), Settled: machine.NewMoney("JPY", 16_000),
+		Fee: machine.NewMoney("EUR", 250), Settled: money.Make("JPY", 16_000, 1), // converted: in the table's places for JPY
 		Shares: []money.Money{machine.NewMoney("EUR", 3334), machine.NewMoney("EUR", 3333), machine.NewMoney("EUR", 3333)},
 		Settle: "JPY",
 	}

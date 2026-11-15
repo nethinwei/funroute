@@ -73,7 +73,10 @@ func declaredValue(table *money.Currencies, value Value, ordered bool) error {
 		if value.s == "" {
 			return noCurrencyIsZero(value)
 		}
-		return declaredCode(table, value.s)
+		if err := declaredCode(table, value.s); err != nil {
+			return err
+		}
+		return declaredPlaces(table, value)
 	case CurrencyKind:
 		return declaredCode(table, value.s)
 	case FxRateKind:
@@ -98,15 +101,16 @@ func declaredValue(table *money.Currencies, value Value, ordered bool) error {
 // is not looked up again, so the walk is a comparison an item, not a lookup.
 // What it refuses, and the item it says, is eachPart's.
 func declaredAmounts(table *money.Currencies, amounts []money.Money) error {
-	declared := ""
+	var declared Value
 	for i, amount := range amounts {
-		if currency := amount.Currency(); currency == declared && currency != "" {
+		value := moneyValueOf(amount)
+		if value.s == declared.s && value.p == declared.p && value.s != "" {
 			continue
 		}
-		if err := declaredValue(table, MoneyValue(amount.Minor(), amount.Currency()), false); err != nil {
+		if err := declaredValue(table, value, false); err != nil {
 			return fmt.Errorf("item %d: %w", i, err)
 		}
-		declared = amount.Currency()
+		declared = value
 	}
 	return nil
 }
@@ -116,17 +120,29 @@ func declaredAmounts(table *money.Currencies, amounts []money.Money) error {
 // an item, and, as declaredAmounts, a currency found declared just before
 // not looked up again. What it refuses, and where it says, is eachPart's.
 func declaredView(table *money.Currencies, view *recordsView) error {
-	declared := ""
+	var declared Value
 	return view.units(func(item, field int, unit Value) error {
-		if unit.s == declared && unit.s != "" {
+		if unit.s == declared.s && unit.p == declared.p && unit.s != "" {
 			return nil
 		}
 		if err := declaredValue(table, unit, false); err != nil {
 			return fmt.Errorf("item %d: field %q: %w", item, view.plan.elem.typ.fields[field].name, err)
 		}
-		declared = unit.s
+		declared = unit
 		return nil
 	})
+}
+
+// declaredPlaces refuses an amount that carries places other than the
+// table's for its currency: read in the registry's places it would be
+// another amount. An amount that carries none goes in as it is and takes
+// places where it meets an amount that has them.
+func declaredPlaces(table *money.Currencies, value Value) error {
+	if value.p == 0 || value.p == money.PlacesIn(table, value.s) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s in %d decimal places, but this registry declares %d",
+		ErrCurrency, value.s, value.p-1, money.PlacesIn(table, value.s)-1)
 }
 
 func declaredCode(table *money.Currencies, currency string) error {

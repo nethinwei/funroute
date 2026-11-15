@@ -174,7 +174,7 @@ func assertRunsTo(t *testing.T, registry *machine.Registry, source string, contr
 	if err != nil {
 		t.Fatalf("%s: %v", source, err)
 	}
-	if got := fmt.Sprint(value.Any()); got != want {
+	if got := fmt.Sprint(plain(value.Any())); got != want {
 		t.Fatalf("%s = %s, want %s", source, got, want)
 	}
 }

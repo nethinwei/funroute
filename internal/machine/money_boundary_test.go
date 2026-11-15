@@ -25,12 +25,12 @@ func TestTheBoundaryChecksEveryCurrencyAnArgumentHolds(t *testing.T) {
 		args  []Value
 		fails bool
 	}{
-		"one currency throughout": {[]Value{MoneyValue(1, "USD"), arrayOf([]money.Money{money.Make("USD", 2), money.Make("", 0)})}, false},
+		"one currency throughout": {[]Value{MoneyValue(1, "USD"), arrayOf([]money.Money{money.Make("USD", 2, 0), money.Make("", 0, 0)})}, false},
 		// money is any declared currency, each value its own: a list of
 		// two is the aggregate's to refuse, not the boundary's.
-		"two currencies":         {[]Value{MoneyValue(1, "USD"), arrayOf([]money.Money{money.Make("EUR", 2)})}, false},
+		"two currencies":         {[]Value{MoneyValue(1, "USD"), arrayOf([]money.Money{money.Make("EUR", 2, 0)})}, false},
 		"an undeclared currency": {[]Value{MoneyValue(1, "GBP"), arrayOf([]money.Money{})}, true},
-		"an undeclared item":     {[]Value{MoneyValue(0, ""), arrayOf([]money.Money{money.Make("GBP", 2)})}, true},
+		"an undeclared item":     {[]Value{MoneyValue(0, ""), arrayOf([]money.Money{money.Make("GBP", 2, 0)})}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -135,17 +135,17 @@ func boundaryCases(t *testing.T) map[string]boundaryCase {
 		"an undeclared currency":    one("m", MoneyType, MoneyValue(5, "GBP"), `"GBP" is not declared`),
 		"a declared currency value": one("c", CurrencyType, CurrencyValue("EUR"), ""),
 		"an empty currency":         one("c", CurrencyType, CurrencyValue(""), "not declared"),
-		"items in two currencies":   one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1), money.Make("EUR", 1)), ""),
-		"an undeclared item":        one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1), money.Make("GBP", 1)), "item 1"),
+		"items in two currencies":   one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1, 0), money.Make("EUR", 1, 0)), ""),
+		"an undeclared item":        one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1, 0), money.Make("GBP", 1, 0)), "item 1"),
 		// A currency is looked up when it changes: after a run of one, a
 		// change back is looked up again, and a zero with no currency does
 		// not vouch for the one after it.
-		"undeclared after a change": one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1), money.Make("USD", 2), money.Make("EUR", 1), money.Make("USD", 3), money.Make("GBP", 1)), "item 4"),
-		"no currency after a zero":  one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1), money.Make("", 0), money.Make("", 5)), "item 2: "),
-		"an undeclared entry":       one("d", DictOf(MoneyType), moneyDict(map[string]money.Money{"x": money.Make("GBP", 1)}), `entry "x"`),
+		"undeclared after a change": one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1, 0), money.Make("USD", 2, 0), money.Make("EUR", 1, 0), money.Make("USD", 3, 0), money.Make("GBP", 1, 0)), "item 4"),
+		"no currency after a zero":  one("xs", ArrayOf(MoneyType), moneyArray(money.Make("USD", 1, 0), money.Make("", 0, 0), money.Make("", 5, 0)), "item 2: "),
+		"an undeclared entry":       one("d", DictOf(MoneyType), moneyDict(map[string]money.Money{"x": money.Make("GBP", 1, 0)}), `entry "x"`),
 		"a record in two":           one("o", order, record(t, order, usd, CurrencyValue("EUR")), ""),
 		"an undeclared field":       one("o", order, record(t, order, usd, CurrencyValue("GBP")), `field "cur"`),
-		"deep in records and dicts": one("xs", ArrayOf(nested), array(t, nested, record(t, nested, moneyDict(map[string]money.Money{"a": money.Make("USD", 1), "b": money.Make("GBP", 1)}))), `entry "b"`),
+		"deep in records and dicts": one("xs", ArrayOf(nested), array(t, nested, record(t, nested, moneyDict(map[string]money.Money{"a": money.Make("USD", 1, 0), "b": money.Make("GBP", 1, 0)}))), `entry "b"`),
 		"ratios are not scanned":    one("rs", ArrayOf(RatioType), Value{kind: ArrayKind, box: []money.Ratio{ratio(1, 10_000_000_000)}}, ""),
 		"two amounts, one currency": {pair, []Value{usd, usd}, ""},
 		"two amounts, two":          {pair, []Value{usd, eur}, ""},

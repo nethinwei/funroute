@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nethinwei/funroute/internal/kit"
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // ArtifactVersion names the shape of everything the digest covers; an artifact
@@ -124,7 +125,57 @@ func ConstantOf(value Value, typ Type) (Constant, bool) {
 		return Constant{Type: typ, Value: data}, true
 	}
 	data, err := json.Marshal(value)
+	if err != nil {
+		return Constant{}, false
+	}
+	data, err = withoutDigits(data, typ)
 	return Constant{Type: typ, Value: data}, err == nil
+}
+
+// withoutDigits is a constant's JSON with the places left out of its
+// amounts. The artifact declares its currencies with their places once, in
+// its money stamp, and a constant's amounts are in those places: writing
+// them again in every amount would only change what is stored, and so the
+// digest, of every artifact with money in it. They are read back in the
+// table's places (valueIn). The walk follows typ, not the keys, so a record
+// field that happens to be called digits is left as it is.
+func withoutDigits(data []byte, typ Type) ([]byte, error) {
+	if !TypeContains(typ, MoneyKind) {
+		return data, nil
+	}
+	decoder := kit.NumberDecoder(data)
+	var tree any
+	if err := decoder.Decode(&tree); err != nil {
+		return nil, err
+	}
+	stripDigits(tree, typ)
+	return json.Marshal(tree)
+}
+
+// stripDigits deletes "digits" from every amount in tree, a value of typ as
+// its JSON decodes.
+func stripDigits(tree any, typ Type) {
+	switch node := tree.(type) {
+	case map[string]any:
+		switch typ.kind {
+		case MoneyKind:
+			delete(node, "digits")
+		case DictKind:
+			for _, item := range node {
+				stripDigits(item, *typ.elem)
+			}
+		case RecordKind:
+			for _, field := range typ.fields {
+				stripDigits(node[field.name], field.typ)
+			}
+		}
+	case []any:
+		if typ.kind == ArrayKind {
+			for _, item := range node {
+				stripDigits(item, *typ.elem)
+			}
+		}
+	}
 }
 
 // scalarJSON is the JSON of an int, a bool or a string, written as
@@ -141,17 +192,23 @@ func scalarJSON(value Value) ([]byte, bool) {
 	return nil, false
 }
 
-// value reads the constant back as a value of its type.
-func (c Constant) value() (Value, error) {
+// value reads the constant back as a value of its type, its amounts without
+// places: what the constant says, for the checks that read it.
+func (c Constant) value() (Value, error) { return c.valueIn(nil) }
+
+// valueIn reads the constant back as a value of its type, its amounts in
+// table's places — the places of the money stamp they were compiled in,
+// which the load checks against the registry's.
+func (c Constant) valueIn(table *money.Currencies) (Value, error) {
 	if value, ok := c.scalar(); ok {
 		return value, nil
 	}
-	return c.decoded()
+	return c.decoded(table)
 }
 
 // decoded reads the constant through the decoder and coerce, as a host's
 // JSON argument is read.
-func (c Constant) decoded() (Value, error) {
+func (c Constant) decoded(table *money.Currencies) (Value, error) {
 	decoder := kit.NumberDecoder(c.Value)
 	var input any
 	if err := decoder.Decode(&input); err != nil {
@@ -160,7 +217,7 @@ func (c Constant) decoded() (Value, error) {
 	if !c.Type.IsConcrete() {
 		return Value{}, errors.New("constant is missing its type")
 	}
-	return coerce(input, c.Type)
+	return coerceWith(input, c.Type, table)
 }
 
 // scalar reads a bool, int, float or string constant straight from its

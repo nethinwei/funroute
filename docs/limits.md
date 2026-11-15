@@ -109,7 +109,7 @@
 | 最大金额 `* 2` | 运行时 `ErrArithmetic` |  |
 | `USD 1 + JPY 1` | 编译期 `ErrCurrency` | 闭合表达式在编译期就算了 |
 | 入参 `"XYZ 1"` | 运行时 `ErrCurrency` | 未声明的币种，同时是 `ErrContract` |
-| 入参是 JSON 数字 `1.5` | 运行时 `ErrContract` | 金额只收 `"USD 1.70"` 或 `{"currency", "minor"}`，float 进不了金额 |
+| 入参是 JSON 数字 `1.5` | 运行时 `ErrContract` | 金额只收 `"USD 1.70"` 或 `{"currency", "minor", "digits"?}`，float 进不了金额 |
 | `m / 3` | 编译期 `ErrCompile` | 金额不能除以整数（会丢分），用 `allocate(m, 3)` |
 | `USD 1.00 / USD 3.00` | `"1/3"` | 同币种之比是精确的 ratio |
 | `USD 1.00 * 2.9%` | 编译期 `ErrCompile` | 落在两个最小单位之间：写在 `round` 里或写出舍入方式 |

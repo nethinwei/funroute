@@ -630,7 +630,7 @@ func TestRunValuesChecksTheCurrencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if encoded, err := json.Marshal(value); err != nil || string(encoded) != `{"fee":{"currency":"USD","minor":29},"made":{"currency":"EUR","minor":100}}` {
+	if encoded, err := json.Marshal(value); err != nil || string(encoded) != `{"fee":{"currency":"USD","minor":29,"digits":2},"made":{"currency":"EUR","minor":100,"digits":2}}` {
 		t.Errorf("RunValues = %s, %v, want the fee and EUR 1.00", encoded, err)
 	}
 	for name, edit := range map[string]func([]funroute.Value){
@@ -673,15 +673,15 @@ func TestEncodeJSONWritesAmountsAsText(t *testing.T) {
 	if encoded, err := registry.EncodeJSON(value); err != nil || string(encoded) != want {
 		t.Errorf("EncodeJSON = %s, %v\nwant %s", encoded, err, want)
 	}
-	raw := `{"z":{"currency":"USD","minor":-170},"a":[{"currency":"JPY","minor":5},{"currency":"JPY","minor":0}],"d":{"k":{"currency":"EUR","minor":5}},"r":"0.0025","c":"EUR","n":1,"fx":{"base":"USD","quote":"JPY","rate":"150"}}`
+	raw := `{"z":{"currency":"USD","minor":-170,"digits":2},"a":[{"currency":"JPY","minor":5,"digits":0},{"currency":"JPY","minor":0,"digits":0}],"d":{"k":{"currency":"EUR","minor":5,"digits":2}},"r":"0.0025","c":"EUR","n":1,"fx":{"base":"USD","quote":"JPY","rate":"150"}}`
 	if encoded, err := json.Marshal(value); err != nil || string(encoded) != raw {
 		t.Errorf("json.Marshal = %s, %v\nwant %s", encoded, err, raw)
 	}
 	if encoded, err := registry.EncodeJSON(valueOf(funroute.Money{})); err != nil || string(encoded) != "0" {
 		t.Errorf("EncodeJSON(currency-less zero) = %s, %v, want 0", encoded, err)
 	}
-	if encoded, err := funroute.CoreRegistry().EncodeJSON(valueOf(amount("USD", 170))); err != nil || string(encoded) != `{"currency":"USD","minor":170}` {
-		t.Errorf("EncodeJSON without money declared = %s, %v, want the minor units", encoded, err)
+	if encoded, err := funroute.CoreRegistry().EncodeJSON(valueOf(amount("USD", 170))); err != nil || string(encoded) != `{"currency":"USD","minor":170,"digits":2}` {
+		t.Errorf("EncodeJSON without money declared = %s, %v, want the minor units and their places", encoded, err)
 	}
 }
 

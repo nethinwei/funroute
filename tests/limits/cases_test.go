@@ -62,7 +62,7 @@ var probeTables = map[string][]probe{
 		{shown: "最大金额 `* 2`", source: "m * 2", contract: "m: money", args: `{"m": "USD 92233720368547758.07"}`},
 		{shown: "`USD 1 + JPY 1`", source: "USD 1 + JPY 1", note: "闭合表达式在编译期就算了"},
 		{shown: "入参 `\"XYZ 1\"`", source: "m", contract: "m: money", args: `{"m": "XYZ 1"}`, note: "未声明的币种，同时是 `ErrContract`"},
-		{shown: "入参是 JSON 数字 `1.5`", source: "m", contract: "m: money", args: `{"m": 1.5}`, note: "金额只收 `\"USD 1.70\"` 或 `{\"currency\", \"minor\"}`，float 进不了金额"},
+		{shown: "入参是 JSON 数字 `1.5`", source: "m", contract: "m: money", args: `{"m": 1.5}`, note: "金额只收 `\"USD 1.70\"` 或 `{\"currency\", \"minor\", \"digits\"?}`，float 进不了金额"},
 		{shown: "`m / 3`", source: "m / 3", contract: "m: money", args: `{"m": "USD 1.00"}`, note: "金额不能除以整数（会丢分），用 `allocate(m, 3)`"},
 		{shown: "`USD 1.00 / USD 3.00`", source: "m / USD 3.00", contract: "m: money", args: `{"m": "USD 1.00"}`, note: "同币种之比是精确的 ratio"},
 		{shown: "`USD 1.00 * 2.9%`", source: "USD 1.00 * 2.9%", note: "落在两个最小单位之间：写在 `round` 里或写出舍入方式"},

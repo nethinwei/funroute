@@ -108,7 +108,7 @@ func signedShares(m Money, magnitudes []uint64) ([]Money, error) {
 		if err != nil {
 			return nil, err
 		}
-		shares[i] = Money{currency: m.currency, minor: minor}
+		shares[i] = m.of(minor)
 	}
 	return shares, nil
 }

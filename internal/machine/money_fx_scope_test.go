@@ -58,7 +58,7 @@ func runUsing(t *testing.T, source, contract string, outer [][3]string, args ...
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprint(value.Any()), nil
+	return fmt.Sprint(plain(value.Any())), nil
 }
 
 // usingCase is a rule over fxContract, the outer table's quotes, and its result as
@@ -382,7 +382,7 @@ func TestAUsingAllocatesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := []machine.Value{machine.MoneyValue(100, "USD")}
-	if value, err := runtime.RunValues(t.Context(), args); err != nil || fmt.Sprint(value.Any()) != "{JPY 150}" {
+	if value, err := runtime.RunValues(t.Context(), args); err != nil || fmt.Sprint(plain(value.Any())) != "{JPY 150}" {
 		t.Fatalf("using(150 JPY / USD, …) = %v, %v, want JPY 150", value.Any(), err)
 	}
 	allocs := testing.AllocsPerRun(100, func() {

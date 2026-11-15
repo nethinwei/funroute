@@ -8,7 +8,22 @@ import (
 )
 
 // moneyValueOf is money as a value.
-func moneyValueOf(m money.Money) Value { return MoneyValue(m.Minor(), m.Currency()) }
+func moneyValueOf(m money.Money) Value {
+	currency, minor, places := money.MoneyParts(m)
+	return Value{kind: MoneyKind, i: minor, s: currency, p: places}
+}
+
+// money is a plain money value's Go form, its places with it.
+func (v Value) money() money.Money { return money.Make(v.s, v.i, v.p) }
+
+// inPlaces is money v in table's places for its currency, the places every
+// amount a run makes in a declared currency carries.
+func (v Value) inPlaces(table *money.Currencies) Value {
+	if v.s != "" {
+		v.p = money.PlacesIn(table, v.s)
+	}
+	return v
+}
 
 // MoneyValue builds a money value. The currency is checked against the
 // registry where the value enters a program, not here: a Value does not know
@@ -64,7 +79,7 @@ func (v Value) quote() string {
 
 // Money returns a money value's Go form.
 func (v Value) Money() (money.Money, bool) {
-	return money.Make(v.s, v.i), v.kind == MoneyKind && !IsExact(v)
+	return v.money(), v.kind == MoneyKind && !IsExact(v)
 }
 
 // Ratio returns a ratio value.
@@ -147,10 +162,11 @@ func pairText(v Value) string { return v.quote() + " / " + v.s }
 // leaves zero. It allocates nothing.
 func exactValue(e money.ExactMoney) Value {
 	num, den := money.RatioParts(e.Minor())
+	places := money.ExactPlaces(e)
 	if den == 1 || den == 0 {
-		return MoneyValue(num, e.Currency())
+		return Value{kind: MoneyKind, i: num, s: e.Currency(), p: places}
 	}
-	return Value{kind: MoneyKind, s: e.Currency(), i: num, f: math.Float64frombits(uint64(den))}
+	return Value{kind: MoneyKind, s: e.Currency(), p: places, i: num, f: math.Float64frombits(uint64(den))}
 }
 
 // exactResult is exactValue with an error passed through.
@@ -163,7 +179,7 @@ func IsExact(v Value) bool { return v.kind == MoneyKind && v.f != 0 }
 // exactOf is a money value as exact money, plain or not.
 func exactOf(v Value) money.ExactMoney {
 	if !IsExact(v) {
-		return money.Make(v.s, v.i).Exact()
+		return v.money().Exact()
 	}
-	return money.ExactFrom(v.s, money.RatioFromParts(v.i, int64(math.Float64bits(v.f))))
+	return money.ExactFrom(v.s, money.RatioFromParts(v.i, int64(math.Float64bits(v.f))), v.p)
 }

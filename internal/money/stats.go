@@ -13,19 +13,19 @@ import (
 // An average lies between the smallest and the largest amount, so it always
 // fits even where the total would not.
 func AverageMoney(amounts []Money, mode Rounding) (Money, error) {
-	currency, err := oneCurrency(amounts)
+	unit, err := oneCurrency(amounts)
 	if err != nil {
 		return Money{}, err
 	}
 	minor, err := averageMinor(amounts, mode)
-	return newMoney(currency, minor), err
+	return unit.of(minor), err
 }
 
 // MedianMoney is the median of amounts in one currency; of an even count,
 // the mean of the middle two rounded by mode. The mode is checked whatever
 // the count, as AverageMoney checks it.
 func MedianMoney(amounts []Money, mode Rounding) (Money, error) {
-	currency, err := oneCurrency(amounts)
+	unit, err := oneCurrency(amounts)
 	if err != nil {
 		return Money{}, err
 	}
@@ -36,27 +36,27 @@ func MedianMoney(amounts []Money, mode Rounding) (Money, error) {
 	slices.SortFunc(sorted, func(a, b Money) int { return cmp.Compare(a.minor, b.minor) })
 	middle := len(sorted) / 2
 	if len(sorted)%2 == 1 {
-		return newMoney(currency, sorted[middle].minor), nil
+		return unit.of(sorted[middle].minor), nil
 	}
 	minor, err := averageMinor(sorted[middle-1:middle+1], mode)
-	return newMoney(currency, minor), err
+	return unit.of(minor), err
 }
 
-// oneCurrency is the currency a non-empty list of amounts is in; the
-// currency-less zero goes with any.
-func oneCurrency(amounts []Money) (string, error) {
+// oneCurrency is the currency and places a non-empty list of amounts is in,
+// as an amount of nothing; the currency-less zero goes with any.
+func oneCurrency(amounts []Money) (Money, error) {
 	if len(amounts) == 0 {
-		return "", fmt.Errorf("%w: an empty array has no average", ErrDomain)
+		return Money{}, fmt.Errorf("%w: an empty array has no average", ErrDomain)
 	}
-	currency := ""
+	var unit Money
 	for _, amount := range amounts {
-		next, err := meet(currency, amount.currency)
+		next, err := unit.meet(amount)
 		if err != nil {
-			return "", err
+			return Money{}, err
 		}
-		currency = next
+		unit = next
 	}
-	return currency, nil
+	return unit, nil
 }
 
 // averageMinor divides first and carries the remainders: the value is

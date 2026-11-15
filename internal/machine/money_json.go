@@ -40,7 +40,7 @@ func readableLeaf(t *money.Currencies) func(Value) any {
 		if value.s == "" && value.i == 0 {
 			return value.i
 		}
-		text, err := t.Format(money.Make(value.s, value.i))
+		text, err := t.Format(value.money())
 		if err != nil {
 			// No places to write it in: the machine form keeps it exact.
 			return map[string]any{"currency": value.s, "minor": value.i}

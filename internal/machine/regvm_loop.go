@@ -390,7 +390,7 @@ func (d *dictBuilder) add(key string, value Value) {
 	case d.texts != nil:
 		fresh = added(d.texts, key, value.s)
 	case d.monies != nil:
-		fresh = added(d.monies, key, money.Make(value.s, value.i))
+		fresh = added(d.monies, key, value.money())
 	default:
 		fresh = added(d.values, key, value)
 	}

@@ -6,8 +6,32 @@ package money
 // a value it made, can promise.
 
 // Make is money of minor units in a currency, unchecked: the machine's, for
-// money it already holds as a value.
-func Make(currency string, minor int64) Money { return newMoney(currency, minor) }
+// money it already holds as a value. places is as MoneyParts gives it.
+func Make(currency string, minor int64, places uint8) Money {
+	return Money{currency: currency, minor: minor, places: places}
+}
+
+// MoneyParts is an amount as Make takes it: places is the decimal places + 1,
+// 0 where the amount does not carry them.
+func MoneyParts(m Money) (currency string, minor int64, places uint8) {
+	return m.currency, m.minor, m.places
+}
+
+// PlacesIn is a currency's places in c as MoneyParts gives them: 0 when c is
+// nil or does not declare code.
+func PlacesIn(c *Currencies, code string) uint8 {
+	if c == nil {
+		return 0
+	}
+	digits, ok := c.digits[code]
+	if !ok {
+		return 0
+	}
+	return placesOf(digits)
+}
+
+// ExactPlaces is exact money's places as MoneyParts gives them.
+func ExactPlaces(e ExactMoney) uint8 { return e.places }
 
 // SplitCount is m.SplitBy of a rule's count, an int64 whatever the
 // platform's int.
@@ -46,8 +70,8 @@ func InverseFxRate(pair *Pair, fx FxRate) (FxRate, error) {
 }
 
 // ExactFrom is exact money of minor units in a currency, unchecked.
-func ExactFrom(currency string, minor Ratio) ExactMoney {
-	return ExactMoney{currency: currency, minor: minor}
+func ExactFrom(currency string, minor Ratio, places uint8) ExactMoney {
+	return ExactMoney{currency: currency, minor: minor, places: places}
 }
 
 // ReadFxRate is a rate from its parts as text, the JSON's: two codes and the

@@ -105,7 +105,7 @@ func TestSameCurrency(t *testing.T) {
 func TestMoneyConstructorsAndAccessors(t *testing.T) {
 	t.Parallel()
 	amount, rate, currency := MoneyValue(170, "USD"), RatioValue(ratio(29, 1000)), CurrencyValue("JPY")
-	if got, ok := amount.Money(); !ok || got != (money.Make("USD", 170)) || amount.Type().String() != MoneyType.String() {
+	if got, ok := amount.Money(); !ok || got != (money.Make("USD", 170, 0)) || amount.Type().String() != MoneyType.String() {
 		t.Fatalf("MoneyValue(170, USD).Money() = %v, %v; type %s", got, ok, amount.Type())
 	}
 	if got, ok := rate.Ratio(); !ok || got != ratio(29, 1000) || !rate.Type().Equal(RatioType) {
@@ -138,7 +138,7 @@ func TestEqualityAcrossUnitsHasNoAnswer(t *testing.T) {
 	usdJPY := FxRateValue(money.FxRateFrom(&money.Pair{Base: "USD", Quote: "JPY"}, ratio(150, 1)))
 	eurJPY := FxRateValue(money.FxRateFrom(&money.Pair{Base: "EUR", Quote: "JPY"}, ratio(160, 1)))
 	dict := func(currency string) Value {
-		return Value{kind: DictKind, box: map[string]money.Money{"k": money.Make(currency, 1)}}
+		return Value{kind: DictKind, box: map[string]money.Money{"k": money.Make(currency, 1, 0)}}
 	}
 	named := RecordOf(FieldOf("name", StringType), FieldOf("fee", MoneyType))
 	channel := func(name, currency string) Value {
@@ -151,7 +151,7 @@ func TestEqualityAcrossUnitsHasNoAnswer(t *testing.T) {
 	amounts := func(currencies ...string) Value {
 		items := make([]money.Money, len(currencies))
 		for i, currency := range currencies {
-			items[i] = money.Make(currency, 1)
+			items[i] = money.Make(currency, 1, 0)
 		}
 		return arrayOf(items)
 	}
@@ -191,11 +191,11 @@ func ratio(num, den int64) money.Ratio {
 // units comes back as plain money, which a round has nothing to do for.
 func TestExactValuesArePlainWhenWhole(t *testing.T) {
 	t.Parallel()
-	whole := exactValue(money.ExactFrom("USD", ratio(4, 2)))
+	whole := exactValue(money.ExactFrom("USD", ratio(4, 2), 0))
 	if IsExact(whole) || whole.i != 2 {
 		t.Fatalf("2 minor units as a value = %+v, want plain money", whole)
 	}
-	half := exactValue(money.ExactFrom("USD", ratio(1, 2)))
+	half := exactValue(money.ExactFrom("USD", ratio(1, 2), 0))
 	if !IsExact(half) || exactOf(half).Minor() != ratio(1, 2) {
 		t.Fatalf("half a minor unit as a value = %+v, want exact money", half)
 	}

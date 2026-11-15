@@ -53,7 +53,7 @@ func fromGo(input any) (Value, error) {
 	case map[string]bool, map[string]int64, map[string]float64, map[string]string:
 		return Value{kind: DictKind, box: x}, nil
 	case money.Money:
-		return MoneyValue(x.Minor(), x.Currency()), nil
+		return moneyValueOf(x), nil
 	case money.Ratio:
 		return RatioValue(x), nil
 	case money.FxRate:
@@ -129,7 +129,7 @@ func ToValue[T any](input T) (Value, error) {
 	case *string:
 		return String(*scalar), nil
 	case *money.Money:
-		return MoneyValue(scalar.Minor(), scalar.Currency()), nil
+		return moneyValueOf(*scalar), nil
 	case *money.Ratio:
 		return RatioValue(*scalar), nil
 	case *money.Currency:

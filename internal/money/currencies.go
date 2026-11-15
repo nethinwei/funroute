@@ -134,7 +134,7 @@ func (c *Currencies) Of(code, amount string) (Money, error) {
 	if err != nil {
 		return Money{}, fmt.Errorf("%s %s: %w", code, amount, err)
 	}
-	return newMoney(code, minor), nil
+	return c.unitOf(code).of(minor), nil
 }
 
 // Minor is an amount given in its currency's minor units: Minor("USD", 170)
@@ -143,7 +143,36 @@ func (c *Currencies) Minor(code string, minor int64) (Money, error) {
 	if _, err := c.Places(code); err != nil {
 		return Money{}, err
 	}
-	return newMoney(code, minor), nil
+	return c.unitOf(code).of(minor), nil
+}
+
+// Adopt is m in this table's places for its currency: an amount read from
+// JSON without them takes the table's, one with them must agree. The
+// currency must be declared; the currency-less zero is itself.
+func (c *Currencies) Adopt(m Money) (Money, error) {
+	if err := m.wellFormed(); err != nil || m.currency == "" {
+		return m, err
+	}
+	if _, err := c.Places(m.currency); err != nil {
+		return Money{}, err
+	}
+	unit, err := c.unitOf(m.currency).meet(m)
+	return unit.of(m.minor), err
+}
+
+// unitOf is a declared currency and its places as an amount of nothing.
+func (c *Currencies) unitOf(code string) Money {
+	return Money{currency: code, places: placesOf(c.digits[code])}
+}
+
+// inPlaces refuses an amount that carries places other than the table's for
+// its currency: read in the table's places it would be another amount.
+func (c *Currencies) inPlaces(m Money) error {
+	if m.places == 0 {
+		return nil
+	}
+	_, err := c.unitOf(m.currency).meet(m)
+	return err
 }
 
 // Currency is a declared currency as a value.
@@ -163,6 +192,9 @@ func (c *Currencies) Format(m Money) (string, error) {
 	}
 	digits, err := c.Places(m.currency)
 	if err != nil {
+		return "", err
+	}
+	if err := c.inPlaces(m); err != nil {
 		return "", err
 	}
 	return m.currency + " " + FormatDecimal(m.minor, digits, false), nil

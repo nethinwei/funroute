@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/nethinwei/funroute/internal/kit"
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 type Runtime struct {
@@ -84,7 +85,7 @@ func load(artifact *Artifact, registry *Registry) (*Runtime, error) {
 
 // newRuntime loads a validated artifact's constants and binds its calls.
 func newRuntime(artifact *Artifact, registry *Registry) (*Runtime, error) {
-	constants, err := loadConstants(artifact)
+	constants, err := loadConstants(artifact, registry.currencies())
 	if err != nil {
 		return nil, err
 	}
@@ -251,10 +252,12 @@ func validateInstruction(index int, instruction Instruction, artifact *Artifact)
 // to every validator costs nothing.
 func problem(format string, args ...any) error { return fmt.Errorf(format, args...) }
 
-func loadConstants(artifact *Artifact) ([]Value, error) {
+// loadConstants reads the artifact's constants, their amounts in table's
+// places (Constant.valueIn).
+func loadConstants(artifact *Artifact, table *money.Currencies) ([]Value, error) {
 	constants := make([]Value, len(artifact.parts.Constants))
 	for i, constant := range artifact.parts.Constants {
-		value, err := constant.value()
+		value, err := constant.valueIn(table)
 		if err != nil {
 			return nil, fmt.Errorf("constant %d: %w", i, err)
 		}

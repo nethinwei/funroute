@@ -14,8 +14,30 @@ import (
 // literal 0 does in a rule. Only zero: an amount without a currency that is
 // not zero is a host that forgot the currency, and is an ErrCurrency.
 
-// meet is the currency two amounts combine in.
-func (m Money) meet(other Money) (string, error) { return meet(m.currency, other.currency) }
+// meet is the currency and places two amounts combine in, as an amount of
+// nothing: an amount that does not say its places takes the other's, and two
+// that say different places are an ErrCurrency — 170 minor units of HUF in
+// two places and in none are not one amount.
+func (m Money) meet(other Money) (Money, error) {
+	currency, err := meet(m.currency, other.currency)
+	if err != nil {
+		return Money{}, err
+	}
+	places, err := meetPlaces(currency, m.places, other.places)
+	return Money{currency: currency, places: places}, err
+}
+
+// meetPlaces is the places two amounts of currency combine in.
+func meetPlaces(currency string, a, b uint8) (uint8, error) {
+	switch {
+	case a == b || b == 0:
+		return a, nil
+	case a == 0:
+		return b, nil
+	default:
+		return 0, fmt.Errorf("%w: %s in %d and in %d decimal places", ErrCurrency, currency, a-1, b-1)
+	}
+}
 
 // Add is m + other, in their one currency.
 func (m Money) Add(other Money) (Money, error) { return m.plus(other, 1) }
@@ -24,16 +46,16 @@ func (m Money) Add(other Money) (Money, error) { return m.plus(other, 1) }
 func (m Money) Sub(other Money) (Money, error) { return m.plus(other, -1) }
 
 func (m Money) plus(other Money, sign int64) (Money, error) {
-	currency, err := m.meet(other)
+	unit, err := m.meet(other)
 	if err != nil {
 		return Money{}, err
 	}
 	sum, err := addInt64(m.minor, other.minor, sign)
-	return Money{currency: currency, minor: sum}, err
+	return unit.of(sum), err
 }
 
 // Neg is -m.
-func (m Money) Neg() (Money, error) { return Money{currency: m.currency}.Sub(m) }
+func (m Money) Neg() (Money, error) { return m.of(0).Sub(m) }
 
 // Abs is m without its sign.
 func (m Money) Abs() (Money, error) {
@@ -52,6 +74,16 @@ func (m Money) Cmp(other Money) (int, error) {
 	return cmp.Compare(m.minor, other.minor), nil
 }
 
+// Equal reports whether m and other are one amount: one currency, one count
+// of minor units, and places that agree — the same, or not known on one
+// side. It is Cmp's equality, false where Cmp is an error: amounts in two
+// currencies, or in two places for one currency, are not one amount. The
+// currency-less zero is the zero of every currency, as it is to Cmp.
+func (m Money) Equal(other Money) bool {
+	order, err := m.Cmp(other)
+	return err == nil && order == 0
+}
+
 // Sign is -1, 0 or 1.
 func (m Money) Sign() int { return cmp.Compare(m.minor, 0) }
 
@@ -61,7 +93,7 @@ func (m Money) IsZero() bool { return m.minor == 0 }
 // MulInt is m times a count, exactly.
 func (m Money) MulInt(count int64) (Money, error) {
 	minor, err := mulInt64(m.minor, count)
-	return Money{currency: m.currency, minor: minor}, err
+	return m.of(minor), err
 }
 
 // Prorate is m × part / whole, exact in between and rounded once by mode:
@@ -69,7 +101,7 @@ func (m Money) MulInt(count int64) (Money, error) {
 // is ErrArithmetic.
 func (m Money) Prorate(part, whole int64, mode Rounding) (Money, error) {
 	minor, err := mulDivRound(m.minor, part, whole, mode)
-	return Money{currency: m.currency, minor: minor}, err
+	return m.of(minor), err
 }
 
 // ProrateBy is Prorate with the proportion given as two amounts of one
@@ -85,7 +117,7 @@ func (m Money) ProrateBy(part, whole Money, mode Rounding) (Money, error) {
 // CHF 0.05, or to whole kronor with SEK 1. The step is an amount in m's
 // currency, and more than zero.
 func (m Money) RoundTo(step Money, mode Rounding) (Money, error) {
-	currency, err := m.meet(step)
+	unit, err := m.meet(step)
 	if err != nil {
 		return Money{}, err
 	}
@@ -97,13 +129,13 @@ func (m Money) RoundTo(step Money, mode Rounding) (Money, error) {
 		return Money{}, err
 	}
 	minor, err := mulInt64(steps, step.minor)
-	return Money{currency: currency, minor: minor}, err
+	return unit.of(minor), err
 }
 
 // MulRatio is m times a ratio, rounded once to the minor unit by mode.
 func (m Money) MulRatio(r Ratio, mode Rounding) (Money, error) {
 	minor, err := r.times(m.minor, mode)
-	return Money{currency: m.currency, minor: minor}, err
+	return m.of(minor), err
 }
 
 // DivRatio is m divided by a ratio — the gross an amount is the net of —
@@ -111,7 +143,7 @@ func (m Money) MulRatio(r Ratio, mode Rounding) (Money, error) {
 func (m Money) DivRatio(r Ratio, mode Rounding) (Money, error) {
 	num, den := r.parts()
 	minor, err := mulDivRound(m.minor, den, num, mode)
-	return Money{currency: m.currency, minor: minor}, err
+	return m.of(minor), err
 }
 
 // Ratio is m / other in one currency: the ratio a fee is of an amount,

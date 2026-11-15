@@ -116,7 +116,7 @@ func runChecked(t *testing.T, source, result string, args map[string]any) (strin
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprint(value.Any()), nil
+	return fmt.Sprint(plain(value.Any())), nil
 }
 
 // testQuotes are the exchange rates every test rule may convert at, as the
