@@ -372,3 +372,61 @@ func TestAFoldedBindingIsHiddenByAnInnerOne(t *testing.T) {
 		})
 	}
 }
+
+// nodeTraits is what the compiler's switches that end in "every other node"
+// take a kind of node to be: whether it may leave a part unevaluated
+// (branches, fold.go), whether it reads the run, so nothing under it folds
+// (ownConstexpr, closed.go), and whether it is a leaf, which folding has
+// nothing to gain from (foldable, fold.go). byFunction marks a call, whose
+// answers are its function's. Two more switches take every other node the
+// safe way and need no entry: boundedExpr calls it unbounded, and exact.of
+// learns a node's bindings from its binds tags.
+type nodeTraits struct{ lazy, readsRun, leaf, byFunction bool }
+
+// nodeSemantics places every kind of node. A new kind fails
+// TestEveryNodeIsPlaced until it is written here — which is reading those
+// switches and adding a case where the node is not "every other node".
+var nodeSemantics = map[string]struct {
+	node   syntax.Expr
+	traits nodeTraits
+}{
+	"int": {&syntax.LiteralExpr{}, nodeTraits{leaf: true}}, "float": {&syntax.LiteralExpr{}, nodeTraits{leaf: true}},
+	"string": {&syntax.LiteralExpr{}, nodeTraits{leaf: true}}, "bool": {&syntax.LiteralExpr{}, nodeTraits{leaf: true}},
+	"duration": {&syntax.LiteralExpr{}, nodeTraits{leaf: true}},
+	"var":      {&syntax.VariableExpr{}, nodeTraits{leaf: true}}, "enum": {&syntax.EnumExpr{}, nodeTraits{leaf: true}},
+	"money": {&syntax.MoneyExpr{}, nodeTraits{leaf: true}}, "ratio": {&syntax.RatioExpr{}, nodeTraits{leaf: true}},
+	"fxrate": {&syntax.FxRateExpr{}, nodeTraits{leaf: true}}, "currency": {&syntax.CurrencyExpr{}, nodeTraits{leaf: true}},
+	"array": {&syntax.ArrayExpr{}, nodeTraits{}}, "dict": {&syntax.DictExpr{}, nodeTraits{}},
+	"record": {&syntax.RecordExpr{}, nodeTraits{}}, "field": {&syntax.FieldExpr{}, nodeTraits{}},
+	"record_update": {&syntax.RecordUpdateExpr{}, nodeTraits{}}, "selector": {&syntax.SelectorExpr{}, nodeTraits{}},
+	"for": {&syntax.ForExpr{}, nodeTraits{}}, "reduce": {&syntax.ReduceExpr{}, nodeTraits{}},
+	"let": {&syntax.LetExpr{}, nodeTraits{}}, "call": {&syntax.CallExpr{}, nodeTraits{byFunction: true}},
+	"switch": {&syntax.SwitchExpr{Cases: []syntax.SwitchCaseExpr{{Result: &syntax.LiteralExpr{}}}}, nodeTraits{lazy: true}},
+	"using":  {&syntax.UsingExpr{}, nodeTraits{readsRun: true}},
+}
+
+// Every kind of node is placed, and what is written of it is what the
+// switches answer for it.
+func TestEveryNodeIsPlaced(t *testing.T) {
+	t.Parallel()
+	for _, kind := range syntax.NodeKinds() {
+		placed, ok := nodeSemantics[kind]
+		if !ok {
+			t.Errorf("node %q is not placed in nodeSemantics: read branches, foldable and ownConstexpr for it", kind)
+			continue
+		}
+		if placed.traits.byFunction {
+			continue
+		}
+		c := &bytecodeCompiler{}
+		if lazy := c.branches(placed.node) != nil; lazy != placed.traits.lazy {
+			t.Errorf("%s: branches says lazy %v, nodeSemantics %v", kind, lazy, placed.traits.lazy)
+		}
+		if reads := !ownConstexpr(placed.node, nil, nil); reads != placed.traits.readsRun {
+			t.Errorf("%s: ownConstexpr says it reads the run %v, nodeSemantics %v", kind, reads, placed.traits.readsRun)
+		}
+		if placed.traits.leaf && c.foldable(placed.node) {
+			t.Errorf("%s: placed as a leaf, but foldable folds it", kind)
+		}
+	}
+}
