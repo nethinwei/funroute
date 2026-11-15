@@ -527,22 +527,7 @@ func TestTwoFieldsCannotShareATag(t *testing.T) {
 		A int64 `funroute:"a"`
 		B int64 `funroute:"a"`
 	}
-	const want = `fields A and B of api.twice are both tagged "a"`
-	if _, err := funroute.ToValue(twice{}); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("ToValue(twice{}) error = %v, want %q", err, want)
-	}
-	if err := funroute.CoreRegistry().Register(funroute.FunctionSpec{
-		Name: "f.g_v1",
-		Go:   func(twice) (int64, error) { return 0, nil },
-	}); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("Register(func(twice)) error = %v, want %q", err, want)
-	}
-	type in struct {
-		R twice `funroute:"r"`
-	}
-	if _, err := funroute.Bind[in, int64](funroute.CoreRegistry()); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("Bind[in, int64] error = %v, want %q", err, want)
-	}
+	expectRefusedOnEveryPath[twice](t, `fields A and B of api.twice are both tagged "a"`)
 }
 
 // A ratio prints and crosses JSON as its exact text — a decimal, or a

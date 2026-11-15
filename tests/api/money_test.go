@@ -624,14 +624,7 @@ func TestManifestCarriesTheMoneyFeature(t *testing.T) {
 	if err := host.Register(funroute.FunctionSpec{Name: "ledger.fee_v1", Go: fee}); err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(host.Manifest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var manifest funroute.Manifest
-	if err := json.Unmarshal(encoded, &manifest); err != nil {
-		t.Fatal(err)
-	}
+	manifest := manifestOf(t, host)
 	declared, declares := manifest.Money()
 	if spec, _ := host.Money(); !declares || !slices.Equal(declared.Currencies, spec.Currencies) {
 		t.Fatalf("manifest money = %+v, %v, want the host's %+v", declared, declares, spec)
