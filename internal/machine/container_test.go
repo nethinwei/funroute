@@ -32,7 +32,7 @@ func TestContainerOperationsSpanBackings(t *testing.T) {
 // nativeSamples is one element of each native backing's Go type.
 var nativeSamples = map[Kind]any{
 	BoolKind: true, IntKind: int64(7), FloatKind: 1.5, StringKind: "a",
-	MoneyKind: money.Make("USD", 5, 0), FxRateKind: money.FxRateFrom(&money.Pair{Base: "USD", Quote: "JPY"}, money.RatioFromParts(601, 4)),
+	MoneyKind: money.Make("USD", 5), FxRateKind: money.FxRateFrom(&money.Pair{Base: "USD", Quote: "JPY"}, money.RatioFromParts(601, 4)),
 }
 
 // natives is the one list of backings, and every switch that reads one

@@ -20,7 +20,7 @@ func TestEncodeJSONWritesMoneyAsPeopleDo(t *testing.T) {
 		t.Fatal(err)
 	}
 	for value, want := range map[*Value]string{
-		new(arrayOf([]money.Money{money.Make("JPY", 150, 0), money.Make("USD", 1, 0)})): `["JPY 150","USD 0.01"]`,
+		new(arrayOf([]money.Money{money.Make("JPY", 150), money.Make("USD", 1)})): `["JPY 150","USD 0.01"]`,
 		&record: `{"net":"USD -0.05","rate":"0.029","zero":0}`,
 	} {
 		encoded, err := registry.EncodeJSON(*value)
@@ -51,14 +51,14 @@ func TestEncodeJSONWritesEveryMoneyShape(t *testing.T) {
 		"an int":                  {Int(5), `5`},
 		"a string":                {String("USD 1.70"), `"USD 1.70"`},
 		"an empty array of money": {mustValue(t, []money.Money{}), `[]`},
-		"a dictionary of money":   {mustValue(t, map[string]money.Money{"b": money.Make("JPY", 1, 0), "a": {}}), `{"a":0,"b":"JPY 1"}`},
+		"a dictionary of money":   {mustValue(t, map[string]money.Money{"b": money.Make("JPY", 1), "a": {}}), `{"a":0,"b":"JPY 1"}`},
 		"arrays of money":         {nestedMoney(t), `[["USD 0.01"],[0,"KWD 1.000"]]`},
 		"records in an array":     {recordsOfMoney(t), `[{"zeta":"USD 0.01","alpha":{"inner":"JPY 2","rate":"1"}}]`},
 		"a record without a type": {Value{kind: RecordKind}, `null`},
 		// What has no places to be written in keeps the exact machine form.
 		"an undeclared currency":         {MoneyValue(170, "GBP"), `{"currency":"GBP","minor":170}`},
 		"no currency and not zero":       {MoneyValue(5, ""), `{"currency":"","minor":5}`},
-		"an undeclared item in an array": {mustValue(t, []money.Money{money.Make("USD", 1, 0), money.Make("GBP", 2, 0)}), `["USD 0.01",{"currency":"GBP","minor":2}]`},
+		"an undeclared item in an array": {mustValue(t, []money.Money{money.Make("USD", 1), money.Make("GBP", 2)}), `["USD 0.01",{"currency":"GBP","minor":2}]`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -77,7 +77,7 @@ func TestEncodeJSONWritesEveryMoneyShape(t *testing.T) {
 func TestEncodeJSONWritesExactMoneyAsMarshalJSON(t *testing.T) {
 	t.Parallel()
 	registry := declared(t, money.CurrencySpec{Code: "USD", Digits: 2})
-	half := exactValue(money.ExactFrom("USD", ratio(1, 2), 0))
+	half := exactValue(money.ExactFrom("USD", ratio(1, 2)))
 	alone, err := json.Marshal(half)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestEncodeJSONWithoutATableWritesTheMachineForm(t *testing.T) {
 	}{
 		"dollars":              {MoneyValue(170, "USD"), `{"currency":"USD","minor":170}`},
 		"a currency-less zero": {MoneyValue(0, ""), `{"currency":"","minor":0}`},
-		"an array of money":    {mustValue(t, []money.Money{money.Make("USD", 1, 0)}), `[{"currency":"USD","minor":1}]`},
+		"an array of money":    {mustValue(t, []money.Money{money.Make("USD", 1)}), `[{"currency":"USD","minor":1}]`},
 		"a ratio":              {RatioValue(ratio(29, 1000)), `"0.029"`},
 		"a currency":           {CurrencyValue("USD"), `"USD"`},
 	} {
@@ -133,7 +133,7 @@ func mustValue(t *testing.T, input any) Value {
 
 func nestedMoney(t *testing.T) Value {
 	t.Helper()
-	rows, err := Array(ArrayOf(MoneyType), []Value{mustValue(t, []money.Money{money.Make("USD", 1, 0)}), mustValue(t, []money.Money{{}, money.Make("KWD", 1000, 0)})})
+	rows, err := Array(ArrayOf(MoneyType), []Value{mustValue(t, []money.Money{money.Make("USD", 1)}), mustValue(t, []money.Money{{}, money.Make("KWD", 1000)})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,10 +201,10 @@ func TestEncodeJSONWritesWhatHoldsNoMoneyWhole(t *testing.T) {
 		"durations":                 nestedOf(DurationType, []Value{Duration(time.Second), Duration(0)}),
 		"records without money":     records,
 		"a dictionary of records":   recordsByKey,
-		"amounts":                   mustValue(t, []money.Money{money.Make("USD", 1, 0), {}}),
+		"amounts":                   mustValue(t, []money.Money{money.Make("USD", 1), {}}),
 		"arrays of money":           nestedMoney(t),
 		"records of money":          recordsOfMoney(t),
-		"a dictionary of money":     mustValue(t, map[string]money.Money{"b": money.Make("KWD", 1, 0), "a": {}}),
+		"a dictionary of money":     mustValue(t, map[string]money.Money{"b": money.Make("KWD", 1), "a": {}}),
 		"a bare zero":               MoneyValue(0, ""),
 	} {
 		t.Run(name, func(t *testing.T) {

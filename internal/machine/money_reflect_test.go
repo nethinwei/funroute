@@ -11,10 +11,10 @@ import (
 func TestAnExactAmountHasNoGoForm(t *testing.T) {
 	t.Parallel()
 	plain, ok, err := intoOwnGo(MoneyValue(150, "USD"), moneyGoType)
-	if !ok || err != nil || plain.Interface() != money.Make("USD", 150, 0) {
+	if !ok || err != nil || plain.Interface() != money.Make("USD", 150) {
 		t.Fatalf("intoOwnGo(USD 1.50) = %v, %v, %v, want USD 1.50", plain, ok, err)
 	}
-	half := exactValue(money.ExactFrom("USD", ratio(1, 2), 0))
+	half := exactValue(money.ExactFrom("USD", ratio(1, 2)))
 	if got, ok, err := intoOwnGo(half, moneyGoType); !ok || err == nil {
 		t.Fatalf("intoOwnGo(half a cent) = %v, %v, %v, want a refusal", got, ok, err)
 	}

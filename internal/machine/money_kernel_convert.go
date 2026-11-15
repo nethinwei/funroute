@@ -75,7 +75,7 @@ func (k moneyKernel) convertExactIn(ctx context.Context, args []Value) (money.Ex
 	// Money with no currency is only ever zero, and in its own currency it
 	// needs no rate.
 	if m.Currency() == to || m.Currency() == "" {
-		return money.ExactFrom(to, m.Minor(), money.PlacesIn(k.table, to)), nil
+		return money.ExactIn(to, m.Minor(), money.PlacesIn(k.table, to)), nil
 	}
 	fx, err := k.rateFor(ctx, m.Currency(), to)
 	if err != nil {

@@ -5,9 +5,13 @@ package money
 // their arguments to be in canonical form, which only the machine, copying
 // a value it made, can promise.
 
-// Make is money of minor units in a currency, unchecked: the machine's, for
-// money it already holds as a value. places is as MoneyParts gives it.
-func Make(currency string, minor int64, places uint8) Money {
+// Make is money of minor units in a currency, unchecked, its places not
+// said: the machine's, for money it already holds as a value.
+func Make(currency string, minor int64) Money { return newMoney(currency, minor) }
+
+// MakeIn is Make in places as MoneyParts gives them: an amount the machine
+// holds as a value with its places.
+func MakeIn(currency string, minor int64, places uint8) Money {
 	return Money{currency: currency, minor: minor, places: places}
 }
 
@@ -79,8 +83,14 @@ func InverseFxRate(pair *Pair, fx FxRate) (FxRate, error) {
 	return FxRate{pair: pair, rate: inverse}, err
 }
 
-// ExactFrom is exact money of minor units in a currency, unchecked.
-func ExactFrom(currency string, minor Ratio, places uint8) ExactMoney {
+// ExactFrom is exact money of minor units in a currency, unchecked, its
+// places not said.
+func ExactFrom(currency string, minor Ratio) ExactMoney {
+	return ExactMoney{currency: currency, minor: minor}
+}
+
+// ExactIn is ExactFrom in places as MoneyParts gives them.
+func ExactIn(currency string, minor Ratio, places uint8) ExactMoney {
 	return ExactMoney{currency: currency, minor: minor, places: places}
 }
 

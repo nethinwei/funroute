@@ -14,7 +14,7 @@ func moneyValueOf(m money.Money) Value {
 }
 
 // money is a plain money value's Go form, its places with it.
-func (v Value) money() money.Money { return money.Make(v.s, v.i, v.p) }
+func (v Value) money() money.Money { return money.MakeIn(v.s, v.i, v.p) }
 
 // inPlaces is money v in table's places for its currency, the places every
 // amount a run makes in a declared currency carries.
@@ -181,5 +181,5 @@ func exactOf(v Value) money.ExactMoney {
 	if !IsExact(v) {
 		return v.money().Exact()
 	}
-	return money.ExactFrom(v.s, money.RatioFromParts(v.i, int64(math.Float64bits(v.f))), v.p)
+	return money.ExactIn(v.s, money.RatioFromParts(v.i, int64(math.Float64bits(v.f))), v.p)
 }

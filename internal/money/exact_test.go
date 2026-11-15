@@ -160,7 +160,7 @@ func TestExactMoneySign(t *testing.T) {
 // units that are no ratio, a part left out.
 func TestExactMoneyReadsBackItsJSON(t *testing.T) {
 	t.Parallel()
-	for _, e := range []ExactMoney{{}, usd(5).Exact(), ExactFrom("USD", ratio(17, 2), placesOf(2)), ExactFrom("JPY", ratio(-1, 3), 0)} {
+	for _, e := range []ExactMoney{{}, usd(5).Exact(), ExactIn("USD", ratio(17, 2), placesOf(2)), ExactFrom("JPY", ratio(-1, 3))} {
 		encoded, err := json.Marshal(e)
 		if err != nil {
 			t.Fatal(err)

@@ -59,7 +59,7 @@ func TestUniqueByKeyAnswersAsEqual(t *testing.T) {
 			t.Errorf("unique of %s kept %d items, Equal keeps %d", array.Type(), len(kept), len(want))
 		}
 	}
-	for _, mixed := range [][]money.Money{{money.Make("USD", 1, 0), money.Make("EUR", 2, 0)}, {money.Make("EUR", 0, 0), money.Make("USD", 0, 0)}} {
+	for _, mixed := range [][]money.Money{{money.Make("USD", 1), money.Make("EUR", 2)}, {money.Make("EUR", 0), money.Make("USD", 0)}} {
 		if got, err := uniqueItems(t.Context(), []Value{arrayOf(mixed)}); !errors.Is(err, ErrCurrency) {
 			t.Errorf("unique of %v = %v, %v; want ErrCurrency", mixed, got.Any(), err)
 		}
@@ -131,9 +131,9 @@ func scalarRecords(t *testing.T, random *rand.Rand) ([]money.Money, []Value, Val
 	amounts := make([]money.Money, 200)
 	records := make([]Value, 200)
 	for i := range records {
-		amounts[i] = money.Make([]string{"USD", "", "USD"}[random.IntN(3)], int64(random.IntN(3)), 0)
+		amounts[i] = money.Make([]string{"USD", "", "USD"}[random.IntN(3)], int64(random.IntN(3)))
 		if amounts[i].Currency() == "" {
-			amounts[i] = money.Make("", 0, 0)
+			amounts[i] = money.Make("", 0)
 		}
 		fields := []Value{Bool(random.IntN(2) == 0), Int(int64(random.IntN(2))), Float(floats[random.IntN(3)]),
 			String([]string{"a", "ab", "b|"}[random.IntN(3)]), MoneyValue(amounts[i].Minor(), amounts[i].Currency())}

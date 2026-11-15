@@ -45,7 +45,7 @@ var LoadOwn = loadOwn
 
 // NewMoney is money without a currency table, for the external tests that
 // build values: they test the machine, not the boundary.
-func NewMoney(currency string, minor int64) money.Money { return money.Make(currency, minor, 0) }
+var NewMoney = money.Make
 
 // NewRatio is num/den, which the test knows fits.
 func NewRatio(num, den int64) money.Ratio {
