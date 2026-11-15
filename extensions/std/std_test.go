@@ -416,3 +416,16 @@ func TestQuantifiersStopAtTheItemThatDecides(t *testing.T) {
 		t.Errorf("any with nothing true before the 0 = %v, want its division by zero", err)
 	}
 }
+
+// Every name std gives examples to is one std registers an overload of: one
+// left behind by a rename or a removal fails here instead of sitting in the
+// table unseen.
+func TestEveryExampleNamesAStdFunction(t *testing.T) {
+	t.Parallel()
+	registered := std.RegisteredNames()
+	for _, name := range std.NamesWithExamples() {
+		if !registered[name] {
+			t.Errorf("std has examples for %q, which std registers no overload of", name)
+		}
+	}
+}

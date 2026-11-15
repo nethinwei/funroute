@@ -4,6 +4,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/nethinwei/funroute/internal/machine"
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // Every node's span lies inside its parent's, and the root covers the
@@ -295,5 +298,31 @@ func TestTheFirstErrorIsReported(t *testing.T) {
 				t.Errorf("%q: the error covers %q, want %q (%v)", source, got, want, err)
 			}
 		})
+	}
+}
+
+// Every word the parser reads as a form or a keyword is reserved, so no
+// function, argument or type takes a name the parser never reads as one.
+// The forms written like a call come from the catalog; the keywords are the
+// words the parser asks p.keyword for, and the literals.
+func TestTheParsersWordsAreReserved(t *testing.T) {
+	t.Parallel()
+	registry := machine.CoreRegistry()
+	if err := registry.EnableForm(machine.OptionalForms()...); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.DeclareMoney(money.MoneySpec{Currencies: []money.CurrencySpec{{Code: "USD", Digits: 2}}}); err != nil {
+		t.Fatal(err)
+	}
+	words := []string{"in", "case", "else", "with", "for", "true", "false"}
+	for _, form := range registry.Catalog().SpecialForms() {
+		if callForm(form.Name()) != nil {
+			words = append(words, form.Name())
+		}
+	}
+	for _, word := range words {
+		if !machine.IsReservedName(word) {
+			t.Errorf("the parser reads %q as its own, but it is not reserved", word)
+		}
 	}
 }

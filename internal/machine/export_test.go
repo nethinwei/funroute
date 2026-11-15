@@ -303,3 +303,9 @@ func WidenParams(r *Runtime) {
 		return &wide
 	})
 }
+
+// NamesWithExamples is the names kernelExamples and formExamples give examples
+// to, for examples_test.go: a name no function or form has is an orphan.
+func NamesWithExamples() (kernel, forms []string) {
+	return kit.SortedKeys(kernelExamples), kit.SortedKeys(formExamples)
+}
