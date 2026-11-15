@@ -1,10 +1,10 @@
 GO ?= go
 NODE ?= node
 
-.PHONY: ci ci-linux build test test-example test-js check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden perf
+.PHONY: ci ci-linux build test test-example test-js test-wasm check-js check-web web site lint vet vet-wasm wasm fmt check-fmt check-imports staticcheck modernize golangci deadcode run clean limits golden perf
 
 # ci must pass before any commit.
-ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize golangci deadcode lint build wasm test test-js
+ci: check-fmt check-imports check-js check-web vet vet-wasm staticcheck modernize golangci deadcode lint build wasm test test-wasm test-js
 
 # The linters are tools, not dependencies: go.mod stays empty. Each is
 # installed once, at the pinned version, into .tools/<version>/ — built for
@@ -90,6 +90,11 @@ wasm:
 # The browser entry builds only for js/wasm, so the ordinary vet skips it.
 vet-wasm:
 	GOOS=js GOARCH=wasm $(GO) vet ./web/wasm
+
+# The browser entry's tests build only for js/wasm too: they run under node,
+# with the runner Go ships for it.
+test-wasm:
+	GOOS=js GOARCH=wasm $(GO) test -exec="$$($(GO) env GOROOT)/lib/wasm/go_js_wasm_exec" ./web/wasm
 
 build:
 	$(GO) build ./...

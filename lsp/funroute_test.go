@@ -528,3 +528,43 @@ func TestNullArgumentsAreNone(t *testing.T) {
 		}
 	}
 }
+
+// Every block the workbench drops in — a catalog entry's wrap, a name in
+// place of $ — is a program the language compiles. With no contract the
+// names are the free variables, so a type still to be inferred is all a
+// block may be reported for. The workbench's own test asks the same of the
+// wasm build; this asks it of every go test, without one.
+func TestEveryBlockTheWorkbenchDropsInCompiles(t *testing.T) {
+	t.Parallel()
+	registry, err := demo.NewRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newSession(t, registry, `{}`)
+	s.notify("funroute/setContract", map[string]any{"contract": map[string]any{}})
+	blocks := map[string]string{}
+	catalog := registry.Catalog()
+	for _, function := range catalog.Functions() {
+		if function.Wrap() != "" {
+			blocks[function.Name()] = function.Wrap()
+		}
+	}
+	for _, form := range catalog.SpecialForms() {
+		if form.Wrap() != "" {
+			blocks[form.Name()] = form.Wrap()
+		}
+	}
+	if len(blocks) == 0 {
+		t.Fatal("the catalog offers no block")
+	}
+	for name, wrap := range blocks {
+		uri, text := "file:///"+name+".fr", strings.Replace(wrap, "$", "x", 1)
+		s.open(uri, text)
+		for _, diagnostic := range s.diagnostics(uri) {
+			message := as[string](t, as[map[string]any](t, diagnostic)["message"])
+			if !strings.Contains(message, "cannot infer a concrete type") {
+				t.Errorf("%s: %s is reported: %s", name, text, message)
+			}
+		}
+	}
+}
