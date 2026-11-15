@@ -50,9 +50,22 @@ const (
 	TimeKind
 	// DurationKind is a length of time: Go's time.Duration.
 	DurationKind
+	// kindCount is how many kinds there are. A new kind goes before it: Kinds
+	// then hands it to every test that keeps a table or a switch per kind,
+	// and each one that has not taken it in fails.
+	kindCount
 )
 
-var kindNames = [...]string{"invalid", "bool", "int", "float", "string", "array", "dict", "var", "handle", "enum", "record",
+// Kinds is every kind, in order.
+func Kinds() []Kind {
+	kinds := make([]Kind, kindCount)
+	for i := range kinds {
+		kinds[i] = Kind(i)
+	}
+	return kinds
+}
+
+var kindNames = [kindCount]string{"invalid", "bool", "int", "float", "string", "array", "dict", "var", "handle", "enum", "record",
 	"money", "ratio", "fxrate", "currency", "time", "duration"}
 
 func (k Kind) String() string {

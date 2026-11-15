@@ -53,3 +53,30 @@ func TestATypeFromJSONMustBeWellFormed(t *testing.T) {
 		t.Errorf("array<money> from JSON = %s, %v, want a concrete type", typ, err)
 	}
 }
+
+// Every kind has a name of its own, and a kind written as a bare name reads
+// back as itself. A kind added before kindCount without a name fails here.
+func TestEveryKindHasANameThatReadsBack(t *testing.T) {
+	t.Parallel()
+	// The kinds no type is written as by name alone: they have parts or a
+	// name of their own, or are no type a program writes.
+	notBare := map[machine.Kind]bool{
+		machine.InvalidKind: true, machine.VarKind: true, machine.ArrayKind: true, machine.DictKind: true,
+		machine.HandleKind: true, machine.EnumKind: true, machine.RecordKind: true,
+	}
+	seen := map[string]machine.Kind{}
+	for _, kind := range machine.Kinds() {
+		name := kind.String()
+		if other, taken := seen[name]; name == "" || taken {
+			t.Errorf("kind %d is named %q, which is empty or %s's too", kind, name, other)
+			continue
+		}
+		seen[name] = kind
+		if notBare[kind] {
+			continue
+		}
+		if typ, err := machine.ParseType(name); err != nil || typ.Kind() != kind {
+			t.Errorf("ParseType(%q) = %v, %v, want the %s kind", name, typ, err, name)
+		}
+	}
+}

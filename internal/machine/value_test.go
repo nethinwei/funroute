@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
+
+	"github.com/nethinwei/funroute/internal/money"
 )
 
 // identical reports two values that are one value, as two ways of computing
@@ -109,5 +112,75 @@ func TestArrayEqualityDoesNotDependOnBacking(t *testing.T) {
 		if got, err := compareEqual(test.left, test.right); err != nil || got.b != test.want || test.left.Equal(test.right) != test.want {
 			t.Errorf("%s: == is %v, %v and Equal %v, want %v", name, got.b, err, test.left.Equal(test.right), test.want)
 		}
+	}
+}
+
+// Every kind of value goes through the switches a value meets — its type,
+// equality, JSON and back as an artifact's constant, its Go form and back —
+// and comes out as itself. A kind with no sample here fails, so a new one is
+// taken through all of them before it is used.
+func TestEveryKindOfValueRoundTrips(t *testing.T) {
+	t.Parallel()
+	// Kinds that are types only: no value has them.
+	typesOnly := map[Kind]string{
+		InvalidKind: "no type", VarKind: "an open type", EnumKind: "an enum's values are strings",
+	}
+	samples := kindSamples(t)
+	for _, kind := range Kinds() {
+		value, ok := samples[kind]
+		if _, only := typesOnly[kind]; only == ok {
+			t.Errorf("%s: a sample %v and a type only %v; want exactly one", kind, ok, only)
+			continue
+		}
+		if ok {
+			expectRoundTrips(t, kind, value)
+		}
+	}
+}
+
+func expectRoundTrips(t *testing.T, kind Kind, value Value) {
+	t.Helper()
+	if got := value.Type().Kind(); got != kind {
+		t.Errorf("%s sample's type is %s", kind, got)
+	}
+	if kind == HandleKind {
+		return // a handle is equal to nothing and has no JSON: it is the host's
+	}
+	constant, ok := ConstantOf(value, value.Type())
+	back, err := constant.value()
+	if !ok || err != nil || !back.Equal(value) {
+		t.Errorf("%s sample as a constant %s reads back as %v, %v", kind, constant.Value, back.Any(), err)
+	}
+	again, err := coerce(value.Any(), value.Type())
+	if err != nil || !again.Equal(value) {
+		t.Errorf("%s sample's Go form %v reads back as %v, %v", kind, value.Any(), again.Any(), err)
+	}
+}
+
+// kindSamples is a value of every kind a value can have.
+func kindSamples(t *testing.T) map[Kind]Value {
+	t.Helper()
+	of := func(input any) Value {
+		value, err := ToValue(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	record, err := Record(RecordOf(FieldOf("a", IntType)), []Value{Int(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rate, err := money.ReadFxRate("USD", "JPY", "150.25")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[Kind]Value{
+		BoolKind: Bool(true), IntKind: Int(-3), FloatKind: Float(0.5), StringKind: String("x"),
+		ArrayKind: of([]int64{1, 2}), DictKind: of(map[string]int64{"a": 1}), RecordKind: record,
+		HandleKind: NewHandle("demo.engine", struct{}{}), MoneyKind: MoneyValue(170, "USD"),
+		RatioKind: RatioValue(money.RatioFromParts(29, 1000)), FxRateKind: FxRateValue(rate),
+		CurrencyKind: CurrencyValue("EUR"), TimeKind: of(time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)),
+		DurationKind: Duration(90 * time.Second),
 	}
 }
