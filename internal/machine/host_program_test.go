@@ -2,7 +2,7 @@ package machine_test
 
 import (
 	"errors"
-	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/nethinwei/funroute/internal/compile"
@@ -120,7 +120,7 @@ func TestProgramCarriesEveryMoneyType(t *testing.T) {
 		Shares: []money.Money{machine.NewMoney("EUR", 3334), machine.NewMoney("EUR", 3333), machine.NewMoney("EUR", 3333)},
 		Settle: "JPY",
 	}
-	if err != nil || fmt.Sprint(out) != fmt.Sprint(want) {
+	if err != nil || !reflect.DeepEqual(out, want) {
 		t.Fatalf("Run(%+v) = %+v, %v, want %+v", in, out, err, want)
 	}
 	in.History[1] = machine.NewMoney("USD", in.History[1].Minor())

@@ -515,7 +515,7 @@ func TestConvertAgreesWithBigRat(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		amount := Money{currency: pair[0], minor: pick() * []int64{1, -1}[random.IntN(2)]}
+		amount := newMoney(pair[0], pick()*[]int64{1, -1}[random.IntN(2)])
 		for _, mode := range []Rounding{RoundDown, RoundUp} {
 			got, err := table.Convert(amount, fx, mode)
 			want, fits := convertedExactly(t, table, amount, fx, mode == RoundUp)
@@ -531,7 +531,7 @@ func TestConvertAgreesWithBigRat(t *testing.T) {
 		t.Fatal(err)
 	}
 	fx := FxRate{pair: &Pair{Base: "AAA", Quote: "BBB"}, rate: ratio(274877906944, 847288609443)}
-	if got, err := wide.Convert(Money{currency: "AAA", minor: 1 << 38}, fx, RoundDown); err != nil || got.minor <= 0 {
+	if got, err := wide.Convert(newMoney("AAA", 1<<38), fx, RoundDown); err != nil || got.minor <= 0 {
 		t.Fatalf("Convert(AAA 2^38) = %v, %v; want about 8.9e18", got, err)
 	}
 }
@@ -560,7 +560,7 @@ func convertedExactly(t *testing.T, table *Currencies, m Money, fx FxRate, away 
 // the rate does — BTC MinInt64 for JPY -1.
 func TestImpliedNeedsNoRatioOfTheAmounts(t *testing.T) {
 	t.Parallel()
-	fx, err := rateCurrencies(t).Implied(Money{currency: "BTC", minor: math.MinInt64}, Money{currency: "JPY", minor: -1})
+	fx, err := rateCurrencies(t).Implied(newMoney("BTC", math.MinInt64), newMoney("JPY", -1))
 	if err != nil || fx.rate != ratio(1<<55, 390625) {
 		t.Fatalf("Implied(BTC MinInt64, JPY -1) = %s, %v; want 2^55/390625", fx, err)
 	}

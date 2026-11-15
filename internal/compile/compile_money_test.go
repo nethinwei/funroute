@@ -399,15 +399,7 @@ func compileContract(t *testing.T, money bool, contract, result string) (*machin
 	if money {
 		return compileMoney(t, "a", contract, result)
 	}
-	options := CompileOptions{Args: moneyContract(t, contract)}
-	if result != "" {
-		typ, err := machine.ParseType(result)
-		if err != nil {
-			t.Fatal(err)
-		}
-		options.Result = &typ
-	}
-	return CompileExpr("a", consoleRegistry(t), options)
+	return CompileExpr("a", consoleRegistry(t), moneyOptions(t, contract, result))
 }
 
 // A result's currency variable may be bound anywhere an argument holds one.

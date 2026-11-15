@@ -85,15 +85,7 @@ const checkContract = "usd: money; eur: money; a: money; u: money; v: money; " +
 
 func compileChecked(t *testing.T, source, result string) (*machine.Artifact, error) {
 	t.Helper()
-	options := CompileOptions{Args: moneyContract(t, checkContract)}
-	if result != "" {
-		typ, err := machine.ParseType(result)
-		if err != nil {
-			t.Fatal(err)
-		}
-		options.Result = &typ
-	}
-	return CompileExpr(source, checkRegistry(t), options)
+	return CompileExpr(source, checkRegistry(t), moneyOptions(t, checkContract, result))
 }
 
 func runChecked(t *testing.T, source, result string, args map[string]any) (string, error) {

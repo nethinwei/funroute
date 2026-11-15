@@ -270,6 +270,13 @@ func runMoney(t *testing.T, source, contract string, args map[string]any) (strin
 
 func compileMoney(t *testing.T, source, contract, result string) (*machine.Artifact, error) {
 	t.Helper()
+	return CompileExpr(source, moneyRegistry(t), moneyOptions(t, contract, result))
+}
+
+// moneyOptions is the "name: type" contract, and a declared result type when
+// result is not empty.
+func moneyOptions(t *testing.T, contract, result string) CompileOptions {
+	t.Helper()
 	options := CompileOptions{Args: moneyContract(t, contract)}
 	if result != "" {
 		typ, err := machine.ParseType(result)
@@ -278,7 +285,7 @@ func compileMoney(t *testing.T, source, contract, result string) (*machine.Artif
 		}
 		options.Result = &typ
 	}
-	return CompileExpr(source, moneyRegistry(t), options)
+	return options
 }
 
 func runArtifact(t *testing.T, artifact *machine.Artifact, args map[string]any) (string, error) {
