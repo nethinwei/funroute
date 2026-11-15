@@ -63,11 +63,26 @@ func TestRankedIsTheSortsFirst(t *testing.T) {
 			ints[i], floats[i] = int64(rng.IntN(6)), []float64{math.NaN(), 0, 1.5, -2}[rng.IntN(4)]
 		}
 		for _, keys := range [][]any{ints, floats} {
-			for k := 0; k <= n+1; k++ {
+			for _, k := range countsToTry(n) {
 				assertRankedAsSorted(t, keys, k)
 			}
 		}
 	}
+}
+
+// countsToTry is every k from 0 to n+1 for a short array, and for a long one
+// the edges and a few between: k past the end, at it, just short of it, and
+// nothing — where the ties and the bounds are — each run compiles two
+// programs.
+func countsToTry(n int) []int {
+	if n <= 17 {
+		ks := make([]int, n+2)
+		for k := range ks {
+			ks[k] = k
+		}
+		return ks
+	}
+	return []int{0, 1, 2, n / 3, n / 2, n - 2, n - 1, n, n + 1}
 }
 
 func assertRankedAsSorted(t *testing.T, keys []any, k int) {
