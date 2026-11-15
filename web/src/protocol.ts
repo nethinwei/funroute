@@ -26,11 +26,19 @@ export type RunResult = {
 // Doc is what the host wrote about a function or a form.
 export type Doc = { label: string; description?: string; category: string };
 
-type Descriptor = { name: string; signature: string; special?: string; wrap?: string; doc: Doc };
+type FunctionDescriptor = { name: string; signature: string; special?: string; wrap?: string; doc: Doc };
+// A form is written, not called: it has its syntax where a function has a
+// signature.
+type FormDescriptor = { name: string; syntax: string; wrap?: string; doc: Doc };
 
 // money is the registry's declared money feature, absent when it has none.
 export type MoneySpec = { currencies: { code: string; digits: number }[] };
-export type Catalog = { artifact_version: number; functions: Descriptor[]; special_forms: Descriptor[]; money?: MoneySpec };
+export type Catalog = {
+  artifact_version: number;
+  functions: FunctionDescriptor[];
+  special_forms: FormDescriptor[];
+  money?: MoneySpec;
+};
 
 // A contract as the server reads it (compile.TextContract): every type is text.
 export type ArgSpec = { name: string; type: string; doc?: string };
