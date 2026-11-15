@@ -106,8 +106,6 @@ type example struct {
 	Args            map[string]any        `json:"args"`
 	Expected        any                   `json:"expected"`
 	MinControlDepth int                   `json:"min_control_depth"`
-	Covers          []string              `json:"covers"`
-	Operators       []string              `json:"operators"`
 }
 
 func readExamples(t *testing.T) []example {
@@ -148,12 +146,6 @@ func TestExamplesRunAndCoverTheLanguage(t *testing.T) {
 		}
 	})
 	for _, item := range readExamples(t) {
-		for _, name := range item.Covers {
-			delete(missing["functions and forms"], name)
-		}
-		for _, operator := range item.Operators {
-			delete(missing["operators"], operator)
-		}
 		t.Run(item.Label, func(t *testing.T) {
 			t.Parallel()
 			coverNodes(t, registry, item, &nodes, missing)
@@ -196,12 +188,13 @@ func coverNodes(t *testing.T, registry *machine.Registry, item example, lock *sy
 	lock.Lock()
 	defer lock.Unlock()
 	coverTree(t, item, missing["nodes"])
-	coverOverloads(t, registry, item, missing["overloads"])
+	coverOverloads(t, registry, item, missing)
+	coverSpelling(t, registry, item, missing)
 }
 
-// coverOverloads marks the overloads the example's calls resolve to, by the
-// types inference settled on — not by what the example says it covers.
-func coverOverloads(t *testing.T, registry *machine.Registry, item example, missing map[string]bool) {
+// coverOverloads marks the overloads the example's calls resolve to, and
+// their functions, by the types inference settled on.
+func coverOverloads(t *testing.T, registry *machine.Registry, item example, missing map[string]map[string]bool) {
 	t.Helper()
 	options, err := item.Contract.Options()
 	if err != nil {
@@ -213,9 +206,74 @@ func coverOverloads(t *testing.T, registry *machine.Registry, item example, miss
 	}
 	for _, fact := range analysis.Nodes {
 		name, _, _ := strings.Cut(fact.Signature, "(")
-		delete(missing, fact.Signature)
-		delete(missing, name)
+		delete(missing["overloads"], fact.Signature)
+		delete(missing["overloads"], name)
+		delete(missing["functions and forms"], name)
 	}
+}
+
+// coverSpelling marks the forms and operators the example is written with,
+// from its tree: a form node is its form, and an operator counts where its
+// spelling is in the source the node covers — add(a, b) reads back as
+// a + b, but no + was written. The forms that are operators (and, or, not)
+// are marked by their spelling in the catalog.
+func coverSpelling(t *testing.T, registry *machine.Registry, item example, missing map[string]map[string]bool) {
+	t.Helper()
+	tree, err := syntax.SyntaxTree(item.Source)
+	if err != nil {
+		t.Fatalf("example %q: %v", item.Label, err)
+	}
+	spelledForms := map[string]string{} // an operator's spelling: the form it is
+	for _, form := range registry.Catalog().SpecialForms() {
+		switch words := strings.Fields(form.Syntax()); {
+		case len(words) == 3 && words[0] == "a" && words[2] == "b": // a && b
+			spelledForms[words[1]] = form.Name()
+		case len(words) == 1 && strings.HasSuffix(words[0], "a"): // !a
+			spelledForms[strings.TrimSuffix(words[0], "a")] = form.Name()
+		}
+	}
+	var visit func(node syntax.Tree)
+	visit = func(node syntax.Tree) {
+		if node.Form {
+			delete(missing["functions and forms"], node.Node)
+		}
+		if written := item.Source[node.Span.Start:node.Span.End]; node.Operator != "" && strings.Contains(written, strings.Trim(node.Operator, "[]")) {
+			delete(missing["operators"], fixityOf(node)+":"+node.Operator)
+			delete(missing["functions and forms"], spelledForms[node.Operator])
+		}
+		eachTreeChild(node, visit)
+	}
+	visit(*tree)
+}
+
+// fixityOf is how an operator node is written: an index, a prefix (one
+// operand) or an infix.
+func fixityOf(node syntax.Tree) string {
+	operands := 0
+	eachTreeChild(node, func(syntax.Tree) { operands++ })
+	switch {
+	case node.Operator == "[]":
+		return "index"
+	case operands == 1:
+		return "prefix"
+	}
+	return "infix"
+}
+
+// eachTreeChild calls visit with each node directly under node.
+func eachTreeChild(node syntax.Tree, visit func(syntax.Tree)) {
+	var fields func([]syntax.TreeField)
+	fields = func(list []syntax.TreeField) {
+		for _, field := range list {
+			for _, child := range field.Nodes {
+				visit(child)
+			}
+			for _, item := range field.Items {
+				fields(item)
+			}
+		}
+	}
+	fields(node.Fields)
 }
 
 func runExample(t *testing.T, s *session, item example) {

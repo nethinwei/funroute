@@ -132,7 +132,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 新增公开 API | `funroute.go` 对应的一节；新类型进 `tests/api/value_test.go` 的断言块，并在 `tests/api` 以宿主视角用一次。能不加就不加 |
 | 有意改变了某个答案或失败 | `make golden` 重写 `tests/golden/testdata/outcomes.jsonl`，逐条读 diff；只改执行方式时金库必须一字不差 |
 | 改了 docs/limits.md 表格里的行为 | `make limits` 重新生成，读一遍 diff；新增边界就在 `tests/limits` 的用例表加一行，说明写在用例里 |
-| 新增例子 | 只改 `web/funroute-examples.json`（源码 + 契约 + 入参 + 期望值）；示例合起来要覆盖演示注册表的全部函数、形式、运算符与节点 |
+| 新增例子 | 只改 `web/funroute-examples.json`（源码 + 契约 + 入参 + 期望值）；示例合起来要覆盖演示注册表的全部函数、形式、运算符与节点，覆盖由源码与推导结果算出（`lsp/funroute_test.go` 的 `coverOverloads`、`coverSpelling`），不手写 |
 | 新增语言服务能力 | `lsp/`：标准方法优先，专有的用 `funroute/*` 或 `workspace/executeCommand`；`web/wasm` 只是传输 |
 | 新增颜色 | 只在 `web/tokens.css`，用 `light-dark(浅, 深)`；组件只消费 token |
 | 新增前端代码 | `web/src/*.ts`；组件经 `ui.ts` 的 `define` 注册并加进 `package.json` 入口；位置一律按 UTF-16 数（`projection.ts` 的 `offsetAt`）；运行时依赖只加实际导入的包 |
