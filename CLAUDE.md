@@ -67,6 +67,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 - 只有调用了宿主函数（含纯函数，`regProgram.foreign`）的运行才设 `recover`：内核与内核库的代码不许 panic，`FuzzProgramsNeverPanic` 守着。新增内核函数时，所有失败都要走 error 返回。
 - 语言不图灵完备：没有递归、没有无界循环，每次 `Run` 只有一个帧。任何能重入程序的构造都会推翻 `docs/termination.md` 的定理 A 与 B。
 - 没有 fuel：运行多久由宿主的 `ctx` 决定，宿主调用前与循环每 `checkEvery` 轮（`machine/limit.go`，约 1 ms）查一次。新增会循环的执行路径（新的循环指令、向量的新走法）必须经 `turn` 计数，否则长循环停不下来。编译期折叠只按数目（`foldTurns`：轮数加上每轮带着的累加器、收下的项有多大）限制，不看时钟：同一份源码在哪台机器上都编出同一个 artifact。
+- `reduce` 的累加器每轮只能多出这一轮带来的东西（`compile/bounded.go` 的 `requireBoundedFold`）：定理 B 靠它成立。新增能把值带进下一轮的形式、或放宽这条检查，要先补上 termination.md 里的归纳。
 - 凭空造容器的函数标 `Doc.BoundedArgs`，整数实参必须由输入规模界定；扩展函数的计算量只能随输入**规模**增长，不能随参数**数值**增长（设上限或换算法，如 `range`/`pad`/`allocate` 的 10000、`pow` 的平方求幂）。
 - 常量折叠只碰 `Doc.Constexpr` 授权的函数：内核与 std 有，模型、时钟、远程调用**不标**。闭合表达式的失败是编译错误。
 
@@ -123,6 +124,7 @@ cmd/funroute cmd/playground CLI 与工作台静态服务
 | 新增聚合函数 | 能用一个内核函数一步步折叠、或遇到某个 bool 就停的，声明 `FunctionSpec.Fold`；融合后的答案与失败与按原样编译的一致（`internal/compile/aggregate_test.go` 对照） |
 | 按 Go 签名注册的新常见形状 | `host_direct.go` 一个 case，在 `TestDirectCallsAnswerAsReflection`（std 用的形状在 `TestTheStandardShapesAreCalledDirectly`）加一个该形状的函数；标量形状再在 `host_pure.go` 的 `pureOf` 加一个直接读写各组的，`TestPureCallsAnswerAsTheirEval` 加一个 |
 | 新增凭空造容器的函数 | 标 `Doc.BoundedArgs`，理由写进 termination.md 定理 B 之后 |
+| 新增吃进容器或字符串、又交回容器或字符串的函数 | 结果的规模（各层项数加字符数）不超过实参之和加定值的，把名字加进 `kernelAdditive`（内核，`machine/builtins.go`）或 `additive`（std）：`reduce` 的累加器只能经过这样的函数（`compile/bounded.go`）。`TestAnAdditiveFunctionHandsBackNoMoreThanItIsGiven` 拿各种大小的实参实测每个声明；不确定就不加，没声明的按"可能放大"处理 |
 | 新增读运行状态的内核函数 | `FunctionSpec.readsRun`（不折叠，要求写在 `using` 里） |
 | 新增金额函数 | 先在 `internal/money` 的 Go 方法上实现；会舍入的内核运算用 `registerRounded`；非内核函数自己检查容器里币种一致（std 的 `amountsOf`）；宿主先 `DeclareMoney` 再注册 std |
 | 改 `Doc` 里影响编译的字段 | `machine/manifest.go` 的 `ManifestFunction` |

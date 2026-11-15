@@ -309,3 +309,6 @@ func WidenParams(r *Runtime) {
 func NamesWithExamples() (kernel, forms []string) {
 	return kit.SortedKeys(kernelExamples), kit.SortedKeys(formExamples)
 }
+
+// KernelAdditive is the names kernelAdditive lists, for builtins_test.go.
+func KernelAdditive() []string { return kernelAdditive }

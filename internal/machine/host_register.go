@@ -43,6 +43,18 @@ type Doc struct {
 	// polynomial bound in docs/termination.md. Requiring a *constant* would be
 	// stronger than that bound needs: range(len(fees)) is as safe as range(3).
 	BoundedArgs bool `json:"-"`
+	// Additive says the result holds no more than the arguments do between
+	// them, give or take a fixed amount: counting the items of every
+	// container in a value and the characters of every string, at any
+	// depth, the result's count is at most the sum of the arguments' plus a
+	// constant. concat is, and so is anything that picks, orders, drops or
+	// regroups what it is given — split too, each separator it takes out
+	// paying for the item it makes; join is not, the separator going in once
+	// an item, nor replace, the replacement once a match. A reduce may
+	// pass its accumulator only through functions that are (requireBoundedFold
+	// in the compiler): through any other, a few turns could double it every
+	// turn, and the polynomial bound in docs/termination.md would not hold.
+	Additive bool `json:"-"`
 	// ConstArgs are the positions of the arguments a call must fix at compile
 	// time: a literal, or what folds to one. It is for an argument that is a
 	// program of its own — matches' pattern — which is then checked and

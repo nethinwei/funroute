@@ -132,6 +132,9 @@ func (c *bytecodeCompiler) compileReduce(node *syntax.ReduceExpr) error {
 	if !ok || !resultType.IsConcrete() {
 		return syntax.Around(node, "cannot compile reduce with unresolved result type")
 	}
+	if err := c.requireBoundedFold(node); err != nil {
+		return err
+	}
 	if err := c.compile(node.Source); err != nil {
 		return err
 	}

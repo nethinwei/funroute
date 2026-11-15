@@ -440,11 +440,11 @@ func TestAFoldIsBoundedByWhatItMakes(t *testing.T) {
 	t.Parallel()
 	registry := foldRegistry(t)
 	for source, folded := range map[string]bool{
-		`len(reduce(x in range(12), a = [1], concat(a, a)))`:                          true,
+		`len(reduce(x in range(10), a = [1], concat(a, range(100))))`:                 true,
 		`len(reduce(x in range(100), a = [1], concat(a, [x])))`:                       true,
 		`len([[x, x] for x in range(3000)])`:                                          true,
-		`len(reduce(x in range(24), a = [1], concat(a, a)))`:                          false,
-		`len(reduce(x in range(24), s = "ab", s + s))`:                                false,
+		`len(reduce(x in range(60), a = [1], concat(a, range(100))))`:                 false,
+		`len(reduce(x in range(300), s = "ab", s + "0123456789"))`:                    false,
 		`len(reduce(x in range(100), a = {v: [1]}, {v: concat(a.v, range(1000))}).v)`: false,
 		`len([range(10000) for x in range(100)])`:                                     false,
 		`len([{v: range(10000)} for x in range(100)])`:                                false,

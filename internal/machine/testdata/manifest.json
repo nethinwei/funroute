@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "forms": [],
   "functions": [
     {
@@ -125,7 +125,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "add",
@@ -188,7 +189,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "add",
@@ -251,7 +253,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "add",
@@ -314,7 +317,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "add",
@@ -377,7 +381,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "add",
@@ -440,7 +445,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "add",
@@ -503,7 +509,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "add",
@@ -566,7 +573,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "add",
@@ -629,7 +637,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "add_days",
@@ -1250,7 +1259,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "at",
@@ -1298,7 +1308,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "at",
@@ -1346,7 +1357,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "at",
@@ -1389,7 +1401,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "avg",
@@ -1577,7 +1590,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "bottom_k",
@@ -1635,7 +1649,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "bottom_k",
@@ -1693,7 +1708,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "bottom_k",
@@ -1751,7 +1767,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "ceil",
@@ -1825,7 +1842,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "contains",
@@ -2853,7 +2871,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "fallback",
@@ -2929,6 +2948,7 @@
         ]
       },
       "constexpr": true,
+      "additive": true,
       "fold": {
         "first": true
       }
@@ -2969,7 +2989,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "float",
@@ -3858,7 +3879,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "gt",
@@ -4745,7 +4767,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "int",
@@ -4893,7 +4916,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "join",
@@ -4959,7 +4983,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "last_index_of",
@@ -5803,7 +5828,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "lt",
@@ -6565,7 +6591,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "max",
@@ -6615,7 +6642,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "max",
@@ -6665,7 +6693,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "max",
@@ -6716,7 +6745,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "max",
@@ -6767,7 +6797,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "max",
@@ -6818,7 +6849,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "max_by",
@@ -6865,7 +6897,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "max_by",
@@ -6912,7 +6945,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "max_by",
@@ -6959,7 +6993,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "median",
@@ -7255,7 +7290,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "min",
@@ -7305,7 +7341,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "min",
@@ -7355,7 +7392,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "min",
@@ -7405,7 +7443,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "min",
@@ -7456,7 +7495,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "min",
@@ -7507,7 +7547,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "min",
@@ -7558,7 +7599,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "min_by",
@@ -7605,7 +7647,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "min_by",
@@ -7652,7 +7695,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "min_by",
@@ -7699,7 +7743,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "minor",
@@ -9809,7 +9854,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "round",
@@ -10040,7 +10086,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "slice",
@@ -10079,7 +10126,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort",
@@ -10120,7 +10168,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort",
@@ -10161,7 +10210,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort",
@@ -10202,7 +10252,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort_by",
@@ -10256,7 +10307,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort_by",
@@ -10310,7 +10362,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort_by",
@@ -10364,7 +10417,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort_by",
@@ -10418,7 +10472,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort_by_desc",
@@ -10472,7 +10527,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort_by_desc",
@@ -10526,7 +10582,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort_by_desc",
@@ -10580,7 +10637,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort_by_desc",
@@ -10634,7 +10692,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort_desc",
@@ -10675,7 +10734,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort_desc",
@@ -10716,7 +10776,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sort_desc",
@@ -10757,7 +10818,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "split",
@@ -10791,7 +10853,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "start_of_day",
@@ -10967,7 +11030,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "string",
@@ -11014,7 +11078,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "string",
@@ -11061,7 +11126,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "string",
@@ -11108,7 +11174,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "string",
@@ -11155,7 +11222,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "string",
@@ -11202,7 +11270,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "sub",
@@ -11896,7 +11965,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "time",
@@ -11981,7 +12051,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "top_k",
@@ -12039,7 +12110,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "top_k",
@@ -12097,7 +12169,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "top_k",
@@ -12155,7 +12228,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "trim",
@@ -12182,7 +12256,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "trim_prefix",
@@ -12217,7 +12292,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "trim_suffix",
@@ -12248,7 +12324,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "unique",
@@ -12283,7 +12360,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "upper",
@@ -12310,7 +12388,8 @@
           }
         ]
       },
-      "constexpr": true
+      "constexpr": true,
+      "additive": true
     },
     {
       "name": "weekday",

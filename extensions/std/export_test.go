@@ -19,3 +19,7 @@ func RegisteredNames() map[string]bool {
 	}
 	return names
 }
+
+// Additive is the names additive lists, for std_test.go: a name std
+// registers no overload of is an orphan.
+func Additive() []string { return additive }

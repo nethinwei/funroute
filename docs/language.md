@@ -152,6 +152,18 @@ reduce(name, weight in weights, total = 0.0, total + weight)            // 遍�
 
 累加器写成 `total = 0`，和 `let` 的绑定同一个写法。
 
+累加器是字符串、数组、字典（或带这些的记录）时，每一轮只能让它**多出这一轮带来的东西**，不能成倍变大——否则二十轮就是一百万项，规则的成本不再由输入规模决定。编译器检查循环体：
+
+```text
+reduce(c in channels, ids = [], if(c.healthy, concat(ids, [c.id]), ids))   // 可以：每轮至多多一项
+reduce(c in channels, s = "", s + c.id + ",")                              // 可以
+reduce(c in channels, a = {ids: [], n: 0}, a with {ids: concat(a.ids, [c.id]), n: a.n + 1})   // 可以：每个字段各用一次
+reduce(c in channels, ids = [1], concat(ids, ids))                         // 编译错误：累加器用了两次，每轮翻倍
+reduce(c in channels, s = "ab", join(["", "", ""], s))                     // 编译错误：join 把分隔符放了多次
+```
+
+规则是：累加器的每个部分在下一轮里至多用一次，只经过不会把它变大的函数（挑选、排序、切片、`concat`、`merge`、`split` 等；`join`、`replace`、`chunk`、`windows` 不算），不在循环体里的循环内读它。从累加器算出的数（`len(ids)`、`a.n + 1`）不受限制。完整的说法与理由见[终止性](termination.md#累加器的增长)。
+
 内核库与标准库的主要内容（完整清单见工作台的「函数说明」，或在编辑器里悬停查看；每个函数都附有可以直接运行的案例）。常用的在内核里，调用就是内核调用：不查截止时间、不再检查结果类型，直接操作数组与字典自己的 backing；低频的与金额的重载在标准库 `extensions/std`（`std.Register(registry)`）：
 
 | 类别 | 内核库 | 标准库 |

@@ -428,4 +428,11 @@ func TestEveryExampleNamesAStdFunction(t *testing.T) {
 			t.Errorf("std has examples for %q, which std registers no overload of", name)
 		}
 	}
+	// The same of the names it declares additive; that each is, a test of
+	// every official function holds (internal/machine).
+	for _, name := range std.Additive() {
+		if !registered[name] {
+			t.Errorf("std declares %q additive, which std registers no overload of", name)
+		}
+	}
 }
