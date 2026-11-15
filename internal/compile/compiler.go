@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/nethinwei/funroute/internal/kit"
 	"github.com/nethinwei/funroute/internal/machine"
@@ -304,8 +305,28 @@ func (c *bytecodeCompiler) compileDict(node *syntax.DictExpr) error {
 // them; compileField turns the name into the index it resolved to, so reading
 // a field is one instruction and no name survives into the bytecode.
 func (c *bytecodeCompiler) compileRecord(node *syntax.RecordExpr) error {
-	return c.compileMake(node, node.ID, machine.RecordKind, fieldValues(node.Fields),
+	return c.compileMake(node, node.ID, machine.RecordKind, c.fieldsInTypeOrder(node),
 		machine.Instruction{Op: machine.OpMakeRecord, A: len(node.Fields)}, "cannot compile record with unresolved type")
+}
+
+// fieldsInTypeOrder is a record literal's values in the order its type has
+// the fields, which inference may have settled other than as written: a
+// record is built, and so evaluated, in its type's order (docs/semantics.md
+// S4).
+func (c *bytecodeCompiler) fieldsInTypeOrder(node *syntax.RecordExpr) []syntax.Expr {
+	typ, ok := c.inferred.nodeType(node.ID)
+	if !ok || typ.Kind() != machine.RecordKind {
+		return fieldValues(node.Fields)
+	}
+	values := make([]syntax.Expr, 0, len(node.Fields))
+	for _, field := range typ.Fields() {
+		at := slices.IndexFunc(node.Fields, func(written syntax.RecordFieldExpr) bool { return written.Name == field.Name() })
+		if at < 0 {
+			return fieldValues(node.Fields)
+		}
+		values = append(values, node.Fields[at].Value)
+	}
+	return values
 }
 
 // compileMake pushes values in order and packs them into one value of the

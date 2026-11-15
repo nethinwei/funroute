@@ -448,5 +448,10 @@ func noOverloadError(node *syntax.CallExpr, s *inferState, args []typeTerm) erro
 	if hint := overloadHint(node.Name, actual); hint != "" {
 		message += "；" + hint
 	}
+	if node.Name == "if" && len(args) == 3 {
+		if hint := s.recordDifference(args[1], args[2]); hint != "" {
+			message += "；else 分支与 then 分支相比：" + hint
+		}
+	}
 	return syntax.Around(node, "%s", message)
 }

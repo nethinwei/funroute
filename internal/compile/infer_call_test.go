@@ -203,7 +203,8 @@ func TestMoneyHintsCoverEveryBranch(t *testing.T) {
 	}
 }
 
-// Where no hint would be true, none is given.
+// Where no money hint would be true, none is given. Two records of other
+// fields are told apart by what they differ in, which is no money hint.
 func TestMoneyHintsStaySilentElsewhere(t *testing.T) {
 	t.Parallel()
 	for _, source := range []string{
@@ -212,7 +213,7 @@ func TestMoneyHintsStaySilentElsewhere(t *testing.T) {
 	} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
-			if got := hintOf(t, source); got != "" {
+			if got := hintOf(t, source); got != "" && !strings.HasPrefix(got, "else 分支与 then 分支相比：") {
 				t.Fatalf("CompileExpr(%q) hint = %q, want none", source, got)
 			}
 		})
