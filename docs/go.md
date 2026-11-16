@@ -124,7 +124,7 @@ for _, request := range requests {
 
 这些类型的字段都是私有的，宿主写不出一个不合规则的值：金额、币种与汇率由**币种表**造出（所以币种一定已声明），或经 JSON 解码得到（解码只检查形状与汇率规则，币种是否已声明在进入规则的边界上、或经币种表 `Format` 时检查），比例由 `ParseRatio`/`Percent`/`BasisPoints` 读出，读取一律经访问方法（`m.Currency()`、`m.Minor()`、`fx.Base()`……）。零值只有两个有意义：`funroute.Money{}` 是不带币种的零（与规则里的 `0` 一样能和任何币种相遇），`funroute.Ratio{}` 是 0。
 
-要用到币种小数位的操作都在币种表上：`registry.Currencies()` 取规则用的那一张（没声明金额的注册表返回 `nil, false`），不跑规则的服务用 `funroute.NewCurrencies(spec)` 按同一个 spec 建一张。金额只能由币种表造出，包里没有包级的 `Parse`：只有币种表知道 `"USD 1.70"` 是多少个最小单位，币种不在表里也就造不出金额。
+币种表声明金额的小数位：`registry.Currencies()` 取规则用的那一张（没声明金额的注册表返回 `nil, false`），不跑规则的服务用 `funroute.NewCurrencies(spec)` 按同一个 spec 建一张。由表造出的金额带着小数位，之后可以直接用 `m.String()` 或 `m.Decimal()` 展示。包里没有包级的 `Parse`：由币种表确定 `"USD 1.70"` 是多少个最小单位，币种不在表里也就造不出金额。
 
 下表里的变量：
 
@@ -136,15 +136,30 @@ table, _ := registry.Currencies()   // *funroute.Currencies，或 funroute.NewCu
 | 类别 | 入口 |
 |---|---|
 | 造金额 | `table.Parse("USD 1.70")`（代码与数之间是一个或几个空格，不收 Tab）、`table.Of("USD", "1.70")`、`table.Minor("USD", 170)`；`table.Format(m)` 写回 `"USD 1.70"`，`table.Places("USD")` 是小数位 |
-| 读金额 | `m.Currency()`、`m.Minor()`、`m.Sign()`、`m.IsZero()` |
+| 读金额 | `m.Currency()`、`m.Minor()`、`m.Digits()`、`m.Sign()`、`m.IsZero()`；`m.String()` 是 `"USD 1.70"`，`m.Decimal()` 返回 `("1.70", nil)`，保留币种的小数位 |
 | 加减比较 | `m.Add(o)`、`m.Sub(o)`、`m.Neg()`、`m.Abs()`、`m.Cmp(o)` |
 | 乘除（当场舍入） | `m.MulInt(n)`、`m.MulRatio(r, mode)`、`m.DivRatio(r, mode)`、`m.Ratio(o)`（同币种之比，得比例）、`m.Prorate(part, whole, mode)`、`m.ProrateBy(part, whole, mode)`（按比例取，只舍入一次）、`m.RoundTo(step, mode)`（现金舍入） |
 | 精确计算（规则里的 `round`） | `m.Exact()` 得 `ExactMoney`；`e.Add`/`Sub`/`Neg`/`MulInt`/`MulRatio`/`DivRatio`/`MulPart`/`ProrateBy`/`Cmp`/`Sign`、`table.ConvertExact(e, fx)` 都不舍入；`e.Round(mode)` 舍入一次得回 `Money` |
 | 分摊与统计 | `m.Allocate(权重...)`、`m.Split(n)`（一分不丢，剩下的最小单位按最大余数法发出；n 为 1–10000，与规则里的 `allocate` 相同）、`m.AllocateBy(strategy, 权重...)`、`m.SplitBy(strategy, n)`（按 `funroute.AllocateAllLast` 等策略发）、`funroute.AverageMoney(ms, mode)`、`funroute.MedianMoney(ms, mode)`（与 std 的 `avg`/`median` 相同） |
-| 比例 | `funroute.ParseRatio("0.029")`（也读分数 `"1/3"`）、`funroute.Percent("2.9")`、`funroute.BasisPoints("25")`；`r.Add`/`Sub`/`Mul`/`Div`、`r.Cmp`、`r.Sign`、`r.IsZero`、`r.String()` |
-| 币种 | `table.Currency("USD")`，`c.Code()`；零值 `Currency{}` 不是币种，写 JSON 是 `ErrCurrency`（与零值 `FxRate` 一样） |
+| 比例 | `funroute.ParseRatio("0.029")`（也读分数 `"1/3"`）、`funroute.Percent("2.9")`、`funroute.BasisPoints("25")`；`r.Add`/`Sub`/`Mul`/`Div`、`r.Cmp`、`r.Sign`、`r.IsZero`；`r.String()` 是精确小数或分数，`r.Decimal(places)` 是半偶舍入后的展示文本 |
+| 币种 | `table.Currency("USD")`，`c.String()` 得到代码 `"USD"`，也供 `fmt` 打印；零值 `Currency{}` 的 `String()` 是 `""`，写 JSON 是 `ErrCurrency`（与零值 `FxRate` 一样） |
 | 汇率 | `table.FxRate("USD", "JPY", "150.25")`、`table.Implied(over, under)`；`fx.Base()`、`fx.Quote()`、`fx.String()`（`150.25 JPY / USD`，与规则里的字面量同一写法）、`fx.Decimal(places)`（半偶舍入后的展示文本，汇率本身不变）、`fx.Inverse()`、`fx.Chain(next)`（串联，前一个的报价币种必须是后一个的基准币种；串回起点时乘积必须恰为 1，带点差的回环是 `ErrArithmetic`）、`fx.MulRatio(r)`（加点，与规则里的 `fx * 101%` 相同）、`fx.Cmp(other)` |
 | 换汇 | `table.Convert(m, fx, mode)`：把 fx 基准币种的 m 按这个汇率换成报价币种并舍入一次，与规则里的 `convert(m, JPY, @mode)` 相同；m 是别的币种（不是不带币种的零）就是 `ErrCurrency` |
+
+**文本展示**：`Money.Decimal()` 精确返回不带币种的金额文本，不舍入、不经过浮点数；不带币种的零写成 `"0"`。从旧 JSON 读出的金额若没有小数位，`String()` 写成 `"USD 170 minor"`，`Decimal()` 返回 `ErrCurrency`，先用 `table.Adopt(m)` 补齐小数位即可。`table.Format(m)` 会按表校验并补齐，再输出带币种的文本。`Ratio.Decimal(places)` 与 `FxRate.Decimal(places)` 保留指定的小数位、使用半偶舍入，只影响文本；负的小数位按 0 处理，超过 18 位或舍入后的数字放不进 int64 是 `ErrArithmetic`。`ExactMoney` 先用 `e.Round(mode)` 明确舍入方式，得到 `Money` 后再调用 `Decimal()`。
+
+**数据库存储**：`Money.Decimal()` 返回的字符串可作为 `DECIMAL` / `NUMERIC` 列的参数，同时保存 `m.Currency()`；读取字符串后，用业务币种表的 `table.Of(code, amount)` 还原。币种的小数位由同一份配置确定；允许多套精度时还需保存 `m.Digits()` 的结果。这样金额从取值到写库都不经过 `float64`。例如在返回 `error` 的宿主方法中：
+
+```go
+amount, err := m.Decimal()
+if err != nil {
+    return err
+}
+_, err = db.ExecContext(ctx, "INSERT INTO payments (currency, amount) VALUES (?, ?)", m.Currency(), amount)
+return err // 占位符按数据库驱动调整
+```
+
+**接口迁移**：`Currency.Code()` 已弃用，保留为 `String()` 的兼容转发；新代码使用 `c.String()`，v0.2.1 中原有调用仍能编译。
 
 汇率是精确比值：`"150.25"` 就是 601/4，`fx.Chain(next)` 是精确的乘积，只有换出来的金额舍入一次。同一币种之间恒为 1：`table.FxRate("USD", "USD", "1")` 合法，别的数是 `ErrArithmetic`。`table.Implied(over, under)` 是一笔交易隐含的汇率——over 是为 under 付出的：`Implied(JPY 15000, USD 100.00)` 是 `150 JPY / USD`，与规则里的 `implied(settled, paid)` 相同；两笔金额必须非零、同号、币种不同。
 

@@ -358,7 +358,7 @@ func pricedRecords(t *testing.T, channels []pricedChannel) machine.Value {
 	items := make([]machine.Value, len(channels))
 	for i, c := range channels {
 		item, err := machine.Record(typ, []machine.Value{machine.String(c.Name), machine.MoneyValue(c.Fee.Minor(), c.Fee.Currency()),
-			machine.CurrencyValue(c.Cur.Code()), machine.Float(c.Risk), machine.Bool(c.OK)})
+			machine.CurrencyValue(c.Cur.String()), machine.Float(c.Risk), machine.Bool(c.OK)})
 		if err != nil {
 			t.Fatal(err)
 		}

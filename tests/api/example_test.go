@@ -217,6 +217,21 @@ func ExampleFormat() {
 	// let(rate = 250, cap = 5000, min(amount * rate / 10000, cap))
 }
 
+// Format keeps comments between arguments and on their own lines.
+func ExampleFormat_comments() {
+	formatted, err := funroute.Format("let(fee=amount*25/10000, // fee rate\n// apply the cap\nmin(fee,5000))")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(formatted)
+	// Output:
+	// let(
+	//   fee = amount * 25 / 10000, // fee rate
+	//   // apply the cap
+	//   min(fee, 5000)
+	// )
+}
+
 // Money is declared once per console: the currencies and the rounding. A
 // contract in one currency variable serves every currency, and the operators
 // keep the currencies straight — the fee comes back in the currency the

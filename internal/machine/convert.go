@@ -59,7 +59,7 @@ func fromGo(input any) (Value, error) {
 	case money.FxRate:
 		return FxRateValue(x), money.CheckFxRate(x)
 	case money.Currency:
-		return CurrencyValue(x.Code()), nil
+		return CurrencyValue(x.String()), nil
 	case []money.Money:
 		return arrayOf(x), nil
 	case []money.FxRate:
@@ -133,7 +133,7 @@ func ToValue[T any](input T) (Value, error) {
 	case *money.Ratio:
 		return RatioValue(*scalar), nil
 	case *money.Currency:
-		return CurrencyValue(scalar.Code()), nil
+		return CurrencyValue(scalar.String()), nil
 	case *[]bool:
 		return arrayOf(*scalar), nil
 	case *[]int64:
