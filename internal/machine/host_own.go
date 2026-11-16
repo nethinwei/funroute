@@ -30,7 +30,7 @@ func loadOwn(typ reflect.Type, p unsafe.Pointer) (Value, error) {
 	case durationGoType:
 		return Duration(*(*time.Duration)(p)), nil
 	case currencyGoType:
-		return CurrencyValue((*money.Currency)(p).Code()), nil
+		return CurrencyValue((*money.Currency)(p).String()), nil
 	default:
 		// A type ownGoKind names and no case here reads: reading it as
 		// another type's memory would be a quiet wrong answer.

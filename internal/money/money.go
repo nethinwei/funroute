@@ -55,6 +55,21 @@ func (m Money) Currency() string { return m.currency }
 // Minor is the amount in its currency's minor unit: 170 for USD 1.70.
 func (m Money) Minor() int64 { return m.minor }
 
+// Decimal writes the amount without its currency, keeping the places it
+// carries: "1.70" for USD 1.70, "1600" for JPY 1600. It is exact, with no
+// rounding; the currency-less zero is "0". An amount without known places
+// returns ErrCurrency; use Currencies.Adopt to supply them first.
+func (m Money) Decimal() (string, error) {
+	if m.currency == "" {
+		return "0", nil
+	}
+	digits, ok := m.Digits()
+	if !ok {
+		return "", fmt.Errorf("%w: %s has unknown decimal places; use Currencies.Adopt first", ErrCurrency, m.currency)
+	}
+	return FormatDecimal(m.minor, digits, false), nil
+}
+
 // String writes the amount as a person reads it, in the places it carries:
 // "SAR 2.12", "JPY 1600". An amount that does not carry its places is written
 // in minor units, "SAR 212 minor", rather than in places guessed; the
@@ -62,14 +77,14 @@ func (m Money) Minor() int64 { return m.minor }
 // one way in every process. Reading and writing amounts that a program parses
 // back goes through a table (Currencies.Format, Parse).
 func (m Money) String() string {
+	text, err := m.Decimal()
 	if m.currency == "" {
-		return FormatDecimal(m.minor, 0, false)
+		return text
 	}
-	digits, ok := m.Digits()
-	if !ok {
+	if err != nil {
 		return m.currency + " " + strconv.FormatInt(m.minor, 10) + " minor"
 	}
-	return m.currency + " " + FormatDecimal(m.minor, digits, false)
+	return m.currency + " " + text
 }
 
 // LogValue makes slog write String instead of the JSON shape: slog resolves
@@ -81,10 +96,13 @@ func (m Money) LogValue() slog.Value { return slog.StringValue(m.String()) }
 // zero value is no currency.
 type Currency struct{ code string }
 
-// Code is the currency's code: "USD".
-func (c Currency) Code() string { return c.code }
-
+// String is the currency's code, such as "USD", or "" for the zero Currency.
 func (c Currency) String() string { return c.code }
+
+// Code is the currency's code.
+//
+// Deprecated: use String instead.
+func (c Currency) Code() string { return c.String() }
 
 // A value's JSON — {"currency", "minor", "digits"}, {"base", "quote",
 // "rate"}, "USD" — and reading one back checks what the JSON alone can say:

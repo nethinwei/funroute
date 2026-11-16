@@ -267,7 +267,7 @@ func TestMoneyContainersKeepTheNativeBacking(t *testing.T) {
 
 func TestFromValueErrorNamesBothSides(t *testing.T) {
 	t.Parallel()
-	if code, err := FromValue[money.Currency](CurrencyValue("USD")); err != nil || code.Code() != "USD" {
+	if code, err := FromValue[money.Currency](CurrencyValue("USD")); err != nil || code.String() != "USD" {
 		t.Fatalf("FromValue[money.Currency](USD) = %v, %v, want USD", code, err)
 	}
 	if _, err := FromValue[money.Currency](Int(1)); err == nil || err.Error() != "argument is int, want money.Currency" {

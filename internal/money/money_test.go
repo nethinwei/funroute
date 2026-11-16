@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"testing"
 )
 
@@ -18,11 +19,19 @@ func TestACurrencysJSONReadsBack(t *testing.T) {
 		t.Fatalf("json.Marshal(USD) = %s, %v, want \"USD\"", encoded, err)
 	}
 	var back Currency
-	if err := json.Unmarshal(encoded, &back); err != nil || back.Code() != "USD" {
+	if err := json.Unmarshal(encoded, &back); err != nil || back.String() != "USD" {
 		t.Fatalf("json.Unmarshal(%s) = %v, %v, want USD", encoded, back, err)
 	}
 	if encoded, err := json.Marshal(Currency{}); !errors.Is(err, ErrCurrency) {
 		t.Errorf("json.Marshal(Currency{}) = %s, %v, want ErrCurrency", encoded, err)
+	}
+}
+
+// A patch release keeps the deprecated Code method usable by existing callers.
+func TestCurrencyCodeCompatibility(t *testing.T) {
+	t.Parallel()
+	if got := CurrencyOf("USD").Code(); got != "USD" || (Currency{}).Code() != "" {
+		t.Fatalf("Currency.Code() = %q, want USD, and empty for the zero Currency", got)
 	}
 }
 
@@ -106,6 +115,62 @@ func TestStringUsesTheAmountsOwnPlaces(t *testing.T) {
 	} {
 		if got := tc.money.String(); got != tc.want {
 			t.Errorf("String() = %q, want %q", got, tc.want)
+		}
+	}
+}
+
+// Decimal preserves every minor unit and the amount's own places, without
+// a currency prefix or a float conversion, even at the int64 limits.
+func TestMoneyDecimalUsesTheAmountsOwnPlaces(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		money Money
+		want  string
+	}{
+		{amount("USD", 170), "1.70"},
+		{amount("USD", -5), "-0.05"},
+		{amount("USD", 0), "0.00"},
+		{amount("JPY", 1600), "1600"},
+		{amount("KWD", 1234), "1.234"},
+		{amount("BTC", 1), "0.00000001"},
+		{amount("USD", math.MaxInt64), "92233720368547758.07"},
+		{amount("USD", math.MinInt64), "-92233720368547758.08"},
+		{Money{currency: "USD", minor: 170, places: placesOf(3)}, "0.170"},
+		{Money{}, "0"},
+	} {
+		got, err := tc.money.Decimal()
+		if err != nil || got != tc.want {
+			t.Fatalf("%v.Decimal() = %q, %v, want %q", tc.money, got, err, tc.want)
+		}
+		digits, ok := tc.money.Digits()
+		if !ok {
+			digits = 0
+		}
+		if minor, err := ParseDecimal(got, digits); err != nil || minor != tc.money.Minor() {
+			t.Errorf("ParseDecimal(%q, %d) = %d, %v, want %d", got, digits, minor, err, tc.money.Minor())
+		}
+	}
+}
+
+// Old JSON needs a currency table before its amount can be shown as a decimal.
+func TestMoneyDecimalNeedsKnownPlaces(t *testing.T) {
+	t.Parallel()
+	table := testCurrencies(t)
+	for _, raw := range []string{`{"currency":"USD","minor":170}`, `{"currency":"USD","minor":0}`} {
+		var m Money
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := m.Decimal(); got != "" || !errors.Is(err, ErrCurrency) {
+			t.Fatalf("%s: Decimal() = %q, %v, want ErrCurrency", raw, got, err)
+		}
+		adopted, err := table.Adopt(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := adopted.Decimal()
+		if err != nil || "USD "+got != adopted.String() {
+			t.Errorf("adopted Decimal() = %q, %v, want amount from %q", got, err, adopted.String())
 		}
 	}
 }

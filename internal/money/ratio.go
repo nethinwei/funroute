@@ -86,6 +86,23 @@ func (r Ratio) String() string {
 	return strconv.FormatInt(num, 10) + "/" + strconv.FormatInt(den, 10)
 }
 
+// Decimal writes r rounded half to even to places decimal places, keeping
+// trailing zeros. Negative places means zero; more than 18 places or rounded
+// digits that do not fit int64 is ErrArithmetic. Only the text is rounded:
+// r stays exact, and String still writes its exact decimal or fraction.
+func (r Ratio) Decimal(places int) (string, error) {
+	places = max(places, 0)
+	if places > 18 {
+		return "", fmt.Errorf("%w: %d decimal places, at most 18 fit", ErrArithmetic, places)
+	}
+	num, den := r.parts()
+	scaled, err := mulDivRound(num, pow10(places), den, RoundHalfEven)
+	if err != nil {
+		return "", err
+	}
+	return FormatDecimal(scaled, places, false), nil
+}
+
 // decimalPlaces is how many places 1/den takes, when it is a finite decimal
 // that fits int64: den's only prime factors are 2 and 5.
 func decimalPlaces(den int64) (int, bool) {

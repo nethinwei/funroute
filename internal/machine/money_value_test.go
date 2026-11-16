@@ -111,7 +111,7 @@ func TestMoneyConstructorsAndAccessors(t *testing.T) {
 	if got, ok := rate.Ratio(); !ok || got != ratio(29, 1000) || !rate.Type().Equal(RatioType) {
 		t.Fatalf("RatioValue.Ratio() = %v, %v; type %s", got, ok, rate.Type())
 	}
-	if got, ok := currency.Currency(); !ok || got.Code() != "JPY" || currency.Type().String() != CurrencyType.String() {
+	if got, ok := currency.Currency(); !ok || got.String() != "JPY" || currency.Type().String() != CurrencyType.String() {
 		t.Fatalf("CurrencyValue.Currency() = %q, %v; type %s", got, ok, currency.Type())
 	}
 	for _, value := range []Value{rate, currency, Int(170), String("USD")} {

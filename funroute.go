@@ -153,8 +153,8 @@ type ArgSpec = compile.ArgSpec
 var ParseToJSON = compile.ParseToJSON
 
 // Format lays a program's text out the way the language prints it, keeping
-// the comments around the expression; it refuses a comment inside one rather
-// than drop it. The result parses to the same program.
+// comments inside and around the expression. The result parses back to the
+// same program, and formatting it again produces the same text.
 var Format = syntax.FormatSource
 
 // RenderWithContract writes the contract as comments above the expression, for
@@ -265,7 +265,8 @@ type (
 	// Money is an amount in a currency's minor unit, the Go form of money.
 	// Only a currency table makes one (Currencies.Parse, Of, Minor); the zero
 	// value is the currency-less zero. []Money is the backing of
-	// array<money>, handed over without a copy.
+	// array<money>, handed over without a copy. String includes the currency;
+	// Decimal writes the amount alone in the decimal places it carries.
 	Money = money.Money
 	// ExactMoney is money between minor units, exactly: what a step inside
 	// round(…) makes before the round rounds it once. Money.Exact makes one,
@@ -276,7 +277,8 @@ type (
 	// Ratio is an exact ratio, made by ParseRatio, Percent or BasisPoints; the
 	// zero value is 0. It only works on money and on other ratios, never
 	// rounds against another ratio, and crosses JSON as its exact text: a
-	// decimal, or p/q where it has no finite decimal.
+	// decimal, or p/q where it has no finite decimal. Decimal rounds only its
+	// display text to the requested places; String preserves its exact value.
 	Ratio = money.Ratio
 	// FxRate is an exact exchange rate, the Go form of fxrate: made by
 	// Currencies.FxRate or Implied, passed to a rule as an argument, and
@@ -285,7 +287,7 @@ type (
 	// an argument, hands it to using, and converts with ->.
 	FxRate = money.FxRate
 	// Currency is a declared currency as a value, made by
-	// Currencies.Currency.
+	// Currencies.Currency. String returns its code, such as "USD".
 	Currency = money.Currency
 )
 

@@ -208,7 +208,7 @@ func TestGoTakesAndGivesMoney(t *testing.T) {
 	quote := func(m money.Money, r money.Ratio, c money.Currency, xs []money.Money) (money.Money, error) {
 		seen.items = xs
 		converted, err := m.MulRatio(r, money.RoundDown)
-		return machine.NewMoney(c.Code(), converted.Minor()+int64(len(xs))), err
+		return machine.NewMoney(c.String(), converted.Minor()+int64(len(xs))), err
 	}
 	if err := registry.Register(machine.FunctionSpec{Name: "fees.quote_v1", Go: quote}); err != nil {
 		t.Fatal(err)

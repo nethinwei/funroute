@@ -96,6 +96,62 @@ func TestARatioWritesItsTextAndReadsItBack(t *testing.T) {
 	}
 }
 
+// Display rounds ties to even on either side of zero and leaves the exact
+// ratio intact, including when its decimal expansion never terminates.
+func TestRatioDecimalRoundsOnlyTheText(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		text   string
+		places int
+		want   string
+	}{
+		{"0", 2, "0.00"},
+		{"1.7", 3, "1.700"},
+		{"1/3", 4, "0.3333"},
+		{"-2/3", 4, "-0.6667"},
+		{"1.225", 2, "1.22"},
+		{"1.235", 2, "1.24"},
+		{"-1.225", 2, "-1.22"},
+		{"-1.235", 2, "-1.24"},
+		{"-0.005", 2, "0.00"},
+		{"9.995", 2, "10.00"},
+		{"2.5", -1, "2"},
+		{"3.5", math.MinInt, "4"},
+		{"1/3", 18, "0.333333333333333333"},
+		{"9223372036854775807", 0, "9223372036854775807"},
+		{"-9223372036854775808", 0, "-9223372036854775808"},
+	} {
+		r, err := ParseRatio(tc.text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := r
+		if got, err := r.Decimal(tc.places); err != nil || got != tc.want {
+			t.Errorf("%s.Decimal(%d) = %q, %v, want %q", tc.text, tc.places, got, err, tc.want)
+		}
+		if r != before {
+			t.Errorf("Decimal changed %s to %s", before, r)
+		}
+	}
+}
+
+func TestRatioDecimalRefusesOutOfRangeDisplay(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		ratio  Ratio
+		places int
+	}{
+		{Ratio{}, 19},
+		{ratioOne, math.MaxInt},
+		{Ratio{num: math.MaxInt64, den: 1}, 1},
+		{Ratio{num: math.MinInt64, den: 1}, 1},
+	} {
+		if got, err := tc.ratio.Decimal(tc.places); got != "" || !errors.Is(err, ErrArithmetic) {
+			t.Errorf("%s.Decimal(%d) = %q, %v, want ErrArithmetic", tc.ratio, tc.places, got, err)
+		}
+	}
+}
+
 // ParseRatio reads a decimal or a fraction of integers, either with a sign,
 // that fits int64 over int64, and nothing else; a JSON number is read as the
 // text it was written as.

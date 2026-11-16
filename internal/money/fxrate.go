@@ -58,21 +58,13 @@ func (f FxRate) String() string {
 // than its JSON object.
 func (f FxRate) LogValue() slog.Value { return slog.StringValue(f.String()) }
 
-// Decimal is the rate rounded half to even to places decimal places, at
-// most 18, for showing it: the rate itself stays exact.
+// Decimal writes the rate without its currencies, rounded half to even as
+// Ratio.Decimal does. Only the text is rounded: the rate itself stays exact.
 func (f FxRate) Decimal(places int) (string, error) {
 	if err := f.checked(); err != nil {
 		return "", err
 	}
-	places = max(places, 0)
-	if places > 18 {
-		return "", fmt.Errorf("%w: %d decimal places, at most 18 fit", ErrArithmetic, places)
-	}
-	scaled, err := mulDivRound(f.rate.num, pow10(places), f.rate.den, RoundHalfEven)
-	if err != nil {
-		return "", err
-	}
-	return FormatDecimal(scaled, places, false), nil
+	return f.rate.Decimal(places)
 }
 
 func (f FxRate) checked() error {

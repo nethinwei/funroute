@@ -187,17 +187,11 @@ func (c *Currencies) Currency(code string) (Currency, error) {
 // currency the table does not have, or not zero without a currency, is an
 // ErrCurrency: there are no places to write it in that Parse would read back.
 func (c *Currencies) Format(m Money) (string, error) {
-	if m.currency == "" {
-		return FormatDecimal(m.minor, 0, false), m.wellFormed()
-	}
-	digits, err := c.Places(m.currency)
+	m, err := c.Adopt(m)
 	if err != nil {
 		return "", err
 	}
-	if err := c.inPlaces(m); err != nil {
-		return "", err
-	}
-	return m.currency + " " + FormatDecimal(m.minor, digits, false), nil
+	return m.String(), nil
 }
 
 // pow10 is 10^n for n from 0 to 18.

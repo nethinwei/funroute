@@ -129,6 +129,8 @@ func TestFormatSourceNeverLosesAComment(t *testing.T) {
 		"a+b // why\n":               "a + b // why\n",
 		"  f( x )  ":                 "f(x)",
 		"// only\n// header\nf(x,y)": "// only\n// header\nf(x, y)",
+		"f(a, // why\n b)":           "f(\n  a, // why\n  b\n)",
+		"let(x = 1, // c\n x)":       "let(\n  x = 1, // c\n  x\n)",
 	}
 	for source, want := range cases {
 		t.Run(source, func(t *testing.T) {
@@ -138,7 +140,7 @@ func TestFormatSourceNeverLosesAComment(t *testing.T) {
 			}
 		})
 	}
-	for _, source := range []string{"f(a, // why\n b)", "let(x = 1, // c\n x)", "f(a,"} {
+	for _, source := range []string{"f(a,"} {
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			if got, err := FormatSource(source); err == nil {
@@ -170,9 +172,7 @@ func FuzzFormatRoundTrip(f *testing.F) {
 		want := exportFuzzed(t, source, expr)
 		checkReparses(t, "Inline", source, Inline(expr), want)
 		checkReparses(t, "Format", source, Format(expr), want)
-		if formatted, err := FormatSource(source); err == nil {
-			checkReparses(t, "FormatSource", source, formatted, want)
-		}
+		checkCommentFormat(t, source)
 	})
 }
 

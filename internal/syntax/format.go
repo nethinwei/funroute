@@ -335,11 +335,10 @@ func (p *printer) comprehensionSplit(node *ForExpr) split {
 	return split{open: opening, close: closing, sep: " ", separator: "\n", parts: parts}
 }
 
-// FormatSource formats a program's text. Comments never reach the AST, so a
-// comment inside the expression would be lost by reprinting it; rather than
-// drop one, FormatSource refuses. The comments before the expression — a
-// contract written as comments, say — and after it are kept as written, and
-// so is a final newline.
+// FormatSource formats a program's text, keeping its comments. An expression
+// with internal comments is laid out from its tokens, since the AST carries
+// no comments. Comments before and after the expression stay as written,
+// and so does a final newline.
 func FormatSource(source string) (string, error) {
 	r := read(source, false)
 	if r.err != nil {
@@ -347,10 +346,15 @@ func FormatSource(source string) (string, error) {
 	}
 	lex, expr := r.lex, r.expr
 	extent := expr.Extent()
+	body := ""
 	for _, comment := range lex.comments {
 		if comment.pos > extent.Start && comment.pos < extent.End {
-			return "", over(comment.pos, comment.end, "cannot format a program with a comment inside the expression yet")
+			body = formatComments(source, r.tokens, lex.comments, extent)
+			break
 		}
+	}
+	if body == "" {
+		body = Format(expr)
 	}
 	before, after := "", ""
 	if len(lex.comments) > 0 && lex.comments[0].pos < extent.Start {
@@ -359,7 +363,7 @@ func FormatSource(source string) (string, error) {
 	if last := len(lex.comments) - 1; last >= 0 && lex.comments[last].pos >= extent.End {
 		after = strings.TrimRightFunc(source[extent.End:], unicode.IsSpace)
 	}
-	formatted := before + Format(expr) + after
+	formatted := before + body + after
 	if strings.HasSuffix(source, "\n") {
 		formatted += "\n"
 	}
